@@ -987,6 +987,11 @@ fn buildReplModuleSource(
     var source_writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer source_writer.deinit();
 
+    // REPL snippets are evaluated as an internal module. Without an explicit
+    // header, production validation treats the synthetic source as a type
+    // module/default-app candidate and rejects ordinary REPL definitions like
+    // `x = 42`.
+    try source_writer.writer.writeAll("module []\n\n");
     try writeDefinitionsWithReplacement(&source_writer.writer, session, replacement, replacement_source);
     if (main_expr) |expr| {
         try source_writer.writer.print("main = {s}\n", .{expr});

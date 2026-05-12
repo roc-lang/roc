@@ -78,6 +78,7 @@ const OwnedSemanticModuleData = messages.OwnedSemanticModuleData;
 
 const Channel = channel.Channel;
 const Io = @import("io").Io;
+
 const Mode = compile_package.Mode;
 
 /// Threading features aren't available when targeting WebAssembly

@@ -1146,6 +1146,11 @@ pub const PackageEnv = struct {
         }
     }
 
+    pub const SnapshotValidationMode = enum {
+        none,
+        checking,
+    };
+
     /// Combined canonicalization and type checking function for snapshot tool
     /// This ensures the SAME module_envs map is used for both phases
     /// Snapshot-only type inspection must not publish post-check lowering input.
@@ -1162,6 +1167,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
         source_dir: ?[]const u8,
+        validation_mode: SnapshotValidationMode,
     ) !Check {
         // Canonicalize
         var czer = try Can.initModule(allocators, env, parse_ast, .{
@@ -1173,7 +1179,10 @@ pub const PackageEnv = struct {
         });
         czer.source_dir = source_dir;
         try czer.canonicalizeFile();
-        try czer.validateForChecking();
+        switch (validation_mode) {
+            .none => {},
+            .checking => try czer.validateForChecking(),
+        }
         czer.deinit();
 
         env.imports.clearResolvedModules();

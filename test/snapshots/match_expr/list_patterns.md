@@ -2,6 +2,7 @@
 ~~~ini
 description=Match expression with list patterns including invalid rest pattern
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
@@ -12,6 +13,10 @@ match numbers {
 ~~~
 # EXPECTED
 BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
+UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
+UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
+UNUSED VARIABLE - list_patterns.md:3:6:3:11
+UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -22,6 +27,52 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
             ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `numbers` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**list_patterns.md:1:7:1:14:**
+```roc
+match numbers {
+```
+      ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `acc` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**list_patterns.md:2:11:2:14:**
+```roc
+    [] => acc
+```
+          ^^^
+
+
+**UNUSED VARIABLE**
+Variable `first` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
+**list_patterns.md:3:6:3:11:**
+```roc
+    [first, ..rest] => 0 # invalid rest pattern should error
+```
+     ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**list_patterns.md:3:15:3:15:**
+```roc
+    [first, ..rest] => 0 # invalid rest pattern should error
+```
+              ^
 
 
 # TOKENS

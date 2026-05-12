@@ -685,6 +685,35 @@ pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
     return diagnostics;
 }
 
+/// Publish diagnostics that have been recorded since the current diagnostic
+/// span was last finalized.
+pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
+    const scratch = self.store.scratch orelse return;
+    const new_top = scratch.diagnostics.top();
+    if (new_top == 0) return;
+
+    const existing = self.store.sliceDiagnostics(self.diagnostics);
+    const index_start = self.store.index_data.len();
+
+    for (existing) |diagnostic_idx| {
+        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+    }
+
+    var i: u32 = 0;
+    while (i < new_top) : (i += 1) {
+        const diagnostic_idx = scratch.diagnostics.items.items[@intCast(i)];
+        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+    }
+
+    scratch.diagnostics.clearFrom(0);
+    self.diagnostics = .{
+        .span = .{
+            .start = @intCast(index_start),
+            .len = @intCast(existing.len + new_top),
+        },
+    };
+}
+
 /// Compilation error report type for user-friendly error messages
 pub const Report = CIR.Report;
 

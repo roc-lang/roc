@@ -279,7 +279,7 @@ pub const tests = [_]TestCase{
         \\    f(5)
         \\}
     ,
-        &.{dbg("<fn>")},
+        &.{dbg("<function>")},
         .returned,
     ),
     exprTest(

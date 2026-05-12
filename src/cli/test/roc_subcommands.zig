@@ -1044,6 +1044,10 @@ test "roc test failure output contains source snippet (interpreter)" {
     try testFailureOutputContainsSourceSnippet("--opt=interpreter");
 }
 
+test "roc test failure output contains source snippet (dev)" {
+    try testFailureOutputContainsSourceSnippet("--opt=dev");
+}
+
 fn testFailureOutputContainsDocComment(opt: []const u8) !void {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -1061,6 +1065,10 @@ fn testFailureOutputContainsDocComment(opt: []const u8) !void {
 
 test "roc test failure output contains doc comment (interpreter)" {
     try testFailureOutputContainsDocComment("--opt=interpreter");
+}
+
+test "roc test failure output contains doc comment (dev)" {
+    try testFailureOutputContainsDocComment("--opt=dev");
 }
 
 fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
@@ -1091,6 +1099,10 @@ fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
 
 test "roc test verbose and non-verbose failure format match (interpreter)" {
     try testVerboseAndNonVerboseFailureFormatMatch("--opt=interpreter");
+}
+
+test "roc test verbose and non-verbose failure format match (dev)" {
+    try testVerboseAndNonVerboseFailureFormatMatch("--opt=dev");
 }
 
 // Exit code tests for warnings

@@ -3208,9 +3208,7 @@ pub fn canonicalizeFile(
     }
 
     // Capture canonicalization diagnostics for later stages.
-    if (self.env.store.scratch != null) {
-        self.env.diagnostics = try self.env.store.diagnosticSpanFrom(0);
-    }
+    try self.env.publishScratchDiagnostics();
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
@@ -3261,6 +3259,11 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    if (self.parse_ir.hasErrors()) {
+        try self.env.publishScratchDiagnostics();
+        return;
+    }
+
     switch (self.env.module_kind) {
         .type_module => |*main_type_ident| {
             const main_status = try self.checkMainFunction(true);
@@ -3303,11 +3306,18 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
             // No validation needed for these module kinds in checking mode
         },
     }
+
+    try self.env.publishScratchDiagnostics();
 }
 
 /// Validate a module for use in execution mode (e.g. `roc main.roc` or `roc build`).
 /// Requires a valid main! function for type_module headers.
 pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
+    if (self.parse_ir.hasErrors()) {
+        try self.env.publishScratchDiagnostics();
+        return;
+    }
+
     switch (self.env.module_kind) {
         .type_module => {
             if (self.findMatchingTypeIdent()) |result| {
@@ -3324,6 +3334,8 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
             // No validation needed for these module kinds in execution mode
         },
     }
+
+    try self.env.publishScratchDiagnostics();
 }
 
 /// Creates an annotation-only def for a standalone type annotation with no implementation

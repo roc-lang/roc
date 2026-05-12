@@ -64,6 +64,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
         imported_envs,
         &module_envs,
         null,
+        .checking,
     );
     defer result.deinit();
 

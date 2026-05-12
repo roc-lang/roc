@@ -2708,10 +2708,12 @@ fn appendNominalDeclarationRootPayload(
             .nominal => |existing_payload| existing_payload,
             else => checkedArtifactInvariant("nominal declaration key collided with a non-nominal payload", .{}),
         };
+        // The canonical key already includes the semantic formal-arg shapes.
+        // The checked root ids can differ when the same nominal declaration is
+        // reached through a declaration root and a use-site root.
         if (existing_nominal.name != nominal.name or
             existing_nominal.origin_module != nominal.origin_module or
-            existing_nominal.is_opaque != nominal.is_opaque or
-            !checkedTypeIdSliceEql(existing_nominal.args, nominal.args))
+            existing_nominal.is_opaque != nominal.is_opaque)
         {
             checkedArtifactInvariant("nominal declaration key collided with a different nominal payload", .{});
         }

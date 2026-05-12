@@ -695,7 +695,8 @@ test "fx platform string interpolation type mismatch (interpreter)" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // The program should run (exit 0) with --allow-errors despite type errors
+    // `--allow-errors` may exit successfully after reporting diagnostics, but
+    // it must not publish checked artifacts or run LIR for an erroneous graph.
     switch (run_result.term) {
         .Exited => |code| {
             try testing.expectEqual(@as(u8, 0), code);
@@ -707,6 +708,8 @@ test "fx platform string interpolation type mismatch (interpreter)" {
             return error.RunFailed;
         },
     }
+
+    try testing.expectEqualStrings("", run_result.stdout);
 
     // Verify the error output contains proper diagnostic info
     // Should show TYPE MISMATCH error with the type information

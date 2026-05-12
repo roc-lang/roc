@@ -1040,8 +1040,8 @@ fn processSnapshotContent(
                 },
                 else => unreachable,
             }
-            if (content.meta.include_canonicalize_diagnostics and can_ir.store.scratch != null) {
-                can_ir.diagnostics = try can_ir.store.diagnosticSpanFrom(0);
+            if (content.meta.include_canonicalize_diagnostics) {
+                try can_ir.publishScratchDiagnostics();
             }
         },
         .repl, .dev_object, .docs => unreachable, // Handled above
@@ -1156,6 +1156,7 @@ fn processSnapshotContent(
                 imported_envs_for_file,
                 &module_envs_for_file.?,
                 std.fs.path.dirname(output_path),
+                if (content.meta.include_module_validation_diagnostics) .checking else .none,
             );
             break :blk checker;
         },
@@ -1605,11 +1606,13 @@ const Meta = struct {
     filename: ?[]const u8 = null,
     skip: bool = false,
     include_canonicalize_diagnostics: bool = false,
+    include_module_validation_diagnostics: bool = false,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
     const SKIP_START: []const u8 = "skip=";
     const CANONICALIZE_DIAGNOSTICS_START: []const u8 = "canonicalize_diagnostics=";
+    const MODULE_VALIDATION_DIAGNOSTICS_START: []const u8 = "module_validation_diagnostics=";
 
     fn fromString(text: []const u8) Error!Meta {
         var lines = std.mem.splitScalar(u8, text, '\n');
@@ -1618,6 +1621,7 @@ const Meta = struct {
         var filename: ?[]const u8 = null;
         var skip: bool = false;
         var include_canonicalize_diagnostics: bool = false;
+        var include_module_validation_diagnostics: bool = false;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
@@ -1635,6 +1639,8 @@ const Meta = struct {
                 skip = std.mem.eql(u8, line[(SKIP_START.len)..], "true");
             } else if (std.mem.startsWith(u8, line, CANONICALIZE_DIAGNOSTICS_START)) {
                 include_canonicalize_diagnostics = std.mem.eql(u8, line[(CANONICALIZE_DIAGNOSTICS_START.len)..], "true");
+            } else if (std.mem.startsWith(u8, line, MODULE_VALIDATION_DIAGNOSTICS_START)) {
+                include_module_validation_diagnostics = std.mem.eql(u8, line[(MODULE_VALIDATION_DIAGNOSTICS_START.len)..], "true");
             }
         }
 
@@ -1644,6 +1650,7 @@ const Meta = struct {
             .filename = filename,
             .skip = skip,
             .include_canonicalize_diagnostics = include_canonicalize_diagnostics,
+            .include_module_validation_diagnostics = include_module_validation_diagnostics,
         };
     }
 
@@ -1665,6 +1672,11 @@ const Meta = struct {
         if (self.include_canonicalize_diagnostics) {
             try writer.writeAll("\n");
             try writer.writeAll(CANONICALIZE_DIAGNOSTICS_START);
+            try writer.writeAll("true");
+        }
+        if (self.include_module_validation_diagnostics) {
+            try writer.writeAll("\n");
+            try writer.writeAll(MODULE_VALIDATION_DIAGNOSTICS_START);
             try writer.writeAll("true");
         }
     }
