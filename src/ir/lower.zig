@@ -1070,8 +1070,8 @@ const IrBuilder = struct {
                 .value = 1,
                 .block = true_block,
             }};
-            const default_block = if (leaf.fallback) |fallback|
-                try self.decisionNodeBlock(fallback, scrutinee_values, result, path_values)
+            const default_block = if (leaf.guard_miss) |guard_miss|
+                try self.decisionNodeBlock(guard_miss, scrutinee_values, result, path_values)
             else
                 try self.unreachableBlock();
             try stmts.append(self.allocator, try self.output.store.addStmt(.{ .switch_ = .{

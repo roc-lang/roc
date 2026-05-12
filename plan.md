@@ -6783,11 +6783,12 @@ must not create duplicate runtime adapter code solely because the same erased
 callable group has multiple explicit `Box(T)` witnesses.
 
 The group-level callable emission is not the only emission for every value in a
-group. It is a fallback for values whose solved representation group is erased
-but whose own `ValueInfo` has no concrete callable leaf metadata, such as an
-alias, projection, join result, imported constant view, or already-materialized
-const-backed erased callable view. Finite producers and proc-value producers in
-the same erased group still receive per-value emission plans:
+group. It is the canonical already-erased group emission for values whose solved
+representation group is erased but whose own `ValueInfo` has no concrete
+callable leaf metadata, such as an alias, projection, join result, imported
+constant view, or already-materialized const-backed erased callable view. Finite
+producers and proc-value producers in the same erased group still receive
+per-value emission plans:
 
 ```text
 already-erased alias/projection/join with no leaf metadata -> adopt group already_erased emission
@@ -6812,7 +6813,8 @@ The value produced by `Box.unbox(...)` is already erased and should adopt the
 group's already-erased emission when it has no more specific leaf metadata.
 Publishing the already-erased group emission must not prevent finite producers
 in that group from getting their own erase plans, and publishing a finite
-producer's erase plan must not overwrite the already-erased group fallback.
+producer's erase plan must not overwrite the canonical already-erased group
+emission.
 
 Once a `CallableValueEmissionPlanId` is stored in another explicit record, such
 as a finite-erased adapter-member owner, a call-boundary dependency, a const
@@ -16365,7 +16367,7 @@ const DecisionLeaf = struct {
     source_branch_pattern: CheckedMatchBranchPatternId,
     degenerate: bool,
     guard: ?GuardPlanId,
-    fallback_after_guard: ?DecisionNodeId,
+    guard_miss: ?DecisionNodeId,
     body: ExprId,
 };
 ```
@@ -16431,12 +16433,12 @@ Decision construction follows these rules:
 - Guards are ordered decision tests, but their representation must make binder
   scope explicit. A guard may appear either as `PatternTest.guard` after the
   selected alternative's pattern bindings have been materialized, or as the
-  equivalent `DecisionLeaf.guard` plus `fallback_after_guard` continuation. In
+  equivalent `DecisionLeaf.guard` plus `guard_miss` continuation. In
   both encodings, a branch whose structural tests pass but whose guard fails
   continues to the next source-compatible branch through an explicit
   `DecisionNodeId`. The guard must run with only the selected alternative's
-  remapped representative binders in scope, and the fallback continuation must
-  run after those branch-local bindings have been removed. This is the same
+  remapped representative binders in scope, and the `guard_miss` continuation
+  must run after those branch-local bindings have been removed. This is the same
   semantic requirement that old Rust handled with `PlaceholderWithGuard`,
   `GuardedNoTest`, and `break_out_guard`, but production MIR carries it as
   explicit decision-plan data.

@@ -403,7 +403,7 @@ pub const DecisionLeaf = struct {
     degenerate: bool,
     guard: ?BoolCondition = null,
     body: ExprId,
-    fallback: ?DecisionNodeId = null,
+    guard_miss: ?DecisionNodeId = null,
     bindings: Span(PatternBinding),
 };
 

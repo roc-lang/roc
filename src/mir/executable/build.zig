@@ -7721,7 +7721,7 @@ const BodyBuilder = struct {
 
         const first = rows[0];
         if (first.remaining.len == 0) {
-            const fallback = if (first.row.guard != null)
+            const guard_miss = if (first.row.guard != null)
                 try self.buildSourceMatchDecisionRows(rows[1..], leaves)
             else
                 null;
@@ -7731,7 +7731,7 @@ const BodyBuilder = struct {
                 .degenerate = first.row.degenerate,
                 .guard = first.row.guard,
                 .body = first.row.body,
-                .fallback = fallback,
+                .guard_miss = guard_miss,
                 .bindings = try self.output.addPatternBindingSpan(first.row.bindings),
             });
             try leaves.append(self.allocator, leaf_id);
