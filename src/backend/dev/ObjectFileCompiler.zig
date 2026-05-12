@@ -12,6 +12,7 @@
 //! ```
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -174,6 +175,12 @@ fn compileWithCodeGen(
     var static_data_symbols = std.ArrayList(ObjectWriter.Symbol).empty;
     defer static_data_symbols.deinit(allocator);
 
+    var owned_proc_symbol_names = std.ArrayList([]u8).empty;
+    defer {
+        for (owned_proc_symbol_names.items) |name| allocator.free(name);
+        owned_proc_symbol_names.deinit(allocator);
+    }
+
     for (static_data_exports) |data_export| {
         const alignment = @as(usize, @intCast(data_export.alignment));
         const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
@@ -213,6 +220,32 @@ fn compileWithCodeGen(
     for (static_data_symbols.items) |sym| {
         if (sym.is_global) continue;
         symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
+    }
+    for (proc_specs, 0..) |_, i| {
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
+        const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
+            }
+            unreachable;
+        };
+        const symbol_name = static_data_export.procSymbolName(allocator, proc_symbol.name) catch return CompilationError.OutOfMemory;
+        owned_proc_symbol_names.append(allocator, symbol_name) catch {
+            allocator.free(symbol_name);
+            return CompilationError.OutOfMemory;
+        };
+        symbols.append(allocator, .{
+            .name = symbol_name,
+            .offset = proc_symbol.code_start,
+            .size = proc_symbol.code_end - proc_symbol.code_start,
+            .is_global = false,
+            .is_function = true,
+            .is_external = false,
+            .section = .text,
+            .prologue_size = proc_symbol.prologue_size,
+            .stack_alloc = proc_symbol.stack_alloc,
+            .uses_frame_pointer = proc_symbol.uses_frame_pointer,
+        }) catch return CompilationError.OutOfMemory;
     }
     for (static_data_symbols.items) |sym| {
         if (!sym.is_global) continue;

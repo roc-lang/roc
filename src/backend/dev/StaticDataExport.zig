@@ -1,5 +1,8 @@
 //! Shared readonly data export records for native object emission.
 
+const std = @import("std");
+const lir = @import("lir");
+
 /// Immutable data symbol to emit into the target's readonly data section.
 pub const StaticDataExport = struct {
     /// The exported symbol name, for example `roc__answer`.
@@ -22,4 +25,16 @@ pub const StaticDataRelocation = struct {
     target_symbol_name: []const u8,
     /// Addend applied to the target symbol address.
     addend: i64 = 0,
+    /// Whether `target_symbol_name` is owned by this relocation and must be freed
+    /// with the static data graph.
+    owns_target_symbol_name: bool = false,
 };
+
+/// Deterministic object-file symbol name for an internal LIR procedure.
+///
+/// These symbols are local text symbols. They exist so readonly data can point at
+/// erased-callable wrappers using ordinary object relocations instead of backend
+/// code-buffer offsets.
+pub fn procSymbolName(allocator: std.mem.Allocator, proc_symbol: lir.Symbol) std.mem.Allocator.Error![]u8 {
+    return try std.fmt.allocPrint(allocator, "roc__proc_{x}", .{proc_symbol.raw()});
+}

@@ -9,13 +9,18 @@ const Allocator = std.mem.Allocator;
 
 const backend = @import("backend");
 const base = @import("base");
+const builtins = @import("builtins");
 const check = @import("check");
 const layout_mod = @import("layout");
+const lir = @import("lir");
+const mir = @import("mir");
 const roc_target = @import("roc_target");
 const types = @import("types");
 
 const CheckedArtifact = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
+const repr = mir.LambdaSolved.Representation;
+const ArtifactViews = mir.Executable.Build.ArtifactViews;
 
 const StaticDataExport = backend.StaticDataExport;
 const StaticDataRelocation = backend.StaticDataRelocation;
@@ -42,13 +47,29 @@ const PointerTarget = struct {
     addend: i64,
 };
 
+const MaterializationContext = struct {
+    owner: CheckedArtifact.CheckedModuleArtifactKey,
+    canonical_names: *const canonical.CanonicalNameStore,
+    plans: *const CheckedArtifact.CompileTimePlanStore,
+    values: *const CheckedArtifact.CompileTimeValueStore,
+    executable_type_payloads: *const CheckedArtifact.ExecutableTypePayloadStore,
+    callable_set_descriptors: *const CheckedArtifact.CallableSetDescriptorStore,
+    const_instances: CheckedArtifact.ConstInstantiationStoreView,
+};
+
+const ExecutablePayloadContext = struct {
+    materialization: MaterializationContext,
+    payload: CheckedArtifact.ExecutableTypePayload,
+};
+
 /// Build every host-visible provided data export for a target.
 pub fn buildProvidedDataExports(
     allocator: Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    artifact_views: ArtifactViews,
+    lowered: ?*const lir.CheckedPipeline.LoweredProgram,
     target: roc_target.RocTarget,
 ) MaterializationError![]StaticDataExport {
-    var builder = try StaticDataBuilder.init(allocator, artifact, target);
+    var builder = try StaticDataBuilder.init(allocator, artifact_views, lowered, target);
     defer builder.deinit();
     return try builder.build();
 }
@@ -58,14 +79,28 @@ pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExpo
     for (exports) |static_export| {
         allocator.free(static_export.symbol_name);
         allocator.free(static_export.bytes);
+        deinitRelocationSlice(allocator, static_export.relocations);
         allocator.free(static_export.relocations);
     }
     allocator.free(exports);
 }
 
+fn deinitRelocationSlice(allocator: Allocator, relocations: []const StaticDataRelocation) void {
+    for (relocations) |relocation| {
+        if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
+    }
+}
+
+fn deinitRelocationList(allocator: Allocator, relocations: *std.ArrayList(StaticDataRelocation)) void {
+    deinitRelocationSlice(allocator, relocations.items);
+    relocations.deinit(allocator);
+}
+
 const StaticDataBuilder = struct {
     allocator: Allocator,
+    artifact_views: ArtifactViews,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    lowered: ?*const lir.CheckedPipeline.LoweredProgram,
     target: roc_target.RocTarget,
     target_usize: base.target.TargetUsize,
     word_size: u32,
@@ -75,13 +110,19 @@ const StaticDataBuilder = struct {
 
     fn init(
         allocator: Allocator,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        artifact_views: ArtifactViews,
+        lowered: ?*const lir.CheckedPipeline.LoweredProgram,
         target: roc_target.RocTarget,
     ) MaterializationError!StaticDataBuilder {
+        const root = artifact_views.root orelse {
+            staticDataInvariant("static data export requires a root lowering artifact view");
+        };
         const target_usize = targetUsizeForTarget(target) orelse return error.UnsupportedTarget;
         return .{
             .allocator = allocator,
-            .artifact = artifact,
+            .artifact_views = artifact_views,
+            .artifact = root.artifact,
+            .lowered = lowered,
             .target = target,
             .target_usize = target_usize,
             .word_size = target_usize.size(),
@@ -131,6 +172,7 @@ const StaticDataBuilder = struct {
         for (self.nodes.items) |node| {
             self.allocator.free(node.symbol_name);
             self.allocator.free(node.bytes);
+            deinitRelocationSlice(self.allocator, node.relocations);
             self.allocator.free(node.relocations);
         }
         self.nodes.deinit(self.allocator);
@@ -138,6 +180,7 @@ const StaticDataBuilder = struct {
 
     fn deinitMaterialized(self: *StaticDataBuilder, value: MaterializedValue) void {
         self.allocator.free(value.bytes);
+        deinitRelocationSlice(self.allocator, value.relocations);
         self.allocator.free(value.relocations);
     }
 
@@ -152,7 +195,7 @@ const StaticDataBuilder = struct {
 
         var relocations = std.ArrayList(StaticDataRelocation).empty;
         errdefer {
-            relocations.deinit(self.allocator);
+            deinitRelocationList(self.allocator, &relocations);
             self.allocator.free(bytes);
         }
 
@@ -314,7 +357,7 @@ const StaticDataBuilder = struct {
         var payload_consumed = false;
         errdefer {
             if (!payload_consumed) {
-                payload_relocs.deinit(self.allocator);
+                deinitRelocationList(self.allocator, &payload_relocs);
                 self.allocator.free(payload);
             }
         }
@@ -370,6 +413,10 @@ const StaticDataBuilder = struct {
             self.writeWord(bytes, base_offset, 0);
             return;
         }
+        if (box_layout.tag == .erased_callable) {
+            try self.writeBoxedErasedCallable(bytes, relocations, base_offset, payload_schema, payload_value);
+            return;
+        }
         if (box_layout.tag != .box) staticDataInvariant("static Box schema did not lower to box layout");
 
         const abi = self.layout_store.builtinBoxAbi(box_layout_idx);
@@ -386,6 +433,35 @@ const StaticDataBuilder = struct {
         );
         payload_consumed = true;
         try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+    }
+
+    fn writeBoxedErasedCallable(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        payload_schema: CheckedArtifact.ComptimeSchemaId,
+        payload_value: CheckedArtifact.ComptimeValueId,
+    ) MaterializationError!void {
+        switch (self.comptimeSchema(payload_schema)) {
+            .callable => {},
+            else => staticDataInvariant("static erased Box payload schema is not callable"),
+        }
+        const leaf = switch (self.comptimeValue(payload_value)) {
+            .callable => |callable| callable,
+            else => staticDataInvariant("static erased Box payload value is not callable"),
+        };
+        const erased = switch (leaf) {
+            .erased_boxed => |erased| erased,
+            .finite => staticDataInvariant("static Box(function) export reached non-erased finite callable leaf"),
+        };
+        try self.writeSealedErasedCallablePointer(
+            self.rootMaterializationContext(),
+            bytes,
+            relocations,
+            base_offset,
+            erased.sealed,
+        );
     }
 
     fn writeTuple(
@@ -522,7 +598,7 @@ const StaticDataBuilder = struct {
 
         var relocations = std.ArrayList(StaticDataRelocation).empty;
         errdefer {
-            relocations.deinit(self.allocator);
+            deinitRelocationList(self.allocator, &relocations);
             self.allocator.free(bytes);
         }
 
@@ -558,7 +634,10 @@ const StaticDataBuilder = struct {
         var payload_relocations_owned = true;
         errdefer {
             if (payload_owned) self.allocator.free(payload);
-            if (payload_relocations_owned) self.allocator.free(payload_relocations);
+            if (payload_relocations_owned) {
+                deinitRelocationSlice(self.allocator, payload_relocations);
+                self.allocator.free(payload_relocations);
+            }
         }
 
         const symbol_name = try std.fmt.allocPrint(
@@ -584,12 +663,16 @@ const StaticDataBuilder = struct {
         self.writeSignedWord(bytes, data_offset - self.word_size, 0);
 
         const relocations = try self.allocator.alloc(StaticDataRelocation, payload_relocations.len);
-        errdefer self.allocator.free(relocations);
+        errdefer {
+            deinitRelocationSlice(self.allocator, relocations);
+            self.allocator.free(relocations);
+        }
         for (payload_relocations, 0..) |rel, i| {
             relocations[i] = .{
                 .offset = data_offset + rel.offset,
                 .target_symbol_name = rel.target_symbol_name,
                 .addend = rel.addend,
+                .owns_target_symbol_name = rel.owns_target_symbol_name,
             };
         }
         self.allocator.free(payload_relocations);
@@ -760,6 +843,991 @@ const StaticDataBuilder = struct {
         return self.artifact.comptime_values.values.items[idx];
     }
 
+    fn rootMaterializationContext(self: *const StaticDataBuilder) MaterializationContext {
+        return .{
+            .owner = self.artifact.key,
+            .canonical_names = &self.artifact.canonical_names,
+            .plans = &self.artifact.comptime_plans,
+            .values = &self.artifact.comptime_values,
+            .executable_type_payloads = &self.artifact.executable_type_payloads,
+            .callable_set_descriptors = &self.artifact.callable_set_descriptors,
+            .const_instances = self.artifact.const_instances.view(),
+        };
+    }
+
+    fn materializationContextForArtifact(
+        self: *const StaticDataBuilder,
+        owner: CheckedArtifact.CheckedModuleArtifactKey,
+    ) MaterializationContext {
+        if (artifactKeyEql(self.artifact.key, owner)) return self.rootMaterializationContext();
+        if (self.artifact_views.root) |root| {
+            for (root.relation_artifacts) |related| {
+                if (!artifactKeyEql(related.key, owner)) continue;
+                return materializationContextFromImportedView(related);
+            }
+        }
+        for (self.artifact_views.imports) |imported| {
+            if (!artifactKeyEql(imported.key, owner)) continue;
+            return materializationContextFromImportedView(imported);
+        }
+        staticDataInvariant("static data materialization referenced an unavailable artifact view");
+    }
+
+    fn materializationContextForArtifactRef(
+        self: *const StaticDataBuilder,
+        ref: canonical.ArtifactRef,
+    ) MaterializationContext {
+        return self.materializationContextForArtifact(.{ .bytes = ref.bytes });
+    }
+
+    fn materializeErasedCapturePlan(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        plan: CheckedArtifact.ErasedCaptureExecutableMaterializationPlan,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+    ) MaterializationError!MaterializedValue {
+        const lowered = self.lowered orelse {
+            staticDataInvariant("static boxed erased callable capture requires lowered requested layout table");
+        };
+        const layout_idx = lowered.lir_result.requestedLayoutForKey(expected_key) orelse {
+            staticDataInvariant("static boxed erased callable capture type has no requested target layout");
+        };
+        const layout_info = layoutInfoFromStore(&lowered.lir_result.layouts, self.target_usize, layout_idx);
+        if (layout_info.alignment > builtins.erased_callable.capture_alignment) {
+            staticDataInvariant("static boxed erased callable capture alignment exceeds erased callable ABI alignment");
+        }
+
+        const bytes = try self.allocator.alloc(u8, layout_info.size);
+        @memset(bytes, 0);
+
+        var relocations = std.ArrayList(StaticDataRelocation).empty;
+        errdefer {
+            deinitRelocationList(self.allocator, &relocations);
+            self.allocator.free(bytes);
+        }
+
+        try self.writeErasedCapturePlan(
+            materialization,
+            bytes,
+            &relocations,
+            0,
+            plan,
+            expected_key,
+            &lowered.lir_result.layouts,
+            layout_idx,
+        );
+
+        return .{
+            .bytes = bytes,
+            .alignment = layout_info.alignment,
+            .relocations = try relocations.toOwnedSlice(self.allocator),
+        };
+    }
+
+    fn writeErasedCapturePlan(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        plan: CheckedArtifact.ErasedCaptureExecutableMaterializationPlan,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        switch (plan) {
+            .none => staticDataInvariant("static erased capture materialization expected value but got none"),
+            .zero_sized_typed => |zero_key| {
+                if (!repr.canonicalExecValueTypeKeyEql(expected_key, zero_key)) {
+                    staticDataInvariant("static erased capture zero-sized key differs from expected type");
+                }
+                const layout = layouts.getLayout(layout_idx);
+                if (layouts.layoutSize(layout) != 0) {
+                    staticDataInvariant("static erased capture zero-sized materialization has nonzero layout");
+                }
+            },
+            .node => |node| try self.writeErasedCaptureNode(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                node,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+        }
+    }
+
+    fn writeErasedCaptureNode(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        node_id: CheckedArtifact.ErasedCaptureExecutableMaterializationNodeId,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const node = materialization.plans.erasedCaptureExecutableMaterializationNode(node_id);
+        switch (node) {
+            .pending => staticDataInvariant("static erased capture materialization reached pending node"),
+            .const_instance => |const_instance| try self.writeConstInstanceCapture(
+                bytes,
+                relocations,
+                base_offset,
+                const_instance,
+                layouts,
+                layout_idx,
+            ),
+            .pure_const => |pure_const| try self.writeConstInstanceCapture(
+                bytes,
+                relocations,
+                base_offset,
+                pure_const.const_instance,
+                layouts,
+                layout_idx,
+            ),
+            .pure_value => |pure_value| try self.writePureValueCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                pure_value.schema,
+                pure_value.value,
+                layouts,
+                layout_idx,
+            ),
+            .finite_callable_set => |finite| try self.writeFiniteCallableSetCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                finite,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .erased_callable => |erased| try self.writeMaterializedErasedCallableCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                erased,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .record => |fields| try self.writeRecordCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                fields,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .tuple => |items| try self.writeTupleCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                items,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .tag_union => |tag| try self.writeTagCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                tag,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .list => |items| try self.writeListCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                items,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .box => |payload| try self.writeBoxCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                payload,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .nominal => |nominal| try self.writeNominalCapture(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                nominal,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+            .recursive_ref => |ref| try self.writeErasedCaptureNode(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                ref,
+                expected_key,
+                layouts,
+                layout_idx,
+            ),
+        }
+    }
+
+    fn writeConstInstanceCapture(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        const_instance: CheckedArtifact.ConstInstanceRef,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const resolved = self.resolveConstInstance(const_instance);
+        try self.writePureValueCapture(
+            resolved.materialization,
+            bytes,
+            relocations,
+            base_offset,
+            resolved.instance.schema,
+            resolved.instance.value,
+            layouts,
+            layout_idx,
+        );
+    }
+
+    fn writePureValueCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        schema: CheckedArtifact.ComptimeSchemaId,
+        value: CheckedArtifact.ComptimeValueId,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const expected = layoutInfoFromStore(layouts, self.target_usize, layout_idx);
+        if (!artifactKeyEql(materialization.owner, self.artifact.key)) {
+            staticDataInvariant("static erased capture pure value currently requires root-owned materialization values");
+        }
+        const materialized = try self.materializeValueWithLayout(schema, value, try self.layoutIdxForSchema(schema));
+        defer self.deinitMaterialized(materialized);
+        if (materialized.bytes.len != expected.size or materialized.alignment != expected.alignment) {
+            staticDataInvariant("static erased capture pure value layout differs from expected executable capture layout");
+        }
+        self.writeBytes(bytes, base_offset, materialized.bytes);
+        try self.appendRelocationsWithOffset(relocations, materialized.relocations, base_offset);
+    }
+
+    fn writeFiniteCallableSetCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        finite: CheckedArtifact.MaterializedFiniteCallableSetValue,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const callable_set = switch (payload_context.payload) {
+            .callable_set => |callable_set| callable_set,
+            else => staticDataInvariant("static erased capture finite callable set expected callable-set executable type"),
+        };
+        if (!repr.callableSetKeyEql(callable_set.key, finite.callable_set_key)) {
+            staticDataInvariant("static erased capture finite callable set key differs from expected type");
+        }
+
+        const member_index: usize = @intFromEnum(finite.selected_member);
+        const selected_member = findCallableSetMemberPayload(callable_set.members, finite.selected_member) orelse {
+            staticDataInvariant("static erased capture finite callable set selected member missing from expected type");
+        };
+        const layout = layouts.getLayout(layout_idx);
+        if (layout.tag != .tag_union) {
+            if (layouts.layoutSize(layout) == 0 and callable_set.members.len == 1 and finite.captures.len == 0) return;
+            staticDataInvariant("static erased capture finite callable set did not lower to tag union layout");
+        }
+        const tag_info = layouts.getTagUnionInfo(layout);
+        if (member_index >= tag_info.variants.len) {
+            staticDataInvariant("static erased capture finite callable set selected member exceeds layout variants");
+        }
+        const payload_layout_idx = tag_info.variants.get(@intCast(member_index)).payload_layout;
+        if (finite.captures.len == 0) {
+            if (selected_member.payload_ty != null) {
+                staticDataInvariant("static erased capture finite callable set has no captures but member expects payload");
+            }
+        } else {
+            const payload_ref = selected_member.payload_ty orelse {
+                staticDataInvariant("static erased capture finite callable set has captures but member has no payload type");
+            };
+            const payload_key = selected_member.payload_ty_key orelse {
+                staticDataInvariant("static erased capture finite callable set member payload has no key");
+            };
+            const tuple_context = self.executablePayloadForRef(payload_ref);
+            const tuple = switch (tuple_context.payload) {
+                .tuple => |tuple| tuple,
+                else => staticDataInvariant("static erased capture finite callable set payload was not a tuple"),
+            };
+            if (!repr.canonicalExecValueTypeKeyEql(tuple_context.materialization.executable_type_payloads.keyFor(payload_ref.payload), payload_key)) {
+                staticDataInvariant("static erased capture finite callable set payload key differs from expected member payload key");
+            }
+            try self.writeCaptureTupleItems(
+                materialization,
+                bytes,
+                relocations,
+                base_offset,
+                finite.captures,
+                tuple,
+                layouts,
+                payload_layout_idx,
+            );
+        }
+
+        const tag_data = layouts.getTagUnionData(layout.data.tag_union.idx);
+        if (tag_data.discriminant_size != 0) {
+            self.writeDiscriminant(
+                bytes,
+                base_offset + tag_data.discriminant_offset,
+                tag_data.discriminant_size,
+                @intCast(member_index),
+            );
+        }
+    }
+
+    fn writeMaterializedErasedCallableCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        erased: CheckedArtifact.MaterializedErasedCallableValue,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const erased_fn = switch (payload_context.payload) {
+            .erased_fn => |erased_fn| erased_fn,
+            else => staticDataInvariant("static erased callable materialization expected erased-fn executable type"),
+        };
+        if (!repr.erasedFnSigKeyEql(erased_fn.sig_key, erased.sealed.boundary.sig_key)) {
+            staticDataInvariant("static erased callable materialization signature differs from expected type");
+        }
+        if (layouts.getLayout(layout_idx).tag != .erased_callable) {
+            staticDataInvariant("static erased callable materialization did not lower to erased callable layout");
+        }
+        try self.writeSealedErasedCallablePointer(materialization, bytes, relocations, base_offset, erased.sealed);
+    }
+
+    fn writeRecordCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        fields: []const CheckedArtifact.ErasedCaptureExecutableMaterializationRecordField,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const expected_fields = switch (payload_context.payload) {
+            .record => |record| record,
+            else => staticDataInvariant("static erased capture record expected record executable type"),
+        };
+        if (fields.len != expected_fields.len) {
+            staticDataInvariant("static erased capture record field count differs from expected type");
+        }
+        const layout = layouts.getLayout(layout_idx);
+        if (layout.tag == .zst) return;
+        if (layout.tag != .struct_) staticDataInvariant("static erased capture record did not lower to struct layout");
+
+        const seen = try self.allocator.alloc(bool, fields.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (expected_fields, 0..) |field, logical_i| {
+            const materialized = findMaterializedRecordField(materialization, fields, payload_context.materialization, field.field, seen) orelse {
+                staticDataInvariant("static erased capture record missing expected field");
+            };
+            const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(logical_i));
+            const field_layout = layouts.getLayout(field_layout_idx);
+            if (layouts.layoutSize(field_layout) == 0) continue;
+            const field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(logical_i));
+            try self.writeErasedCapturePlan(
+                materialization,
+                bytes,
+                relocations,
+                base_offset + field_offset,
+                materialized.value,
+                field.key,
+                layouts,
+                field_layout_idx,
+            );
+        }
+        verifyAllSeen(seen, "static erased capture record had extra field");
+    }
+
+    fn writeTupleCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        items: []const CheckedArtifact.ErasedCaptureExecutableMaterializationPlan,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const tuple = switch (payload_context.payload) {
+            .tuple => |tuple| tuple,
+            else => staticDataInvariant("static erased capture tuple expected tuple executable type"),
+        };
+        try self.writeCaptureTupleItems(materialization, bytes, relocations, base_offset, items, tuple, layouts, layout_idx);
+    }
+
+    fn writeCaptureTupleItems(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        items: []const CheckedArtifact.ErasedCaptureExecutableMaterializationPlan,
+        tuple: []const CheckedArtifact.ExecutableTupleElemPayload,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        if (items.len != tuple.len) {
+            staticDataInvariant("static erased capture tuple arity differs from expected type");
+        }
+        const layout = layouts.getLayout(layout_idx);
+        if (layout.tag == .zst) return;
+        if (layout.tag != .struct_) staticDataInvariant("static erased capture tuple did not lower to struct layout");
+
+        var seen = try self.allocator.alloc(bool, items.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (tuple) |item| {
+            const index: usize = @intCast(item.index);
+            if (index >= items.len) staticDataInvariant("static erased capture tuple item index out of range");
+            if (seen[index]) staticDataInvariant("static erased capture tuple duplicated item index");
+            seen[index] = true;
+            const field_layout_idx = layouts.getStructFieldLayoutByOriginalIndex(layout.data.struct_.idx, @intCast(index));
+            const field_layout = layouts.getLayout(field_layout_idx);
+            if (layouts.layoutSize(field_layout) == 0) continue;
+            const field_offset = layouts.getStructFieldOffsetByOriginalIndex(layout.data.struct_.idx, @intCast(index));
+            try self.writeErasedCapturePlan(
+                materialization,
+                bytes,
+                relocations,
+                base_offset + field_offset,
+                items[index],
+                item.key,
+                layouts,
+                field_layout_idx,
+            );
+        }
+        verifyAllSeen(seen, "static erased capture tuple missing item");
+    }
+
+    fn writeTagCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        tag: CheckedArtifact.ErasedCaptureExecutableMaterializationTagNode,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const variants = switch (payload_context.payload) {
+            .tag_union => |variants| variants,
+            else => staticDataInvariant("static erased capture tag expected tag-union executable type"),
+        };
+        const selected = findExecutableTagVariant(materialization, tag.tag, payload_context.materialization, variants) orelse {
+            staticDataInvariant("static erased capture tag missing from expected type");
+        };
+        if (tag.payloads.len != selected.variant.payloads.len) {
+            staticDataInvariant("static erased capture tag payload count differs from expected type");
+        }
+
+        const layout = layouts.getLayout(layout_idx);
+        if (layout.tag == .zst) return;
+        if (layout.tag != .tag_union) staticDataInvariant("static erased capture tag did not lower to tag-union layout");
+
+        const tag_info = layouts.getTagUnionInfo(layout);
+        if (selected.index >= tag_info.variants.len) {
+            staticDataInvariant("static erased capture tag index exceeds layout variants");
+        }
+        const active_payload_layout_idx = tag_info.variants.get(@intCast(selected.index)).payload_layout;
+
+        const seen = try self.allocator.alloc(bool, tag.payloads.len);
+        defer self.allocator.free(seen);
+        @memset(seen, false);
+
+        for (selected.variant.payloads) |expected_payload| {
+            const materialized = findTagPayload(tag.payloads, expected_payload.index, seen) orelse {
+                staticDataInvariant("static erased capture tag missing expected payload");
+            };
+            const payload_layout_idx = payloadLayoutForTagArg(layouts, active_payload_layout_idx, selected.variant.payloads.len, expected_payload.index);
+            const payload_layout = layouts.getLayout(payload_layout_idx);
+            if (layouts.layoutSize(payload_layout) == 0) continue;
+            const payload_offset = payloadOffsetForTagArg(layouts, active_payload_layout_idx, selected.variant.payloads.len, expected_payload.index);
+            try self.writeErasedCapturePlan(
+                materialization,
+                bytes,
+                relocations,
+                base_offset + payload_offset,
+                materialized.value,
+                expected_payload.key,
+                layouts,
+                payload_layout_idx,
+            );
+        }
+        verifyAllSeen(seen, "static erased capture tag had extra payload");
+
+        const tag_data = layouts.getTagUnionData(layout.data.tag_union.idx);
+        if (tag_data.discriminant_size != 0) {
+            self.writeDiscriminant(bytes, base_offset + tag_data.discriminant_offset, tag_data.discriminant_size, selected.index);
+        }
+    }
+
+    fn writeListCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        items: []const CheckedArtifact.ErasedCaptureExecutableMaterializationPlan,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const list_child = switch (payload_context.payload) {
+            .list => |list| list,
+            else => staticDataInvariant("static erased capture list expected list executable type"),
+        };
+        if (items.len == 0) {
+            self.writeWord(bytes, base_offset, 0);
+            self.writeWord(bytes, base_offset + self.word_size, 0);
+            self.writeWord(bytes, base_offset + self.word_size * 2, 0);
+            return;
+        }
+
+        const list_layout = layouts.getLayout(layout_idx);
+        const abi = layouts.builtinListAbi(layout_idx);
+        const payload_size = @as(usize, abi.elem_size) * items.len;
+        const payload = try self.allocator.alloc(u8, payload_size);
+        @memset(payload, 0);
+
+        var payload_relocs = std.ArrayList(StaticDataRelocation).empty;
+        var payload_consumed = false;
+        errdefer {
+            if (!payload_consumed) {
+                deinitRelocationList(self.allocator, &payload_relocs);
+                self.allocator.free(payload);
+            }
+        }
+
+        if (abi.elem_size != 0) {
+            const elem_layout_idx = switch (list_layout.tag) {
+                .list => list_layout.data.list,
+                .list_of_zst => layout_mod.Idx.zst,
+                else => staticDataInvariant("static erased capture list did not lower to list layout"),
+            };
+            for (items, 0..) |item, i| {
+                try self.writeErasedCapturePlan(
+                    materialization,
+                    payload,
+                    &payload_relocs,
+                    @as(u32, @intCast(i * abi.elem_size)),
+                    item,
+                    list_child.key,
+                    layouts,
+                    elem_layout_idx,
+                );
+            }
+        }
+
+        const payload_relocations = try payload_relocs.toOwnedSlice(self.allocator);
+        errdefer if (!payload_consumed) self.allocator.free(payload_relocations);
+        const target = try self.addStaticAllocationWithRelocs(
+            payload,
+            abi.elem_alignment,
+            abi.contains_refcounted,
+            if (abi.contains_refcounted) items.len else null,
+            payload_relocations,
+        );
+        payload_consumed = true;
+        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+        self.writeWord(bytes, base_offset + self.word_size, items.len);
+        self.writeWord(bytes, base_offset + self.word_size * 2, items.len);
+    }
+
+    fn writeBoxCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        payload: CheckedArtifact.ErasedCaptureExecutableMaterializationPlan,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const box_child = switch (payload_context.payload) {
+            .box => |box| box,
+            else => staticDataInvariant("static erased capture box expected box executable type"),
+        };
+        const layout = layouts.getLayout(layout_idx);
+        if (layout.tag == .box_of_zst) {
+            self.writeWord(bytes, base_offset, 0);
+            return;
+        }
+        if (layout.tag == .erased_callable) {
+            try self.writeErasedCapturePlan(materialization, bytes, relocations, base_offset, payload, box_child.key, layouts, layout_idx);
+            return;
+        }
+        if (layout.tag != .box) staticDataInvariant("static erased capture box did not lower to box layout");
+
+        const abi = layouts.builtinBoxAbi(layout_idx);
+        const payload_value = try self.materializeErasedCapturePlan(materialization, payload, box_child.key);
+        defer self.deinitMaterialized(payload_value);
+        if (payload_value.bytes.len != abi.elem_size or payload_value.alignment != abi.elem_alignment) {
+            staticDataInvariant("static erased capture box payload layout differs from expected box ABI");
+        }
+
+        const target = try self.addStaticAllocationWithRelocs(
+            try self.allocator.dupe(u8, payload_value.bytes),
+            abi.elem_alignment,
+            abi.contains_refcounted,
+            null,
+            try self.cloneRelocations(payload_value.relocations),
+        );
+        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+    }
+
+    fn writeNominalCapture(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        nominal: anytype,
+        expected_key: canonical.CanonicalExecValueTypeKey,
+        layouts: *const layout_mod.Store,
+        layout_idx: layout_mod.Idx,
+    ) MaterializationError!void {
+        const payload_context = self.executablePayloadForKey(materialization, expected_key);
+        const expected_nominal = switch (payload_context.payload) {
+            .nominal => |nominal_payload| nominal_payload,
+            else => staticDataInvariant("static erased capture nominal expected nominal executable type"),
+        };
+        if (!nominalKeyTextEql(materialization, nominal.nominal, payload_context.materialization, expected_nominal.nominal)) {
+            staticDataInvariant("static erased capture nominal identity differs from expected type");
+        }
+        try self.writeErasedCapturePlan(materialization, bytes, relocations, base_offset, nominal.backing, expected_nominal.backing_key, layouts, layout_idx);
+    }
+
+    fn writeSealedErasedCallablePointer(
+        self: *StaticDataBuilder,
+        materialization: MaterializationContext,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        sealed: CheckedArtifact.SealedErasedCallableValue,
+    ) MaterializationError!void {
+        const capture: ?MaterializedValue = switch (sealed.capture) {
+            .none => blk: {
+                if (sealed.boundary.sig_key.capture_ty != null) {
+                    staticDataInvariant("static boxed erased callable has hidden capture type but no capture materialization");
+                }
+                break :blk null;
+            },
+            .zero_sized_typed => |capture_key| blk: {
+                const expected = sealed.boundary.sig_key.capture_ty orelse {
+                    staticDataInvariant("static boxed erased callable has zero-sized capture but no hidden capture type");
+                };
+                if (!repr.canonicalExecValueTypeKeyEql(expected, capture_key)) {
+                    staticDataInvariant("static boxed erased callable zero-sized capture type differs from hidden capture type");
+                }
+                break :blk try self.materializeErasedCapturePlan(materialization, sealed.capture, expected);
+            },
+            .node => blk: {
+                const expected = sealed.boundary.sig_key.capture_ty orelse {
+                    staticDataInvariant("static boxed erased callable has capture materialization node but no hidden capture type");
+                };
+                break :blk try self.materializeErasedCapturePlan(materialization, sealed.capture, expected);
+            },
+        };
+        defer if (capture) |materialized| self.deinitMaterialized(materialized);
+
+        const proc_symbol_name = try self.procSymbolNameForSealedErasedCallableCode(sealed.code);
+        var proc_symbol_owned = true;
+        errdefer if (proc_symbol_owned) self.allocator.free(proc_symbol_name);
+
+        const capture_size = if (capture) |materialized| materialized.bytes.len else 0;
+        const payload_size = erasedCallablePayloadSize(self.word_size, capture_size);
+        const payload = try self.allocator.alloc(u8, payload_size);
+        @memset(payload, 0);
+        var payload_owned = true;
+        var payload_relocs = std.ArrayList(StaticDataRelocation).empty;
+        var payload_relocs_owned = true;
+        errdefer {
+            if (payload_owned) self.allocator.free(payload);
+            if (payload_relocs_owned) deinitRelocationList(self.allocator, &payload_relocs);
+        }
+
+        try self.writePointerRelocationWithOwnership(payload, &payload_relocs, 0, proc_symbol_name, 0, true);
+        proc_symbol_owned = false;
+        self.writeWord(payload, self.word_size, 0);
+        if (capture) |materialized| {
+            const capture_offset = erasedCallableCaptureOffset(self.word_size);
+            self.writeBytes(payload, capture_offset, materialized.bytes);
+            try self.appendRelocationsWithOffset(&payload_relocs, materialized.relocations, capture_offset);
+        }
+
+        const payload_relocations = try payload_relocs.toOwnedSlice(self.allocator);
+        payload_relocs_owned = false;
+        var payload_relocations_owned = true;
+        errdefer if (payload_relocations_owned) {
+            deinitRelocationSlice(self.allocator, payload_relocations);
+            self.allocator.free(payload_relocations);
+        };
+
+        const target = try self.addStaticAllocationWithRelocs(
+            payload,
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+            null,
+            payload_relocations,
+        );
+        payload_owned = false;
+        payload_relocations_owned = false;
+        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+    }
+
+    const ResolvedConstInstance = struct {
+        materialization: MaterializationContext,
+        instance: CheckedArtifact.ConstInstance,
+    };
+
+    fn resolveConstInstance(
+        self: *const StaticDataBuilder,
+        ref: CheckedArtifact.ConstInstanceRef,
+    ) ResolvedConstInstance {
+        const materialization = self.materializationContextForArtifact(ref.owner);
+        if (!artifactKeyEql(materialization.const_instances.owner, ref.owner)) {
+            staticDataInvariant("static const instance view has wrong owning artifact");
+        }
+        const index: usize = @intFromEnum(ref.instance);
+        if (index >= materialization.const_instances.instances.len) {
+            staticDataInvariant("static const instance ref out of range");
+        }
+        const record = materialization.const_instances.instances[index];
+        return .{
+            .materialization = materialization,
+            .instance = switch (record.state) {
+                .evaluated => |instance| instance,
+                .reserved, .evaluating => staticDataInvariant("static const instance was consumed before being sealed"),
+            },
+        };
+    }
+
+    fn executablePayloadForKey(
+        self: *const StaticDataBuilder,
+        preferred: MaterializationContext,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) ExecutablePayloadContext {
+        const preferred_ref = preferred.executable_type_payloads.refForKey(artifactRefFromKey(preferred.owner), key);
+        if (preferred_ref) |ref| return self.executablePayloadForRef(ref);
+        if (self.artifact.executable_type_payloads.refForKey(artifactRefFromKey(self.artifact.key), key)) |ref| {
+            return self.executablePayloadForRef(ref);
+        }
+        if (self.artifact_views.root) |root| {
+            for (root.relation_artifacts) |related| {
+                if (related.executable_type_payloads.refForKey(artifactRefFromKey(related.key), key)) |ref| {
+                    return self.executablePayloadForRef(ref);
+                }
+            }
+        }
+        for (self.artifact_views.imports) |imported| {
+            if (imported.executable_type_payloads.refForKey(artifactRefFromKey(imported.key), key)) |ref| {
+                return self.executablePayloadForRef(ref);
+            }
+        }
+        staticDataInvariant("static data materialization could not find executable payload for key");
+    }
+
+    fn executablePayloadForRef(
+        self: *const StaticDataBuilder,
+        ref: CheckedArtifact.ExecutableTypePayloadRef,
+    ) ExecutablePayloadContext {
+        const materialization = self.materializationContextForArtifactRef(ref.artifact);
+        return .{
+            .materialization = materialization,
+            .payload = materialization.executable_type_payloads.get(ref.payload),
+        };
+    }
+
+    fn findMaterializedRecordField(
+        materialization: MaterializationContext,
+        fields: []const CheckedArtifact.ErasedCaptureExecutableMaterializationRecordField,
+        expected_context: MaterializationContext,
+        expected_label: canonical.RecordFieldLabelId,
+        seen: []bool,
+    ) ?CheckedArtifact.ErasedCaptureExecutableMaterializationRecordField {
+        const expected_text = expected_context.canonical_names.recordFieldLabelText(expected_label);
+        for (fields, 0..) |field, i| {
+            const actual_text = materialization.canonical_names.recordFieldLabelText(field.field);
+            if (!std.mem.eql(u8, actual_text, expected_text)) continue;
+            if (seen[i]) staticDataInvariant("static erased capture record duplicated field");
+            seen[i] = true;
+            return field;
+        }
+        return null;
+    }
+
+    const SelectedTagVariant = struct {
+        index: u32,
+        variant: CheckedArtifact.ExecutableTagVariantPayload,
+    };
+
+    fn findExecutableTagVariant(
+        materialization: MaterializationContext,
+        actual_tag: canonical.TagLabelId,
+        expected_context: MaterializationContext,
+        variants: []const CheckedArtifact.ExecutableTagVariantPayload,
+    ) ?SelectedTagVariant {
+        const actual_text = materialization.canonical_names.tagLabelText(actual_tag);
+        for (variants, 0..) |variant, i| {
+            const expected_text = expected_context.canonical_names.tagLabelText(variant.tag);
+            if (!std.mem.eql(u8, actual_text, expected_text)) continue;
+            return .{
+                .index = @intCast(i),
+                .variant = variant,
+            };
+        }
+        return null;
+    }
+
+    fn appendRelocationsWithOffset(
+        self: *StaticDataBuilder,
+        dest: *std.ArrayList(StaticDataRelocation),
+        source: []const StaticDataRelocation,
+        base_offset: u32,
+    ) Allocator.Error!void {
+        try dest.ensureUnusedCapacity(self.allocator, source.len);
+        for (source) |relocation| {
+            var target_name = relocation.target_symbol_name;
+            var owns_target_symbol_name = false;
+            if (relocation.owns_target_symbol_name) {
+                target_name = try self.allocator.dupe(u8, relocation.target_symbol_name);
+                owns_target_symbol_name = true;
+            }
+            errdefer if (owns_target_symbol_name) self.allocator.free(target_name);
+            dest.appendAssumeCapacity(.{
+                .offset = base_offset + relocation.offset,
+                .target_symbol_name = target_name,
+                .addend = relocation.addend,
+                .owns_target_symbol_name = owns_target_symbol_name,
+            });
+        }
+    }
+
+    fn cloneRelocations(
+        self: *StaticDataBuilder,
+        source: []const StaticDataRelocation,
+    ) Allocator.Error![]StaticDataRelocation {
+        const cloned = try self.allocator.alloc(StaticDataRelocation, source.len);
+        var initialized: usize = 0;
+        errdefer {
+            deinitRelocationSlice(self.allocator, cloned[0..initialized]);
+            self.allocator.free(cloned);
+        }
+        for (source, 0..) |relocation, i| {
+            var target_name = relocation.target_symbol_name;
+            var owns_target_symbol_name = false;
+            if (relocation.owns_target_symbol_name) {
+                target_name = try self.allocator.dupe(u8, relocation.target_symbol_name);
+                owns_target_symbol_name = true;
+            }
+            cloned[i] = .{
+                .offset = relocation.offset,
+                .target_symbol_name = target_name,
+                .addend = relocation.addend,
+                .owns_target_symbol_name = owns_target_symbol_name,
+            };
+            initialized += 1;
+        }
+        return cloned;
+    }
+
+    fn procSymbolNameForSealedErasedCallableCode(
+        self: *StaticDataBuilder,
+        code: CheckedArtifact.SealedErasedCallableCode,
+    ) MaterializationError![]u8 {
+        const lowered = self.lowered orelse {
+            staticDataInvariant("static boxed erased callable export requires lowered erased-callable code map");
+        };
+        for (lowered.erased_callable_code_map) |entry| {
+            if (!sealedErasedCallableCodeMatchesLowered(code, entry.code)) continue;
+            const proc_spec = lowered.lir_result.store.getProcSpec(entry.lir_proc);
+            return try backend.procSymbolName(self.allocator, proc_spec.name);
+        }
+        staticDataInvariant("static boxed erased callable export referenced erased callable code that was not lowered");
+    }
+
+    fn sealedErasedCallableCodeMatchesLowered(
+        sealed: CheckedArtifact.SealedErasedCallableCode,
+        lowered: canonical.ErasedCallableCodeRef,
+    ) bool {
+        return switch (sealed) {
+            .direct_proc => |sealed_direct| switch (lowered) {
+                .direct_proc_value => |lowered_direct| erasedDirectProcCodeRefEql(sealed_direct.code, lowered_direct),
+                .finite_set_adapter => false,
+            },
+            .finite_adapter => |sealed_finite| switch (lowered) {
+                .direct_proc_value => false,
+                .finite_set_adapter => |lowered_adapter| repr.erasedAdapterKeyEql(sealed_finite.adapter_key, lowered_adapter),
+            },
+        };
+    }
+
+    fn erasedDirectProcCodeRefEql(
+        a: canonical.ErasedDirectProcCodeRef,
+        b: canonical.ErasedDirectProcCodeRef,
+    ) bool {
+        return canonical.procedureCallableRefEql(a.proc_value, b.proc_value) and
+            repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key);
+    }
+
     fn writePointerRelocation(
         self: *StaticDataBuilder,
         bytes: []u8,
@@ -768,11 +1836,24 @@ const StaticDataBuilder = struct {
         target_symbol_name: []const u8,
         addend: i64,
     ) Allocator.Error!void {
+        try self.writePointerRelocationWithOwnership(bytes, relocations, offset, target_symbol_name, addend, false);
+    }
+
+    fn writePointerRelocationWithOwnership(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        offset: u32,
+        target_symbol_name: []const u8,
+        addend: i64,
+        owns_target_symbol_name: bool,
+    ) Allocator.Error!void {
         self.writeWord(bytes, offset, 0);
         try relocations.append(self.allocator, .{
             .offset = offset,
             .target_symbol_name = target_symbol_name,
             .addend = addend,
+            .owns_target_symbol_name = owns_target_symbol_name,
         });
     }
 
@@ -807,6 +1888,87 @@ const StaticDataBuilder = struct {
         }
     }
 };
+
+fn materializationContextFromImportedView(view: CheckedArtifact.ImportedModuleView) MaterializationContext {
+    return .{
+        .owner = view.key,
+        .canonical_names = view.canonical_names,
+        .plans = view.comptime_plans,
+        .values = view.comptime_values,
+        .executable_type_payloads = view.executable_type_payloads,
+        .callable_set_descriptors = view.callable_set_descriptors,
+        .const_instances = view.const_instances,
+    };
+}
+
+fn artifactRefFromKey(key: CheckedArtifact.CheckedModuleArtifactKey) canonical.ArtifactRef {
+    return .{ .bytes = key.bytes };
+}
+
+fn artifactKeyEql(a: CheckedArtifact.CheckedModuleArtifactKey, b: CheckedArtifact.CheckedModuleArtifactKey) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn findCallableSetMemberPayload(
+    members: []const CheckedArtifact.ExecutableCallableSetMemberPayload,
+    selected: canonical.CallableSetMemberId,
+) ?CheckedArtifact.ExecutableCallableSetMemberPayload {
+    for (members) |member| {
+        if (member.member == selected) return member;
+    }
+    return null;
+}
+
+fn findTagPayload(
+    payloads: []const CheckedArtifact.ErasedCaptureExecutableMaterializationTagPayload,
+    expected_index: u32,
+    seen: []bool,
+) ?CheckedArtifact.ErasedCaptureExecutableMaterializationTagPayload {
+    for (payloads, 0..) |payload, i| {
+        if (payload.index != expected_index) continue;
+        if (seen[i]) staticDataInvariant("static erased capture tag duplicated payload");
+        seen[i] = true;
+        return payload;
+    }
+    return null;
+}
+
+fn nominalKeyTextEql(
+    actual_context: MaterializationContext,
+    actual: canonical.NominalTypeKey,
+    expected_context: MaterializationContext,
+    expected: canonical.NominalTypeKey,
+) bool {
+    return std.mem.eql(
+        u8,
+        actual_context.canonical_names.moduleNameText(actual.module_name),
+        expected_context.canonical_names.moduleNameText(expected.module_name),
+    ) and std.mem.eql(
+        u8,
+        actual_context.canonical_names.typeNameText(actual.type_name),
+        expected_context.canonical_names.typeNameText(expected.type_name),
+    );
+}
+
+fn verifyAllSeen(seen: []const bool, comptime message: []const u8) void {
+    for (seen) |was_seen| {
+        if (!was_seen) staticDataInvariant(message);
+    }
+}
+
+fn layoutInfoFromStore(
+    layouts: *const layout_mod.Store,
+    target_usize: base.target.TargetUsize,
+    layout_idx: layout_mod.Idx,
+) ValueLayout {
+    const layout = layouts.getLayout(layout_idx);
+    return .{
+        .idx = layout_idx,
+        .size = layouts.layoutSize(layout),
+        .alignment = @intCast(layout.alignment(target_usize).toByteUnits()),
+        .contains_refcounted = layouts.layoutContainsRefcounted(layout),
+    };
+}
 
 fn payloadLayoutForTagArg(
     layouts: *const layout_mod.Store,
@@ -848,6 +2010,14 @@ fn sortedIndexForOriginal(sorted: []const StaticDataBuilder.SortedVariant, origi
 fn staticDataPtrOffset(word_size: u32, element_alignment: u32, contains_refcounted: bool) u32 {
     const required_space = if (contains_refcounted) word_size * 2 else word_size;
     return alignForwardU32(required_space, element_alignment);
+}
+
+fn erasedCallablePayloadSize(word_size: u32, capture_size: usize) usize {
+    return @as(usize, erasedCallableCaptureOffset(word_size)) + capture_size;
+}
+
+fn erasedCallableCaptureOffset(word_size: u32) u32 {
+    return alignForwardU32(word_size * 2, builtins.erased_callable.capture_alignment);
 }
 
 fn alignForwardU32(value: u32, alignment: u32) u32 {

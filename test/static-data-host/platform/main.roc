@@ -1,5 +1,3 @@
-I64ToI64 : I64 -> I64
-
 platform ""
     requires {} {
         main! : () => {},
@@ -22,7 +20,7 @@ platform ""
                 Box([BranchLeaf(I64), BranchPair(Box(I64), Box(I64))]),
             ),
         ],
-        boxed_add_one : Box(I64ToI64),
+        boxed_add_one : Box((I64 -> I64)),
     }
     exposes []
     packages {}
@@ -82,5 +80,5 @@ tree_for_host : [
 ]
 tree_for_host = tree
 
-boxed_add_one_for_host : Box(I64ToI64)
+boxed_add_one_for_host : Box((I64 -> I64))
 boxed_add_one_for_host = boxed_add_one

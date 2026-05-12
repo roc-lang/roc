@@ -111,7 +111,7 @@ typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);
 /**
  * Total number of hosted functions in this platform
  */
-#define HOSTED_FUNCTION_COUNT 15
+#define HOSTED_FUNCTION_COUNT 16
 
 /**
  * Index constants for each hosted function
@@ -122,16 +122,17 @@ typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);
 #define HOSTED_IDX_HOST_BOXED_DROP_REPORT 2
 #define HOSTED_IDX_HOST_BOXED_NESTED_RECORD 3
 #define HOSTED_IDX_HOST_BOXED_RECURSIVE_TREE 4
-#define HOSTED_IDX_HOST_CALL_BOXED 5
-#define HOSTED_IDX_HOST_GET_GREETING 6
-#define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 7
-#define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 8
-#define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 9
-#define HOSTED_IDX_HOST_STORE_BOXED 10
-#define HOSTED_IDX_HOST_STORED_BOXED_CALL 11
-#define HOSTED_IDX_STDERR_LINE 12
-#define HOSTED_IDX_STDIN_LINE 13
-#define HOSTED_IDX_STDOUT_LINE 14
+#define HOSTED_IDX_HOST_BOXED_WITH_BOXED_CAPTURE 5
+#define HOSTED_IDX_HOST_CALL_BOXED 6
+#define HOSTED_IDX_HOST_GET_GREETING 7
+#define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 8
+#define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 9
+#define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 10
+#define HOSTED_IDX_HOST_STORE_BOXED 11
+#define HOSTED_IDX_HOST_STORED_BOXED_CALL 12
+#define HOSTED_IDX_STDERR_LINE 13
+#define HOSTED_IDX_STDIN_LINE 14
+#define HOSTED_IDX_STDOUT_LINE 15
 
 // =============================================================================
 // Argument Structures
@@ -217,6 +218,29 @@ _Static_assert(_Alignof(HostBoxed_recursive_treeArgs) >= 1, "HostBoxed_recursive
  * Example implementation:
  * void hosted_host_boxed_recursive_tree(struct RocOps* ops, HostBoxed_recursive_treeArgs* args, void* ret) {
  *     // args->arg0 is void* (Host.Tree)
+ *     // Set return value: *((RocErasedCallable*)ret) = result;
+ * }
+ */
+
+/**
+ * Arguments for Host.boxed_with_boxed_capture!
+ * Roc signature: Box(I64 -> I64), I64 => Box(I64 -> I64)
+ * C function name: host_boxed_with_boxed_capture
+ * Return type: RocErasedCallable
+ */
+typedef struct {
+    RocErasedCallable arg0;  // Box(I64 -> I64)
+    int64_t arg1;  // I64
+} HostBoxed_with_boxed_captureArgs;
+
+_Static_assert(sizeof(HostBoxed_with_boxed_captureArgs) > 0, "HostBoxed_with_boxed_captureArgs must have non-zero size");
+_Static_assert(_Alignof(HostBoxed_with_boxed_captureArgs) >= 1, "HostBoxed_with_boxed_captureArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_boxed_with_boxed_capture(struct RocOps* ops, HostBoxed_with_boxed_captureArgs* args, void* ret) {
+ *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
+ *     // args->arg1 is int64_t (I64)
  *     // Set return value: *((RocErasedCallable*)ret) = result;
  * }
  */
@@ -387,16 +411,17 @@ typedef struct {
     HostedFn Host_boxed_drop_report;  // index 2, C name: host_boxed_drop_report
     HostedFn Host_boxed_nested_record;  // index 3, C name: host_boxed_nested_record
     HostedFn Host_boxed_recursive_tree;  // index 4, C name: host_boxed_recursive_tree
-    HostedFn Host_call_boxed;  // index 5, C name: host_call_boxed
-    HostedFn Host_get_greeting;  // index 6, C name: host_get_greeting
-    HostedFn Host_release_stored_boxed;  // index 7, C name: host_release_stored_boxed
-    HostedFn Host_reset_boxed_drop_report;  // index 8, C name: host_reset_boxed_drop_report
-    HostedFn Host_roundtrip_boxed;  // index 9, C name: host_roundtrip_boxed
-    HostedFn Host_store_boxed;  // index 10, C name: host_store_boxed
-    HostedFn Host_stored_boxed_call;  // index 11, C name: host_stored_boxed_call
-    HostedFn Stderr_line;  // index 12, C name: stderr_line
-    HostedFn Stdin_line;  // index 13, C name: stdin_line
-    HostedFn Stdout_line;  // index 14, C name: stdout_line
+    HostedFn Host_boxed_with_boxed_capture;  // index 5, C name: host_boxed_with_boxed_capture
+    HostedFn Host_call_boxed;  // index 6, C name: host_call_boxed
+    HostedFn Host_get_greeting;  // index 7, C name: host_get_greeting
+    HostedFn Host_release_stored_boxed;  // index 8, C name: host_release_stored_boxed
+    HostedFn Host_reset_boxed_drop_report;  // index 9, C name: host_reset_boxed_drop_report
+    HostedFn Host_roundtrip_boxed;  // index 10, C name: host_roundtrip_boxed
+    HostedFn Host_store_boxed;  // index 11, C name: host_store_boxed
+    HostedFn Host_stored_boxed_call;  // index 12, C name: host_stored_boxed_call
+    HostedFn Stderr_line;  // index 13, C name: stderr_line
+    HostedFn Stdin_line;  // index 14, C name: stdin_line
+    HostedFn Stdout_line;  // index 15, C name: stdout_line
 } HostedFunctions;
 
 #ifdef __cplusplus

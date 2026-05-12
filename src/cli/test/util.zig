@@ -162,7 +162,10 @@ pub fn runRocWithEnv(
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
-    const test_file = try std.fs.path.join(allocator, &.{ cwd_path, test_file_path });
+    const test_file = if (std.fs.path.isAbsolute(test_file_path))
+        try allocator.dupe(u8, test_file_path)
+    else
+        try std.fs.path.join(allocator, &.{ cwd_path, test_file_path });
     defer allocator.free(test_file);
 
     // Build argv: [roc_path, ...args, test_file]

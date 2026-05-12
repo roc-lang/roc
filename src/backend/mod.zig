@@ -30,6 +30,7 @@ pub const AArch64Backend = dev.AArch64Backend;
 pub const Entrypoint = dev.Entrypoint;
 pub const StaticDataExport = dev.StaticDataExport;
 pub const StaticDataRelocation = dev.StaticDataRelocation;
+pub const procSymbolName = dev.procSymbolName;
 pub const ObjectFileCompiler = dev.ObjectFileCompiler;
 pub const CompilationResult = dev.CompilationResult;
 pub const resolveBuiltinFunction = dev.resolveBuiltinFunction;

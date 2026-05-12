@@ -26,6 +26,7 @@ const repr = LambdaSolved.Representation;
 pub const ArtifactViews = struct {
     root: ?checked_artifact.LoweringModuleView = null,
     imports: []const checked_artifact.ImportedModuleView = &.{},
+    collect_provided_data_exports: bool = false,
 };
 
 /// Public `PublishedExecutableTypeRequest` declaration.
@@ -800,21 +801,20 @@ fn collectErasedAdapterRequirements(
     for (input.executable_synthetic_procs.items) |synthetic| {
         switch (synthetic.body) {
             .erased_promoted_wrapper => |erased| {
-                try collectErasedCodeRefAdapter(
+                try collectSealedErasedCallableAdapters(
                     allocator,
                     &adapters,
-                    erased.code,
+                    erased.sealed,
                     synthetic.artifact,
-                    try cloneExecutableSpecializationKeySlice(allocator, erased.finite_adapter_member_targets),
-                    try clonePublishedFiniteSetEraseAdapterBranches(allocator, erased.finite_adapter_branches),
                 );
                 try collectErasedCaptureMaterializationAdapters(
                     allocator,
                     &adapters,
                     artifact_views,
                     &visited_const_instances,
+                    synthetic.artifact,
                     synthetic.comptime_plans,
-                    erased.capture,
+                    erased.sealed.capture,
                 );
                 switch (erased.hidden_capture_arg) {
                     .none => {},
@@ -823,6 +823,7 @@ fn collectErasedAdapterRequirements(
                         &adapters,
                         artifact_views,
                         &visited_const_instances,
+                        synthetic.artifact,
                         synthetic.comptime_plans,
                         capture,
                     ),
@@ -831,35 +832,70 @@ fn collectErasedAdapterRequirements(
         }
     }
 
+    if (artifact_views.collect_provided_data_exports) {
+        try collectProvidedDataExportAdapters(
+            allocator,
+            &adapters,
+            artifact_views,
+            &visited_const_instances,
+        );
+    }
+
     return adapters;
 }
 
-fn collectErasedCodeRefAdapter(
+fn collectProvidedDataExportAdapters(
     allocator: Allocator,
     adapters: *std.ArrayList(ErasedAdapterRequirement),
-    code: canonical.ErasedCallableCodeRef,
-    artifact_descriptor_owner: ?checked_artifact.CheckedModuleArtifactKey,
-    member_targets: []const repr.ExecutableSpecializationKey,
-    published_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
+    artifact_views: ArtifactViews,
+    visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
 ) Allocator.Error!void {
-    switch (code) {
-        .direct_proc_value => {
-            if (member_targets.len != 0) {
-                executableInvariant("direct erased callable code carried finite adapter member targets");
-            }
-            if (published_branches.len != 0) {
-                executableInvariant("direct erased callable code carried finite adapter branches");
-            }
-            deinitExecutableSpecializationKeySlice(allocator, member_targets);
-            deinitPublishedFiniteSetEraseAdapterBranches(allocator, published_branches);
+    const root = artifact_views.root orelse {
+        executableInvariant("executable adapter collection for provided data exports requires root artifact view");
+    };
+    const materialization = materializationStoresForArtifact(
+        root.artifact.key,
+        &root.artifact.canonical_names,
+        &root.artifact.comptime_plans,
+        &root.artifact.comptime_values,
+    );
+    for (root.artifact.provided_exports.exports) |provided| {
+        const data = switch (provided) {
+            .procedure => continue,
+            .data => |data| data,
+        };
+        const binding = root.artifact.comptime_values.lookupBinding(data.pattern) orelse {
+            executableInvariant("provided data export had no published compile-time value for executable adapters");
+        };
+        try collectComptimeValueAdapters(
+            allocator,
+            adapters,
+            artifact_views,
+            visited_const_instances,
+            materialization,
+            binding.schema,
+            binding.value,
+        );
+    }
+}
+
+fn collectSealedErasedCallableAdapters(
+    allocator: Allocator,
+    adapters: *std.ArrayList(ErasedAdapterRequirement),
+    sealed: checked_artifact.SealedErasedCallableValue,
+    artifact_descriptor_owner: checked_artifact.CheckedModuleArtifactKey,
+) Allocator.Error!void {
+    switch (sealed.code) {
+        .direct_proc => {},
+        .finite_adapter => |finite| {
+            try appendErasedAdapterRequirement(allocator, adapters, .{
+                .key = finite.adapter_key,
+                .payload_artifact_owner = artifact_descriptor_owner,
+                .artifact_descriptor_owner = artifact_descriptor_owner,
+                .member_targets = try cloneExecutableSpecializationKeysFromSealedMembers(allocator, finite.members),
+                .published_branches = try publishedBranchesFromSealedMembers(allocator, finite.members),
+            });
         },
-        .finite_set_adapter => |adapter| try appendErasedAdapterRequirement(allocator, adapters, .{
-            .key = adapter,
-            .payload_artifact_owner = artifact_descriptor_owner,
-            .artifact_descriptor_owner = artifact_descriptor_owner,
-            .member_targets = member_targets,
-            .published_branches = published_branches,
-        }),
     }
 }
 
@@ -1033,6 +1069,7 @@ fn collectErasedCaptureMaterializationAdapters(
     adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
+    owner: checked_artifact.CheckedModuleArtifactKey,
     plans: *const checked_artifact.CompileTimePlanStore,
     capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
 ) Allocator.Error!void {
@@ -1045,6 +1082,7 @@ fn collectErasedCaptureMaterializationAdapters(
             adapters,
             artifact_views,
             visited_const_instances,
+            owner,
             plans,
             node,
         ),
@@ -1056,6 +1094,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
     adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
+    owner: checked_artifact.CheckedModuleArtifactKey,
     plans: *const checked_artifact.CompileTimePlanStore,
     node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
 ) Allocator.Error!void {
@@ -1078,30 +1117,26 @@ fn collectErasedCaptureMaterializationNodeAdapters(
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                owner,
                 plans,
                 capture,
             );
         },
         .erased_callable => |erased| {
-            try collectErasedCodeRefAdapter(
+            try collectSealedErasedCallableAdapters(
                 allocator,
                 adapters,
-                erased.code,
-                // Materialized erased callable values that need an artifact
-                // descriptor must publish member targets before reaching this
-                // path. The owner is unused for direct code and empty-target
-                // session descriptors.
-                null,
-                &.{},
-                &.{},
+                erased.sealed,
+                owner,
             );
             try collectErasedCaptureMaterializationAdapters(
                 allocator,
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                owner,
                 plans,
-                erased.capture,
+                erased.sealed.capture,
             );
         },
         .record => |fields| for (fields) |field| {
@@ -1110,6 +1145,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                owner,
                 plans,
                 field.value,
             );
@@ -1120,6 +1156,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                owner,
                 plans,
                 item,
             );
@@ -1130,6 +1167,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                owner,
                 plans,
                 payload.value,
             );
@@ -1140,6 +1178,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                owner,
                 plans,
                 item,
             );
@@ -1149,6 +1188,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
             adapters,
             artifact_views,
             visited_const_instances,
+            owner,
             plans,
             payload,
         ),
@@ -1157,6 +1197,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
             adapters,
             artifact_views,
             visited_const_instances,
+            owner,
             plans,
             nominal.backing,
         ),
@@ -1165,6 +1206,7 @@ fn collectErasedCaptureMaterializationNodeAdapters(
             adapters,
             artifact_views,
             visited_const_instances,
+            owner,
             plans,
             ref,
         ),
@@ -1288,6 +1330,7 @@ fn collectComptimeValueAdapters(
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                materialization.owner,
                 materialization.plans,
                 leaf,
             );
@@ -1300,20 +1343,27 @@ fn collectComptimeCallableLeafAdapters(
     adapters: *std.ArrayList(ErasedAdapterRequirement),
     artifact_views: ArtifactViews,
     visited_const_instances: *std.AutoHashMap(ConstInstanceAdapterVisitKey, void),
+    owner: checked_artifact.CheckedModuleArtifactKey,
     plans: *const checked_artifact.CompileTimePlanStore,
     leaf: checked_artifact.CallableLeafInstance,
 ) Allocator.Error!void {
     switch (leaf) {
         .finite => {},
         .erased_boxed => |erased| {
-            try collectErasedCodeRefAdapter(allocator, adapters, erased.code, null, &.{}, &.{});
+            try collectSealedErasedCallableAdapters(
+                allocator,
+                adapters,
+                erased.sealed,
+                owner,
+            );
             try collectErasedCaptureMaterializationAdapters(
                 allocator,
                 adapters,
                 artifact_views,
                 visited_const_instances,
+                owner,
                 plans,
-                erased.capture,
+                erased.sealed.capture,
             );
         },
     }
@@ -1511,6 +1561,73 @@ fn cloneExecutableSpecializationKeySlice(
     for (keys, 0..) |key, i| {
         out[i] = try repr.cloneExecutableSpecializationKey(allocator, key);
         initialized += 1;
+    }
+    return out;
+}
+
+fn cloneExecutableSpecializationKeysFromSealedMembers(
+    allocator: Allocator,
+    members: []const checked_artifact.SealedFiniteErasedAdapterMember,
+) Allocator.Error![]const repr.ExecutableSpecializationKey {
+    if (members.len == 0) return &.{};
+    const out = try allocator.alloc(repr.ExecutableSpecializationKey, members.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (out[0..initialized]) |*key| repr.deinitExecutableSpecializationKey(allocator, key);
+        allocator.free(out);
+    }
+    for (members, 0..) |member, i| {
+        out[i] = try repr.cloneExecutableSpecializationKey(allocator, member.target_key);
+        initialized += 1;
+    }
+    return out;
+}
+
+fn publishedBranchesFromSealedMembers(
+    allocator: Allocator,
+    members: []const checked_artifact.SealedFiniteErasedAdapterMember,
+) Allocator.Error![]const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan {
+    if (members.len == 0) return &.{};
+    const out = try allocator.alloc(checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan, members.len);
+    @memset(out, .{
+        .member = .{
+            .callable_set_key = .{ .bytes = [_]u8{0} ** 32 },
+            .member_index = undefined,
+        },
+        .member_proc_source_fn_ty_payload = undefined,
+        .member_lifted_owner_source_fn_ty_payload = null,
+        .target_key = .{
+            .base = undefined,
+            .requested_fn_ty = .{ .bytes = [_]u8{0} ** 32 },
+            .exec_arg_tys = &.{},
+            .exec_ret_ty = .{ .bytes = [_]u8{0} ** 32 },
+            .callable_repr_mode = .direct,
+            .capture_shape_key = .{ .bytes = [_]u8{0} ** 32 },
+        },
+        .arg_transforms = &.{},
+        .capture_transforms = &.{},
+        .result_transform = .{
+            .artifact = .{ .bytes = [_]u8{0} ** 32 },
+            .transform = undefined,
+        },
+    });
+    errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, out);
+    for (members, 0..) |member, i| {
+        out[i] = .{
+            .member = member.member,
+            .member_proc_source_fn_ty_payload = member.member_proc_source_fn_ty_payload,
+            .member_lifted_owner_source_fn_ty_payload = member.member_lifted_owner_source_fn_ty_payload,
+            .target_key = try repr.cloneExecutableSpecializationKey(allocator, member.target_key),
+            .arg_transforms = if (member.arg_transforms.len == 0)
+                &.{}
+            else
+                try allocator.dupe(checked_artifact.PublishedExecutableValueTransformRef, member.arg_transforms),
+            .capture_transforms = if (member.capture_transforms.len == 0)
+                &.{}
+            else
+                try allocator.dupe(checked_artifact.PublishedExecutableValueTransformRef, member.capture_transforms),
+            .result_transform = member.result_transform,
+        };
     }
     return out;
 }
@@ -2721,19 +2838,19 @@ fn lowerErasedPromotedWrapperBody(
         program,
         materialization,
         capture_ty,
-        erased.capture,
+        erased.sealed.capture,
         erased.hidden_capture_arg,
     );
 
-    const code_proc = executableProcForErasedCode(program, erased.code, materialization.owner);
+    const code_proc = executableProcForSealedErasedCallableCode(program, erased.sealed.code, materialization.owner);
     const packed_ty = try program.types.addType(.{ .erased_fn = .{
-        .sig_key = erased.sig_key,
+        .sig_key = erased.sealed.boundary.sig_key,
         .capture_shape = signature.specialization_key.capture_shape_key,
         .capture_ty = capture_ty,
     } });
     const packed_value = program.ast.freshValueRef();
     const packed_expr = try program.ast.addExpr(packed_ty, packed_value, .{ .packed_erased_fn = .{
-        .sig_key = erased.sig_key,
+        .sig_key = erased.sealed.boundary.sig_key,
         .code = code_proc,
         .capture = capture.value,
         .capture_ty = capture_ty,
@@ -2770,7 +2887,7 @@ fn lowerErasedPromotedWrapperBody(
     const raw_call_expr = try program.ast.addExpr(raw_call_ty, raw_call_value, .{ .call_erased = .{
         .func = packed_value,
         .args = try program.ast.addValueRefSpan(call_args),
-        .sig_key = erased.sig_key,
+        .sig_key = erased.sealed.boundary.sig_key,
         .capture_ty = capture_ty,
     } });
 
@@ -2949,13 +3066,8 @@ fn applyPublishedExecutableValueTransform(
             const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
             const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
             const from_erased_ty = erasedFnType(program, from_ty);
-            if (!repr.erasedFnSigKeyEql(from_erased_ty.sig_key, already_erased.sig_key)) {
-                executableInvariant("already-erased value transform signature differs from source endpoint");
-            }
             const erased_ty = erasedFnType(program, to_ty);
-            if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, already_erased.sig_key)) {
-                executableInvariant("already-erased value transform signature differs from target endpoint");
-            }
+            verifyAlreadyErasedCallableTransformPlan(from_erased_ty.sig_key, erased_ty.sig_key, already_erased);
             if (from_ty == to_ty) return value;
 
             const bridged_value = program.ast.freshValueRef();
@@ -3736,23 +3848,37 @@ fn applyCallableToErasedValueTransform(
                 executableInvariant("proc-value erasure transform target signature differs from plan");
             }
             _ = executableProcForSpecializationKey(program, proc.executable_specialization_key);
-            const erased_expr = try lowerMaterializedErasedCallableValue(
-                program.allocator,
-                program,
-                materialization,
-                result_ty,
-                .{
-                    .source_fn_ty = proc.proc_value.source_fn_ty,
-                    .sig_key = proc.erased_fn_sig_key,
-                    .code = .{ .direct_proc_value = .{
-                        .proc_value = proc.proc_value,
-                        .capture_shape_key = proc.capture_shape_key,
-                    } },
-                    .capture = proc.capture,
-                    .provenance = &.{},
-                },
-            );
-            const erased_value = program.ast.getExpr(erased_expr).value;
+            const capture_expr: ?Ast.ExprId = if (proc.erased_fn_sig_key.capture_ty) |_| blk: {
+                const capture_ty = erased_ty.capture_ty orelse {
+                    executableInvariant("proc-value erasure transform expected type has no capture type");
+                };
+                break :blk try lowerErasedCaptureExecutableMaterializationPlanExpr(
+                    program.allocator,
+                    program,
+                    materialization,
+                    capture_ty,
+                    proc.capture,
+                );
+            } else null;
+            const capture_ref: ?Ast.ExecutableValueRef = if (capture_expr) |expr| blk: {
+                const capture_value = program.ast.getExpr(expr).value;
+                try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+                    .value = capture_value,
+                    .body = expr,
+                } }));
+                break :blk capture_value;
+            } else null;
+            const erased_value = program.ast.freshValueRef();
+            const erased_expr = try program.ast.addExpr(result_ty, erased_value, .{ .packed_erased_fn = .{
+                .sig_key = proc.erased_fn_sig_key,
+                .code = executableProcForErasedDirectProcAdapter(program, .{
+                    .proc_value = proc.proc_value,
+                    .capture_shape_key = proc.capture_shape_key,
+                }),
+                .capture = capture_ref,
+                .capture_ty = erased_ty.capture_ty,
+                .capture_shape = proc.capture_shape_key,
+            } });
             try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
                 .value = erased_value,
                 .body = erased_expr,
@@ -3767,6 +3893,41 @@ fn erasedFnType(program: *const Program, ty: Type.TypeId) Type.ErasedFnType {
         .erased_fn => |erased_fn| erased_fn,
         else => executableInvariant("executable value transform expected erased function target"),
     };
+}
+
+fn erasedFnSigKeyAbiEql(a: repr.ErasedFnSigKey, b: repr.ErasedFnSigKey) bool {
+    return std.mem.eql(u8, a.abi.bytes[0..], b.abi.bytes[0..]);
+}
+
+fn verifyAlreadyErasedCallableTransformPlan(
+    from_sig: repr.ErasedFnSigKey,
+    to_sig: repr.ErasedFnSigKey,
+    plan: checked_artifact.AlreadyErasedCallableTransformPlan,
+) void {
+    switch (plan) {
+        .exact => |sig_key| {
+            if (!repr.erasedFnSigKeyEql(from_sig, sig_key)) {
+                executableInvariant("already-erased value transform exact signature differs from source endpoint");
+            }
+            if (!repr.erasedFnSigKeyEql(to_sig, sig_key)) {
+                executableInvariant("already-erased value transform exact signature differs from target endpoint");
+            }
+        },
+        .same_abi_retype => |retype| {
+            if (!repr.erasedFnSigKeyEql(from_sig, retype.source_sig)) {
+                executableInvariant("already-erased value transform source signature differs from retype source");
+            }
+            if (!repr.erasedFnSigKeyEql(to_sig, retype.target_sig)) {
+                executableInvariant("already-erased value transform target signature differs from retype target");
+            }
+            if (!erasedFnSigKeyAbiEql(retype.source_sig, retype.target_sig)) {
+                executableInvariant("already-erased value transform retype changed erased ABI");
+            }
+            if (repr.canonicalTypeKeyEql(retype.source_sig.source_fn_ty, retype.target_sig.source_fn_ty)) {
+                executableInvariant("already-erased value transform retype did not change source function identity");
+            }
+        },
+    }
 }
 
 fn lowerPublishedExecutableValueTransformAsBridge(
@@ -4687,13 +4848,7 @@ fn lowerComptimeCallableLeafExpr(
             program,
             materialization,
             expected_ty,
-            .{
-                .source_fn_ty = erased.source_fn_ty,
-                .sig_key = erased.sig_key,
-                .code = erased.code,
-                .capture = erased.capture,
-                .provenance = erased.provenance,
-            },
+            .{ .sealed = erased.sealed },
         ),
     };
 }
@@ -5330,14 +5485,14 @@ fn lowerMaterializedErasedCallableValue(
         .erased_fn => |erased_fn| erased_fn,
         else => executableInvariant("executable erased callable materialization expected erased-fn type"),
     };
-    if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, erased.sig_key)) {
+    if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, erased.sealed.boundary.sig_key)) {
         executableInvariant("executable erased callable materialization signature differs from expected type");
     }
-    const capture_expr: ?Ast.ExprId = if (erased.sig_key.capture_ty) |_| blk: {
+    const capture_expr: ?Ast.ExprId = if (erased.sealed.boundary.sig_key.capture_ty) |_| blk: {
         const capture_ty = erased_ty.capture_ty orelse {
             executableInvariant("executable erased callable materialization expected type has no capture type");
         };
-        break :blk try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, capture_ty, erased.capture);
+        break :blk try lowerErasedCaptureExecutableMaterializationPlanExpr(allocator, program, materialization, capture_ty, erased.sealed.capture);
     } else null;
 
     const stmt_count: usize = if (capture_expr == null) 0 else 1;
@@ -5354,8 +5509,8 @@ fn lowerMaterializedErasedCallableValue(
 
     const value = program.ast.freshValueRef();
     const packed_fn = try program.ast.addExpr(expected_ty, value, .{ .packed_erased_fn = .{
-        .sig_key = erased.sig_key,
-        .code = executableProcForErasedCode(program, erased.code, materialization.owner),
+        .sig_key = erased.sealed.boundary.sig_key,
+        .code = executableProcForSealedErasedCallableCode(program, erased.sealed.code, materialization.owner),
         .capture = capture_ref,
         .capture_ty = erased_ty.capture_ty,
         .capture_shape = erased_ty.capture_shape,
@@ -5367,14 +5522,14 @@ fn lowerMaterializedErasedCallableValue(
     } });
 }
 
-fn executableProcForErasedCode(
+fn executableProcForSealedErasedCallableCode(
     program: *const Program,
-    code: canonical.ErasedCallableCodeRef,
+    code: checked_artifact.SealedErasedCallableCode,
     owner: checked_artifact.CheckedModuleArtifactKey,
 ) Ast.ExecutableProcId {
     return switch (code) {
-        .direct_proc_value => |direct| executableProcForErasedDirectProcAdapter(program, direct),
-        .finite_set_adapter => |adapter| executableProcForErasedAdapter(program, adapter, .{ .artifact = owner }),
+        .direct_proc => |direct| executableProcForErasedDirectProcAdapter(program, direct.code),
+        .finite_adapter => |finite| executableProcForErasedAdapter(program, finite.adapter_key, .{ .artifact = owner }),
     };
 }
 
@@ -10259,9 +10414,6 @@ const BodyBuilder = struct {
         if (!repr.canonicalTypeKeyEql(call_site.requested_source_fn_ty, call.requested_source_fn_ty)) {
             executableInvariant("executable erased call_value call-site requested source type differs from expression");
         }
-        if (!repr.canonicalTypeKeyEql(sig_key.source_fn_ty, call_site.requested_source_fn_ty)) {
-            executableInvariant("executable erased call_value signature source type differs from call site");
-        }
         const func_value_info_id = self.input.exprs.items[@intFromEnum(call.func)].value_info;
         const func_value_info = self.value_store.values.items[@intFromEnum(func_value_info_id)];
         const callable = func_value_info.callable orelse executableInvariant("executable erased call_value callee has no callable metadata");
@@ -11023,14 +11175,9 @@ const BodyBuilder = struct {
             .already_erased_callable => |erased| blk: {
                 const from_ty = try self.lowerSessionExecutableEndpointType(plan.from);
                 const from_erased_ty = erasedFnType(self.program, from_ty);
-                if (!repr.erasedFnSigKeyEql(from_erased_ty.sig_key, erased.sig_key)) {
-                    executableInvariant("executable already-erased session transform source signature differs from plan");
-                }
                 const to_ty = try self.lowerSessionExecutableEndpointType(plan.to);
                 const erased_ty = erasedFnType(self.program, to_ty);
-                if (!repr.erasedFnSigKeyEql(erased_ty.sig_key, erased.sig_key)) {
-                    executableInvariant("executable already-erased session transform target signature differs from plan");
-                }
+                verifyAlreadyErasedCallableTransformPlan(from_erased_ty.sig_key, erased_ty.sig_key, erased);
                 if (from_ty == to_ty) break :blk value;
 
                 const bridged_value = self.output.freshValueRef();

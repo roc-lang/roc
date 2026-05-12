@@ -3991,7 +3991,11 @@ fn processDevObjectSnapshot(
             const proc_specs = if (lowered) |*lowered_program| lowered_program.lir_result.store.getProcSpecs() else &.{};
             const static_data_exports = compile.static_data_exports.buildProvidedDataExports(
                 allocator,
-                root_artifact,
+                .{
+                    .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .imports = imported_artifacts,
+                },
+                if (lowered) |*lowered_program| lowered_program else null,
                 target,
             ) catch |err| {
                 std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });

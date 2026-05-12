@@ -811,6 +811,8 @@ pub const ProcValueErasePlan = struct {
 pub const AlreadyErasedCapturePlan = union(enum) {
     none,
     zero_sized_ty: TypeVarId,
+    executable_key: CanonicalExecValueTypeKey,
+    materialized_capture: checked_artifact.ArtifactErasedCaptureMaterializationRef,
     value: ValueInfoId,
 };
 
@@ -2207,10 +2209,11 @@ pub const RepresentationStore = struct {
             unreachable;
         }
         if (self.group_erasure_provenance[group_index].len > 0) {
-            if (!boxErasureProvenanceSliceEql(self.group_erasure_provenance[group_index], provenance)) {
-                debug.invariant(false, "lambda-solved invariant violated: group erasure provenance was published twice with different values");
-                unreachable;
-            }
+            self.group_erasure_provenance[group_index] = try mergeOwnedBoxErasureProvenanceSet(
+                self.allocator,
+                self.group_erasure_provenance[group_index],
+                provenance,
+            );
             return;
         }
         self.group_erasure_provenance[group_index] = try self.allocator.dupe(BoxErasureProvenance, provenance);
@@ -2448,6 +2451,30 @@ pub const RepresentationStore = struct {
         id: CallableValueEmissionPlanId,
     ) *CallableValueEmissionPlan {
         return &self.callable_emission_plans[@intFromEnum(id)];
+    }
+
+    /// Public `mergeCallableEmissionPlanProvenance` function.
+    pub fn mergeCallableEmissionPlanProvenance(
+        self: *RepresentationStore,
+        id: CallableValueEmissionPlanId,
+        provenance: []const BoxErasureProvenance,
+    ) std.mem.Allocator.Error!void {
+        if (provenance.len == 0) return;
+        const plan = self.callableEmissionPlanPtr(id);
+        switch (plan.*) {
+            .already_erased => |*erased| {
+                erased.provenance = try mergeOwnedBoxErasureProvenanceSet(self.allocator, erased.provenance, provenance);
+            },
+            .erase_proc_value => |*erase| {
+                erase.provenance = try mergeOwnedBoxErasureProvenanceSet(self.allocator, erase.provenance, provenance);
+            },
+            .erase_finite_set => |*erase| {
+                erase.provenance = try mergeOwnedBoxErasureProvenanceSet(self.allocator, erase.provenance, provenance);
+            },
+            .pending_proc_value,
+            .finite,
+            => representationInvariant("lambda-solved attempted to merge Box(T) provenance into a non-erased callable emission plan"),
+        }
     }
 
     pub fn setProcValueEraseCaptureTransforms(
@@ -3647,10 +3674,16 @@ fn boxErasureProvenanceEql(a: BoxErasureProvenance, b: BoxErasureProvenance) boo
     return switch (a) {
         .local_box_boundary => |left| switch (b) {
             .local_box_boundary => |right| left == right,
-            .promoted_wrapper => false,
+            .const_graph_box, .promoted_wrapper => false,
+        },
+        .const_graph_box => |left| switch (b) {
+            .const_graph_box => |right| std.mem.eql(u8, left.artifact.bytes[0..], right.artifact.bytes[0..]) and left.box_plan == right.box_plan,
+            .local_box_boundary,
+            .promoted_wrapper,
+            => false,
         },
         .promoted_wrapper => |left| switch (b) {
-            .local_box_boundary => false,
+            .const_graph_box, .local_box_boundary => false,
             .promoted_wrapper => |right| canonical.mirProcedureRefEql(left, right),
         },
     };
@@ -3665,6 +3698,63 @@ fn boxErasureProvenanceSliceEql(
         if (!boxErasureProvenanceEql(left, right)) return false;
     }
     return true;
+}
+
+fn boxErasureProvenanceSliceContains(
+    items: []const BoxErasureProvenance,
+    needle: BoxErasureProvenance,
+) bool {
+    for (items) |item| {
+        if (boxErasureProvenanceEql(item, needle)) return true;
+    }
+    return false;
+}
+
+/// Public `mergeBoxErasureProvenanceSets` function.
+pub fn mergeBoxErasureProvenanceSets(
+    allocator: std.mem.Allocator,
+    existing: []const BoxErasureProvenance,
+    added: []const BoxErasureProvenance,
+) std.mem.Allocator.Error![]const BoxErasureProvenance {
+    if (existing.len == 0) {
+        if (added.len == 0) return &.{};
+        return try allocator.dupe(BoxErasureProvenance, added);
+    }
+    var unique_added = std.ArrayList(BoxErasureProvenance).empty;
+    defer unique_added.deinit(allocator);
+    for (added) |item| {
+        if (boxErasureProvenanceSliceContains(existing, item)) continue;
+        if (boxErasureProvenanceSliceContains(unique_added.items, item)) continue;
+        try unique_added.append(allocator, item);
+    }
+    if (unique_added.items.len == 0) return try allocator.dupe(BoxErasureProvenance, existing);
+
+    const merged = try allocator.alloc(BoxErasureProvenance, existing.len + unique_added.items.len);
+    @memcpy(merged[0..existing.len], existing);
+    @memcpy(merged[existing.len..], unique_added.items);
+    return merged;
+}
+
+fn mergeOwnedBoxErasureProvenanceSet(
+    allocator: std.mem.Allocator,
+    existing: []const BoxErasureProvenance,
+    added: []const BoxErasureProvenance,
+) std.mem.Allocator.Error![]const BoxErasureProvenance {
+    if (added.len == 0) return existing;
+    var unique_added = std.ArrayList(BoxErasureProvenance).empty;
+    defer unique_added.deinit(allocator);
+    for (added) |item| {
+        if (boxErasureProvenanceSliceContains(existing, item)) continue;
+        if (boxErasureProvenanceSliceContains(unique_added.items, item)) continue;
+        try unique_added.append(allocator, item);
+    }
+    if (unique_added.items.len == 0) return existing;
+
+    const merged = try allocator.alloc(BoxErasureProvenance, existing.len + unique_added.items.len);
+    @memcpy(merged[0..existing.len], existing);
+    @memcpy(merged[existing.len..], unique_added.items);
+    if (existing.len > 0) allocator.free(existing);
+    return merged;
 }
 
 pub fn deinitProcRepresentationInstance(
@@ -5318,6 +5408,23 @@ const SessionExecutableTypePayloadBuilder = struct {
                     representationInvariant("already-erased session payload zero-sized capture key differs from signature");
                 }
                 break :blk capture;
+            },
+            .executable_key => |key| blk: {
+                const expected = erased.sig_key.capture_ty orelse representationInvariant("already-erased session payload executable capture has no signature capture type");
+                if (!canonicalExecValueTypeKeyEql(key, expected)) {
+                    representationInvariant("already-erased session payload executable capture key differs from signature");
+                }
+                const capture = self.payload_store.refForKey(key) orelse {
+                    representationInvariant("already-erased session payload executable capture key was not published");
+                };
+                break :blk .{ .ty = capture, .key = key };
+            },
+            .materialized_capture => blk: {
+                const key = erased.sig_key.capture_ty orelse representationInvariant("already-erased session payload materialized capture has no signature capture type");
+                const capture = self.payload_store.refForKey(key) orelse {
+                    representationInvariant("already-erased session payload materialized capture key was not published");
+                };
+                break :blk .{ .ty = capture, .key = key };
             },
             .value => |value| blk: {
                 const capture = try self.endpointForValue(value);

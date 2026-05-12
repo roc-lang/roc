@@ -49,6 +49,7 @@ pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @i
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
+pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
 
 /// Generic development backend parameterized by architecture-specific types.

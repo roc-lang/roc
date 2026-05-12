@@ -23,6 +23,7 @@ const checked_artifact = check.CheckedArtifact;
 pub const ArtifactViews = struct {
     root: checked_artifact.LoweringModuleView,
     imports: []const checked_artifact.ImportedModuleView = &.{},
+    collect_provided_data_exports: bool = false,
 };
 
 /// Public `Proc` declaration.
@@ -50,6 +51,13 @@ const ProcBuildRecord = struct {
 const ProcBuildRecordKind = union(enum) {
     normal,
     executable_synthetic: u32,
+};
+
+const SealedErasedAdapterMemberReservation = struct {
+    artifact: checked_artifact.CheckedModuleArtifactKey,
+    payloads: *const checked_artifact.ExecutableTypePayloadStore,
+    target_key: repr.ExecutableSpecializationKey,
+    provenance: []const repr.BoxErasureProvenance,
 };
 
 /// Public `ExecutableSyntheticProcInstance` declaration.
@@ -159,6 +167,7 @@ const ProcedureInstanceOwner = union(enum) {
         synthetic_index: u32,
         member_index: u32,
     },
+    sealed_erased_adapter_member: u32,
     finite_erased_adapter_member: struct {
         emission_plan: repr.CallableValueEmissionPlanId,
         member_index: u32,
@@ -176,6 +185,7 @@ fn procedureInstanceOwnerIsMaterialized(owner: ProcedureInstanceOwner) bool {
         .direct_call,
         .recursive_group_member,
         .executable_erased_adapter_member,
+        .sealed_erased_adapter_member,
         .finite_erased_adapter_member,
         .finite_erased_adapter_demand_member,
         => true,
@@ -478,6 +488,7 @@ const ProcedureInstanceRegistry = struct {
     proc_sccs: []ProcSccInfo,
     reservations: std.ArrayList(ProcedureInstanceReservation),
     recursive_group_members: std.ArrayList(RecursiveGroupMemberReservation),
+    sealed_erased_adapter_members: std.ArrayList(SealedErasedAdapterMemberReservation),
     pending: std.ArrayList(repr.ProcRepresentationInstanceId),
     active: std.ArrayList(repr.ProcRepresentationInstanceId),
     session_members: std.ArrayList(std.ArrayList(repr.ProcRepresentationInstanceId)),
@@ -510,6 +521,7 @@ const ProcedureInstanceRegistry = struct {
             .proc_sccs = proc_sccs,
             .reservations = .empty,
             .recursive_group_members = .empty,
+            .sealed_erased_adapter_members = .empty,
             .pending = .empty,
             .active = .empty,
             .session_members = .empty,
@@ -523,6 +535,11 @@ const ProcedureInstanceRegistry = struct {
         self.session_members.deinit(self.allocator);
         self.active.deinit(self.allocator);
         self.pending.deinit(self.allocator);
+        for (self.sealed_erased_adapter_members.items) |*member| {
+            repr.deinitExecutableSpecializationKey(self.allocator, &member.target_key);
+            if (member.provenance.len > 0) self.allocator.free(member.provenance);
+        }
+        self.sealed_erased_adapter_members.deinit(self.allocator);
         self.recursive_group_members.deinit(self.allocator);
         self.reservations.deinit(self.allocator);
         self.allocator.free(self.proc_sccs);
@@ -982,24 +999,24 @@ const ProcedureInstanceRegistry = struct {
         synthetic: ids.ExecutableSyntheticProc,
     ) Allocator.Error!void {
         switch (synthetic.body) {
-            .erased_promoted_wrapper => |erased| switch (erased.code) {
-                .direct_proc_value => {},
-                .finite_set_adapter => |adapter| {
-                    if (erased.finite_adapter_member_targets.len == 0) {
+            .erased_promoted_wrapper => |erased| switch (erased.sealed.code) {
+                .direct_proc => {},
+                .finite_adapter => |finite| {
+                    if (finite.members.len == 0) {
                         lambdaInvariant("lambda-solved executable synthetic finite adapter has no member targets");
                     }
                     const descriptors = callableSetDescriptorsForArtifactViews(self.artifact_views, synthetic.artifact) orelse {
                         lambdaInvariant("lambda-solved executable synthetic finite adapter artifact descriptors are unavailable");
                     };
-                    const descriptor = descriptors.descriptorFor(adapter.callable_set_key) orelse {
+                    const descriptor = descriptors.descriptorFor(finite.adapter_key.callable_set_key) orelse {
                         lambdaInvariant("lambda-solved executable synthetic finite adapter descriptor is unavailable");
                     };
-                    if (descriptor.members.len != erased.finite_adapter_member_targets.len) {
+                    if (descriptor.members.len != finite.members.len) {
                         lambdaInvariant("lambda-solved executable synthetic finite adapter member target count differs from descriptor");
                     }
-                    for (descriptor.members, erased.finite_adapter_member_targets, 0..) |member, target_key, member_index| {
-                        validatePersistedFiniteAdapterMemberTarget(member, target_key);
-                        const source_proc = try self.type_importer.name_resolver.mirProcedureRef(member.source_proc);
+                    for (descriptor.members, finite.members, 0..) |descriptor_member, sealed_member, member_index| {
+                        validatePersistedFiniteAdapterMemberTarget(descriptor_member, sealed_member.target_key);
+                        const source_proc = try self.type_importer.name_resolver.mirProcedureRef(sealed_member.source_proc);
                         _ = try self.reserve(source_proc, session_id, .{ .executable_erased_adapter_member = .{
                             .synthetic_index = synthetic_index,
                             .member_index = @intCast(member_index),
@@ -1008,6 +1025,361 @@ const ProcedureInstanceRegistry = struct {
                 },
             },
         }
+    }
+
+    fn reserveSealedErasedCallableValueDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        sealed: checked_artifact.SealedErasedCallableValue,
+    ) Allocator.Error!void {
+        switch (sealed.code) {
+            .direct_proc => {},
+            .finite_adapter => |finite| {
+                if (finite.members.len == 0) {
+                    lambdaInvariant("lambda-solved const-backed sealed finite adapter had no member targets");
+                }
+                const descriptors = callableSetDescriptorsForArtifactViews(self.artifact_views, owner) orelse {
+                    lambdaInvariant("lambda-solved const-backed sealed finite adapter artifact descriptors are unavailable");
+                };
+                const descriptor = descriptors.descriptorFor(finite.adapter_key.callable_set_key) orelse {
+                    lambdaInvariant("lambda-solved const-backed sealed finite adapter descriptor is unavailable");
+                };
+                if (descriptor.members.len != finite.members.len) {
+                    lambdaInvariant("lambda-solved const-backed sealed finite adapter member target count differs from descriptor");
+                }
+                const payloads = executablePayloadsForArtifactViews(self.artifact_views, owner) orelse {
+                    lambdaInvariant("lambda-solved const-backed sealed finite adapter executable payloads are unavailable");
+                };
+                for (descriptor.members, finite.members) |descriptor_member, sealed_member| {
+                    validatePersistedFiniteAdapterMemberTarget(descriptor_member, sealed_member.target_key);
+                    const source_proc = try self.type_importer.name_resolver.mirProcedureRef(sealed_member.source_proc);
+                    _ = try self.reserveSealedErasedAdapterMember(
+                        session_id,
+                        owner,
+                        payloads,
+                        source_proc,
+                        sealed_member.target_key,
+                        sealed.boundary.provenance,
+                    );
+                }
+            },
+        }
+    }
+
+    fn reserveSealedErasedAdapterMember(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        payloads: *const checked_artifact.ExecutableTypePayloadStore,
+        source_proc: canonical.MirProcedureRef,
+        target_key: repr.ExecutableSpecializationKey,
+        provenance: []const repr.BoxErasureProvenance,
+    ) Allocator.Error!repr.ProcRepresentationInstanceId {
+        if (provenance.len == 0) {
+            lambdaInvariant("lambda-solved const-backed sealed adapter member had no Box(T) provenance");
+        }
+        for (self.reservations.items) |reservation| {
+            if (reservation.solve_session != session_id) continue;
+            if (!canonical.mirProcedureRefEql(reservation.proc, source_proc)) continue;
+            const dep_index = switch (reservation.owner) {
+                .sealed_erased_adapter_member => |index| index,
+                else => continue,
+            };
+            const existing = self.sealed_erased_adapter_members.items[dep_index];
+            if (std.meta.eql(existing.artifact.bytes, owner.bytes) and
+                repr.executableSpecializationKeyEql(existing.target_key, target_key))
+            {
+                return reservation.instance;
+            }
+        }
+
+        var owned_key = try repr.cloneExecutableSpecializationKey(self.allocator, target_key);
+        errdefer repr.deinitExecutableSpecializationKey(self.allocator, &owned_key);
+        const owned_provenance = try self.allocator.dupe(repr.BoxErasureProvenance, provenance);
+        errdefer self.allocator.free(owned_provenance);
+        const dependency_index: u32 = @intCast(self.sealed_erased_adapter_members.items.len);
+        try self.sealed_erased_adapter_members.append(self.allocator, .{
+            .artifact = owner,
+            .payloads = payloads,
+            .target_key = owned_key,
+            .provenance = owned_provenance,
+        });
+        owned_key = undefined;
+        return try self.reserve(source_proc, session_id, .{ .sealed_erased_adapter_member = dependency_index }, null);
+    }
+
+    fn reserveProvidedDataExportDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+    ) Allocator.Error!void {
+        var seen_values = std.AutoHashMap(ProvidedDataValueVisitKey, void).init(self.allocator);
+        defer seen_values.deinit();
+        var seen_nodes = std.AutoHashMap(ProvidedDataMaterializationNodeVisitKey, void).init(self.allocator);
+        defer seen_nodes.deinit();
+        var seen_const_instances = std.AutoHashMap(ProvidedDataConstInstanceVisitKey, void).init(self.allocator);
+        defer seen_const_instances.deinit();
+
+        const materialization = ConstMaterializationView{
+            .owner = self.artifact_views.root.artifact.key,
+            .names = &self.artifact_views.root.artifact.canonical_names,
+            .values = &self.artifact_views.root.artifact.comptime_values,
+        };
+        for (self.artifact_views.root.artifact.provided_exports.exports) |provided| {
+            const data = switch (provided) {
+                .procedure => continue,
+                .data => |data| data,
+            };
+            const binding = self.artifact_views.root.artifact.comptime_values.lookupBinding(data.pattern) orelse {
+                lambdaInvariant("lambda-solved provided data export dependency had no published compile-time value");
+            };
+            try self.reserveComptimeValueMaterializationDependencies(
+                session_id,
+                materialization,
+                binding.schema,
+                binding.value,
+                &seen_values,
+                &seen_nodes,
+                &seen_const_instances,
+            );
+        }
+    }
+
+    fn reserveComptimeValueMaterializationDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        materialization: ConstMaterializationView,
+        schema_id: checked_artifact.ComptimeSchemaId,
+        value_id: checked_artifact.ComptimeValueId,
+        seen_values: *std.AutoHashMap(ProvidedDataValueVisitKey, void),
+        seen_nodes: *std.AutoHashMap(ProvidedDataMaterializationNodeVisitKey, void),
+        seen_const_instances: *std.AutoHashMap(ProvidedDataConstInstanceVisitKey, void),
+    ) Allocator.Error!void {
+        const visit = try seen_values.getOrPut(.{
+            .owner = materialization.owner.bytes,
+            .schema = schema_id,
+            .value = value_id,
+        });
+        if (visit.found_existing) return;
+
+        const schema = constSchemaForMaterialization(materialization, schema_id);
+        const value = constValueForMaterialization(materialization, value_id);
+        switch (schema) {
+            .pending => lambdaInvariant("lambda-solved provided data export dependency reached pending compile-time schema"),
+            .zst,
+            .int,
+            .frac,
+            .str,
+            => {},
+            .list => |elem_schema| {
+                const items = switch (value) {
+                    .list => |items| items,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached list schema/value mismatch"),
+                };
+                for (items) |item| {
+                    try self.reserveComptimeValueMaterializationDependencies(session_id, materialization, elem_schema, item, seen_values, seen_nodes, seen_const_instances);
+                }
+            },
+            .box => |payload_schema| {
+                const payload = switch (value) {
+                    .box => |payload| payload,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached Box(T) schema/value mismatch"),
+                };
+                try self.reserveComptimeValueMaterializationDependencies(session_id, materialization, payload_schema, payload, seen_values, seen_nodes, seen_const_instances);
+            },
+            .tuple => |schemas| {
+                const items = switch (value) {
+                    .tuple => |items| items,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached tuple schema/value mismatch"),
+                };
+                if (schemas.len != items.len) lambdaInvariant("lambda-solved provided data export dependency reached tuple arity mismatch");
+                for (schemas, items) |item_schema, item| {
+                    try self.reserveComptimeValueMaterializationDependencies(session_id, materialization, item_schema, item, seen_values, seen_nodes, seen_const_instances);
+                }
+            },
+            .record => |fields| {
+                const values = switch (value) {
+                    .record => |values| values,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached record schema/value mismatch"),
+                };
+                if (fields.len != values.len) lambdaInvariant("lambda-solved provided data export dependency reached record field count mismatch");
+                for (fields, values) |field, field_value| {
+                    try self.reserveComptimeValueMaterializationDependencies(session_id, materialization, field.schema, field_value, seen_values, seen_nodes, seen_const_instances);
+                }
+            },
+            .tag_union => |variants| {
+                const tag = switch (value) {
+                    .tag_union => |tag| tag,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached tag-union schema/value mismatch"),
+                };
+                const index: usize = @intCast(tag.variant_index);
+                if (index >= variants.len) lambdaInvariant("lambda-solved provided data export dependency reached tag index outside schema");
+                const variant = variants[index];
+                if (variant.payloads.len != tag.payloads.len) lambdaInvariant("lambda-solved provided data export dependency reached tag payload count mismatch");
+                for (variant.payloads, tag.payloads) |payload_schema, payload| {
+                    try self.reserveComptimeValueMaterializationDependencies(session_id, materialization, payload_schema, payload, seen_values, seen_nodes, seen_const_instances);
+                }
+            },
+            .alias => |alias| {
+                const backing = switch (value) {
+                    .alias => |backing| backing,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached alias schema/value mismatch"),
+                };
+                try self.reserveComptimeValueMaterializationDependencies(session_id, materialization, alias.backing, backing, seen_values, seen_nodes, seen_const_instances);
+            },
+            .nominal => |nominal| {
+                const backing = switch (value) {
+                    .nominal => |backing| backing,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached nominal schema/value mismatch"),
+                };
+                try self.reserveComptimeValueMaterializationDependencies(session_id, materialization, nominal.backing, backing, seen_values, seen_nodes, seen_const_instances);
+            },
+            .callable => {
+                const leaf = switch (value) {
+                    .callable => |leaf| leaf,
+                    else => lambdaInvariant("lambda-solved provided data export dependency reached callable schema/value mismatch"),
+                };
+                try self.reserveCallableLeafMaterializationDependencies(
+                    session_id,
+                    materialization.owner,
+                    leaf,
+                    seen_values,
+                    seen_nodes,
+                    seen_const_instances,
+                );
+            },
+        }
+    }
+
+    fn reserveCallableLeafMaterializationDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        leaf: checked_artifact.CallableLeafInstance,
+        seen_values: *std.AutoHashMap(ProvidedDataValueVisitKey, void),
+        seen_nodes: *std.AutoHashMap(ProvidedDataMaterializationNodeVisitKey, void),
+        seen_const_instances: *std.AutoHashMap(ProvidedDataConstInstanceVisitKey, void),
+    ) Allocator.Error!void {
+        switch (leaf) {
+            .finite => {},
+            .erased_boxed => |erased| {
+                try self.reserveSealedErasedCallableValueDependencies(session_id, owner, erased.sealed);
+                try self.reserveErasedCaptureMaterializationDependencies(
+                    session_id,
+                    owner,
+                    erased.sealed.capture,
+                    seen_values,
+                    seen_nodes,
+                    seen_const_instances,
+                );
+            },
+        }
+    }
+
+    fn reserveErasedCaptureMaterializationDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+        seen_values: *std.AutoHashMap(ProvidedDataValueVisitKey, void),
+        seen_nodes: *std.AutoHashMap(ProvidedDataMaterializationNodeVisitKey, void),
+        seen_const_instances: *std.AutoHashMap(ProvidedDataConstInstanceVisitKey, void),
+    ) Allocator.Error!void {
+        switch (capture) {
+            .none,
+            .zero_sized_typed,
+            => {},
+            .node => |node| try self.reserveErasedCaptureMaterializationNodeDependencies(
+                session_id,
+                owner,
+                node,
+                seen_values,
+                seen_nodes,
+                seen_const_instances,
+            ),
+        }
+    }
+
+    fn reserveErasedCaptureMaterializationNodeDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+        seen_values: *std.AutoHashMap(ProvidedDataValueVisitKey, void),
+        seen_nodes: *std.AutoHashMap(ProvidedDataMaterializationNodeVisitKey, void),
+        seen_const_instances: *std.AutoHashMap(ProvidedDataConstInstanceVisitKey, void),
+    ) Allocator.Error!void {
+        const visit = try seen_nodes.getOrPut(.{
+            .owner = owner.bytes,
+            .node = node_id,
+        });
+        if (visit.found_existing) return;
+
+        const plans = compileTimePlansForArtifactViews(self.artifact_views, owner) orelse {
+            lambdaInvariant("lambda-solved provided data export dependency referenced unavailable materialization plan owner");
+        };
+        const node = plans.erasedCaptureExecutableMaterializationNode(node_id);
+        switch (node) {
+            .pending => lambdaInvariant("lambda-solved provided data export dependency reached pending erased capture materialization node"),
+            .pure_const,
+            .pure_value,
+            => {},
+            .const_instance => |const_instance| try self.reserveConstInstanceMaterializationDependencies(
+                session_id,
+                const_instance,
+                seen_values,
+                seen_nodes,
+                seen_const_instances,
+            ),
+            .finite_callable_set => |finite| for (finite.captures) |nested| {
+                try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, nested, seen_values, seen_nodes, seen_const_instances);
+            },
+            .erased_callable => |erased| {
+                try self.reserveSealedErasedCallableValueDependencies(session_id, owner, erased.sealed);
+                try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, erased.sealed.capture, seen_values, seen_nodes, seen_const_instances);
+            },
+            .record => |fields| for (fields) |field| {
+                try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, field.value, seen_values, seen_nodes, seen_const_instances);
+            },
+            .tuple => |items| for (items) |item| {
+                try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, item, seen_values, seen_nodes, seen_const_instances);
+            },
+            .tag_union => |tag| for (tag.payloads) |payload| {
+                try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, payload.value, seen_values, seen_nodes, seen_const_instances);
+            },
+            .list => |items| for (items) |item| {
+                try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, item, seen_values, seen_nodes, seen_const_instances);
+            },
+            .box => |payload| try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, payload, seen_values, seen_nodes, seen_const_instances),
+            .nominal => |nominal| try self.reserveErasedCaptureMaterializationDependencies(session_id, owner, nominal.backing, seen_values, seen_nodes, seen_const_instances),
+            .recursive_ref => |ref| try self.reserveErasedCaptureMaterializationNodeDependencies(session_id, owner, ref, seen_values, seen_nodes, seen_const_instances),
+        }
+    }
+
+    fn reserveConstInstanceMaterializationDependencies(
+        self: *ProcedureInstanceRegistry,
+        session_id: repr.RepresentationSolveSessionId,
+        ref: checked_artifact.ConstInstanceRef,
+        seen_values: *std.AutoHashMap(ProvidedDataValueVisitKey, void),
+        seen_nodes: *std.AutoHashMap(ProvidedDataMaterializationNodeVisitKey, void),
+        seen_const_instances: *std.AutoHashMap(ProvidedDataConstInstanceVisitKey, void),
+    ) Allocator.Error!void {
+        const visit = try seen_const_instances.getOrPut(.{
+            .owner = ref.owner.bytes,
+            .instance = ref.instance,
+        });
+        if (visit.found_existing) return;
+
+        const resolved = resolveConstInstanceForArtifactViews(self.artifact_views, ref);
+        try self.reserveComptimeValueMaterializationDependencies(
+            session_id,
+            resolved.materialization,
+            resolved.instance.schema,
+            resolved.instance.value,
+            seen_values,
+            seen_nodes,
+            seen_const_instances,
+        );
     }
 
     fn recursiveGroupAnchorForCall(
@@ -1143,6 +1515,10 @@ fn procedureInstanceOwnerEql(a: ProcedureInstanceOwner, b: ProcedureInstanceOwne
         .executable_erased_adapter_member => |a_member| switch (b) {
             .executable_erased_adapter_member => |b_member| a_member.synthetic_index == b_member.synthetic_index and
                 a_member.member_index == b_member.member_index,
+            else => false,
+        },
+        .sealed_erased_adapter_member => |a_member| switch (b) {
+            .sealed_erased_adapter_member => |b_member| a_member == b_member,
             else => false,
         },
         .finite_erased_adapter_member => |a_member| switch (b) {
@@ -1373,6 +1749,10 @@ pub fn run(
             _ = try registry.reserveRoot(proc.proc, session_id, @intCast(raw_proc));
         }
     }
+    if (artifact_views.collect_provided_data_exports) {
+        const session_id = try registry.createSession();
+        try registry.reserveProvidedDataExportDependencies(session_id);
+    }
     try registry.buildPending();
     try registry.finalizeSessions();
     try program.executable_synthetic_procs.appendSlice(allocator, input.executable_synthetic_procs.items);
@@ -1430,7 +1810,12 @@ pub fn run(
         }
         break;
     }
-    try sealProcRepresentationInstances(&program, proc_build_records.items, input.executable_synthetic_procs.items);
+    try sealProcRepresentationInstances(
+        &program,
+        proc_build_records.items,
+        input.executable_synthetic_procs.items,
+        registry.sealed_erased_adapter_members.items,
+    );
     try publishSessionExecutableTypePayloads(&program, artifact_views);
     try finalizeBoxPayloadRepresentationPlans(&program, proc_build_records.items, artifact_views);
     try finalizeValueTransformBoundaries(&program, artifact_views);
@@ -2914,6 +3299,7 @@ fn procedureBoundaryErasureRequirementPlan(
             };
         },
         .executable_erased_adapter_member,
+        .sealed_erased_adapter_member,
         .root,
         .direct_call,
         .recursive_group_member,
@@ -3077,6 +3463,7 @@ fn sealProcRepresentationInstances(
     program: *Program,
     records: []const ProcBuildRecord,
     executable_synthetic_procs: []const ids.ExecutableSyntheticProc,
+    sealed_erased_adapter_members: []const SealedErasedAdapterMemberReservation,
 ) Allocator.Error!void {
     for (records) |record| {
         const session_index = @intFromEnum(record.solve_session);
@@ -3088,13 +3475,26 @@ fn sealProcRepresentationInstances(
                     const erased = switch (synthetic.body) {
                         .erased_promoted_wrapper => |erased| erased,
                     };
-                    if (member.member_index >= erased.finite_adapter_member_targets.len) {
+                    const finite = switch (erased.sealed.code) {
+                        .direct_proc => lambdaInvariant("lambda-solved executable adapter member seal reached direct erased code"),
+                        .finite_adapter => |finite| finite,
+                    };
+                    if (member.member_index >= finite.members.len) {
                         lambdaInvariant("lambda-solved executable adapter member seal index is out of range");
                     }
                     break :blk try executableAdapterMemberSpecializationKey(
                         program.allocator,
                         erased.executable_signature,
-                        erased.finite_adapter_member_targets[member.member_index],
+                        finite.members[member.member_index].target_key,
+                    );
+                },
+                .sealed_erased_adapter_member => |member| blk: {
+                    if (member >= sealed_erased_adapter_members.len) {
+                        lambdaInvariant("lambda-solved sealed adapter member seal index is out of range");
+                    }
+                    break :blk try repr.cloneExecutableSpecializationKey(
+                        program.allocator,
+                        sealed_erased_adapter_members[member].target_key,
                     );
                 },
                 .finite_erased_adapter_member => |member| blk: {
@@ -3174,6 +3574,16 @@ fn sealProcRepresentationInstances(
                         .promoted_wrapper = synthetic.source_proc,
                     };
                 },
+                .sealed_erased_adapter_member => |member| blk: {
+                    if (member >= sealed_erased_adapter_members.len) {
+                        lambdaInvariant("lambda-solved sealed adapter member boundary payload index is out of range");
+                    }
+                    const dependency = sealed_erased_adapter_members[member];
+                    break :blk .{
+                        .artifact = dependency.artifact,
+                        .payloads = dependency.payloads,
+                    };
+                },
                 .proc_value => |owner| blk: {
                     const target = owner.forced_target orelse break :blk null;
                     break :blk .{
@@ -3197,6 +3607,7 @@ fn sealProcRepresentationInstances(
             program,
             record,
             executable_synthetic_procs,
+            sealed_erased_adapter_members,
         );
         errdefer if (boundary_provenance.len > 0) program.allocator.free(boundary_provenance);
         try program.proc_instances.append(program.allocator, .{
@@ -3229,6 +3640,7 @@ fn cloneBoundaryProvenanceForSealedInstance(
     program: *Program,
     record: ProcBuildRecord,
     executable_synthetic_procs: []const ids.ExecutableSyntheticProc,
+    sealed_erased_adapter_members: []const SealedErasedAdapterMemberReservation,
 ) Allocator.Error![]const repr.BoxErasureProvenance {
     return switch (record.kind) {
         .executable_synthetic => |synthetic_index| blk: {
@@ -3239,6 +3651,16 @@ fn cloneBoundaryProvenanceForSealedInstance(
             .executable_erased_adapter_member => |member| blk: {
                 const synthetic = executable_synthetic_procs[member.synthetic_index];
                 break :blk try cloneSingleBoundaryProvenance(program.allocator, .{ .promoted_wrapper = synthetic.source_proc });
+            },
+            .sealed_erased_adapter_member => |member| blk: {
+                if (member >= sealed_erased_adapter_members.len) {
+                    lambdaInvariant("lambda-solved sealed adapter boundary provenance index is out of range");
+                }
+                const provenance = sealed_erased_adapter_members[member].provenance;
+                if (provenance.len == 0) {
+                    lambdaInvariant("lambda-solved sealed adapter boundary provenance is empty");
+                }
+                break :blk try program.allocator.dupe(repr.BoxErasureProvenance, provenance);
             },
             .proc_value => |owner| blk: {
                 const target = owner.forced_target orelse break :blk &.{};
@@ -4749,6 +5171,7 @@ const CallableEmissionAssigner = struct {
     fn assign(self: *CallableEmissionAssigner) Allocator.Error!void {
         try self.collectFunctionRootMetadata();
         try self.collectFiniteCallableContributions();
+        try self.seedAlreadyErasedCallableGroupEmissions();
         try self.collectBoxErasureRequirements();
         try self.publishGroupErasureProvenance();
         try self.publishCallableGroupSets();
@@ -5039,6 +5462,7 @@ const CallableEmissionAssigner = struct {
                 .require_box_erased => |erasure| {
                     switch (erasure.provenance) {
                         .local_box_boundary => |boundary_id| _ = self.boxBoundary(boundary_id),
+                        .const_graph_box => {},
                         .promoted_wrapper => {},
                     }
                     try self.markErasedPayloadRoot(erasure.payload_root, erasure.provenance);
@@ -5050,6 +5474,31 @@ const CallableEmissionAssigner = struct {
     fn publishGroupErasureProvenance(self: *CallableEmissionAssigner) Allocator.Error!void {
         for (self.erased_groups.items) |entry| {
             try self.representationStore().publishGroupErasureProvenance(entry.group, entry.provenance.items);
+        }
+    }
+
+    fn seedAlreadyErasedCallableGroupEmissions(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.session.members) |instance| {
+            const record = self.recordForInstance(instance);
+            if (!record.materialized) continue;
+            const value_store = self.valueStoreFor(record);
+            for (value_store.values.items) |value_info| {
+                if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
+                const callable = value_info.callable orelse continue;
+                switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
+                    .already_erased => {
+                        const group = value_info.solved_group orelse {
+                            lambdaInvariant("lambda-solved already-erased callable seed reached value without a solved representation group");
+                        };
+                        _ = try self.publishAlreadyErasedCallableGroupEmission(group, callable.emission_plan);
+                    },
+                    .pending_proc_value,
+                    .finite,
+                    .erase_proc_value,
+                    .erase_finite_set,
+                    => {},
+                }
+            }
         }
     }
 
@@ -5157,7 +5606,25 @@ const CallableEmissionAssigner = struct {
                 if (!value_store.valueSourceMatchBranchReachable(value_info.*)) continue;
                 if (value_info.callable) |existing| {
                     switch (self.representationStore().callableEmissionPlan(existing.emission_plan)) {
-                        .already_erased => continue,
+                        .already_erased => {
+                            const group = value_info.solved_group orelse {
+                                lambdaInvariant("lambda-solved already-erased callable value reached emission assignment without a solved representation group");
+                            };
+                            const canonical_emission = try self.publishAlreadyErasedCallableGroupEmission(group, existing.emission_plan);
+                            const already_erased = switch (self.representationStore().callableEmissionPlan(canonical_emission)) {
+                                .already_erased => |erased| erased,
+                                else => unreachable,
+                            };
+                            if (already_erased.provenance.len > 0) {
+                                try self.representationStore().publishGroupErasureProvenance(group, already_erased.provenance);
+                            }
+                            if (canonical_emission != existing.emission_plan) {
+                                var canonical_callable = existing;
+                                canonical_callable.emission_plan = canonical_emission;
+                                value_info.callable = canonical_callable;
+                            }
+                            continue;
+                        },
                         .pending_proc_value,
                         .finite,
                         .erase_proc_value,
@@ -5170,7 +5637,10 @@ const CallableEmissionAssigner = struct {
                     if (value_info.callable == null and self.valueHasFunctionType(value_info.logical_ty)) {
                         if (self.erasedProvenance(group)) |provenance| {
                             const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
-                            const callable = try self.synthesizeAlreadyErasedCallableInfo(record, value_store, value_id, value_info.*, provenance);
+                            const callable = if (self.representationStore().callableGroupEmission(group)) |emission|
+                                try self.adoptAlreadyErasedGroupEmission(value_info.*, emission)
+                            else
+                                try self.synthesizeAlreadyErasedCallableInfo(record, value_store, value_id, value_info.*, provenance);
                             value_info.callable = callable;
                             if (self.representationStore().callableGroupEmission(group) == null) {
                                 try self.representationStore().publishCallableGroupEmission(group, callable.emission_plan);
@@ -5230,7 +5700,8 @@ const CallableEmissionAssigner = struct {
                 const provenance = self.erasedProvenance(group);
                 _ = try self.ensureCallableGroupEmission(group_set, group_key, provenance);
                 var callable = if (value_info.callable) |existing| existing else try self.synthesizeCallableInfo(value_info.*, group_key);
-                switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
+                const current_emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
+                switch (current_emission) {
                     .pending_proc_value => |construction_id| {
                         const attached = callable.construction_plan orelse {
                             lambdaInvariant("lambda-solved pending proc-value emission has no construction plan");
@@ -5246,6 +5717,27 @@ const CallableEmissionAssigner = struct {
                     .erase_finite_set => {},
                 }
                 try self.rewriteCallableConstructionPlan(&callable, value_id, group_set, group_key);
+
+                switch (current_emission) {
+                    .erase_finite_set => |erase| {
+                        if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key)) {
+                            lambdaInvariant("lambda-solved existing finite erased value emission has wrong callable-set key");
+                        }
+                        if (provenance) |boundaries| {
+                            if (!boxErasureProvenanceSetEql(erase.provenance, boundaries)) {
+                                const merged = try repr.mergeBoxErasureProvenanceSets(self.allocator, erase.provenance, boundaries);
+                                defer if (merged.len > 0) self.allocator.free(merged);
+                                const updated = try self.finiteSetErasePlan(group_set, group_key, merged);
+                                defer deinitExecutableSpecializationKeySlice(self.allocator, updated.member_targets);
+                                try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(callable.emission_plan, updated);
+                            }
+                        }
+                        value_info.callable = callable;
+                        continue;
+                    },
+                    else => {},
+                }
+
                 self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
 
                 if (provenance == null) {
@@ -5257,6 +5749,38 @@ const CallableEmissionAssigner = struct {
                 value_info.callable = callable;
             }
         }
+    }
+
+    fn publishAlreadyErasedCallableGroupEmission(
+        self: *CallableEmissionAssigner,
+        group: repr.RepresentationGroupId,
+        emission_plan: repr.CallableValueEmissionPlanId,
+    ) Allocator.Error!repr.CallableValueEmissionPlanId {
+        if (self.representationStore().callableGroupEmission(group)) |existing| {
+            if (self.callableEmissionPlansEquivalent(existing, emission_plan)) {
+                const current_plan = self.representationStore().callableEmissionPlan(emission_plan);
+                switch (current_plan) {
+                    .already_erased => |erased| try self.representationStore().mergeCallableEmissionPlanProvenance(existing, erased.provenance),
+                    else => lambdaInvariant("lambda-solved already-erased group emission merge reached non-erased current plan"),
+                }
+                return existing;
+            }
+            const existing_plan = self.representationStore().callableEmissionPlan(existing);
+            const current_plan = self.representationStore().callableEmissionPlan(emission_plan);
+            const mismatch = switch (existing_plan) {
+                .already_erased => |left| switch (current_plan) {
+                    .already_erased => |right| alreadyErasedCallablePlanMismatch(left, right),
+                    else => "plan_tag",
+                },
+                else => "plan_tag",
+            };
+            lambdaInvariantFmt(
+                "lambda-solved callable group emission was published with incompatible plans: {s} then {s}; mismatch={s}",
+                .{ @tagName(std.meta.activeTag(existing_plan)), @tagName(std.meta.activeTag(current_plan)), mismatch },
+            );
+        }
+        try self.representationStore().publishCallableGroupEmission(group, emission_plan);
+        return emission_plan;
     }
 
     fn synthesizeCallableInfo(
@@ -5272,6 +5796,33 @@ const CallableEmissionAssigner = struct {
             .callable_root = value_info.root,
             .source = .{ .finite_set = group_key },
             .emission_plan = try self.representationStore().appendFiniteCallableEmissionPlan(group_key),
+            .construction_plan = null,
+        };
+    }
+
+    fn adoptAlreadyErasedGroupEmission(
+        self: *CallableEmissionAssigner,
+        value_info: repr.ValueInfo,
+        emission: repr.CallableValueEmissionPlanId,
+    ) Allocator.Error!repr.CallableValueInfo {
+        const erased = switch (self.representationStore().callableEmissionPlan(emission)) {
+            .already_erased => |erased| erased,
+            else => lambdaInvariant("lambda-solved erased callable value reached non-erased group emission"),
+        };
+        if (!self.valueHasFunctionType(value_info.logical_ty)) {
+            lambdaInvariant("lambda-solved erased group emission was attached to a non-function value");
+        }
+        return .{
+            .whole_function_root = value_info.root,
+            .callable_root = value_info.root,
+            .source = .{ .already_erased = .{
+                .sig_key = erased.sig_key,
+                .capture_shape_key = erased.capture_shape_key,
+                .result_ty = erased.result_ty,
+                .capture = erased.capture,
+                .provenance = &.{},
+            } },
+            .emission_plan = emission,
             .construction_plan = null,
         };
     }
@@ -5322,11 +5873,50 @@ const CallableEmissionAssigner = struct {
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
         if (self.representationStore().callableGroupEmission(group_set.group)) |existing| {
             if (self.callableGroupEmissionMatches(existing, group_key, provenance)) return existing;
+            const existing_plan = self.representationStore().callableEmissionPlan(existing);
             if (provenance) |boundaries| {
-                const erase = try self.finiteSetErasePlan(group_set, group_key, boundaries);
+                const erase_provenance = switch (existing_plan) {
+                    .already_erased => |erased| {
+                        if (erased.provenance.len > 0) {
+                            try self.representationStore().publishGroupErasureProvenance(group_set.group, erased.provenance);
+                        }
+                        try self.representationStore().mergeCallableEmissionPlanProvenance(existing, boundaries);
+                        try self.representationStore().publishGroupErasureProvenance(group_set.group, boundaries);
+                        return existing;
+                    },
+                    .erase_finite_set => |erase| blk: {
+                        if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key)) {
+                            lambdaInvariant("lambda-solved erased finite callable group emission key changed while merging Box(T) provenance");
+                        }
+                        const merged = try repr.mergeBoxErasureProvenanceSets(self.allocator, erase.provenance, boundaries);
+                        break :blk merged;
+                    },
+                    .finite => |key| blk: {
+                        if (!repr.callableSetKeyEql(key, group_key)) {
+                            lambdaInvariant("lambda-solved finite callable group emission key changed while adding Box(T) provenance");
+                        }
+                        break :blk try repr.mergeBoxErasureProvenanceSets(self.allocator, &.{}, boundaries);
+                    },
+                    .pending_proc_value,
+                    .erase_proc_value,
+                    => lambdaInvariant("lambda-solved finite callable group emission merged with incompatible existing emission plan"),
+                };
+                defer if (erase_provenance.len > 0) self.allocator.free(erase_provenance);
+                const erase = try self.finiteSetErasePlan(group_set, group_key, erase_provenance);
                 defer deinitExecutableSpecializationKeySlice(self.allocator, erase.member_targets);
                 try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(existing, erase);
             } else {
+                switch (existing_plan) {
+                    .finite => |key| if (!repr.callableSetKeyEql(key, group_key)) {
+                        lambdaInvariant("lambda-solved finite callable group emission key changed");
+                    },
+                    .erase_finite_set,
+                    => return existing,
+                    .pending_proc_value,
+                    .already_erased,
+                    .erase_proc_value,
+                    => lambdaInvariant("lambda-solved finite callable group emission merged with incompatible existing emission plan"),
+                }
                 self.representationStore().replaceCallableEmissionPlanWithFinite(existing, group_key);
             }
             return existing;
@@ -5356,6 +5946,23 @@ const CallableEmissionAssigner = struct {
             .already_erased,
             .erase_proc_value,
             => false,
+        };
+    }
+
+    fn callableEmissionPlansEquivalent(
+        self: *CallableEmissionAssigner,
+        left_id: repr.CallableValueEmissionPlanId,
+        right_id: repr.CallableValueEmissionPlanId,
+    ) bool {
+        if (left_id == right_id) return true;
+        const left = self.representationStore().callableEmissionPlan(left_id);
+        const right = self.representationStore().callableEmissionPlan(right_id);
+        return switch (left) {
+            .already_erased => |left_erased| switch (right) {
+                .already_erased => |right_erased| alreadyErasedCallablePlanEquivalent(left_erased, right_erased),
+                else => false,
+            },
+            else => false,
         };
     }
 
@@ -6253,10 +6860,16 @@ fn boxErasureProvenanceEql(
     return switch (a) {
         .local_box_boundary => |left| switch (b) {
             .local_box_boundary => |right| left == right,
-            .promoted_wrapper => false,
+            .const_graph_box, .promoted_wrapper => false,
+        },
+        .const_graph_box => |left| switch (b) {
+            .const_graph_box => |right| std.mem.eql(u8, left.artifact.bytes[0..], right.artifact.bytes[0..]) and left.box_plan == right.box_plan,
+            .local_box_boundary,
+            .promoted_wrapper,
+            => false,
         },
         .promoted_wrapper => |left| switch (b) {
-            .local_box_boundary => false,
+            .const_graph_box, .local_box_boundary => false,
             .promoted_wrapper => |right| canonical.mirProcedureRefEql(left, right),
         },
     };
@@ -6292,6 +6905,74 @@ fn boxErasureProvenanceSetEql(
         if (!boxErasureProvenanceSliceContains(b, item)) return false;
     }
     return true;
+}
+
+fn alreadyErasedCallablePlanEquivalent(
+    a: repr.AlreadyErasedCallablePlan,
+    b: repr.AlreadyErasedCallablePlan,
+) bool {
+    return canonical.erasedFnAbiKeyEql(a.sig_key.abi, b.sig_key.abi) and
+        repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key) and
+        alreadyErasedResultMatchesSig(a) and
+        alreadyErasedResultMatchesSig(b) and
+        alreadyErasedCapturePlanEquivalent(a.capture, b.capture);
+}
+
+fn alreadyErasedCallablePlanMismatch(
+    a: repr.AlreadyErasedCallablePlan,
+    b: repr.AlreadyErasedCallablePlan,
+) []const u8 {
+    if (!canonical.erasedFnAbiKeyEql(a.sig_key.abi, b.sig_key.abi)) return "abi_key";
+    if (!repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key)) return "capture_shape_key";
+    if (!alreadyErasedResultMatchesSig(a) or !alreadyErasedResultMatchesSig(b)) return "result_ty";
+    if (!alreadyErasedCapturePlanEquivalent(a.capture, b.capture)) return "capture";
+    return "none";
+}
+
+fn alreadyErasedResultMatchesSig(plan: repr.AlreadyErasedCallablePlan) bool {
+    return repr.canonicalExecValueTypeKeyEql(plan.result_ty, repr.erasedCallableExecValueTypeKey(plan.sig_key));
+}
+
+fn alreadyErasedCapturePlanEquivalent(
+    a: repr.AlreadyErasedCapturePlan,
+    b: repr.AlreadyErasedCapturePlan,
+) bool {
+    return switch (a) {
+        .none => b == .none,
+        .zero_sized_ty => |left| switch (b) {
+            .zero_sized_ty => |right| left == right,
+            else => false,
+        },
+        .executable_key => |left| switch (b) {
+            .executable_key => |right| repr.canonicalExecValueTypeKeyEql(left, right),
+            else => false,
+        },
+        .materialized_capture => |left| switch (b) {
+            .materialized_capture => |right| artifactKeyEql(left.owner, right.owner) and erasedCaptureMaterializationPlanEql(left.capture, right.capture),
+            else => false,
+        },
+        .value => |left| switch (b) {
+            .value => |right| left == right,
+            else => false,
+        },
+    };
+}
+
+fn erasedCaptureMaterializationPlanEql(
+    left: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+    right: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+) bool {
+    return switch (left) {
+        .none => right == .none,
+        .zero_sized_typed => |left_key| switch (right) {
+            .zero_sized_typed => |right_key| repr.canonicalExecValueTypeKeyEql(left_key, right_key),
+            else => false,
+        },
+        .node => |left_node| switch (right) {
+            .node => |right_node| left_node == right_node,
+            else => false,
+        },
+    };
 }
 
 fn mirProcedureBodyIdentityEql(
@@ -8746,13 +9427,24 @@ const ValueTransformFinalizer = struct {
 
     fn transformPayloadInvariant(
         _: *ValueTransformFinalizer,
-        _: repr.SessionExecutableValueEndpoint,
-        _: repr.SessionExecutableValueEndpoint,
-        _: repr.SessionExecutableTypePayload,
-        _: repr.SessionExecutableTypePayload,
+        from: repr.SessionExecutableValueEndpoint,
+        to: repr.SessionExecutableValueEndpoint,
+        from_payload: repr.SessionExecutableTypePayload,
+        to_payload: repr.SessionExecutableTypePayload,
     ) noreturn {
-        lambdaInvariant("lambda-solved value transform has incompatible executable payloads");
-        unreachable;
+        const from_key_hex = std.fmt.bytesToHex(from.exec_ty.key.bytes, .lower);
+        const to_key_hex = std.fmt.bytesToHex(to.exec_ty.key.bytes, .lower);
+        lambdaInvariantFmt(
+            "lambda-solved value transform has incompatible executable payloads: {s}({s}, key={s}) -> {s}({s}, key={s})",
+            .{
+                @tagName(from_payload),
+                @tagName(std.meta.activeTag(from.owner)),
+                &from_key_hex,
+                @tagName(to_payload),
+                @tagName(std.meta.activeTag(to.owner)),
+                &to_key_hex,
+            },
+        );
     }
 
     fn planRecordTransform(
@@ -9332,17 +10024,23 @@ const ValueTransformFinalizer = struct {
         source: repr.SessionExecutableErasedFnPayload,
         target: repr.SessionExecutableErasedFnPayload,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformRef {
-        if (!repr.erasedFnSigKeyEql(source.sig_key, target.sig_key)) {
+        const plan: checked_artifact.AlreadyErasedCallableTransformPlan = if (repr.erasedFnSigKeyEql(source.sig_key, target.sig_key))
+            .{ .exact = target.sig_key }
+        else if (std.mem.eql(u8, source.sig_key.abi.bytes[0..], target.sig_key.abi.bytes[0..]))
+            .{ .same_abi_retype = .{
+                .source_sig = source.sig_key,
+                .target_sig = target.sig_key,
+            } }
+        else
             lambdaInvariantFmt(
-                "lambda-solved already-erased callable transform changed erased signature: same_source_fn={} same_abi={}",
+                "lambda-solved already-erased callable transform changed erased ABI: same_source_fn={} same_abi={}",
                 .{
                     repr.canonicalTypeKeyEql(source.sig_key.source_fn_ty, target.sig_key.source_fn_ty),
                     std.mem.eql(u8, source.sig_key.abi.bytes[0..], target.sig_key.abi.bytes[0..]),
                 },
             );
-        }
         return try self.appendSessionValueTransform(scope, from, to, .none, .{
-            .already_erased_callable = .{ .sig_key = target.sig_key },
+            .already_erased_callable = plan,
         });
     }
 
@@ -10256,6 +10954,48 @@ fn checkedTypesForArtifactViews(
     return null;
 }
 
+fn executablePayloadsForArtifactViews(
+    views: ArtifactViews,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.ExecutableTypePayloadStore {
+    if (std.mem.eql(u8, &views.root.artifact.key.bytes, &key.bytes)) return &views.root.artifact.executable_type_payloads;
+    for (views.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.executable_type_payloads;
+    }
+    for (views.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.executable_type_payloads;
+    }
+    return null;
+}
+
+fn compileTimePlansForArtifactViews(
+    views: ArtifactViews,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.CompileTimePlanStore {
+    if (std.mem.eql(u8, &views.root.artifact.key.bytes, &key.bytes)) return &views.root.artifact.comptime_plans;
+    for (views.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.comptime_plans;
+    }
+    for (views.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.comptime_plans;
+    }
+    return null;
+}
+
+fn erasedFnAbisForArtifactViews(
+    views: ArtifactViews,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const canonical.ErasedFnAbiStore {
+    if (std.mem.eql(u8, &views.root.artifact.key.bytes, &key.bytes)) return &views.root.artifact.erased_fn_abis;
+    for (views.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.erased_fn_abis;
+    }
+    for (views.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.erased_fn_abis;
+    }
+    return null;
+}
+
 fn canonicalNamesForArtifactViews(
     views: ArtifactViews,
     key: checked_artifact.CheckedModuleArtifactKey,
@@ -10268,6 +11008,15 @@ fn canonicalNamesForArtifactViews(
         if (artifactKeyEql(related.key, key)) return related.canonical_names;
     }
     lambdaInvariant("lambda-solved artifact executable payload referenced unavailable canonical names");
+}
+
+fn erasedCallableLeafCaptureShapeKey(
+    erased: checked_artifact.ErasedCallableLeafInstance,
+) canonical.CaptureShapeKey {
+    return switch (erased.sealed.code) {
+        .direct_proc => |direct| direct.code.capture_shape_key,
+        .finite_adapter => |finite| finite.adapter_key.capture_shape_key,
+    };
 }
 
 fn artifactKeyEql(
@@ -10431,6 +11180,117 @@ const ResolvedConstInstance = struct {
     materialization: ConstMaterializationView,
     instance: checked_artifact.ConstInstance,
 };
+
+const ProvidedDataValueVisitKey = struct {
+    owner: [32]u8,
+    schema: checked_artifact.ComptimeSchemaId,
+    value: checked_artifact.ComptimeValueId,
+};
+
+const ProvidedDataMaterializationNodeVisitKey = struct {
+    owner: [32]u8,
+    node: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+};
+
+const ProvidedDataConstInstanceVisitKey = struct {
+    owner: [32]u8,
+    instance: checked_artifact.ConstInstanceId,
+};
+
+fn constSchemaForMaterialization(
+    materialization: ConstMaterializationView,
+    id: checked_artifact.ComptimeSchemaId,
+) checked_artifact.ComptimeSchema {
+    const index: usize = @intFromEnum(id);
+    if (index >= materialization.values.schemas.items.len) {
+        lambdaInvariant("lambda-solved provided data export dependency schema id out of range");
+    }
+    return materialization.values.schemas.items[index];
+}
+
+fn constValueForMaterialization(
+    materialization: ConstMaterializationView,
+    id: checked_artifact.ComptimeValueId,
+) checked_artifact.ComptimeValue {
+    const index: usize = @intFromEnum(id);
+    if (index >= materialization.values.values.items.len) {
+        lambdaInvariant("lambda-solved provided data export dependency value id out of range");
+    }
+    return materialization.values.values.items[index];
+}
+
+fn constMaterializationForArtifactViews(
+    views: ArtifactViews,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+) ConstMaterializationView {
+    if (artifactKeyEql(views.root.artifact.key, owner)) {
+        return .{
+            .owner = views.root.artifact.key,
+            .names = &views.root.artifact.canonical_names,
+            .values = &views.root.artifact.comptime_values,
+        };
+    }
+    for (views.imports) |imported| {
+        if (!artifactKeyEql(imported.key, owner)) continue;
+        return .{
+            .owner = imported.key,
+            .names = imported.canonical_names,
+            .values = imported.comptime_values,
+        };
+    }
+    for (views.root.relation_artifacts) |related| {
+        if (!artifactKeyEql(related.key, owner)) continue;
+        return .{
+            .owner = related.key,
+            .names = related.canonical_names,
+            .values = related.comptime_values,
+        };
+    }
+    lambdaInvariant("lambda-solved provided data export dependency referenced unavailable materialization owner");
+}
+
+fn resolveConstInstanceForArtifactViews(
+    views: ArtifactViews,
+    ref: checked_artifact.ConstInstanceRef,
+) ResolvedConstInstance {
+    const materialization = constMaterializationForArtifactViews(views, ref.owner);
+    const instances = constInstancesForArtifactViews(views, ref.owner);
+    if (!artifactKeyEql(instances.owner, ref.owner)) {
+        lambdaInvariant("lambda-solved provided data export dependency const instance view had wrong owner");
+    }
+    const index: usize = @intFromEnum(ref.instance);
+    if (index >= instances.instances.len) {
+        lambdaInvariant("lambda-solved provided data export dependency const instance id out of range");
+    }
+    const record = instances.instances[index];
+    if (!checked_artifact.constInstantiationKeyEql(record.key, ref.key)) {
+        lambdaInvariant("lambda-solved provided data export dependency const instance key mismatch");
+    }
+    const instance = switch (record.state) {
+        .evaluated => |evaluated| evaluated,
+        .reserved,
+        .evaluating,
+        => lambdaInvariant("lambda-solved provided data export dependency reached unsealed const instance"),
+    };
+    return .{
+        .materialization = materialization,
+        .instance = instance,
+    };
+}
+
+fn constInstancesForArtifactViews(
+    views: ArtifactViews,
+    owner: checked_artifact.CheckedModuleArtifactKey,
+) checked_artifact.ConstInstantiationStoreView {
+    if (artifactKeyEql(views.root.artifact.key, owner)) return views.root.artifact.const_instances.view();
+    for (views.imports) |imported| {
+        if (artifactKeyEql(imported.key, owner)) return imported.const_instances;
+    }
+    for (views.root.relation_artifacts) |related| {
+        if (artifactKeyEql(related.key, owner)) return related.const_instances;
+    }
+    lambdaInvariant("lambda-solved provided data export dependency referenced unavailable const instances");
+}
 
 const ConstBackedProjectionResult = struct {
     value: repr.ValueInfoId,
@@ -10798,10 +11658,14 @@ const BodySolver = struct {
                 const erased = switch (synthetic.body) {
                     .erased_promoted_wrapper => |erased| erased,
                 };
-                if (member.member_index >= erased.finite_adapter_member_targets.len) {
+                const finite = switch (erased.sealed.code) {
+                    .direct_proc => lambdaInvariant("lambda-solved executable adapter member requirement reached direct erased code"),
+                    .finite_adapter => |finite| finite,
+                };
+                if (member.member_index >= finite.members.len) {
                     lambdaInvariant("lambda-solved executable adapter member requirement index is out of range");
                 }
-                const target_key = erased.finite_adapter_member_targets[member.member_index];
+                const target_key = finite.members[member.member_index].target_key;
                 const params = self.value_store.sliceValueSpan(roots.params);
                 if (params.len != target_key.exec_arg_tys.len) {
                     lambdaInvariant("lambda-solved executable adapter member target key arity differs from public roots");
@@ -10819,6 +11683,34 @@ const BodySolver = struct {
                         .payload_root = self.valueRoot(roots.ret),
                         .provenance = provenance,
                     } });
+                }
+            },
+            .sealed_erased_adapter_member => |member| {
+                if (member >= self.registry.sealed_erased_adapter_members.items.len) {
+                    lambdaInvariant("lambda-solved sealed adapter member requirement index is out of range");
+                }
+                const dependency = self.registry.sealed_erased_adapter_members.items[member];
+                const target_key = dependency.target_key;
+                const params = self.value_store.sliceValueSpan(roots.params);
+                if (params.len != target_key.exec_arg_tys.len) {
+                    lambdaInvariant("lambda-solved sealed adapter member target key arity differs from public roots");
+                }
+                for (params, target_key.exec_arg_tys) |param, exec_key| {
+                    if (!try self.executableArtifactTypeKeyContainsErasedFn(dependency.payloads, dependency.artifact, exec_key)) continue;
+                    for (dependency.provenance) |provenance| {
+                        _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                            .payload_root = self.valueRoot(param),
+                            .provenance = provenance,
+                        } });
+                    }
+                }
+                if (try self.executableArtifactTypeKeyContainsErasedFn(dependency.payloads, dependency.artifact, target_key.exec_ret_ty)) {
+                    for (dependency.provenance) |provenance| {
+                        _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                            .payload_root = self.valueRoot(roots.ret),
+                            .provenance = provenance,
+                        } });
+                    }
                 }
             },
             .finite_erased_adapter_member => |member| {
@@ -10958,6 +11850,23 @@ const BodySolver = struct {
             lambdaInvariant("lambda-solved executable synthetic erased requirement referenced missing executable payload key");
         };
         return try self.executableSyntheticPayloadContainsErasedFn(synthetic, ref);
+    }
+
+    fn executableArtifactTypeKeyContainsErasedFn(
+        self: *BodySolver,
+        payloads: *const checked_artifact.ExecutableTypePayloadStore,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!bool {
+        const ref = payloads.refForKey(.{ .bytes = artifact.bytes }, key) orelse {
+            lambdaInvariant("lambda-solved sealed adapter member erased requirement referenced missing executable payload key");
+        };
+        if (!std.meta.eql(ref.artifact.bytes, artifact.bytes)) {
+            lambdaInvariant("lambda-solved sealed adapter member executable payload ref points at another artifact");
+        }
+        var visited = std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.executableArtifactPayloadContainsErasedFn(payloads, ref.payload, &visited);
     }
 
     fn executableSyntheticPayloadContainsErasedFn(
@@ -13033,7 +13942,7 @@ const BodySolver = struct {
                     .callable => |leaf| leaf,
                     else => lambdaInvariant("lambda-solved const-backed callable schema had non-callable value"),
                 };
-                try self.publishConstBackedCallableLeaf(value, leaf);
+                try self.publishConstBackedCallableLeaf(value, backing.const_instance.owner, leaf);
             },
             .record => try self.publishConstBackedRecordAggregate(value, backing, resolved),
             .tuple => try self.publishConstBackedTupleAggregate(value, backing, resolved),
@@ -13054,13 +13963,129 @@ const BodySolver = struct {
     fn publishConstBackedCallableLeaf(
         self: *BodySolver,
         value: repr.ValueInfoId,
+        owner: checked_artifact.CheckedModuleArtifactKey,
         leaf: checked_artifact.CallableLeafInstance,
     ) Allocator.Error!void {
         if (self.value_store.values.items[@intFromEnum(value)].callable != null) return;
         switch (leaf) {
             .finite => |finite| try self.publishConstBackedFiniteCallableLeaf(value, finite),
-            .erased_boxed => lambdaInvariant("lambda-solved const-backed erased callable leaf requires already-erased metadata publication"),
+            .erased_boxed => |erased| try self.publishConstBackedErasedCallableLeaf(value, owner, erased),
         }
+    }
+
+    fn publishConstBackedErasedCallableLeaf(
+        self: *BodySolver,
+        value: repr.ValueInfoId,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        erased: checked_artifact.ErasedCallableLeafInstance,
+    ) Allocator.Error!void {
+        const sealed = erased.sealed;
+        const boundary = sealed.boundary;
+        if (boundary.provenance.len == 0) {
+            lambdaInvariant("lambda-solved const-backed erased callable leaf had no Box(T) provenance");
+        }
+        for (boundary.provenance) |provenance| {
+            switch (provenance) {
+                .local_box_boundary => lambdaInvariant("lambda-solved const-backed erased callable leaf carried session-local BoxBoundaryId provenance"),
+                .const_graph_box,
+                .promoted_wrapper,
+                => {},
+            }
+        }
+        try self.importConstBackedErasedAbi(owner, boundary.sig_key.abi);
+        const current_record = self.registry.procRecord(self.instance);
+        try self.registry.reserveSealedErasedCallableValueDependencies(
+            current_record.solve_session,
+            owner,
+            sealed,
+        );
+        self.refreshValueStore();
+        const capture_plan: repr.AlreadyErasedCapturePlan = if (boundary.sig_key.capture_ty) |capture_key| blk: {
+            _ = try self.importConstBackedExecutableEndpoint(owner, capture_key);
+            switch (sealed.capture) {
+                .none => lambdaInvariant("lambda-solved const-backed erased callable had hidden capture signature but no materialized capture"),
+                else => {},
+            }
+            break :blk .{ .materialized_capture = .{
+                .owner = owner,
+                .capture = sealed.capture,
+            } };
+        } else .none;
+        const plan = repr.AlreadyErasedCallablePlan{
+            .sig_key = boundary.sig_key,
+            .capture_shape_key = erasedCallableLeafCaptureShapeKey(erased),
+            .result_ty = repr.erasedCallableExecValueTypeKey(boundary.sig_key),
+            .capture = capture_plan,
+            .provenance = boundary.provenance,
+        };
+        const emission = try self.representation_store.appendAlreadyErasedCallableEmissionPlan(plan);
+        const value_info = &self.value_store.values.items[@intFromEnum(value)];
+        if (!self.valueHasFunctionType(value_info.logical_ty)) {
+            lambdaInvariant("lambda-solved const-backed erased callable leaf was attached to a non-function value");
+        }
+        value_info.callable = .{
+            .whole_function_root = value_info.root,
+            .callable_root = value_info.root,
+            .source = .{ .already_erased = .{
+                .sig_key = boundary.sig_key,
+                .capture_shape_key = plan.capture_shape_key,
+                .result_ty = plan.result_ty,
+                .capture = capture_plan,
+                .provenance = &.{},
+            } },
+            .emission_plan = emission,
+            .construction_plan = null,
+        };
+    }
+
+    fn importConstBackedErasedAbi(
+        self: *BodySolver,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        key: canonical.ErasedFnAbiKey,
+    ) Allocator.Error!void {
+        if (self.representation_store.erased_fn_abis.abiFor(key) != null) return;
+        const source_abis = erasedFnAbisForArtifactViews(self.artifact_views, owner) orelse {
+            lambdaInvariant("lambda-solved const-backed erased callable referenced unavailable erased ABI owner");
+        };
+        const source = source_abis.abiFor(key) orelse {
+            lambdaInvariant("lambda-solved const-backed erased callable referenced missing erased ABI");
+        };
+        _ = try self.importConstBackedExecutableEndpoint(owner, source.ret_exec_key);
+        for (source.arg_exec_keys) |arg_key| {
+            _ = try self.importConstBackedExecutableEndpoint(owner, arg_key);
+        }
+        const published = try self.representation_store.erased_fn_abis.append(self.allocator, source.*);
+        if (!canonical.erasedFnAbiKeyEql(published, key)) {
+            lambdaInvariant("lambda-solved imported const-backed erased ABI under a different key");
+        }
+    }
+
+    fn importConstBackedExecutableEndpoint(
+        self: *BodySolver,
+        owner: checked_artifact.CheckedModuleArtifactKey,
+        key: canonical.CanonicalExecValueTypeKey,
+    ) Allocator.Error!repr.SessionExecutableTypeEndpoint {
+        if (self.representation_store.session_executable_type_payloads.refForKey(key)) |existing| {
+            return .{ .ty = existing, .key = key };
+        }
+        const payloads = executablePayloadsForArtifactViews(self.artifact_views, owner) orelse {
+            lambdaInvariant("lambda-solved const-backed erased callable referenced unavailable executable payload owner");
+        };
+        const source_ref = payloads.refForKey(.{ .bytes = owner.bytes }, key) orelse {
+            lambdaInvariant("lambda-solved const-backed erased callable capture key had no published executable payload");
+        };
+        const source_names = canonicalNamesForArtifactViews(self.artifact_views, owner);
+        var importer = ArtifactExecutablePayloadImporter.init(
+            self.allocator,
+            source_names,
+            &self.registry.program.canonical_names,
+            self.row_shapes,
+            owner,
+            payloads,
+            &self.representation_store.session_executable_type_payloads,
+        );
+        defer importer.deinit();
+        return try importer.importRef(source_ref, key);
     }
 
     fn publishConstBackedFiniteCallableLeaf(
@@ -13231,6 +14256,7 @@ const BodySolver = struct {
         const payload_source_root = try self.sourceChildRoot(source_root, .box_payload);
         const payload_value = try self.newValue(payload_ty, if (payload_source_root) |source| source.key else .{});
         try self.publishConstBackedValueMetadata(payload_value, self.constBackedBoxPayload(resolved, backing.const_instance));
+        try self.appendConstBackedBoxErasureRequirements(payload_value);
 
         const box_root = self.valueRoot(value);
         const payload_root = self.valueRoot(payload_value);
@@ -13245,6 +14271,32 @@ const BodySolver = struct {
             .payload_value = payload_value,
             .boundary = null,
         };
+    }
+
+    fn appendConstBackedBoxErasureRequirements(
+        self: *BodySolver,
+        payload_value: repr.ValueInfoId,
+    ) Allocator.Error!void {
+        const payload_info = self.value_store.values.items[@intFromEnum(payload_value)];
+        const callable = payload_info.callable orelse return;
+        const provenance = switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
+            .already_erased => |erased| erased.provenance,
+            .erase_proc_value => |erase| erase.provenance,
+            .erase_finite_set => |erase| erase.provenance,
+            .pending_proc_value,
+            .finite,
+            => return,
+        };
+        if (provenance.len == 0) {
+            lambdaInvariant("lambda-solved const-backed boxed erased callable payload had no Box(T) provenance");
+        }
+        const payload_root = self.valueRoot(payload_value);
+        for (provenance) |item| {
+            _ = try self.representation_store.appendRepresentationRequirement(.{ .require_box_erased = .{
+                .payload_root = payload_root,
+                .provenance = item,
+            } });
+        }
     }
 
     fn constBackedProjectionChild(

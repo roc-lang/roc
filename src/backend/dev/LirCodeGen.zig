@@ -726,6 +726,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             name: Symbol,
             /// Declared arguments for ABI-correct call lowering.
             args: LocalSpan,
+            /// Size of the emitted prologue, used for object unwind metadata.
+            prologue_size: u8 = 0,
+            /// Stack allocation size recorded in object unwind metadata.
+            stack_alloc: u32 = 0,
+            /// Whether this procedure uses the platform frame pointer.
+            uses_frame_pointer: bool = true,
+        };
+
+        /// Object-file symbol metadata for one compiled LIR procedure.
+        pub const CompiledProcSymbol = struct {
+            name: Symbol,
+            code_start: usize,
+            code_end: usize,
+            prologue_size: u8,
+            stack_alloc: u32,
+            uses_frame_pointer: bool,
         };
 
         const unresolved_proc_code_start = std.math.maxInt(usize);
@@ -11336,6 +11352,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.patchPendingProcAddrs();
         }
 
+        /// Returns object-file symbol metadata for a compiled LIR procedure.
+        ///
+        /// This is used by native object emission to let readonly static data
+        /// relocate to erased-callable wrapper procedures. The procedure must
+        /// already have been compiled by `compileAllProcSpecs`.
+        pub fn compiledProcSymbol(self: *const Self, proc_id: lir.LIR.LirProcSpecId) ?CompiledProcSymbol {
+            const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse return null;
+            if (proc.code_start == unresolved_proc_code_start) return null;
+            return .{
+                .name = proc.name,
+                .code_start = proc.code_start,
+                .code_end = proc.code_end,
+                .prologue_size = proc.prologue_size,
+                .stack_alloc = proc.stack_alloc,
+                .uses_frame_pointer = proc.uses_frame_pointer,
+            };
+        }
+
         /// Compile a single procedure as a complete unit.
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
@@ -11566,6 +11600,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (self.proc_registry.getPtr(key)) |entry| {
                     entry.code_start = prologue_start;
                     entry.code_end = self.codegen.currentOffset();
+                    entry.prologue_size = @intCast(prologue_size);
+                    entry.stack_alloc = actual_locals_x86;
+                    entry.uses_frame_pointer = true;
                 }
             } else {
                 // aarch64: Prepend prologue to generated body
@@ -11618,6 +11655,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (self.proc_registry.getPtr(key)) |entry| {
                     entry.code_start = prologue_start;
                     entry.code_end = self.codegen.currentOffset();
+                    entry.prologue_size = @intCast(prologue_size);
+                    entry.stack_alloc = actual_locals;
+                    entry.uses_frame_pointer = true;
                 }
             }
 

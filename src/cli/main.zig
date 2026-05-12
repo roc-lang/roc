@@ -3358,7 +3358,15 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
-    const static_data_exports = try compile.static_data_exports.buildProvidedDataExports(ctx.gpa, root_artifact, target);
+    const static_data_exports = try compile.static_data_exports.buildProvidedDataExports(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        &lowered,
+        target,
+    );
     defer compile.static_data_exports.deinitProvidedDataExports(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {

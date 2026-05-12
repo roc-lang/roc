@@ -47,12 +47,19 @@ pub const MonoSpecializationReason = union(enum) {
     str_inspect_custom: canonical.ProcedureTemplateRef,
 };
 
+/// Public `MaterializationDependencyRoot` declaration.
+pub const MaterializationDependencyRoot = struct {
+    owner: checked_artifact.CheckedModuleArtifactKey,
+    summary: checked_artifact.ComptimeDependencySummaryId,
+};
+
 /// Public `Input` declaration.
 pub const Input = struct {
     root: checked_artifact.LoweringModuleView,
     imports: []const checked_artifact.ImportedModuleView = &.{},
     mode: LoweringMode = .runnable,
     checking_artifact_sink: ?*checked_artifact.CheckedModuleArtifact = null,
+    materialization_dependencies: []const MaterializationDependencyRoot = &.{},
 };
 
 /// Public `LoweringMode` declaration.
@@ -404,6 +411,21 @@ pub fn run(
         const reserved = try queue.reserve(&program.concrete_source_types, request);
         try program.root_procs.append(allocator, mirProcedureRefFromReserved(reserved));
         try program.root_metadata.append(allocator, seed.metadata);
+    }
+
+    if (input.materialization_dependencies.len != 0) {
+        var dependency_state = ConcreteDependencyReservationState.init(allocator);
+        defer dependency_state.deinit();
+        for (input.materialization_dependencies) |dependency| {
+            try reserveComptimeDependencySummaryDependencies(
+                input,
+                &program,
+                &queue,
+                &dependency_state,
+                dependency.owner,
+                dependency.summary,
+            );
+        }
     }
 
     while (queue.pending.items.len != 0) {
@@ -1132,7 +1154,7 @@ fn executableSyntheticProcForReserved(
             const body_plan = template_lookup.promoted_callable_body_plans.get(wrapper.body_plan);
             break :blk switch (body_plan) {
                 .erased => |erased| erased_blk: {
-                    if (!std.mem.eql(u8, &erased.source_fn_ty.bytes, &key.requested_mono_fn_ty.bytes)) {
+                    if (!std.mem.eql(u8, &erased.sealed.boundary.source_fn_ty.bytes, &key.requested_mono_fn_ty.bytes)) {
                         invariantViolation("erased promoted callable wrapper source function type disagrees with mono specialization request");
                     }
                     break :erased_blk mir_ids.ExecutableSyntheticProc{
@@ -1159,11 +1181,11 @@ fn executableSyntheticSignatureForErased(
     checked_types: checked_artifact.CheckedTypeStoreView,
     erased: checked_artifact.ErasedPromotedWrapperBodyPlan,
 ) mir_ids.ExecutableSyntheticProcSignaturePlan {
-    const checked_root = checkedTypeRootForKey(checked_types, erased.source_fn_ty) orelse {
+    const checked_root = checkedTypeRootForKey(checked_types, erased.sealed.boundary.source_fn_ty) orelse {
         invariantViolation("erased promoted wrapper source function type was not published in checked type roots");
     };
     return .{
-        .source_fn_ty = erased.source_fn_ty,
+        .source_fn_ty = erased.sealed.boundary.source_fn_ty,
         .params = erased.params,
         .ret_source_ty = checkedFunctionReturnSourceType(checked_types, checked_root),
     };
@@ -1269,7 +1291,7 @@ fn reserveExecutableSyntheticProcDependencies(
     switch (synthetic.body) {
         .erased_promoted_wrapper => |erased| {
             try reserveErasedPromotedWrapperCodeDependency(input, program, queue, erased, .{ .erased_promoted_wrapper_code = synthetic.template });
-            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, erased.capture);
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, erased.sealed.capture);
             switch (erased.hidden_capture_arg) {
                 .none => {},
                 .materialized_capture => |capture| try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, &state, owner_artifact, synthetic.comptime_plans, capture),
@@ -1285,21 +1307,21 @@ fn reserveErasedPromotedWrapperCodeDependency(
     erased: checked_artifact.ErasedPromotedWrapperBodyPlan,
     reason: MonoSpecializationReason,
 ) Allocator.Error!void {
-    switch (erased.code) {
-        .direct_proc_value => |direct| try reserveCallableProcedureDependency(input, program, queue, direct.proc_value, reason),
-        .finite_set_adapter => |adapter| {
-            if (erased.finite_adapter_member_targets.len == 0) {
+    switch (erased.sealed.code) {
+        .direct_proc => |direct| try reserveCallableProcedureDependency(input, program, queue, direct.code.proc_value, reason),
+        .finite_adapter => |finite| {
+            if (finite.members.len == 0) {
                 invariantViolation("mono dependency reservation reached persisted finite-set adapter with no member targets");
             }
-            const descriptor = callableSetDescriptorForKey(input, adapter.callable_set_key) orelse {
+            const descriptor = callableSetDescriptorForKey(input, finite.adapter_key.callable_set_key) orelse {
                 invariantViolation("mono dependency reservation reached persisted finite-set adapter with no callable-set descriptor");
             };
-            if (descriptor.members.len != erased.finite_adapter_member_targets.len) {
+            if (descriptor.members.len != finite.members.len) {
                 invariantViolation("mono dependency reservation persisted finite-set adapter target count differs from descriptor");
             }
-            for (descriptor.members, erased.finite_adapter_member_targets) |member, target| {
-                validatePersistedFiniteAdapterMemberTarget(member, target);
-                _ = try reserveCallableSetMemberProcedureDependency(input, program, queue, member, reason);
+            for (descriptor.members, finite.members) |descriptor_member, sealed_member| {
+                validatePersistedFiniteAdapterMemberTarget(descriptor_member, sealed_member.target_key);
+                try reserveCallableProcedureDependency(input, program, queue, sealed_member.proc_value, reason);
             }
         },
     }
@@ -1317,21 +1339,21 @@ fn validatePersistedFiniteAdapterMemberTarget(
     }
 }
 
-fn reserveErasedCodeRefDependency(
+fn reserveSealedErasedCallableDependency(
     input: Input,
     program: *Program,
     queue: *Queue,
-    code: canonical.ErasedCallableCodeRef,
+    sealed: checked_artifact.SealedErasedCallableValue,
     reason: MonoSpecializationReason,
 ) Allocator.Error!void {
-    switch (code) {
-        .direct_proc_value => |direct| try reserveCallableProcedureDependency(input, program, queue, direct.proc_value, reason),
-        .finite_set_adapter => |adapter| {
-            const descriptor = callableSetDescriptorForKey(input, adapter.callable_set_key) orelse {
-                invariantViolation("mono dependency reservation reached finite-set adapter with no callable-set descriptor");
-            };
-            for (descriptor.members) |member| {
-                _ = try reserveCallableSetMemberProcedureDependency(input, program, queue, member, reason);
+    switch (sealed.code) {
+        .direct_proc => |direct| try reserveCallableProcedureDependency(input, program, queue, direct.code.proc_value, reason),
+        .finite_adapter => |finite| {
+            if (finite.members.len == 0) {
+                invariantViolation("mono dependency reservation reached sealed finite adapter with no members");
+            }
+            for (finite.members) |member| {
+                try reserveCallableProcedureDependency(input, program, queue, member.proc_value, reason);
             }
         },
     }
@@ -1522,8 +1544,8 @@ fn reserveErasedCaptureExecutableMaterializationNodeDependencies(
             }
         },
         .erased_callable => |erased| {
-            try reserveErasedCodeRefDependency(input, program, queue, erased.code, .{ .erased_finite_capture_member = node_id });
-            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, erased.capture);
+            try reserveSealedErasedCallableDependency(input, program, queue, erased.sealed, .{ .erased_finite_capture_member = node_id });
+            try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, erased.sealed.capture);
         },
         .record => |fields| for (fields) |field| {
             try reserveErasedCaptureExecutableMaterializationPlanDependencies(input, program, queue, state, owner_artifact, plans, field.value);

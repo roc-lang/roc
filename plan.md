@@ -2793,8 +2793,30 @@ const ProcValueToErasedPlan = struct {
     capture: ErasedCaptureExecutableMaterializationPlan,
 };
 
-const AlreadyErasedCallableTransformPlan = struct {
-    call_sig: ErasedCallSigKey,
+const AlreadyErasedCallableTransformPlan = union(enum) {
+    // Source and target endpoints have the same erased source function type and
+    // the same erased ABI. Lowering verifies both endpoints against this exact
+    // signature before deciding whether a type-state bridge is needed.
+    exact: ErasedCallSigKey,
+
+    // Source and target endpoints have the same erased ABI but different
+    // canonical source function identities. This happens at transparent
+    // function type alias boundaries, where the runtime erased callable payload
+    // is unchanged but the executable value must be typed at the consumer's
+    // endpoint before it can flow onward.
+    //
+    // This variant is not compatibility repair. It is valid only when:
+    // - the source endpoint erased signature is exactly `source_sig`
+    // - the target endpoint erased signature is exactly `target_sig`
+    // - `source_sig.abi == target_sig.abi`
+    // - `source_sig.source_fn_ty != target_sig.source_fn_ty`
+    //
+    // It must not allocate, repack, synthesize an adapter, or compare compatible
+    // shapes. The runtime value remains the same erased callable payload pointer.
+    same_abi_retype: struct {
+        source_sig: ErasedCallSigKey,
+        target_sig: ErasedCallSigKey,
+    },
 };
 
 const ExecutableValueTransformPlan = struct {
@@ -2814,11 +2836,23 @@ const BoxErasureProvenance = union(enum) {
     // a real Box.box or Box.unbox value-flow operation.
     local_box_boundary: BoxBoundaryId,
 
+    // A stable checked-artifact authorization owned by a const-graph Box(T)
+    // reification plan. This is used for already-materialized compile-time
+    // values crossing into a later lambda-solved session. It must name the
+    // artifact that owns the const graph and the exact const graph node whose
+    // payload is being rehydrated.
+    const_graph_box: ConstGraphBoxErasureWitness,
+
     // A stable checked-artifact authorization owned by a promoted executable
     // wrapper procedure. This is used when the wrapper body was already sealed
     // from an earlier compile-time-evaluated Box(T) boundary, so the current
     // lambda-solved session must not invent a fresh BoxBoundaryId.
     promoted_wrapper: MirProcedureRef,
+};
+
+const ConstGraphBoxErasureWitness = struct {
+    artifact: CheckedModuleArtifactKey,
+    box_plan: ConstGraphReificationPlanId,
 };
 
 const ErasedPromotedProcedureExecutableSignature = struct {
@@ -5090,10 +5124,92 @@ body must dispatch with `callable_match`, including singleton sets. The
 `proc_value` case packs an already-resolved procedure value and its sealed
 executable capture materialization for direct erased calls. The
 `already_erased_callable` case is runtime-pass-through verification for an input
-value already represented by exactly the published `ErasedCallSigKey`. "Runtime
-pass-through" does not mean "reuse the same typed executable value handle in all
-cases." Executable MIR values are typed by `TypeId`, and `addValueRefExpr` must
-never ascribe a new `TypeId` to an existing value ref.
+value already represented by an erased callable payload. "Runtime pass-through"
+does not mean "reuse the same typed executable value handle in all cases."
+Executable MIR values are typed by `TypeId`, and `addValueRefExpr` must never
+ascribe a new `TypeId` to an existing value ref.
+
+There are exactly two already-erased callable transform variants:
+
+```zig
+const AlreadyErasedCallableTransformPlan = union(enum) {
+    exact: ErasedCallSigKey,
+    same_abi_retype: struct {
+        source_sig: ErasedCallSigKey,
+        target_sig: ErasedCallSigKey,
+    },
+};
+```
+
+`exact` is for endpoints whose erased source function type and erased ABI are
+identical. `same_abi_retype` is for endpoints whose erased ABI is identical but
+whose canonical source function type identities differ. The only intended reason
+for this is a transparent source-level function type alias boundary. This can
+happen in ordinary modules and across host/platform boundaries. For example:
+
+```roc
+I64ToI64 : I64 -> I64
+
+make_boxed : {} -> Box(I64 -> I64)
+make_boxed = |_| Box.box(|x| x + 1)
+
+use_alias : Box(I64ToI64) -> I64
+use_alias = |boxed| {
+    f = Box.unbox(boxed)
+    f(41)
+}
+
+main = use_alias(make_boxed({}))
+```
+
+It can also happen when a platform exports an alias and an application stores or
+calls a boxed function through that alias:
+
+```roc
+# platform module
+I64ToI64 : I64 -> I64
+
+Host :: {}.{
+    boxed_add! : I64 => Box(I64ToI64)
+    call_boxed! : Box(I64ToI64), I64 => I64
+}
+
+# app module
+run! = || {
+    boxed = Host.boxed_add!(10)
+    f = Box.unbox(boxed)
+    f(32)
+}
+```
+
+The boxed callable created by `make_boxed({})` and consumed by `use_alias` has
+one runtime erased callable payload pointer. No allocation, repacking, adapter,
+or source-shape comparison is needed at the alias boundary. However, the
+executable endpoint for `Box(I64 -> I64)` and the executable endpoint for
+`Box(I64ToI64)` can name different canonical source function identities in
+their `ErasedCallSigKey.source_fn_ty`. That difference must stay explicit in the
+transform plan as `same_abi_retype`; it must not be hidden by weakening
+`ErasedCallSigKey` equality and must not be repaired by compatibility-shape
+logic.
+
+An erased `call_value` is slightly different from a value transform. The call
+does not store the callee under a new executable value type; it consumes the
+callee immediately through the explicitly selected erased ABI. Therefore
+`CallSiteDispatch.call_value_erased` names the callee payload signature whose
+ABI will be called, while `CallSiteInfo.requested_source_fn_ty` records the
+source-level call view that checking accepted. Those two source-function
+identities may differ only when the erased ABI is the same, such as the
+transparent `I64ToI64` host alias above. Executable MIR must verify the
+published erased ABI, the raw argument consumer-use endpoints, and the raw
+result transform against `CallSiteDispatch.call_value_erased`. It must not reject
+the call merely because `sig_key.source_fn_ty` differs from
+`call_site.requested_source_fn_ty`.
+
+If the erased callable value is stored, returned, passed as an ordinary value, or
+otherwise materialized at a new endpoint, this call-boundary rule does not apply;
+lambda-solved must publish an `already_erased_callable.same_abi_retype` value
+transform. The immediate-call rule exists only because the call boundary already
+has explicit raw ABI endpoints and does not create a retyped value.
 
 Therefore, lowering `already_erased_callable` follows this exact rule:
 
@@ -5102,13 +5218,23 @@ fn lower_already_erased_callable_transform(
     source_value: ExecutableValueRef,
     from_endpoint: Endpoint,
     to_endpoint: Endpoint,
-    sig_key: ErasedFnSigKey,
+    plan: AlreadyErasedCallableTransformPlan,
 ) ExecutableValueRef {
     const from_ty = lower_endpoint_type(from_endpoint);
     const to_ty = lower_endpoint_type(to_endpoint);
 
-    debug_assert(erased_sig(from_ty) == sig_key);
-    debug_assert(erased_sig(to_ty) == sig_key);
+    switch (plan) {
+        .exact => |sig_key| {
+            debug_assert(erased_sig(from_ty) == sig_key);
+            debug_assert(erased_sig(to_ty) == sig_key);
+        },
+        .same_abi_retype => |retype| {
+            debug_assert(erased_sig(from_ty) == retype.source_sig);
+            debug_assert(erased_sig(to_ty) == retype.target_sig);
+            debug_assert(retype.source_sig.abi == retype.target_sig.abi);
+            debug_assert(retype.source_sig.source_fn_ty != retype.target_sig.source_fn_ty);
+        },
+    }
 
     if (from_ty == to_ty) {
         return source_value;
@@ -5128,12 +5254,18 @@ The bridge is a type-state bridge, not a runtime conversion and not a
 compatible-shape repair. It exists because two endpoint types can have the same
 erased call ABI while carrying different executable metadata for where the
 erased callable came from or how its capture was published. For example, a
-host-provided `Box(I64 -> I64)` and a Roc-created `Box(I64 -> I64)` can both
-unbox to the same `ErasedFnSigKey`, but one endpoint may carry no Roc capture
-payload type while the other endpoint carries a published Roc capture payload
-type for final-drop planning. The runtime value is still one erased callable
+transparent alias such as `I64ToI64 : I64 -> I64` can produce a target endpoint
+whose `ErasedCallSigKey.source_fn_ty` names the alias while the source endpoint
+names the expanded function type. The runtime value is still one erased callable
 payload pointer. The executable value handle still needs the target endpoint's
 `TypeId` before it can be passed into a consumer typed at that endpoint.
+
+`call_value_erased` call sites are stricter: they consume exactly one
+`ErasedCallSigKey`. If an already-erased value reaches a call site through a
+transparent alias boundary, the `same_abi_retype` transform must be applied
+before the call, and the call site must then verify the value against the call
+site's exact key. Calls must not use "same ABI" as a substitute for exact erased
+signature agreement.
 
 This rule also applies to identity transforms. A true identity transform may
 return the source value only when the source and target endpoint keys lower to
@@ -6575,6 +6707,49 @@ const RepresentationStore = struct {
 };
 ```
 
+`BoxErasureProvenance` is an authorization set, not runtime identity. A solved
+representation group can legitimately be reached through more than one explicit
+`Box(T)` witness. That happens when an already-erased callable is moved through
+ordinary Roc value flow after it has crossed a `Box(function)` boundary:
+
+```roc
+{
+    make_boxed = |_| Box.box(|x| x + 1)
+    add_one = Box.unbox(make_boxed({}))
+    add_one(41)
+}
+```
+
+The compile-time value stored for `make_boxed({})` has artifact-stable
+`const_graph_box` provenance. The later `Box.unbox(...)` in the consuming
+specialization introduces a local `BoxBoundaryId` provenance. These are not two
+different runtime callables, and they are not a contradiction. They are two
+explicit witnesses that the same solved callable group is allowed to use erased
+representation. The canonical group provenance is the de-duplicated union of
+all explicit witnesses that reach the group.
+
+The same rule applies to branches, records, tags, lists, helper calls, captures,
+returns, and compile-time promoted callables. For example:
+
+```roc
+{
+    choose_boxed = |pick|
+        if pick {
+            Box.box(|x| x + 1)
+        } else {
+            Box.box(|x| x + 10)
+        }
+
+    add = Box.unbox(choose_boxed(Bool.True))
+    add(41)
+}
+```
+
+Both branch payloads are explicit `Box(T)` witnesses for the same branch-result
+erased callable group. Lambda-solved must union the witnesses. It must not
+require both branches to have identical provenance slices, and it must not
+choose one witness and discard the other.
+
 `CallableEmissionAssigner` already walks explicit `require_box_erased`
 requirements and propagates provenance through the solved representation graph.
 After that propagation, before value-transform finalization, it must publish the
@@ -6590,11 +6765,64 @@ recovery from type shape; it is the solved result of explicit requirements:
 
 When `ValueTransformFinalizer` plans a non-identity structural transform and no
 local `BoxBoundaryId` or inherited provenance is already in scope, it may read
-the source and target endpoint solved groups and inherit their published
-`group_erasure_provenance`. If both endpoints have provenance, they must agree
-as sets after de-duplication; a mismatch is a compiler invariant violation. If
-neither endpoint has provenance, the transform proceeds with empty provenance and
-will remain valid only if no callable-erasing child transform is needed.
+the source and target endpoint solved groups and inherit the de-duplicated union
+of their published `group_erasure_provenance`. This union is valid only because
+each member is itself an explicit `Box(T)` witness published by an earlier
+stage. If neither endpoint has provenance, the transform proceeds with empty
+provenance and will remain valid only if no callable-erasing child transform is
+needed. A mismatch in runtime erased ABI, capture shape, capture materialization,
+or source/target executable type remains a compiler invariant violation; a
+difference only in explicit Box-erasure witnesses is not a mismatch.
+
+Callable-emission publication follows the same rule. Two already-erased
+callable emission plans in the same solved group are semantically compatible
+when their runtime erased ABI, capture shape, result erased type, and capture
+materialization are compatible. If their Box-erasure provenance differs, the
+group emission plan's provenance becomes the de-duplicated union. Lambda-solved
+must not create duplicate runtime adapter code solely because the same erased
+callable group has multiple explicit `Box(T)` witnesses.
+
+The group-level callable emission is not the only emission for every value in a
+group. It is a fallback for values whose solved representation group is erased
+but whose own `ValueInfo` has no concrete callable leaf metadata, such as an
+alias, projection, join result, imported constant view, or already-materialized
+const-backed erased callable view. Finite producers and proc-value producers in
+the same erased group still receive per-value emission plans:
+
+```text
+already-erased alias/projection/join with no leaf metadata -> adopt group already_erased emission
+finite callable producer in erased group -> per-value finite_set_to_erased adapter plan
+proc-value producer in erased group -> per-value proc_value_to_erased adapter plan
+```
+
+This distinction is mandatory for cases where a finite callable and an
+already-erased callable flow into the same solved group:
+
+```roc
+{
+    make_boxed = |_| Box.box(|x| x + 1)
+    add_one = Box.unbox(make_boxed({}))
+    add_one(41)
+}
+```
+
+The lambda inside `Box.box(...)` is a finite callable producer that must be
+packed with an explicit finite-set-to-erased adapter when constructing the box.
+The value produced by `Box.unbox(...)` is already erased and should adopt the
+group's already-erased emission when it has no more specific leaf metadata.
+Publishing the already-erased group emission must not prevent finite producers
+in that group from getting their own erase plans, and publishing a finite
+producer's erase plan must not overwrite the already-erased group fallback.
+
+Once a `CallableValueEmissionPlanId` is stored in another explicit record, such
+as a finite-erased adapter-member owner, a call-boundary dependency, a const
+materialization dependency, or an executable synthetic procedure dependency, the
+plan id is stable. Later solve-loop iterations may extend Box-erasure
+provenance on that plan and may fill in same-kind details that were deliberately
+reserved earlier, but they must not change the plan to a different semantic
+kind. In particular, a plan id that has been used as `erase_finite_set` must not
+be rewritten to `finite`; doing so would make adapter-member owners point at
+data that no longer describes the adapter member they are lowering.
 
 When a session does lower a real `Box.unbox(boxed)` operation, the boxed input
 value must also be marked as a boxed value carrying the new local boundary:
@@ -6759,11 +6987,12 @@ select the lifted local function for `|n| |x| x + n` inside `make_boxed`. The
 checked artifact must not persist that lifted local function as the final adapter
 member target. Instead it promotes that selected callable member into a private
 synthetic checked procedure owned by the promoted `make_adder` wrapper, stores
-the finite adapter member as that synthetic procedure, and stores
-`finite_adapter_member_targets[i]` for the synthetic procedure's executable
+the finite adapter member as that synthetic procedure, and seals a
+`SealedFiniteErasedAdapterMember` for the synthetic procedure's executable
 specialization. Later lowering of `main` consumes only the promoted private
-synthetic procedure and the executable specialization key; it does not need to
-reproduce the compile-time lowering's lifted site.
+synthetic procedure, the sealed member metadata, and the executable
+specialization key; it does not need to reproduce the compile-time lowering's
+lifted site.
 
 `ProcedureCallableRef` is the canonical identity for one resolved procedure
 value occurrence before executable representation solving. `template` is the
@@ -6911,11 +7140,7 @@ const MaterializedFiniteCallableSetValue = struct {
 };
 
 const MaterializedErasedCallableValue = struct {
-    source_fn_ty: CanonicalTypeKey,
-    call_sig: ErasedCallSigKey,
-    code: ErasedCallableCodeRef,
-    capture: ErasedCaptureExecutableMaterializationPlan,
-    provenance: NonEmptySpan(BoxErasureProvenance),
+    sealed: SealedErasedCallableValue,
 };
 
 const StableErasedCaptureRecordMaterialization = struct {
@@ -7107,14 +7332,52 @@ must distinguish at least these recipe shapes:
   recipes.
 - `finite_callable_set_value`: a callable-result plan whose interpreted value
   selects a finite callable-set member for a finite-set erased adapter
+- `singleton_finite_adapter_without_hidden_capture`: not a separate runtime
+  payload shape, but an allowed publication case for finite-set erased adapter
+  code whose erased signature has no hidden capture. This can happen for Roc code
+  like:
+
+  ```roc
+  I64ToI64 : I64 -> I64
+
+  boxed_add_one : Box(I64ToI64)
+  boxed_add_one = Box.box(|value| value + 1)
+  ```
+
+  The runtime erased callable code may still be a finite-set adapter because all
+  finite callable-set calls lower through `callable_match`, including singleton
+  sets. However, there is no hidden capture value to inspect: the lambda has no
+  captures, the finite set has exactly one member, and the erased callable
+  payload does not need runtime data to choose a branch. Checking finalization
+  must therefore select the single member from the already-published
+  `CallableSetDescriptor` and the lowered adapter member target table. This is
+  not recovery from syntax or from bytes; it is consuming explicit metadata
+  published by lambda-solved and executable lowering. If the descriptor has more
+  than one member, if the member has captures, or if the lowered code map does
+  not publish exactly one target key, that is a compiler bug.
 
 Checking finalization consumes those recipes against the interpreted LIR value
 while the lambda-solved representation store and callable-set descriptors are
-still available. It then publishes only
+still available. For singleton finite adapters with no hidden capture, there is
+no interpreted capture value to consume; finalization instead consumes the
+published descriptor member plus the lowered finite-adapter target key and turns
+that into the same sealed singleton adapter shape it would have produced after
+selecting a runtime finite callable-set value. It then publishes only
 `ErasedCaptureExecutableMaterializationPlan` plus descriptor-store entries.
 Executable MIR must never receive the recipe form and must never decide which of
 these cases it has by looking at arity, type shape, capture byte size, code-ref
 variant, or runtime data.
+
+Imported or aliased const-backed erased callables may arrive with
+`materialized_capture` instead of `finite_callable_set_value`. That is also
+explicit data, not a recovery path. The materialization graph must contain the
+selected finite callable-set value, including its selected member and any
+already-reified captures. Checking finalization consumes that graph directly. It
+must not re-interpret source CIR or inspect bytes to rediscover the selected
+member. If a materialized finite callable-set capture has member captures, the
+sealed finite adapter members must carry the published branch capture transforms
+needed to pass those captures to the selected member; if those transforms are
+missing, the checked artifact is incomplete.
 
 `ErasedHiddenCaptureArgPlan` must say exactly which materialized capture value
 backs the inline capture region whose pointer is passed to erased code, or state
@@ -8304,52 +8567,61 @@ erased-wrapper adapter is the erased function representation named by the
 persisted executable specialization key.
 
 Concretely, when lambda-solved MIR reserves code dependencies for a bodyless
-promoted erased wrapper whose `code` is `finite_set_adapter`, it must:
+promoted erased wrapper whose sealed code is `finite_adapter`, it must:
 
 1. load the target-free artifact callable-set descriptor only to validate member
    count/order and to retain member metadata such as procedure identity and
    capture slots
-2. iterate `finite_adapter_member_targets` in descriptor member order
-3. pair descriptor member `i` with `finite_adapter_member_targets[i]`
-4. reserve the descriptor member's exact `source_proc` in the current solve
-   session as
+2. iterate `sealed.code.finite_adapter.members` in canonical descriptor member
+   order
+3. validate that sealed member `i` names descriptor member `i`
+4. reserve the sealed member's exact `source_proc` in the current solve session as
    `executable_erased_adapter_member(synthetic_index, member_index)`
 5. attach erased payload representation requirements from the target key's
    `exec_arg_tys` and `exec_ret_ty`, not from the descriptor member
 
-The descriptor member's `source_proc` is not sufficient by itself, but it is
-also not optional. `ExecutableSpecializationKey` intentionally does not carry a
+The sealed member's `source_proc` is not sufficient by itself, but it is also
+not optional. `ExecutableSpecializationKey` intentionally does not carry a
 `CallableProcedureTemplateRef`; it names the executable specialization selected
-for a procedure identity that must come from somewhere else. For ordinary
-checked top-level functions, `base + requested_fn_ty` may appear to be enough to
-recover that identity, but lifted local functions and closures require their
-exact `CallableProcedureTemplateRef.lifted` owner specialization plus
+for a procedure identity that must come from explicit artifact data. For
+ordinary checked top-level functions, `base + requested_fn_ty` may appear to be
+enough to recover that identity, but lifted local functions and closures require
+their exact `CallableProcedureTemplateRef.lifted` owner specialization plus
 `NestedProcSiteId`. Therefore a persisted finite adapter member target is the
-explicit pair:
+explicit sealed record:
 
 ```zig
-const PersistedFiniteAdapterMemberTarget = struct {
-    source_proc: MirProcedureRef, // from artifact descriptor member i
-    executable_specialization_key: ExecutableSpecializationKey, // from member_targets[i]
+const SealedFiniteErasedAdapterMember = struct {
+    member: CallableSetMemberRef,
+    source_proc: MirProcedureRef,
+    proc_value: ProcedureCallableRef,
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
+    target_key: ExecutableSpecializationKey,
+    arg_transforms: Span(PublishedExecutableValueTransformRef),
+    capture_transforms: Span(PublishedExecutableValueTransformRef),
+    result_transform: PublishedExecutableValueTransformRef,
 };
 ```
 
-The implementation may store only the `ExecutableSpecializationKey` slice in the
-erased wrapper plan because the descriptor already stores `source_proc` in the
-same canonical member order. The consumer must nevertheless treat the pair as
-the target identity. Using `source_proc` alone is forbidden because it omits the
-executable argument keys, return key, callable representation mode, and capture
-shape selected when the promoted erased wrapper was originally solved. Using
-`ExecutableSpecializationKey` alone is also forbidden because it omits the
-callable template identity needed for lifted closures and compiler-created
-synthetic procedures.
+The implementation must not store only an `ExecutableSpecializationKey` slice in
+the erased wrapper plan. The descriptor's member order is useful for validation,
+but it is not the public source of truth for executable adapter member targets.
+The sealed member record is the source of truth. Using `source_proc` alone is
+forbidden because it omits the executable argument keys, return key, callable
+representation mode, and capture shape selected when the promoted erased wrapper
+was originally solved. Using `ExecutableSpecializationKey` alone is also
+forbidden because it omits the callable template identity needed for lifted
+closures and compiler-created synthetic procedures. Using descriptor order to
+reconstruct the missing side is also forbidden; descriptor order may only be used
+by debug verification that the sealed member list matches the descriptor.
 
 Mono dependency reservation for a persisted finite adapter must use the same
-pair. For each descriptor member `i`, mono validates that
-`member.source_proc.proc.proc_base == member_targets[i].base` and
-`member.proc_value.source_fn_ty == member_targets[i].requested_fn_ty`, then
+sealed record. For each sealed member, mono validates that
+`member.source_proc.proc.proc_base == member.target_key.base` and
+`member.proc_value.source_fn_ty == member.target_key.requested_fn_ty`, then
 reserves `member.proc_value` through the ordinary callable-procedure dependency
-path. For persisted promoted erased wrappers, descriptor members must be
+path. For persisted promoted erased wrappers, sealed members must be
 checked/imported/hosted/platform-required procedures or compiler-created
 synthetic promoted procedures. A lifted descriptor member in persisted promoted
 wrapper code is a checked-artifact publication bug: checking finalization should
@@ -8360,20 +8632,21 @@ loses lifted-member identity and can silently reserve the promoted wrapper
 instead of the callable member body.
 
 Lambda-solved MIR then reserves `member.source_proc` in the current solve
-session as the adapter member procedure and uses `member_targets[i]` only to
-impose the executable public-root representation requirements. Executable MIR
-finally resolves `member_targets[i]` to the current session's
+session as the adapter member procedure and uses `member.target_key` to impose
+the executable public-root representation requirements. Executable MIR finally
+resolves `member.target_key` to the current session's
 `ProcRepresentationInstanceId` and debug-verifies that the instance's `proc`
 equals `member.source_proc`. If mono did not make that procedure available, if
-lambda-solved sealed a different executable key, or if the descriptor/key pair
-does not agree, that is a compiler bug.
+lambda-solved sealed a different executable key, or if the sealed member and
+descriptor do not agree, that is a compiler bug.
 
 The same rule applies to materialized erased callable leaves inside constants,
 private promoted captures, and erased callable result plans that are interpreted
 and then stored in a checked artifact. If the persisted code is a finite-set
-adapter, the persisted plan must contain `member_targets`; a bare
+adapter, the persisted plan must contain sealed finite adapter members; a bare
 `ErasedAdapterKey`, bare `ProcedureCallableRef`, source procedure symbol,
-generated procedure name, or source function type is not sufficient.
+generated procedure name, source function type, or executable specialization key
+is not sufficient.
 
 A capture-slot mismatch is an invariant violation only when both callable-set
 entries refer to the same `CallableMemberInstanceId` in the same
@@ -10056,11 +10329,44 @@ The lambda-solved construction algorithm is:
    ```
 
    `markErasedPayloadRoot` then follows existing explicit representation edges
-   such as `.tag_payload`, `.record_field`, `.tuple_elem`, `.list_elem`,
-   `.nominal_backing`, `.function_arg`, and `.function_return` to mark the
-   nested callable group as erased. The solver must then re-run, so the pattern
-   binder `f` is assigned an already-erased callable emission instead of looking
-   for finite callable members that do not exist at the boundary.
+   that carry the same value or a structural child of the same value. This
+   includes structural edges such as `.tag_payload`, `.record_field`,
+   `.tuple_elem`, `.list_elem`, `.box_payload`, and `.nominal_backing`, public
+   procedure boundary edges such as `.function_arg` and `.function_return`, and
+   ordinary value-flow edges such as `.value_alias`, `.value_move`,
+   `.branch_join`, `.loop_phi`, and `.mutable_version`. The solver must then
+   re-run, so the pattern binder `f` is assigned an already-erased callable
+   emission instead of looking for finite callable members that do not exist at
+   the boundary.
+
+   The value-flow edges are mandatory. A `Box(T)` erasure requirement applies to
+   the runtime value, not merely to the source syntax node where the requirement
+   was first discovered. If an erased boxed callable is rebound, returned,
+   joined, moved through a mutable version, or forwarded through a platform
+   wrapper, every connected representation root that denotes the same runtime
+   value must receive the same erased payload requirement before executable
+   boundary keys are sealed.
+
+   For example:
+
+   ```roc
+   I64ToI64 : I64 -> I64
+
+   boxed_add_one : Box(I64ToI64)
+   boxed_add_one = Box.box(|value| value + 1)
+
+   boxed_add_one_for_host : Box((I64 -> I64))
+   boxed_add_one_for_host = boxed_add_one
+   ```
+
+   The local `Box.box` boundary authorizes erasure for the lambda payload. The
+   wrapper value `boxed_add_one_for_host` is an alias and procedure return of
+   that same boxed runtime value. Its public return endpoint must therefore seal
+   as `Box(erased_fn(...))`, possibly with an
+   `AlreadyErasedCallableTransformPlan.same_abi_retype` if the transparent alias
+   changes the canonical source function identity. It must not seal as
+   `Box(vacant_callable_slot(I64 -> I64))`, and no later stage may repair that
+   by synthesizing an `erased_fn -> vacant_callable_slot` bridge.
 
    The compiler must deduplicate these requirements by `(payload_root,
    provenance)` and treat new requirements as a solve-loop change. This is not a
@@ -11130,6 +11436,29 @@ fn publishConstBackedCallableLeaf(value: ValueInfoId, leaf: CallableLeafInstance
 }
 ```
 
+For an erased boxed callable leaf, `publishAlreadyErasedCallable` must attach an
+`already_erased` callable emission plan to the const-backed payload value. The
+plan consumes only sealed checked-artifact data:
+
+- `sig_key` comes from the `ErasedCallableLeafInstance`;
+- `capture_shape_key` comes from the explicit erased code ref
+  (`direct_proc_value.capture_shape_key` or
+  `finite_set_adapter.capture_shape_key`);
+- `provenance` is cloned from the leaf and must be non-empty;
+- if `sig_key.capture_ty` is present, the lambda-solved session imports that
+  executable payload from the artifact that owns the `ConstInstanceRef` and
+  records an executable-only hidden capture key; it does not fabricate a source
+  `ValueInfo` for a runtime-only erased capture.
+
+This executable-only capture key is explicit semantic data. It is not a layout
+guess and not a backend hint. It exists because an already-materialized
+`ErasedCallableLeafInstance` has already consumed the interpreter bytes and
+stored a complete executable capture materialization graph in the checked
+artifact. When that const-backed value is later lowered again, lambda-solved only
+needs the erased callable slot's executable payload identity so calls and value
+transforms can preserve the ABI. It must not rerun compile-time evaluation or
+recover the hidden capture from runtime bytes.
+
 The checked-artifact dependency summary for every const graph containing a
 finite callable result must include every finite member procedure before the
 const graph can be consumed by mono. This is mandatory even if the current
@@ -11164,11 +11493,16 @@ value_info(boxed_const).boxed = BoxedValueInfo{
 ```
 
 The `boundary = null` is intentional. A compile-time-backed `Box(T)` value
-already exists in the checked artifact; publishing its structural child does not
-create a fresh local `BoxBoundaryId` and does not authorize new erased callable
-representation. Erasure remains authorized only by real local `Box.box` or
-`Box.unbox` value-flow operations, or by a sealed promoted-wrapper plan whose
-provenance came from such an explicit `Box(T)` boundary.
+already exists in the checked artifact; publishing its structural child does
+not create a fresh local `BoxBoundaryId` and does not claim that the current
+session executed `Box.box` or `Box.unbox`. If the payload contains an erased
+callable, the consuming session republishes erasure through
+`BoxErasureProvenance.const_graph_box`, which names the checked artifact and
+the exact `ConstGraphReificationPlan.box` node that reified the value.
+Erasure remains authorized only by real local `Box.box` or `Box.unbox`
+value-flow operations, by a const-graph `Box(T)` witness, or by a sealed
+promoted-wrapper plan whose provenance came from one of those explicit
+sources.
 
 This matters even when the later runtime expression never unboxes the value. For
 example:
@@ -11221,6 +11555,321 @@ runtime contents are not statically a particular child `ValueInfo`. If neither a
 compiler bug. Later stages must not inspect `Box(T)` runtime bytes, compare
 compatible shapes, or look back at the source `Box.box(...)` expression to fill
 the gap.
+
+If the executable `Box(T)` payload key is an `erased_fn`, const-graph planning
+must create an erased boxed callable leaf whose code plan is
+`read_from_interpreted_erased_value`. This is the correct public-boundary form for
+compile-time roots: the LIR interpreter will return one runtime erased-callable
+payload, and finalization reads the callable code from that payload through the
+explicit `LoweredErasedCallableCodeMap`. The const-graph planner must not require
+the procedure return root to carry the original `Box.box(...)` expression's
+callable metadata.
+
+That erased boxed callable leaf must still carry non-empty `Box(T)` erasure
+provenance. The provenance belongs to the boxed value's representation root, not
+to the function payload child. A procedure-boundary `Box(function)` value may have
+no child `ValueInfo` for the payload, but its own root is still in a
+representation group whose solved metadata records the `Box(T)` boundary that
+authorized erasure. Const-graph planning must read provenance from that boxed
+value root before planning the executable payload child, clone it into the
+`ErasedCallableResultPlan`, and panic as a compiler bug if the provenance is
+empty. It must never invent provenance from the payload type, from source syntax,
+from the erased ABI, or from the fact that the executable payload key happens to
+be `erased_fn`.
+
+For example, in:
+
+```roc
+I64ToI64 : I64 -> I64
+
+mk_boxed : {} -> Box(I64ToI64)
+mk_boxed = |_| Box.box(|value| value + 1)
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = mk_boxed({})
+```
+
+the public root for `boxed_add_one` may have only an executable `Box(I64ToI64)`
+endpoint and no payload `ValueInfo`. Planning the boxed payload therefore uses
+the endpoint's explicit executable payload key to discover that the payload is an
+erased callable, but it uses the boxed root's representation group to obtain the
+`Box(T)` provenance. If either side is missing, the checked artifact is
+incomplete and finalization must stop with an invariant failure.
+
+The hidden capture for that `erased_fn` is also planned from explicit published
+data:
+
+- if the erased signature has no hidden capture type, the erased capture
+  reification plan is `none`; if the erased code later resolves to a
+  finite-set adapter, that adapter is valid only when the published callable-set
+  descriptor and lowered code map prove it is a no-capture singleton, and
+  checking finalization must publish a singleton adapter from those explicit
+  records
+- if the erased callable comes from an already-materialized const graph,
+  `materialized_capture` must point at an
+  `ErasedCaptureExecutableMaterializationPlan` whose finite callable-set node
+  records the selected member and already-reified captures; checking
+  finalization uses that node as the selected-member source
+- if the erased signature has a hidden capture type whose executable payload is a
+  finite `callable_set`, the erased capture reification plan is
+  `finite_callable_set_value` with a `CallableResultPlan` built from that exact
+  callable-set key
+- if a future hidden-capture representation is not a callable set, the checked
+  artifact must publish an explicit hidden-capture materialization plan before
+  const-graph planning consumes it; the planner must not reconstruct that plan
+  from source syntax, function type text, target bytes, or layout shape
+
+For example:
+
+```roc
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+```
+
+The public return root for the compile-time evaluation of `boxed_add_one` may
+have only the executable `Box(I64ToI64)` boundary key. The body expression has the
+local `BoxedValueInfo`, but that local metadata is not copied onto the public
+return root. This does not mean const-graph planning may reconstruct the payload
+from source syntax or from a target-free descriptor. The lambda-solved return
+record already publishes the required explicit relation:
+
+```zig
+const ReturnInfo = struct {
+    value: ValueInfoId,
+    consumer_use: ?ConsumerUsePlanId,
+    transform: ?ValueTransformBoundaryId,
+};
+```
+
+When const-graph planning starts from a procedure's public return root and needs
+aggregate metadata such as `BoxedValueInfo`, record fields, tuple items, tag
+payloads, or list elements, it may read the unique `ReturnInfo.value` for that
+procedure as the explicit metadata owner. It must still type the result at the
+public return endpoint and apply the published `ReturnInfo.transform` or
+consumer-use endpoint data; it must not copy local metadata onto the public root
+and must not rediscover the returned expression from the source body.
+
+The executable payload key says the boxed payload is an erased function, and the
+returned expression value supplies the local `BoxedValueInfo` for the payload.
+Const-graph planning therefore publishes an erased callable result plan with
+`read_from_interpreted_erased_value` plus either the returned value's boxed
+payload metadata or an already-materialized const-backed erased capture. Finalization
+later reads the returned erased-callable payload header for the concrete code ref
+and reads the hidden capture bytes according to the already-published capture
+plan.
+If that concrete code ref is a finite erased adapter, dependency collection
+must consume the explicit `LoweredErasedCallableCodeMap` entry for the adapter
+and the lowered callable-set descriptor that belongs to that same lowering run.
+It must validate that the code-map member targets and descriptor members agree,
+then record those member procedure dependencies. It must not require the
+callable-set descriptor to have already been persisted in the checked artifact
+before the compile-time value has finished reification, because persistence is
+an output of finalization. It also must not rediscover the members from source
+syntax or from callable-set member order alone.
+
+Const-graph and capture-slot plan builders that run during checking
+finalization must therefore receive the lowering-run callable-set descriptor
+slice explicitly. Looking only in the current `RepresentationStore` is not
+enough: an executable hidden capture can name a descriptor produced by another
+solve session in the same lowering run. Looking only in the checked artifact is
+also wrong during finalization, because a current-artifact descriptor may not
+have been published yet.
+
+The legal lookup order is:
+
+1. the owning value context's representation store, when the descriptor belongs
+   to that exact solve session
+2. the explicit lowering-run descriptor slice passed into the builder
+
+If neither explicit runtime descriptor source has the descriptor, the checked
+artifact or lowering run is incomplete and the compiler must take the invariant
+path. A published checked-artifact callable-set descriptor is target-free: it
+does not contain `ProcRepresentationInstanceId` values from the current
+lambda-solved session, and it is not a substitute for a runtime lowering
+descriptor. Published root/imported/relation descriptor stores may be consumed
+for artifact validation, dependency summaries, and materialized-constant
+reification, but they must not be used by capture-slot planning to reconstruct
+executable member targets.
+
+Every builder that can recursively create a `CaptureSlotReificationPlan` or
+`CallableResultPlan` must carry that same descriptor availability set. It is a
+compiler bug for a top-level const-graph builder to receive the lowering-run
+descriptor slice, then construct a nested capture-slot builder or callable-result
+builder that silently drops it. This includes callable result roots,
+finite-callable captures, already-erased hidden captures, erased proc-value
+captures, erased finite-set captures, serializable leaves, and executable-key
+capture materialization. The descriptor set is not a cache and not semantic
+recovery; it is the explicit descriptor data already published by lambda-solved
+or by checked artifacts.
+
+A const-backed erased callable leaf that already has an
+`AlreadyErasedCallablePlan` is still a member of a solved representation group.
+Callable-emission assignment must publish that preassigned emission plan and its
+non-empty Box-erasure provenance on the group before it skips ordinary
+finite-callable assignment. It is not enough to store the plan only on the leaf
+`ValueInfo`. Aliases, procedure returns, projections, joins, and
+imported/static-data wrapper values can share the same solved group without
+carrying their own callable leaf metadata. Those connected values must still be
+able to ask the group for its executable callable payload and receive
+`erased_fn`, not `vacant_callable_slot`.
+
+Multiple values in the same solved group may each carry an independently
+allocated `AlreadyErasedCallablePlan` id for the same already-materialized
+callable. Group-emission publication must compare those plans semantically, not
+by plan id alone.
+
+For already-erased callables, group emission equivalence is runtime-ABI
+equivalence, not exact source-function-type identity. Two source views can name
+the same erased runtime callable with different transparent aliases or
+host-facing function type keys. For example:
+
+```roc
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+
+boxed_add_one_for_host : Box((I64 -> I64))
+boxed_add_one_for_host = boxed_add_one
+```
+
+The two boxed payload views may have different `ErasedFnSigKey.source_fn_ty`
+values, but they must have the same `ErasedFnAbiKey`, the same capture shape
+key, and equivalent already-erased capture plan. Their Box-erasure provenance
+sets may differ; the canonical group emission carries the de-duplicated union of
+those explicit witnesses. Their `result_ty` values may differ only because
+`erasedCallableExecValueTypeKey(sig_key)` includes the endpoint's source
+function type identity. Endpoint publication and value transforms still preserve
+the exact source-function view; moving between views is represented explicitly
+with `AlreadyErasedCallableTransformPlan.same_abi_retype`. If the erased ABI,
+capture shape, or capture plan differs, the group contains contradictory
+executable data and the compiler must take the invariant path. If only
+provenance differs, the first published group emission remains the canonical
+group emission and its provenance is extended with the new explicit witnesses;
+later duplicate plan ids are accepted as the same runtime callable data.
+
+For function-typed values in an erased group that have no local callable leaf
+metadata, lambda-solved must first ask the solved group for an already-published
+callable emission. If the group already has an `already_erased` emission, the
+value adopts that exact emission plan. It must not synthesize a new type-only
+erased boundary plan from the value's source function type. A type-only erased
+boundary endpoint has no concrete hidden capture shape; it is valid for
+boundary contracts, but it is not a replacement for the concrete runtime erased
+callable payload already attached to the group. Only if the group has no
+callable emission may lambda-solved synthesize an already-erased type-only plan
+from an explicit erased boundary endpoint.
+
+Callable-emission assignment must be order-independent. Before it synthesizes
+any type-only erased callable metadata, it must scan all materialized values in
+the solve session and seed group emissions from concrete preexisting callable
+metadata, especially const-backed `already_erased` leaves. Only after this
+seed phase may it synthesize missing callable metadata for other values in the
+same groups. This prevents iteration order from making a type-only erased
+boundary plan the canonical group emission before the concrete erased payload
+leaf is seen.
+
+When a const-backed `.box` value rehydrates a payload whose callable emission is
+already erased, the consuming solve session must also append
+`require_box_erased` for the rehydrated payload root using artifact-stable
+provenance from that callable emission plan. That provenance must be
+`const_graph_box` or `promoted_wrapper`; it must not be `local_box_boundary`,
+because a local boundary id from the original lambda-solved session has no
+meaning in the consuming session. This is the const-backed equivalent of the
+original `Box.box` boundary. It is not a new source of erasure: the checked
+artifact already recorded the `ConstGraphReificationPlan.box` witness while
+reifying the constant. The requirement exists so ordinary representation
+solving marks both the payload group and the containing box group in the new
+session. Const-graph planning then reads provenance from the boxed value root,
+exactly as it does for a local `Box.box` expression.
+
+Compile-time reification must normalize Box-erasure provenance before storing a
+callable leaf in `ComptimeValue`. If the source `ErasedCallableResultPlan`
+contains `local_box_boundary`, the reifier must be running while reifying the
+payload of a `ConstGraphReificationPlan.box`; it replaces that session-local
+provenance with:
+
+```zig
+BoxErasureProvenance.const_graph_box = .{
+    .artifact = current_checked_artifact_key,
+    .box_plan = current_const_graph_box_plan,
+}
+```
+
+The original `BoxBoundaryId` must not be copied into the value store. If there
+is no current const-graph box witness, the compile-time plan is incomplete and
+the compiler must take the invariant path. `promoted_wrapper` provenance is
+already artifact-stable and is copied unchanged. A persisted
+`ErasedCallableLeafInstance` with `local_box_boundary` provenance is invalid;
+debug verification must reject it immediately.
+
+For example:
+
+```roc
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+
+boxed_add_one_for_host : Box((I64 -> I64))
+boxed_add_one_for_host = boxed_add_one
+```
+
+Compile-time finalization may reify `boxed_add_one` into a const-backed
+`erased_boxed` callable leaf. When the platform wrapper returns
+`boxed_add_one_for_host`, the wrapper's return root shares value flow with that
+leaf through explicit `value_alias` and `function_return` edges. The group
+emission must already be `already_erased`, so the wrapper return endpoint seals
+as `Box(erased_fn(...))`. If the leaf is skipped without seeding the group
+emission, the wrapper return root can incorrectly seal as
+`Box(vacant_callable_slot(I64 -> I64))` and later lowering would be forced to
+consider an illegal `erased_fn -> vacant_callable_slot` transform. That is a
+compiler bug, not a bridgeable runtime conversion.
+
+The same example also requires provenance on the boxed value root. If
+const-backed rehydration publishes the erased payload leaf but fails to append
+the `require_box_erased` requirement from its stored provenance, const-graph
+planning will see the correct erased executable payload key but no legal
+`Box(T)` provenance on the returned `Box` value. That is also a compiler bug.
+The planner must not invent provenance from the erased ABI or from the fact that
+the key contains `erased_fn`; the solve session must have republished it from
+the checked artifact's const-backed callable leaf.
+
+When finalization materializes the hidden finite callable-set capture for an
+erased callable, the value graph may not persist a runtime-only lifted procedure
+identity. If the selected callable-set member already has a published artifact
+procedure identity, the materialized capture may store the original callable-set
+key, selected member id, and materialized captures. If the selected member is
+runtime-only, finalization must first publish a promoted procedure for that exact
+selected member using the current const/callable/private-capture reification
+path as provenance. It then publishes a singleton callable-set descriptor whose
+only member is the promoted procedure and materializes the hidden capture as that
+singleton with no capture slots. This is the same explicit persistence boundary
+used for finite erased adapters: captured values are baked into the promoted
+procedure's private captures, and the persisted value graph names only
+artifact-owned procedures. It is a compiler bug to store a lifted/runtime-only
+member in `MaterializedFiniteCallableSetValue`.
+
+For example:
+
+```roc
+make_boxed_adder : I64 -> Box(I64 -> I64)
+make_boxed_adder = |n| Box.box(|x| x + n)
+
+add_five : Box(I64 -> I64)
+add_five = make_boxed_adder(5)
+```
+
+The interpreted erased callable for `add_five` contains a finite callable-set
+capture selecting the local lambda `|x| x + n`. That lambda is a lifted/runtime
+member with a capture for `n`; it is not a stable checked-artifact procedure
+identity. Finalization must promote the selected member to a real synthetic
+procedure whose private capture stores the already-interpreted value `5`, publish
+a singleton callable-set descriptor pointing at that synthetic procedure, and
+store the singleton descriptor/member in the static value graph. Later imports,
+readonly data export, IR, LIR, and backends then see only explicit artifact-owned
+procedure metadata and never need to recover the original local lambda.
 
 For eval-template constants, the dependency summary stored on the sealed
 `ConstInstance` is accumulated while the LIR result is being reified into the
@@ -12492,16 +13141,28 @@ const ErasedCallableProvenance = struct {
 The exact Zig shape may differ, but the semantics must not. A non-empty
 provenance set proves that erasure came from one or more explicit `Box(T)`
 boundaries. `BoxErasureProvenance.local_box_boundary` names a `BoxBoundaryId`
-in the current representation store. `BoxErasureProvenance.promoted_wrapper`
-names a promoted executable-only wrapper whose checked artifact has already
-sealed non-empty Box-erasure provenance from an earlier compile-time-evaluation
-solve session. There is no `unknown`, `intrinsic`, `hosted`, `layout`, or
-`compatibility` provenance case. If a solved erased callable slot has an empty
-provenance set, if any local boundary is not a checked `Box(T)` boundary, or if
-any promoted-wrapper provenance does not name a sealed erased promoted wrapper
-with non-empty Box-erasure provenance, lambda-solved MIR must hit the
-compiler-invariant path: debug-only assertion in debug builds, `unreachable` in
-release builds.
+in the current representation store and is legal only inside the lambda-solved
+session that created that boundary. It must never be stored inside a
+compile-time value, imported checked artifact, persisted const graph leaf, or
+any other artifact-stable record that can be consumed by a different
+lambda-solved session.
+
+Artifact-stable provenance has separate variants. `const_graph_box` names the
+checked artifact and exact `ConstGraphReificationPlan.box` node that reified an
+already-materialized compile-time `Box(T)` value. `promoted_wrapper` names a
+promoted executable-only wrapper whose checked artifact has already sealed
+non-empty Box-erasure provenance from an earlier compile-time-evaluation solve
+session. These stable variants are not weaker substitutes for a local boundary;
+they are explicit published facts saying that the value being consumed has
+already crossed a real `Box(T)` boundary. There is no `unknown`, `intrinsic`,
+`hosted`, `layout`, or `compatibility` provenance case. If a solved erased
+callable slot has an empty provenance set, if any local boundary is not a
+checked `Box(T)` boundary in the current representation store, if any
+const-graph witness does not name a `ConstGraphReificationPlan.box` owned by
+the named artifact, or if any promoted-wrapper provenance does not name a
+sealed erased promoted wrapper with non-empty Box-erasure provenance,
+lambda-solved MIR must hit the compiler-invariant path: debug-only assertion in
+debug builds, `unreachable` in release builds.
 
 `erased_box_payload_type(boundary)` may be called only with a `BoxBoundaryId`
 from this table. It recursively walks that boundary's boxed payload type and
@@ -12531,17 +13192,21 @@ callable-set adapter produced for each list element must therefore have the same
 `source_fn_ty` as the selected callable-set member specialization.
 
 `require_box_erased(payload_root, provenance)` may be created only from one of
-two explicit sources. A real `Box.box` or `Box.unbox` value-flow operation
+three explicit sources. A real `Box.box` or `Box.unbox` value-flow operation
 creates a local `BoxBoundaryId` and then creates
-`BoxErasureProvenance.local_box_boundary`. A bodyless promoted-wrapper
-signature creates `BoxErasureProvenance.promoted_wrapper` for the exact
-parameter or return root whose published executable endpoint is an erased
-callable slot. It is a requirement in the `RepresentationStore`, not an
-executable conversion. Solving that requirement walks the given `payload_root`
-representation graph, marks every reachable function representation slot as
-erased, and attaches that provenance to the erased callable provenance set for
-the solved representation group. The walk follows only explicit representation
-edges already present in the store.
+`BoxErasureProvenance.local_box_boundary`. Rehydrating a const-backed
+`ComptimeSchema.box`/`ComptimeValue.box` value whose payload contains an
+already-erased callable creates
+`BoxErasureProvenance.const_graph_box(artifact, box_plan)` from the const graph
+box node that reified that value. A bodyless promoted-wrapper signature creates
+`BoxErasureProvenance.promoted_wrapper` for the exact parameter or return root
+whose published executable endpoint is an erased callable slot. It is a
+requirement in the `RepresentationStore`, not an executable conversion.
+Solving that requirement walks the given `payload_root` representation graph,
+marks every reachable function representation slot as erased, and attaches that
+provenance to the erased callable provenance set for the solved representation
+group. The walk follows only explicit representation edges already present in
+the store.
 
 There must be no helper that accepts an arbitrary type, expression, or
 `RepRootId` and makes it erased. Any API that introduces local erasure must take
@@ -12888,7 +13553,7 @@ The required callable representation algebra is:
 ```text
 finite callable set + finite callable set = canonical finite callable-set union
 finite callable set + erased callable = erased callable with the erased side's BoxErasureProvenance
-erased callable + erased callable = erased callable slot with exactly matching ErasedCallSigKey and unioned BoxErasureProvenance
+erased callable + erased callable = erased callable slot with matching runtime ABI/capture data and unioned BoxErasureProvenance
 ```
 
 The finite-callable plus erased-callable case can occur only in a representation
@@ -14531,11 +15196,7 @@ slots deliberately do not carry:
 
 ```zig
 const MaterializedErasedCallableValue = struct {
-    call_sig: ErasedCallSigKey,
-    code: ErasedCallableCodeRef,
-    capture: ErasedCaptureExecutableMaterializationPlan,
-    capture_shape_key: CaptureShapeKey,
-    provenance: NonEmptySpan(BoxErasureProvenance),
+    sealed: SealedErasedCallableValue,
 };
 
 const ErasedCaptureExecutableMaterializationPlan = union(enum) {
@@ -14552,13 +15213,16 @@ const ErasedCaptureBoxPlan = struct {
 };
 ```
 
-The exact Zig names may differ, but the ownership must not. `call_sig` names the
-erased call ABI. `code` names the erased entry procedure or adapter body.
-`capture` records how executable MIR materializes the captured environment for
-that particular value. `capture_shape_key` records the canonical capture schema
-for verification and adapter/procedure identity. None of these materialized
-value fields participate in the executable type identity of an erased callable
-slot.
+The exact Zig names may differ, but the ownership must not. The sealed value is
+one boundary-typed record. `sealed.boundary.call_sig` names the erased call ABI.
+`sealed.code` names the erased entry procedure or adapter body. `sealed.capture`
+records how executable MIR materializes the captured environment for that
+particular value. Adapter capture shape is part of
+`sealed.code.finite_adapter.adapter_key`; direct-proc capture shape is part of
+`sealed.code.direct_proc.code`. None of these materialized value fields
+participate in the executable type identity of an erased callable slot, and no
+stage may split them into parallel state and then rely on later checks to keep
+them synchronized.
 
 `ErasedFnAbiKey` interns an explicit erased-call ABI payload owned by an
 `ErasedFnAbiStore`:
@@ -18908,6 +19572,7 @@ const CallableResultPlanId = enum(u32) { _ };
 
 const FiniteCallableResultPlan = struct {
     source_fn_ty: CanonicalTypeKey,
+    source_fn_ty_payload: CheckedTypeId,
     callable_set_key: CanonicalCallableSetKey,
     members: Span(CallableResultMemberPlan),
 };
@@ -18919,6 +19584,7 @@ const ErasedCallableResultCodePlan = union(enum) {
 
 const ErasedCallableResultPlan = struct {
     source_fn_ty: CanonicalTypeKey,
+    source_fn_ty_payload: CheckedTypeId,
     call_sig: ErasedCallSigKey,
     provenance: NonEmptySpan(BoxErasureProvenance),
     code_plan: ErasedCallableResultCodePlan,
@@ -18969,6 +19635,28 @@ The exact Zig names may differ, but the contract must not. The result plan is
 produced before interpretation from the resolved lambda-solved/executable
 callable representation. `CallableResultPlan` and
 `CaptureSlotReificationPlan` records form a reserved graph, not a tree.
+Callable result plans must be published at the exact checked boundary where the
+callable result is consumed. For a top-level callable root, that boundary is the
+root's `checked_type`; for callable-containing constants, promoted captures, and
+boxed-erased leaves, the boundary is the checked payload of the field, tag
+payload, list element, box payload, or function slot currently being reified.
+Later finalization must not recover this boundary by searching the checked type
+store for a canonical key. Transparent aliases and checked app/platform
+relations can make multiple checked roots have logically compatible function
+shapes; the exact root is semantic data and must be carried explicitly in
+`source_fn_ty_payload`.
+
+`FiniteCallableResultPlan.source_fn_ty_payload` and
+`ErasedCallableResultPlan.source_fn_ty_payload` must key-check to their
+`source_fn_ty` in debug-only artifact verifiers. Release lowering may treat a
+mismatch as `unreachable`. The only allowed way to build an
+`ErasedCallableBoundary.checked_fn_root` is to copy
+`ErasedCallableResultPlan.source_fn_ty_payload` into the sealed boundary and
+verify that it matches the boundary key. Calling `rootForKey(source_fn_ty)` during
+compile-time finalization or static-data graph emission is forbidden because it
+silently chooses a root by canonical shape instead of preserving the checked
+consumer boundary.
+
 Recursive callable captures and recursive aggregate captures must use reserved
 ids plus `recursive_ref`; they must not duplicate nodes or keep extending a path
 forever. Capture-slot reification is structural, not a single-level
@@ -21351,18 +22039,65 @@ const ErasedCallableTemplate = struct {
     provenance: NonEmptySpan(BoxErasureProvenance),
 };
 
-const ErasedCallableLeafInstance = struct {
-    source_fn_ty: CanonicalTypeKey,
-    call_sig: ErasedCallSigKey,
-    code: ErasedCallableCodeRef,
+const SealedErasedCallableValue = struct {
+    // The exact checked/source boundary at which this erased callable is being
+    // published. This is the consumer/export boundary, not necessarily the
+    // source function type of the finite callable member selected while running
+    // compile-time evaluation.
+    boundary: ErasedCallableBoundary,
+
+    // The exact executable code path to put in the erased callable payload.
+    // This includes finite adapter member targets and branch transforms when
+    // the erased callable calls a finite callable set.
+    code: SealedErasedCallableCode,
+
+    // The already-reified executable materialization graph for the hidden
+    // erased capture payload. This graph is complete at artifact publication
+    // time and never points back into interpreter memory.
     capture: ErasedCaptureExecutableMaterializationPlan,
+};
+
+const ErasedCallableBoundary = struct {
+    source_fn_ty: CanonicalTypeKey,
+    checked_fn_root: CheckedTypeId,
+    call_sig: ErasedCallSigKey,
     provenance: NonEmptySpan(BoxErasureProvenance),
+};
+
+const SealedErasedCallableCode = union(enum) {
+    direct_proc: SealedDirectErasedProc,
+    finite_adapter: SealedFiniteErasedAdapter,
+};
+
+const SealedDirectErasedProc = struct {
+    code: ErasedDirectProcCodeRef,
+};
+
+const SealedFiniteErasedAdapter = struct {
+    adapter_key: ErasedAdapterKey,
+    members: NonEmptySpan(SealedFiniteErasedAdapterMember),
+};
+
+const SealedFiniteErasedAdapterMember = struct {
+    member: CallableSetMemberRef,
+    source_proc: MirProcedureRef,
+    proc_value: ProcedureCallableRef,
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
+    target_key: ExecutableSpecializationKey,
+    arg_transforms: Span(PublishedExecutableValueTransformRef),
+    capture_transforms: Span(PublishedExecutableValueTransformRef),
+    result_transform: PublishedExecutableValueTransformRef,
+};
+
+const ErasedCallableLeafInstance = struct {
+    sealed: SealedErasedCallableValue,
 };
 ```
 
 An `ErasedCallableTemplate` is a pre-interpretation recipe.
 `ErasedCallableLeafInstance` is post-interpretation, post-reification data and
-must be executable-ready. Its `capture` field is therefore an
+must be executable-ready. Its `sealed.capture` field is therefore an
 `ErasedCaptureExecutableMaterializationPlan`, not an
 `ErasedCaptureReificationPlan`, not a `CaptureSlotReificationPlanId`, not a
 `CallableResultPlanId`, and not a pointer into the interpreter's returned
@@ -21372,6 +22107,272 @@ immediately and store the complete executable materialization graph in the
 checked artifact. Later MIR, IR, LIR, ARC, backend, interpreter, and imported
 artifact consumers must not rerun the interpreter or recover erased captures
 from runtime packed-function bytes.
+
+`SealedErasedCallableValue` is the only artifact-stable representation of a
+post-interpretation erased callable. `ErasedPromotedWrapperBodyPlan`,
+`MaterializedErasedCallableValue`, `ErasedCallableLeafInstance`, readonly static
+data export records, and imported const views must embed or reference this
+sealed value. They must not each carry separate copies of `source_fn_ty`,
+`call_sig`, `code`, finite adapter targets, finite adapter branches, capture,
+and provenance. Those parallel fields are forbidden because they make it
+possible to combine a boundary source type from one occurrence with code or
+capture data from another.
+
+The boundary is part of the value. `sealed.boundary.source_fn_ty` is the exact
+requested source function type at the consumer boundary that produced the erased
+callable. `sealed.boundary.checked_fn_root` is the checked type root for that
+same boundary. `sealed.boundary.call_sig.source_fn_ty` must equal
+`sealed.boundary.source_fn_ty`. `sealed.boundary.provenance` must be non-empty
+and must contain only artifact-stable `Box(T)` erasure provenance
+(`const_graph_box` or `promoted_wrapper`) after compile-time finalization seals
+the value. `local_box_boundary` is allowed only while solving a local
+lambda-solved session; it must never appear in a sealed checked artifact.
+
+The source type attached to the executable code that originally created the
+erased callable is not the boundary. A checked relation may establish that a
+value whose internal callable-set member came from one source type is valid at a
+different consumer boundary, such as a transparent alias or a platform
+`requires` type. The pre-interpretation result plan may therefore contain a
+lowering-owned direct erased proc or finite adapter whose original source type
+differs from `ErasedCallableResultPlan.source_fn_ty`. That is not a recovery
+path and not compatible-shape guessing: the boundary is explicit
+`source_fn_ty + source_fn_ty_payload`, and the executable code ref is explicit
+code data. Debug verification must compare the code ABI, hidden-capture key, and
+capture shape to the boundary signature, but it must not require the original
+code source type to equal the consumer boundary source type.
+
+If the sealed code is `finite_adapter`, `adapter_key.source_fn_ty` and
+`adapter_key.erased_call_sig_key.source_fn_ty` must equal
+`sealed.boundary.source_fn_ty`, and `adapter_key.erased_call_sig_key` must equal
+`sealed.boundary.call_sig`. The finite adapter owns a non-empty `members` span.
+Each member stores the callable-set member ref, the exact procedure identity,
+the checked source type payloads needed by later imported lowering, the exact
+`ExecutableSpecializationKey`, and the exact argument/capture/result transforms.
+A persisted erased callable leaf must never name a finite-set adapter and rely on
+executable MIR to reconstruct member targets or branch transforms from the
+callable-set descriptor, source procedure, member index, runtime bytes, source
+type, generated symbol text, or old lambda-solved session state. The descriptor
+names the callable-set members and capture schema; the sealed adapter member
+records name the exact executable specializations and value transforms. Both are
+explicit semantic inputs, and neither may be recovered later.
+
+This is especially important when compile-time finalization promotes a
+runtime-only selected member to an artifact-owned singleton callable set. The
+sealed erased callable value must update all of these pieces together:
+
+1. `sealed.boundary.call_sig.capture_ty` names the singleton callable-set
+   executable payload.
+2. `sealed.code.finite_adapter.adapter_key` names the singleton adapter key.
+3. `sealed.code.finite_adapter.members` contains exactly one member whose
+   `target_key.requested_fn_ty` is the boundary source function type and whose
+   executable argument/return keys are the erased adapter ABI keys.
+4. `sealed.capture` is a `finite_callable_set` materialization node with the singleton
+   callable-set key and selected singleton member.
+
+The promoted singleton member must be published under the erased adapter
+boundary's source function type, not necessarily under the source function type
+of the callable-set value that the interpreter selected. Those two canonical
+source keys can differ after a `requires`/`provides` boundary, a transparent
+function type alias, or another already-checked relation has established that a
+value is valid at the boundary type. For example:
+
+```roc
+app [boxed_add_one] { pf: platform "./platform/main.roc" }
+
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+```
+
+and the platform may require:
+
+```roc
+platform ""
+    requires {} {
+        boxed_add_one : Box((I64 -> I64)),
+    }
+    exposes []
+    packages {}
+    provides {
+        boxed_add_one_for_host: "boxed_add_one",
+    }
+```
+
+The selected runtime callable value comes from the app's `I64ToI64` source
+type, but the erased finite adapter and the exported boxed constant are sealed
+at the platform boundary type `(I64 -> I64)`. Compile-time finalization must
+therefore request/publish the singleton promoted member at
+`sealed.boundary.source_fn_ty`, then produce a singleton
+`SealedFiniteErasedAdapterMember.target_key` whose `requested_fn_ty` is that same
+boundary source key and whose executable argument/return keys are the erased
+adapter ABI keys. Publishing the singleton member at the selected callable
+result's original source key and pairing it with the erased boundary adapter is
+invalid, even if the two source types are logically equivalent after checking. No
+later stage may repair this by comparing or reconstructing compatible source
+shapes; the checked artifact must publish the exact boundary key and exact
+executable keys together.
+
+Storing the singleton capture while keeping the original adapter signature is an
+invalid checked artifact. It makes executable MIR see an expected hidden-capture
+type for one callable-set key and a materialized capture graph for another
+callable-set key. Debug builds must assert immediately; release builds use
+`unreachable`.
+
+The compile-time finalization publication algorithm is:
+
+1. Determine the erased callable boundary from the immediate consumer:
+   top-level function promotion, provided readonly data export, private
+   promoted-capture slot, or const-graph boxed value rehydration.
+2. Resolve the boundary checked root and build `ErasedCallableBoundary` from
+   that root, the exact `ErasedCallSigKey`, and non-empty stable
+   `BoxErasureProvenance`.
+3. Decode the concrete code only through explicit data:
+   `ErasedCallableResultCodePlan.materialized_by_lowering` already names it, and
+   `read_from_interpreted_erased_value` looks it up in
+   `LoweredErasedCallableCodeMap` by the LIR procedure id returned in the
+   interpreter value.
+4. If the code is direct, seal `SealedDirectErasedProc` and materialize the
+   capture through the already-published `ErasedCaptureReificationPlan`.
+5. If the code is a finite adapter, interpret the hidden capture only to select
+   the concrete callable-set member, then publish a singleton artifact-owned
+   callable set at the boundary source function type. Seal the singleton adapter
+   key, one `SealedFiniteErasedAdapterMember`, all branch transforms, and the
+   singleton hidden-capture materialization together.
+6. Store the resulting `SealedErasedCallableValue` in the artifact. Later
+   lambda-solved, executable MIR, IR, LIR, static data graph emission, backends,
+   and the interpreter consume only this sealed value.
+
+Any helper that still accepts separate parameters such as `(source_fn_ty,
+call_sig, code, finite_adapter_member_targets, finite_adapter_branches, capture,
+provenance)` for a post-interpretation erased callable is obsolete. The helper
+must accept `SealedErasedCallableValue` instead. Debug-only artifact verifiers
+must reject:
+
+- `boundary.call_sig.source_fn_ty != boundary.source_fn_ty`
+- empty boundary provenance
+- `local_box_boundary` in a sealed artifact value
+- direct erased code carrying finite adapter members
+- finite adapter code with no members
+- finite adapter key source/signature disagreement with the boundary
+- member target `requested_fn_ty` disagreement with the boundary
+- member target executable argument/return disagreement with the erased ABI
+- branch transforms whose member refs or target keys disagree with the sealed
+  member
+- capture materialization whose finite callable-set key disagrees with the
+  sealed finite adapter key
+
+When lambda-solved rehydrates a const-backed `ErasedCallableLeafInstance`, it
+must preserve that already-materialized capture graph explicitly:
+
+```zig
+const AlreadyErasedCapturePlan = union(enum) {
+    none,
+    zero_sized_ty: TypeVarId,
+    executable_key: CanonicalExecValueTypeKey,
+    value: ValueInfoId,
+
+    // A checked-artifact materialized erased capture graph that was produced
+    // when compile-time finalization originally interpreted and reified the
+    // erased callable value.
+    materialized_capture: ArtifactErasedCaptureMaterializationRef,
+};
+
+const ArtifactErasedCaptureMaterializationRef = struct {
+    owner: CheckedModuleArtifactKey,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+};
+```
+
+For a const-backed erased callable, `materialized_capture` is the only correct
+hidden-capture plan. Replacing it with `executable_key` would throw away the
+selected finite callable member and its already-reified captures, then force a
+later stage to recover that information from a callable-set descriptor. That is
+not allowed. Capture materialization itself comes from the artifact
+materialization graph.
+
+Rehydrating a const-backed erased callable must atomically import all explicit
+erased-call metadata named by the leaf into the current lambda-solved session:
+
+1. Import the `ErasedFnAbi` payload named by `ErasedCallSigKey.abi` from the
+   leaf owner's published `ErasedFnAbiStore`.
+2. Import the executable endpoint payload for `ErasedFnAbi.ret_exec_key` into
+   the current session executable payload store.
+3. Import the executable endpoint payload for every
+   `ErasedFnAbi.arg_exec_keys[index]` into the current session executable
+   payload store.
+4. If `ErasedCallSigKey.capture_ty` is present, import that hidden-capture
+   executable endpoint too, but keep the hidden-capture plan as
+   `materialized_capture`.
+5. Reserve every executable code dependency named by
+   `SealedErasedCallableValue.code` in the current solve session before
+   executable MIR is allowed to collect erased adapter procedures.
+
+For finite adapters, step 5 means lambda-solved consumes the sealed adapter
+member records directly:
+
+```zig
+const SealedFiniteErasedAdapterMember = struct {
+    member: CallableSetMemberRef,
+    source_proc: MirProcedureRef,
+    proc_value: ProcedureCallableRef,
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
+    target_key: ExecutableSpecializationKey,
+    arg_transforms: Span(PublishedExecutableValueTransformRef),
+    capture_transforms: Span(PublishedExecutableValueTransformRef),
+    result_transform: PublishedExecutableValueTransformRef,
+};
+```
+
+Each `target_key` is the exact executable specialization required by the erased
+adapter branch. Lambda-solved must reserve and solve one materialized procedure
+instance for that key in the consuming solve session, and it must attach the
+owner artifact's executable payload store plus the sealed Box-erasure provenance
+to that procedure boundary. It must not wait for executable MIR to rediscover
+that member target from the adapter key, callable-set descriptor, source
+procedure name, source function type, or member order.
+
+This is especially important for readonly static data exports. For example:
+
+```roc
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+```
+
+When `boxed_add_one` is exported to a platform that requires
+`Box((I64 -> I64))`, compile-time finalization may persist a singleton sealed
+finite adapter whose member procedure was promoted while reifying the constant.
+Later, while lowering the exported static data symbol, lambda-solved rehydrates
+that const-backed erased callable leaf. At that moment it has all explicit
+member target keys in the checked artifact. It must reserve those member target
+instances immediately. If executable MIR can see the sealed adapter but cannot
+find the corresponding solved member instance, the bug is in lambda-solved
+rehydration, not in executable MIR; executable MIR must take the invariant path
+rather than synthesize a target.
+
+The same rule applies recursively to erased callables contained inside a sealed
+hidden-capture materialization graph. Rehydration of the outer erased callable
+must reserve code dependencies for nested sealed erased callables as it walks
+the explicit materialization graph. That walk consumes checked-artifact
+materialization data; it is not source recovery and not a backend scan.
+
+This import is not optional verifier metadata. The current session's
+`ErasedFnAbiStore` is sealed only when every argument/result executable key it
+contains has a corresponding session executable payload. Later signature,
+wrapper, bridge, LIR, ARC, backend, and interpreter stages consume those
+published session payloads directly. They must not recover the missing
+argument/result endpoint from the erased ABI key, from source function type,
+from layout shape, from a callable-set descriptor, or from runtime packed
+callable bytes.
+
+If the owner artifact differs from the consuming artifact, checking finalization
+must clone the materialization graph into the consuming artifact before storing
+it in a new `ErasedCallableResultPlan`. That clone uses the existing const graph
+materialization cloner and preserves explicit dependencies; it does not rerun
+the interpreter and it does not inspect source syntax.
 
 The exact Zig names may differ, but the contract must not. A finite callable
 leaf template is exactly a target-independent `proc_value` template with an
@@ -22210,14 +23211,267 @@ captures are retained. Backends do not infer that policy from the payload.
 
 The logical `CompileTimeValueStore` is not enough to emit a boxed erased
 callable constant. The static data graph builder must consume the explicit
-callable materialization data selected by executable MIR:
+sealed callable materialization data selected by executable MIR:
 
-- `ErasedCallSigKey`
-- concrete `ErasedCallableCodeRef`
-- executable erased-call wrapper symbol
-- exact capture materialization plan
-- exact `on_drop` helper symbol, or `null` when there is no captured
-  refcounted data
+- `SealedErasedCallableValue.boundary`, including exact boundary source function
+  type, checked root, erased call signature, and stable `Box(T)` provenance
+- `SealedErasedCallableValue.code`, including either a direct erased procedure
+  code ref or a finite adapter with explicit sealed members
+- the executable erased-call wrapper symbol produced from that sealed code
+- `SealedErasedCallableValue.capture`, the exact already-reified capture
+  materialization graph
+- the exact `on_drop` helper symbol derived before backend object emission, or
+  `null` when there is no captured refcounted data
+
+The capture materialization graph is part of the readonly data source of truth.
+It must be consumed directly by static data emission, using the exact executable
+capture type key named by `SealedErasedCallableValue.boundary.sig_key.capture_ty`.
+The data emitter must not decide that a boxed erased callable is "capture-free"
+from the source lambda syntax, from the selected wrapper procedure, or from the
+absence of ordinary lambda captures. A source lambda with no ordinary captures
+can still have an executable hidden capture because the erased callable stores a
+finite callable-set value as its capture:
+
+```roc
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+```
+
+The source lambda captures no user variables, but the boxed erased callable may
+still have:
+
+```zig
+SealedErasedCallableValue{
+    .boundary = .{
+        .sig_key = .{
+            .capture_ty = <exec key for the singleton finite callable set>,
+            // ...
+        },
+        // ...
+    },
+    .capture = .{ .node = <finite callable-set materialization node> },
+    // ...
+}
+```
+
+That capture can be zero-sized after target layout, but it is not semantically
+absent. Static data emission must therefore do all of the following:
+
+1. Require the checked-artifact-to-LIR pipeline to publish a materialization
+   layout request for `capture_ty` before IR lowering. Readonly static data
+   exports are an explicit source of materialization layout requests, just like
+   compile-time interpreter payloads. The request contains the exact
+   `ExecutableTypePayloadRef` and `CanonicalExecValueTypeKey` for the hidden
+   capture type; it is not reconstructed from source syntax, callable-set
+   descriptors, or the erased callable code ref.
+2. Look up `capture_ty` in the already-lowered requested layout table.
+3. Verify the capture layout alignment is no greater than the fixed 16-byte
+   boxed-erased-callable capture alignment.
+4. Emit the capture bytes at `builtins.erased_callable.capture_offset`.
+5. Emit readonly relocations for any nested static allocations referenced by
+   those capture bytes.
+6. Treat a zero-sized materialized capture as a real explicit capture whose byte
+   width happens to be zero, not as missing data.
+
+The materialization layout request collector is fed only by published
+checked-artifact data:
+
+- compile-time evaluation payloads that can be interpreted immediately
+- provided readonly data exports and the `CompileTimeValueStore` values they
+  name
+- sealed erased callable values reachable from those values
+- erased hidden-capture materialization graphs reachable from those sealed
+  callable values, including nested sealed erased callables
+
+Provided readonly data exports are collected only after checking finalization
+has published the checked artifact. They must not be collected while checking
+finalization is evaluating an individual compile-time root, because at that
+point other provided constants in the same artifact may not have been evaluated
+or bound yet. In checking-finalization mode, the materialization layout request
+set contains only the compile-time payloads for the root currently being
+interpreted. In published-artifact runtime lowering mode, it also contains the
+explicit provided readonly data exports that will be emitted into the final
+binary.
+
+The collector may recursively walk `CompileTimeValueStore` values and
+`ErasedCaptureExecutableMaterializationPlan` nodes because those are already
+published post-check materialization records. It must not walk CIR, source
+syntax, unchecked declarations, runtime bytes, generated object data, or backend
+state. For every reachable sealed erased callable with
+`boundary.sig_key.capture_ty != null`, the collector must resolve the matching
+`ExecutableTypePayloadRef` from the owning artifact view or another explicit
+import/relation view, then pass that request into executable MIR before IR
+lowering. `ensurePublishedExecutableTypeRequests` lowers those payload refs into
+executable MIR types, and IR/LIR commits their physical layouts into the
+`requestedLayoutForKey` table consumed by static data emission.
+
+This means readonly static data emission has no authority to ask "what layout
+would this capture have?" If `requestedLayoutForKey(capture_ty)` is absent, the
+bug is earlier in the checked-artifact-to-LIR pipeline: the data export's
+materialization layout request was not published. The static emitter must take
+the invariant path instead of computing a layout locally, because computing it
+locally would create a second source of truth for executable layouts.
+
+Readonly data exports also publish executable code dependencies before
+mono/lambda-solved/executable lowering. This is a separate explicit dependency
+stream from the layout requests above:
+
+- a layout request says "this hidden capture executable type must have a
+  committed target layout before static data bytes are emitted"
+- a code dependency says "this provided readonly value names these procedure
+  bodies and erased-call wrappers, so those bodies/wrappers must be lowered even
+  if no runtime procedure root calls them"
+
+Both streams are derived from the same published checked-artifact data. The
+code-dependency stream must not turn a readonly data export into a runtime root,
+must not lower all top-level functions, and must not perform a late graph walk of
+source declarations. A readonly data export is already explicit in
+`ProvidedExportTable`; its compile-time root already has a filled
+`ComptimeDependencySummaryRequestId`; and that summary already names every
+concrete callable/procedure dependency selected while the value was evaluated
+and materialized.
+
+Concretely, published-artifact runtime lowering does this before mono MIR:
+
+```zig
+const MaterializationDependencyRoot = struct {
+    owner: CheckedModuleArtifactKey,
+    summary: ComptimeDependencySummaryId,
+};
+
+for (artifact.provided_exports.exports) |provided| {
+    const data = switch (provided) {
+        .procedure => continue,
+        .data => |data| data,
+    };
+
+    const root_id = artifact.compile_time_roots.lookupIdByPattern(data.pattern)
+        orelse invariant("provided data export has no compile-time root");
+    const root = artifact.compile_time_roots.root(root_id);
+    const summary = artifact.comptime_dependencies.summaryIdForRootRequest(
+        root.dependency_summary_request,
+    );
+
+    mono_input.materialization_dependencies.append(.{
+        .owner = artifact.key,
+        .summary = summary,
+    });
+}
+```
+
+Mono consumes each `MaterializationDependencyRoot` through the same
+`reserveComptimeDependencySummaryDependencies` path used for ordinary
+compile-time dependency summaries. This reserves the exact procedure callables,
+callable-binding instances, const instances, promoted wrapper dependencies, and
+semantic instantiation procedures named by the summary. It only makes those
+procedures available to later lowering; it does not append them to
+`root_procs`, does not create a top-level thunk, and does not make them visible
+as hosted/provided procedure entrypoints.
+
+Lambda-solved MIR must also consume the provided readonly data export
+materialization graph before executable MIR is built. Mono has made the member
+procedure bodies available, but lambda-solved still owns representation
+instances and solve-session membership. For readonly data exports, lambda-solved
+creates an explicit non-root materialization solve session and walks only the
+published `CompileTimeValueStore` values named by provided data exports. When it
+reaches a `SealedErasedCallableValue`, it reserves the sealed finite adapter
+members or direct erased procedure dependencies in that session exactly as it
+does for const-backed callable leaves encountered in normal procedure bodies.
+
+This lambda-solved materialization session is not a runtime entrypoint and does
+not create a procedure root. Its only purpose is to materialize the executable
+representation instances that readonly static data needs later. Those instances
+are marked materialized so executable MIR can resolve the sealed adapter member
+`ExecutableSpecializationKey`s without scanning procedure bodies or
+reconstructing callable-set membership. In checking-finalization mode this
+session is not created, because other provided constants in the same artifact
+may not have been evaluated yet.
+
+Executable MIR then consumes the provided readonly data export's sealed
+materialization values as an explicit erased-adapter dependency source. For each
+provided data export, executable adapter collection looks up the already
+published `CompileTimeValueStore` binding for `ProvidedDataExport.pattern` and
+walks only that published value graph plus the reachable
+`ErasedCaptureExecutableMaterializationPlan` nodes. When it reaches a
+`SealedErasedCallableValue`, it reserves exactly the wrapper named by
+`sealed.code`:
+
+```zig
+switch (sealed.code) {
+    .direct_proc => |direct| reserve_erased_direct_proc_adapter(direct.code),
+    .finite_adapter => |finite| reserve_finite_erased_adapter(
+        finite.adapter_key,
+        finite.members,
+    ),
+}
+```
+
+For finite adapters, the sealed member list is the source of truth for the
+member targets and published branch transforms; descriptor order may only be
+used for debug validation. For direct erased procedure adapters, the sealed
+value must provide enough information to reserve the adapter without recovering
+it from source syntax. If a direct sealed readonly value can name only
+`ErasedDirectProcCodeRef` but not the target executable specialization/adapter
+plan needed to lower the uniform erased-call wrapper, the checked artifact is
+incomplete and the implementation must stop and fix the publication data shape.
+
+The executable adapter collector is allowed to walk `CompileTimeValueStore`
+values for provided readonly data exports for the same reason the layout request
+collector is allowed to do so: these values are the published post-check
+materialization graph. It must not walk CIR, unchecked source, object-file
+bytes, or backend state. In checking-finalization mode this provided-data-export
+adapter collection is disabled; other provided constants in the same artifact
+may not have been evaluated yet. Only published-artifact runtime lowering has
+the complete export table/value-store relation required to reserve static data
+code dependencies.
+
+Static data emission remains a consumer only. It receives the lowered erased
+callable code map from LIR lowering and emits relocations to already-lowered
+procedure symbols. If `SealedErasedCallableValue.code` is absent from that map,
+static data emission must take the invariant path. It must not synthesize an
+adapter, choose a procedure symbol by name, inspect a callable-set descriptor to
+recreate missing member targets, or compute a source-compatible replacement.
+
+For static allocations, `on_drop` is `null` unless object emission has a real
+published final-drop helper symbol for a dynamic copy of that same payload. A
+readonly static erased callable allocation has `REFCOUNT_STATIC_DATA`, so normal
+runtime `decref` never runs `on_drop` and never frees the payload. Nested
+capture data inside static payloads must therefore be emitted as static readonly
+allocations with `REFCOUNT_STATIC_DATA`; the correctness of static data does not
+depend on running a final-drop callback.
+
+The static data graph builder must receive the same artifact views used by
+executable MIR lowering: the root lowering view, relation artifacts, and direct
+imports. Hidden capture materialization nodes may reference imported const
+instances, imported executable type payloads, imported callable-set descriptors,
+or nested sealed erased callables. A static data emitter that only receives the
+root artifact is incomplete; it cannot correctly materialize those explicit
+published references without trying to recover them from source or runtime
+bytes.
+
+The executable erased-call wrapper symbol is a real object-file text symbol, not
+an anonymous code-buffer offset. During LIR lowering, each erased callable code
+ref is published in the lowered erased-callable code map with the exact
+`LirProcSpecId` that implements it. Native object emission must give every LIR
+procedure that can be referenced from readonly data a deterministic local text
+symbol, for example:
+
+```zig
+pub fn proc_symbol_name(symbol: lir.Symbol) []const u8 {
+    // Exact spelling is an implementation detail, but it is derived only from
+    // the already-published LIR procedure symbol.
+    return "roc__proc_<symbol>";
+}
+```
+
+The static data graph then emits a readonly relocation from
+`ErasedCallablePayload.callable_fn_ptr` to that local text symbol. It must not
+try to encode a backend-private code offset in readonly bytes, because object
+linking and host access need a normal relocation target. It must not create a
+new wrapper procedure during static data emission; all callable code roots must
+already have been requested through the checked-artifact/MIR/LIR root path.
 
 If any of those fields are missing, that is a compiler invariant violation. The
 materializer must not reconstruct a callable function pointer from source syntax,
@@ -22239,6 +23493,28 @@ contains a relocation to the erased callable wrapper selected for
 `I64 -> I64`, an `on_drop` helper pointer if the capture requires final-drop
 work, and inline capture bytes for `n = 1`. It does not export a runtime thunk
 or a global closure object.
+
+The boundary source type used by the sealed value is the provided/exported type.
+That may differ from the source type that appeared where the boxed value was
+created:
+
+```roc
+app [boxed_add_one] { pf: platform "./platform/main.roc" }
+
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+```
+
+If the platform requires `boxed_add_one : Box((I64 -> I64))`, the readonly
+static data graph consumes a `SealedErasedCallableValue` whose
+`boundary.source_fn_ty` is `(I64 -> I64)`. The finite adapter member selected
+while evaluating the app value may have originated from `I64ToI64`, but that is
+not what object emission sees. Object emission sees exactly one sealed boundary
+record and writes one erased callable payload from it. It must not compare the
+alias and expanded type, recover the selected member from descriptor order, or
+look through runtime bytes.
 
 #### Compile-Time Evaluation and Export Decisions Stay Decoupled
 
@@ -22291,6 +23567,8 @@ not by inspecting compiler-internal snapshots:
 - `List(Str)` and `List(List(Str))` values point at readonly static allocations,
   including the allocation-element-count word for refcounted-element lists
 - `Box(T)` values point at readonly static allocations for their payloads
+- `Box(function)` values are the erased-callable allocation pointer itself; they
+  do not add a second outer `Box` allocation around the erased-callable payload
 - recursive tag unions with boxed children use ordinary tag-union layout plus
   readonly boxed payloads
 - calling runtime `incref`/`decref` helpers on those static pointers does not
@@ -25769,6 +27047,30 @@ violation. Builtin transparent nominals are not a separate category here:
 `Bool`, `Try`, and any other builtin transparent nominal use the same backing
 merge rule as user-defined transparent nominals, with no Bool-specific or
 Try-specific lowering behavior.
+
+Transparent aliases are also transparent when they appear only on the app side
+inside a platform requirement. For example:
+
+```roc
+# platform requirement
+boxed_add_one : Box((I64 -> I64))
+
+# app
+I64ToI64 : I64 -> I64
+
+boxed_add_one : Box(I64ToI64)
+boxed_add_one = Box.box(|value| value + 1)
+```
+
+When relation resolution merges the `Box` argument, the platform side is the
+function type `I64 -> I64` and the app side is the alias `I64ToI64`. The
+resolver must unwrap the app alias to its backing before comparing the function
+payloads. This is not source recovery: both the alias payload and its backing
+are explicit checked-artifact type-store data. The platform boundary remains
+the authority for the required shape, so platform-side aliases may be preserved
+when they are the declared interface, but app-side aliases must not cause a
+false "expected function-compatible app payload" invariant failure inside
+nominal arguments, records, tuples, tag payloads, lists, or boxes.
 
 For tag unions, this means:
 
@@ -32140,9 +33442,20 @@ whether the current source expression is syntactically enclosed by `Box.box(...)
 or `Box.unbox(...)`. Erased callable packaging must consume
 `CallableValueEmissionPlan` values with non-empty `BoxErasureProvenance`.
 
-Forbid solved erased callable representation without non-empty `BoxErasureProvenance`
-provenance. Forbid any erased callable provenance case other than explicit
-`BoxBoundaryId`.
+Forbid solved erased callable representation without non-empty
+`BoxErasureProvenance` provenance. Forbid any erased callable provenance case
+other than:
+
+- a current-session `BoxBoundaryId` from a real `Box.box` or `Box.unbox`
+  value-flow operation
+- an artifact-stable `ConstGraphBoxErasureWitness` naming a published const
+  graph `Box(T)` node
+- an artifact-stable promoted-wrapper procedure whose sealed signature already
+  carries non-empty Box-erasure provenance
+
+Forbid storing a current-session `BoxBoundaryId` in a compile-time value,
+imported checked artifact view, or any persisted record consumed by a later
+lambda-solved session.
 
 Forbid non-primitive `LambdaSolvedLowLevelCall` nodes without a complete
 `LowLevelValueFlowSignatureId`. Low-level ABI metadata and RC-effect metadata
@@ -33694,20 +35007,51 @@ Compile-time constants:
   `ErasedAdapterKey`, and the adapter body dispatches with `callable_match`,
   even though the callable set is a singleton.
 - reified erased compile-time callable values and erased callable leaves must
-  store exact erased code refs. Direct erased code refs carry
-  `ErasedDirectProcCodeRef { proc_value, capture_shape_key }`. Finite-set
-  adapter refs embedded in erased callable leaves must lower through the exact
+  store exact sealed erased callable values. Direct erased code refs inside the
+  sealed value carry `ErasedDirectProcCodeRef { proc_value, capture_shape_key }`.
+  Finite-set adapter refs inside the sealed value must lower through the exact
   `ErasedAdapterKey { source_fn_ty, callable_set_key, erased_call_sig_key,
   capture_shape_key }`, and adapter bodies must dispatch with `callable_match`,
   including singleton sets. Tests must prove a bare code symbol, bare procedure
   value, finite callable leaf, source function type plus callable-set key
   without erased signature, source function type plus callable-set key without
-  capture shape, erased signature alone, executable specialization key, or
-  generated symbol text is insufficient and rejected by debug verifiers. Adapter
-  deduplication tests must include two adapters with the same
-  `source_fn_ty + callable_set_key` but different `erased_call_sig_key`, and two
-  adapters with the same `source_fn_ty + callable_set_key + erased_call_sig_key`
-  but different `capture_shape_key`.
+  capture shape, erased signature alone, executable specialization key, generated
+  symbol text, or loose tuple of erased callable fields is insufficient and
+  rejected by debug verifiers. Adapter deduplication tests must include two
+  adapters with the same `source_fn_ty + callable_set_key` but different
+  `erased_call_sig_key`, and two adapters with the same
+  `source_fn_ty + callable_set_key + erased_call_sig_key` but different
+  `capture_shape_key`.
+- sealed erased callable publication must include boundary-type mismatch tests.
+  At least one readonly data export test must use an app-side function type alias
+  and a platform-side expanded function type:
+
+  ```roc
+  app [boxed_add_one] { pf: platform "./platform/main.roc" }
+
+  I64ToI64 : I64 -> I64
+
+  boxed_add_one : Box(I64ToI64)
+  boxed_add_one = Box.box(|value| value + 1)
+  ```
+
+  with the platform requiring:
+
+  ```roc
+  boxed_add_one : Box((I64 -> I64))
+  ```
+
+  The expected checked artifact must contain a `SealedErasedCallableValue` whose
+  `boundary.source_fn_ty` and `boundary.call_sig.source_fn_ty` are the platform
+  boundary type, whose finite singleton adapter key uses that same boundary type,
+  whose single member target key uses that same boundary type, and whose capture
+  materialization uses the singleton callable-set key named by the adapter. The
+  test must cover both a direct procedure value and a captured lambda. Debug
+  verifier tests must corrupt each of these independently and require a loud
+  panic: boundary/source mismatch, adapter/source mismatch, member target/source
+  mismatch, missing branch transforms, branch member ref mismatch, branch target
+  key mismatch, and singleton capture key mismatch. No verifier may accept a
+  later compatible-shape repair.
 - pre-interpretation erased callable result plans must cover both concrete and
   interpreted-code cases. Tests must include `add1 = Box.unbox(make_boxed({}))`
   and a branch-selected erased callable:

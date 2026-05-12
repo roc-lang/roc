@@ -746,7 +746,7 @@ fn evaluateConstantRoot(
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 
-    var dependencies = ConcreteDependencyCollector.init(allocator, artifact);
+    var dependencies = ConcreteDependencyCollector.init(allocator, artifact, lowered);
     defer dependencies.deinit();
 
     var reifier = ComptimeReifier{
@@ -912,9 +912,24 @@ const SelectedFiniteCallableResult = struct {
     result_plan_id: checked_artifact.CallableResultPlanId,
     result_plan: checked_artifact.FiniteCallableResultPlan,
     planned_member: checked_artifact.CallableResultMemberPlan,
-    descriptor_member: *const repr.CanonicalCallableSetMember,
+    descriptor_member: SelectedCallableDescriptorMember,
     payload_layout: layout_mod.Idx,
     payload_value: Value,
+};
+
+const SelectedCallableDescriptorMember = struct {
+    member: canonical.CallableSetMemberId,
+    proc_value: canonical.ProcedureCallableRef,
+    source_proc: canonical.MirProcedureRef,
+    published_proc_value: ?canonical.ProcedureCallableRef = null,
+    published_source_proc: ?canonical.MirProcedureRef = null,
+    capture_slots: []const canonical.CallableSetCaptureSlot,
+    capture_shape_key: canonical.CaptureShapeKey,
+};
+
+const PersistedFiniteAdapterSelection = struct {
+    result_plan_id: checked_artifact.CallableResultPlanId,
+    selected: SelectedFiniteCallableResult,
 };
 
 const PublishedCallableResult = struct {
@@ -1137,7 +1152,7 @@ fn ensureConstInstanceRequest(
     switch (source.template.state) {
         .reserved => compileTimeFinalizationInvariant("constant instance request reached unsealed const template"),
         .value_graph_template => |graph| {
-            var dependencies = ConcreteDependencyCollector.init(allocator, artifact);
+            var dependencies = ConcreteDependencyCollector.init(allocator, artifact, null);
             defer dependencies.deinit();
             var cloner = ComptimeGraphCloner.init(
                 allocator,
@@ -1206,7 +1221,7 @@ fn ensureConstInstanceRequest(
             const ret_layout = lowered_request.lowered.lir_result.store.getProcSpec(lowered_request.lir_root).ret_layout;
             defer interpreter.dropValue(result.value, ret_layout);
 
-            var concrete_dependencies = ConcreteDependencyCollector.init(allocator, artifact);
+            var concrete_dependencies = ConcreteDependencyCollector.init(allocator, artifact, &lowered_request.lowered);
             defer concrete_dependencies.deinit();
 
             var reifier = ComptimeReifier{
@@ -1882,7 +1897,7 @@ fn appendConcreteDependencySummaryForCallableRoot(
     _: checked_artifact.CallableResultPlanId,
     published_proc: canonical.ProcedureCallableRef,
 ) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
-    var collector = ConcreteDependencyCollector.init(allocator, artifact);
+    var collector = ConcreteDependencyCollector.init(allocator, artifact, null);
     defer collector.deinit();
     try collector.appendProcedureCallable(published_proc);
     return try appendConcreteDependencySummary(allocator, artifact, root, collector.concrete.items);
@@ -1917,6 +1932,7 @@ fn appendConcreteDependencySummaryFromBase(
 const ConcreteDependencyCollector = struct {
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: ?*const lir.CheckedPipeline.LoweredProgram,
     concrete: std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     active_const_graphs: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void),
     active_capture_slots: std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void),
@@ -1925,10 +1941,12 @@ const ConcreteDependencyCollector = struct {
     fn init(
         allocator: Allocator,
         artifact: *checked_artifact.CheckedModuleArtifact,
+        lowered: ?*const lir.CheckedPipeline.LoweredProgram,
     ) ConcreteDependencyCollector {
         return .{
             .allocator = allocator,
             .artifact = artifact,
+            .lowered = lowered,
             .concrete = .empty,
             .active_const_graphs = std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, void).init(allocator),
             .active_capture_slots = std.AutoHashMap(checked_artifact.CaptureSlotReificationPlanId, void).init(allocator),
@@ -2012,10 +2030,7 @@ const ConcreteDependencyCollector = struct {
     ) Allocator.Error!void {
         switch (leaf) {
             .finite => |finite| try self.appendProcedureCallable(finite.proc_value),
-            .erased_boxed => |erased| {
-                try self.collectErasedCodeRef(erased.code);
-                try self.collectErasedCaptureExecutableMaterialization(erased.capture);
-            },
+            .erased_boxed => |erased| try self.collectSealedErasedCallableValue(erased.sealed),
         }
     }
 
@@ -2085,6 +2100,7 @@ const ConcreteDependencyCollector = struct {
         switch (capture) {
             .none,
             .zero_sized_typed,
+            .materialized_capture,
             => {},
             .whole_hidden_capture_value => |ref| try self.collectCaptureSlot(ref.plan),
             .proc_capture_tuple => |refs| for (refs) |ref| try self.collectCaptureSlot(ref.plan),
@@ -2099,11 +2115,38 @@ const ConcreteDependencyCollector = struct {
         switch (code) {
             .direct_proc_value => |direct| try self.appendProcedureCallable(direct.proc_value),
             .finite_set_adapter => |adapter| {
-                const descriptor = persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, adapter.callable_set_key) orelse {
-                    compileTimeFinalizationInvariant("concrete dependency collection reached erased finite adapter without descriptor");
-                };
-                for (descriptor.members) |member| try self.appendProcedureCallable(member.proc_value);
+                if (persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, adapter.callable_set_key)) |descriptor| {
+                    for (descriptor.members) |member| try self.appendProcedureCallable(member.proc_value);
+                    return;
+                }
+                try self.collectErasedFiniteAdapterFromLowered(adapter);
             },
+        }
+    }
+
+    fn collectErasedFiniteAdapterFromLowered(
+        self: *ConcreteDependencyCollector,
+        adapter: canonical.ErasedAdapterKey,
+    ) Allocator.Error!void {
+        const lowered = self.lowered orelse {
+            compileTimeFinalizationInvariant("concrete dependency collection reached erased finite adapter without persisted descriptor or lowered code map");
+        };
+        const targets = try finiteAdapterMemberTargetsForResolvedErasedCode(
+            self.allocator,
+            lowered,
+            .{ .finite_set_adapter = adapter },
+        );
+        defer deinitExecutableSpecializationKeySlice(self.allocator, targets);
+
+        const descriptor = runtimeCallableSetDescriptor(lowered.callable_set_descriptors, adapter.callable_set_key) orelse {
+            compileTimeFinalizationInvariant("concrete dependency collection reached erased finite adapter without lowered callable-set descriptor");
+        };
+        if (descriptor.members.len != targets.len) {
+            compileTimeFinalizationInvariant("concrete dependency collection erased finite adapter member target count differs from lowered descriptor");
+        }
+        for (descriptor.members, targets) |member, target| {
+            validateLoweredFiniteAdapterMemberTarget(member, target);
+            try self.appendProcedureCallable(member.proc_value);
         }
     }
 
@@ -2143,8 +2186,7 @@ const ConcreteDependencyCollector = struct {
                 for (finite.captures) |capture| try self.collectErasedCaptureExecutableMaterialization(capture);
             },
             .erased_callable => |erased| {
-                try self.collectErasedCodeRef(erased.code);
-                try self.collectErasedCaptureExecutableMaterialization(erased.capture);
+                try self.collectSealedErasedCallableValue(erased.sealed);
             },
             .record => |fields| for (fields) |field| try self.collectErasedCaptureExecutableMaterialization(field.value),
             .tuple => |items| for (items) |item| try self.collectErasedCaptureExecutableMaterialization(item),
@@ -2154,6 +2196,19 @@ const ConcreteDependencyCollector = struct {
             .nominal => |nominal| try self.collectErasedCaptureExecutableMaterialization(nominal.backing),
             .recursive_ref => |ref| try self.collectErasedCaptureExecutableMaterializationNode(ref),
         }
+    }
+
+    fn collectSealedErasedCallableValue(
+        self: *ConcreteDependencyCollector,
+        sealed: checked_artifact.SealedErasedCallableValue,
+    ) Allocator.Error!void {
+        switch (sealed.code) {
+            .direct_proc => |direct| try self.collectErasedCodeRef(.{ .direct_proc_value = direct.code }),
+            .finite_adapter => |finite| for (finite.members) |member| {
+                try self.appendProcedureCallable(member.proc_value);
+            },
+        }
+        try self.collectErasedCaptureExecutableMaterialization(sealed.capture);
     }
 };
 
@@ -2389,15 +2444,27 @@ const ComptimeGraphCloner = struct {
                 break :blk .{ .finite = finite };
             },
             .erased_boxed => |erased| blk: {
-                try self.dependencies.collectErasedCodeRef(erased.code);
+                try self.dependencies.collectSealedErasedCallableValue(erased.sealed);
                 break :blk .{ .erased_boxed = .{
-                    .source_fn_ty = erased.source_fn_ty,
-                    .sig_key = erased.sig_key,
-                    .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
-                    .code = erased.code,
-                    .capture = try self.cloneErasedCapturePlan(erased.capture),
+                    .sealed = try self.cloneSealedErasedCallableValue(erased.sealed),
                 } };
             },
+        };
+    }
+
+    fn cloneSealedErasedCallableValue(
+        self: *ComptimeGraphCloner,
+        sealed: checked_artifact.SealedErasedCallableValue,
+    ) Allocator.Error!checked_artifact.SealedErasedCallableValue {
+        return .{
+            .boundary = .{
+                .source_fn_ty = sealed.boundary.source_fn_ty,
+                .checked_fn_root = sealed.boundary.checked_fn_root,
+                .sig_key = sealed.boundary.sig_key,
+                .provenance = try cloneBoxBoundarySpan(self.allocator, sealed.boundary.provenance),
+            },
+            .code = try cloneSealedErasedCallableCode(self.allocator, sealed.code),
+            .capture = try self.cloneErasedCapturePlan(sealed.capture),
         };
     }
 
@@ -2467,13 +2534,9 @@ const ComptimeGraphCloner = struct {
                 } };
             },
             .erased_callable => |erased| blk: {
-                try self.dependencies.collectErasedCodeRef(erased.code);
+                try self.dependencies.collectSealedErasedCallableValue(erased.sealed);
                 break :blk .{ .erased_callable = .{
-                    .source_fn_ty = erased.source_fn_ty,
-                    .sig_key = erased.sig_key,
-                    .code = erased.code,
-                    .capture = try self.cloneErasedCapturePlan(erased.capture),
-                    .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
+                    .sealed = try self.cloneSealedErasedCallableValue(erased.sealed),
                 } };
             },
             .record => |fields| .{ .record = try self.cloneErasedCaptureRecord(fields) },
@@ -2575,7 +2638,7 @@ fn selectFiniteCallableResult(
         .result_plan_id = result_plan_id,
         .result_plan = finite,
         .planned_member = planned_member,
-        .descriptor_member = member,
+        .descriptor_member = selectedDescriptorMemberFromRuntime(member.*),
         .payload_layout = selected.payload_layout,
         .payload_value = value,
     };
@@ -2883,27 +2946,21 @@ fn publishErasedCallableResult(
             .proc = reserved.promoted_ref.proc,
             .callable = .{
                 .template = .{ .synthetic = .{ .template = reserved.template } },
-                .source_fn_ty = publication.erased.source_fn_ty,
+                .source_fn_ty = publication.sealed.boundary.source_fn_ty,
             },
         },
         executable_signature,
     );
     artifact.fillPromotedCallableWrapperBody(reserved, .{ .erased = .{
-        .source_fn_ty = publication.erased.source_fn_ty,
+        .sealed = publication.sealed,
         .params = params,
         .executable_signature = executable_signature,
-        .sig_key = publication.erased.sig_key,
-        .code = publication.code,
-        .finite_adapter_member_targets = publication.finite_adapter_member_targets,
-        .finite_adapter_branches = publication.finite_adapter_branches,
-        .capture = publication.capture,
         .arg_transforms = transforms.args,
-        .hidden_capture_arg = if (publication.erased.sig_key.capture_ty == null)
+        .hidden_capture_arg = if (publication.sealed.boundary.sig_key.capture_ty == null)
             .none
         else
-            .{ .materialized_capture = publication.capture },
+            .{ .materialized_capture = publication.sealed.capture },
         .result_transform = transforms.result,
-        .provenance = try cloneBoxBoundarySpan(allocator, publication.erased.provenance),
     } });
     publication_owned = false;
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
@@ -2911,7 +2968,7 @@ fn publishErasedCallableResult(
         allocator,
         artifact,
         reserved,
-        publication.erased.source_fn_ty,
+        publication.sealed.boundary.source_fn_ty,
     );
 
     const promotion_plan = try artifact.comptime_plans.appendCallablePromotion(allocator, .{ .erased = .{
@@ -2920,7 +2977,7 @@ fn publishErasedCallableResult(
     } });
     const proc_value = canonical.ProcedureCallableRef{
         .template = .{ .synthetic = .{ .template = reserved.template } },
-        .source_fn_ty = publication.erased.source_fn_ty,
+        .source_fn_ty = publication.sealed.boundary.source_fn_ty,
     };
     return .{
         .proc_value = proc_value,
@@ -2933,10 +2990,7 @@ fn publishErasedCallableResult(
 
 const PersistedErasedCallablePublication = struct {
     erased: checked_artifact.ErasedCallableResultPlan,
-    code: canonical.ErasedCallableCodeRef,
-    finite_adapter_member_targets: []const canonical.ExecutableSpecializationKey = &.{},
-    finite_adapter_branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan = &.{},
-    capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+    sealed: checked_artifact.SealedErasedCallableValue,
 };
 
 fn persistedErasedCallablePublication(
@@ -2952,11 +3006,8 @@ fn persistedErasedCallablePublication(
     ret_value: Value,
 ) Allocator.Error!PersistedErasedCallablePublication {
     switch (code) {
-        .direct_proc_value => return .{
-            .erased = erased,
-            .code = code,
-            .finite_adapter_member_targets = &.{},
-            .capture = try materializeErasedPromotedCapture(
+        .direct_proc_value => |direct| {
+            const capture = try materializeErasedPromotedCapture(
                 allocator,
                 artifact,
                 lowered,
@@ -2964,7 +3015,15 @@ fn persistedErasedCallablePublication(
                 erased,
                 ret_layout,
                 ret_value,
-            ),
+            );
+            return .{
+                .erased = erased,
+                .sealed = .{
+                    .boundary = try sealedErasedCallableBoundaryForResult(allocator, artifact, erased, erased.provenance),
+                    .code = .{ .direct_proc = .{ .code = direct } },
+                    .capture = capture,
+                },
+            };
         },
         .finite_set_adapter => {},
     }
@@ -2986,8 +3045,8 @@ fn deinitPersistedErasedCallablePublication(
     allocator: Allocator,
     publication: PersistedErasedCallablePublication,
 ) void {
-    deinitExecutableSpecializationKeySlice(allocator, publication.finite_adapter_member_targets);
-    deinitPublishedFiniteSetEraseAdapterBranches(allocator, publication.finite_adapter_branches);
+    var sealed = publication.sealed;
+    deinitSealedErasedCallableValue(allocator, &sealed);
 }
 
 fn persistConcreteFiniteAdapterAsSingleton(
@@ -3001,10 +3060,35 @@ fn persistConcreteFiniteAdapterAsSingleton(
     ret_layout: layout_mod.Idx,
     ret_value: Value,
 ) Allocator.Error!PersistedErasedCallablePublication {
-    const result_plan = switch (erased.capture) {
-        .finite_callable_set_value => |plan| plan,
-        else => compileTimeFinalizationInvariant("persisted finite-set erased adapter did not carry a finite callable-set capture"),
+    const private_context = PromotedCallablePublicationContext{
+        .source_binding = context.source_binding,
+        .base = .{ .private_capture = privateCaptureOwner(owner) },
     };
+    const provenance = [_]checked_artifact.BoxErasureProvenance{.{ .promoted_wrapper = privateCaptureOwnerMirProcedureRef(privateCaptureOwner(owner)) }};
+    return try persistConcreteFiniteAdapterAsSingletonWithContext(
+        allocator,
+        artifact,
+        lowered,
+        private_context,
+        provenance[0..],
+        adapter,
+        erased,
+        ret_layout,
+        ret_value,
+    );
+}
+
+fn persistConcreteFiniteAdapterAsSingletonWithContext(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    member_context: PromotedCallablePublicationContext,
+    transform_provenance: []const checked_artifact.BoxErasureProvenance,
+    adapter: canonical.ErasedAdapterKey,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    ret_layout: layout_mod.Idx,
+    ret_value: Value,
+) Allocator.Error!PersistedErasedCallablePublication {
     const original_targets = try finiteAdapterMemberTargetsForResolvedErasedCode(
         allocator,
         lowered,
@@ -3012,55 +3096,90 @@ fn persistConcreteFiniteAdapterAsSingleton(
     );
     defer deinitExecutableSpecializationKeySlice(allocator, original_targets);
 
-    const hidden_physical = erasedClosureHiddenCapturePhysical(
-        &lowered.lir_result.layouts,
-        erasedHiddenCaptureLayout(lowered, erased),
-        ret_layout,
-        ret_value,
-    ) orelse {
-        compileTimeFinalizationInvariant("persisted finite-set erased adapter had no hidden capture payload");
+    const selection: PersistedFiniteAdapterSelection = switch (erased.capture) {
+        .finite_callable_set_value => |result_plan| blk: {
+            const hidden_physical = erasedClosureHiddenCapturePhysical(
+                &lowered.lir_result.layouts,
+                erasedHiddenCaptureLayout(lowered, erased),
+                ret_layout,
+                ret_value,
+            ) orelse {
+                compileTimeFinalizationInvariant("persisted finite-set erased adapter had no hidden capture payload");
+            };
+            break :blk .{
+                .result_plan_id = result_plan,
+                .selected = selectFiniteCallableResult(
+                    &artifact.comptime_plans,
+                    lowered.callable_set_descriptors,
+                    &lowered.lir_result.layouts,
+                    result_plan,
+                    hidden_physical.layout_idx,
+                    hidden_physical.value,
+                ),
+            };
+        },
+        .none => try selectNoHiddenCaptureSingletonFiniteAdapter(
+            allocator,
+            artifact,
+            lowered,
+            adapter,
+            erased,
+            original_targets,
+        ),
+        .zero_sized_typed => |capture_key| blk: {
+            if (erased.sig_key.capture_ty) |expected| {
+                if (!repr.canonicalExecValueTypeKeyEql(expected, capture_key)) {
+                    compileTimeFinalizationInvariant("persisted zero-sized finite-set erased adapter capture key differs from signature");
+                }
+            } else {
+                compileTimeFinalizationInvariant("persisted zero-sized finite-set erased adapter had no signature capture key");
+            }
+            break :blk try selectNoHiddenCaptureSingletonFiniteAdapter(
+                allocator,
+                artifact,
+                lowered,
+                adapter,
+                erased,
+                original_targets,
+            );
+        },
+        .materialized_capture => |capture| try selectMaterializedFiniteAdapterCapture(
+            allocator,
+            artifact,
+            adapter,
+            erased,
+            original_targets,
+            capture,
+        ),
+        .whole_hidden_capture_value,
+        .proc_capture_tuple,
+        => compileTimeFinalizationInvariant("persisted finite-set erased adapter capture recipe cannot select an adapter member"),
     };
-    const selected = selectFiniteCallableResult(
-        &artifact.comptime_plans,
-        lowered.callable_set_descriptors,
-        &lowered.lir_result.layouts,
-        result_plan,
-        hidden_physical.layout_idx,
-        hidden_physical.value,
-    );
+    const selected = selection.selected;
     const member_index = @intFromEnum(selected.planned_member.member);
     if (member_index >= original_targets.len) {
         compileTimeFinalizationInvariant("persisted finite-set erased adapter selected member exceeded target count");
     }
 
-    const checked_fn_root = artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
-        compileTimeFinalizationInvariant("persisted finite-set erased adapter selected member source function type was not published");
-    };
-    const private_context = PromotedCallablePublicationContext{
-        .source_binding = context.source_binding,
-        .base = .{ .private_capture = privateCaptureOwner(owner) },
-    };
+    const checked_fn_root = checkedResultPlanSourcePayload(artifact, erased.source_fn_ty_payload, erased.source_fn_ty);
     const published_member = try publishCallableResult(
         allocator,
         artifact,
         lowered,
-        private_context,
+        member_context,
         checked_fn_root,
-        result_plan,
+        selection.result_plan_id,
         selected,
     );
     const source_proc = mirProcedureRefForPublishedCallable(published_member.proc_value);
-    const target_key = try persistedSingletonAdapterMemberTarget(
+    var target_key = try persistedSingletonAdapterMemberTarget(
         allocator,
         published_member.proc_value,
         source_proc,
         erased,
         original_targets[member_index],
     );
-    errdefer {
-        var owned = target_key;
-        repr.deinitExecutableSpecializationKey(allocator, &owned);
-    }
+    defer repr.deinitExecutableSpecializationKey(allocator, &target_key);
     const callable_set_key = persistedSingletonCallableSetKey(published_member.proc_value, source_proc, target_key);
     try publishPersistedSingletonCallableSetDescriptor(
         allocator,
@@ -3089,29 +3208,33 @@ fn persistConcreteFiniteAdapterAsSingleton(
         .capture_shape_key = capture_shape_key,
     };
 
-    const branches = try persistedSingletonAdapterBranches(
+    const members = try persistedSingletonAdapterMembers(
         allocator,
         artifact,
-        .{
-            .proc = owner.promoted_ref.proc,
-            .callable = .{
-                .template = .{ .synthetic = .{ .template = owner.template } },
-                .source_fn_ty = erased.source_fn_ty,
-            },
-        },
         singleton_adapter,
         erased,
+        source_proc,
+        published_member.proc_value,
         published_member.source_fn_ty_payload,
         null,
         target_key,
+        transform_provenance,
     );
-    errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, branches);
+    errdefer deinitSealedFiniteErasedAdapterMembers(allocator, members);
 
-    const targets = try allocator.alloc(canonical.ExecutableSpecializationKey, 1);
-    targets[0] = target_key;
+    const capture = checked_artifact.ErasedCaptureExecutableMaterializationPlan{ .node = try artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(
+        allocator,
+        .{ .finite_callable_set = .{
+            .source_fn_ty = published_member.proc_value.source_fn_ty,
+            .callable_set_key = callable_set_key,
+            .selected_member = canonical.onlyCallableSetMemberId(),
+            .captures = &.{},
+        } },
+    ) };
     return .{
         .erased = .{
             .source_fn_ty = erased.source_fn_ty,
+            .source_fn_ty_payload = erased.source_fn_ty_payload,
             .sig_key = sig_key,
             .provenance = erased.provenance,
             .code_plan = erased.code_plan,
@@ -3123,31 +3246,346 @@ fn persistConcreteFiniteAdapterAsSingleton(
                 capture_shape_key,
             ),
         },
-        .code = .{ .finite_set_adapter = singleton_adapter },
-        .finite_adapter_member_targets = targets,
-        .finite_adapter_branches = branches,
-        .capture = .{ .node = try artifact.comptime_plans.appendErasedCaptureExecutableMaterializationNode(
-            allocator,
-            .{ .finite_callable_set = .{
-                .source_fn_ty = selected.result_plan.source_fn_ty,
-                .callable_set_key = callable_set_key,
-                .selected_member = canonical.onlyCallableSetMemberId(),
-                .captures = &.{},
+        .sealed = .{
+            .boundary = try sealedErasedCallableBoundaryForResult(allocator, artifact, .{
+                .source_fn_ty = erased.source_fn_ty,
+                .source_fn_ty_payload = erased.source_fn_ty_payload,
+                .sig_key = sig_key,
+                .provenance = erased.provenance,
+                .code_plan = erased.code_plan,
+                .capture = erased.capture,
+                .result_ty = erased.result_ty,
+                .executable_signature_payloads = erasedSignaturePayloadsWithHiddenCapture(
+                    erased.executable_signature_payloads,
+                    hidden_capture,
+                    capture_shape_key,
+                ),
+            }, transform_provenance),
+            .code = .{ .finite_adapter = .{
+                .adapter_key = singleton_adapter,
+                .members = members,
             } },
-        ) },
+            .capture = capture,
+        },
     };
 }
 
-fn persistedSingletonAdapterBranches(
+fn selectNoHiddenCaptureSingletonFiniteAdapter(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
-    owner_proc: canonical.MirProcedureRef,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
     adapter: canonical.ErasedAdapterKey,
     erased: checked_artifact.ErasedCallableResultPlan,
+    original_targets: []const canonical.ExecutableSpecializationKey,
+) Allocator.Error!PersistedFiniteAdapterSelection {
+    const descriptor = runtimeCallableSetDescriptor(lowered.callable_set_descriptors, adapter.callable_set_key) orelse {
+        compileTimeFinalizationInvariant("no-hidden-capture finite erased adapter had no published callable-set descriptor");
+    };
+    if (descriptor.members.len != 1) {
+        compileTimeFinalizationInvariant("no-hidden-capture finite erased adapter must be a singleton descriptor");
+    }
+    if (original_targets.len != 1) {
+        compileTimeFinalizationInvariant("no-hidden-capture finite erased adapter must publish exactly one lowered target");
+    }
+    const descriptor_member = &descriptor.members[0];
+    if (descriptor_member.member != canonical.onlyCallableSetMemberId()) {
+        compileTimeFinalizationInvariant("no-hidden-capture finite erased adapter singleton member was not canonical");
+    }
+    if (descriptor_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("no-hidden-capture finite erased adapter singleton member unexpectedly had captures");
+    }
+
+    return try selectFiniteAdapterFromPublishedDescriptor(
+        allocator,
+        artifact,
+        adapter,
+        erased,
+        descriptor,
+        original_targets,
+        descriptor_member.member,
+    );
+}
+
+fn selectMaterializedFiniteAdapterCapture(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    adapter: canonical.ErasedAdapterKey,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    original_targets: []const canonical.ExecutableSpecializationKey,
+    capture: checked_artifact.ArtifactErasedCaptureMaterializationRef,
+) Allocator.Error!PersistedFiniteAdapterSelection {
+    if (!std.meta.eql(capture.owner.bytes, artifact.key.bytes)) {
+        compileTimeFinalizationInvariant("materialized finite erased adapter capture belongs to an unavailable artifact");
+    }
+    const finite = materializedFiniteCallableSetValueForPlan(artifact, capture.capture);
+    if (!repr.callableSetKeyEql(finite.callable_set_key, adapter.callable_set_key)) {
+        compileTimeFinalizationInvariant("materialized finite erased adapter capture callable-set key differs from adapter");
+    }
+    if (!std.meta.eql(finite.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
+        compileTimeFinalizationInvariant("materialized finite erased adapter capture source type differs from erased boundary");
+    }
+    if (finite.captures.len != 0) {
+        compileTimeFinalizationInvariant("materialized finite erased adapter capture with member captures requires published branch capture transforms");
+    }
+    const descriptor = persistedCallableSetDescriptor(artifact.callable_set_descriptors.descriptors, adapter.callable_set_key) orelse {
+        compileTimeFinalizationInvariant("materialized finite erased adapter had no published callable-set descriptor");
+    };
+    return try selectFiniteAdapterFromPersistedDescriptor(
+        allocator,
+        artifact,
+        adapter,
+        erased,
+        descriptor,
+        original_targets,
+        finite.selected_member,
+    );
+}
+
+fn materializedFiniteCallableSetValueForPlan(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    capture: checked_artifact.ErasedCaptureExecutableMaterializationPlan,
+) checked_artifact.MaterializedFiniteCallableSetValue {
+    return switch (capture) {
+        .node => |node_id| materializedFiniteCallableSetValueForNode(artifact, node_id),
+        .none,
+        .zero_sized_typed,
+        => compileTimeFinalizationInvariant("materialized finite erased adapter capture was not a finite callable-set node"),
+    };
+}
+
+fn materializedFiniteCallableSetValueForNode(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    node_id: checked_artifact.ErasedCaptureExecutableMaterializationNodeId,
+) checked_artifact.MaterializedFiniteCallableSetValue {
+    return switch (artifact.comptime_plans.erasedCaptureExecutableMaterializationNode(node_id)) {
+        .finite_callable_set => |finite| finite,
+        .recursive_ref => |ref| materializedFiniteCallableSetValueForNode(artifact, ref),
+        else => compileTimeFinalizationInvariant("materialized finite erased adapter capture node was not a finite callable-set"),
+    };
+}
+
+fn selectFiniteAdapterFromPublishedDescriptor(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    adapter: canonical.ErasedAdapterKey,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    descriptor: *const repr.CanonicalCallableSetDescriptor,
+    original_targets: []const canonical.ExecutableSpecializationKey,
+    selected_member_id: canonical.CallableSetMemberId,
+) Allocator.Error!PersistedFiniteAdapterSelection {
+    if (descriptor.members.len == 0) {
+        compileTimeFinalizationInvariant("persisted finite erased adapter descriptor had no members");
+    }
+    if (descriptor.members.len != original_targets.len) {
+        compileTimeFinalizationInvariant("persisted finite erased adapter member target count differs from descriptor");
+    }
+
+    const result_plan_id = try artifact.comptime_plans.appendCallableResult(allocator, .{ .finite = .{
+        .source_fn_ty = erased.source_fn_ty,
+        .source_fn_ty_payload = checkedResultPlanSourcePayload(artifact, erased.source_fn_ty_payload, erased.source_fn_ty),
+        .callable_set_key = adapter.callable_set_key,
+        .members = try callableResultMembersFromDescriptor(
+            allocator,
+            artifact,
+            erased,
+            descriptor,
+            original_targets,
+        ),
+    } });
+
+    const result_plan = switch (artifact.comptime_plans.callableResult(result_plan_id)) {
+        .finite => |finite| finite,
+        .erased => compileTimeFinalizationInvariant("no-hidden-capture singleton finite adapter published an erased result plan"),
+    };
+    const planned_member = callableResultMember(result_plan.members, selected_member_id) orelse {
+        compileTimeFinalizationInvariant("persisted finite erased adapter selected member was missing from result plan");
+    };
+    const descriptor_member = runtimeCallableSetMember(descriptor, selected_member_id) orelse {
+        compileTimeFinalizationInvariant("persisted finite erased adapter selected member was missing from descriptor");
+    };
+    if (planned_member.capture_slots.len != 0 or descriptor_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("persisted finite erased adapter selected member unexpectedly had captures");
+    }
+    return .{
+        .result_plan_id = result_plan_id,
+        .selected = .{
+            .result_plan_id = result_plan_id,
+            .result_plan = result_plan,
+            .planned_member = planned_member,
+            .descriptor_member = selectedDescriptorMemberFromRuntime(descriptor_member.*),
+            .payload_layout = .zst,
+            .payload_value = Value.zst,
+        },
+    };
+}
+
+fn callableResultMembersFromDescriptor(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    descriptor: *const repr.CanonicalCallableSetDescriptor,
+    original_targets: []const canonical.ExecutableSpecializationKey,
+) Allocator.Error![]const checked_artifact.CallableResultMemberPlan {
+    const checked_fn_root = checkedResultPlanSourcePayload(artifact, erased.source_fn_ty_payload, erased.source_fn_ty);
+    const members = try allocator.alloc(checked_artifact.CallableResultMemberPlan, descriptor.members.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (members[0..initialized]) |member| deinitCallableResultMemberTargetPlan(allocator, member.target);
+        allocator.free(members);
+    }
+    for (descriptor.members, original_targets, 0..) |descriptor_member, target_key, i| {
+        if (descriptor_member.capture_slots.len != 0) {
+            compileTimeFinalizationInvariant("persisted finite erased adapter descriptor member with captures requires published branch capture transforms");
+        }
+        var member_proc = descriptor_member.published_proc_value orelse descriptor_member.proc_value;
+        member_proc.source_fn_ty = erased.source_fn_ty;
+        members[i] = .{
+            .member = descriptor_member.member,
+            .member_proc = member_proc,
+            .member_proc_source_fn_ty_payload = checked_fn_root,
+            .member_lifted_owner_source_fn_ty_payload = try checkedPayloadForLiftedMemberOwnerIfNeeded(artifact, member_proc),
+            .target = try memberTargetPlanFromExecutableKey(allocator, target_key, erased.source_fn_ty),
+            .capture_slots = &.{},
+        };
+        initialized += 1;
+    }
+    return members;
+}
+
+fn selectFiniteAdapterFromPersistedDescriptor(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    adapter: canonical.ErasedAdapterKey,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    descriptor: *const canonical.CanonicalCallableSetDescriptor,
+    original_targets: []const canonical.ExecutableSpecializationKey,
+    selected_member_id: canonical.CallableSetMemberId,
+) Allocator.Error!PersistedFiniteAdapterSelection {
+    if (descriptor.members.len == 0) {
+        compileTimeFinalizationInvariant("persisted materialized finite erased adapter descriptor had no members");
+    }
+    if (descriptor.members.len != original_targets.len) {
+        compileTimeFinalizationInvariant("persisted materialized finite erased adapter member target count differs from descriptor");
+    }
+
+    const result_plan_id = try artifact.comptime_plans.appendCallableResult(allocator, .{ .finite = .{
+        .source_fn_ty = erased.source_fn_ty,
+        .source_fn_ty_payload = checkedResultPlanSourcePayload(artifact, erased.source_fn_ty_payload, erased.source_fn_ty),
+        .callable_set_key = adapter.callable_set_key,
+        .members = try callableResultMembersFromPersistedDescriptor(
+            allocator,
+            artifact,
+            erased,
+            descriptor,
+            original_targets,
+        ),
+    } });
+
+    const result_plan = switch (artifact.comptime_plans.callableResult(result_plan_id)) {
+        .finite => |finite| finite,
+        .erased => compileTimeFinalizationInvariant("persisted materialized finite adapter published an erased result plan"),
+    };
+    const planned_member = callableResultMember(result_plan.members, selected_member_id) orelse {
+        compileTimeFinalizationInvariant("persisted materialized finite erased adapter selected member was missing from result plan");
+    };
+    const descriptor_member = persistedCallableSetMember(descriptor, selected_member_id) orelse {
+        compileTimeFinalizationInvariant("persisted materialized finite erased adapter selected member was missing from descriptor");
+    };
+    if (planned_member.capture_slots.len != 0 or descriptor_member.capture_slots.len != 0) {
+        compileTimeFinalizationInvariant("persisted materialized finite erased adapter selected member unexpectedly had captures");
+    }
+    return .{
+        .result_plan_id = result_plan_id,
+        .selected = .{
+            .result_plan_id = result_plan_id,
+            .result_plan = result_plan,
+            .planned_member = planned_member,
+            .descriptor_member = selectedDescriptorMemberFromPersisted(descriptor_member.*),
+            .payload_layout = .zst,
+            .payload_value = Value.zst,
+        },
+    };
+}
+
+fn callableResultMembersFromPersistedDescriptor(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    descriptor: *const canonical.CanonicalCallableSetDescriptor,
+    original_targets: []const canonical.ExecutableSpecializationKey,
+) Allocator.Error![]const checked_artifact.CallableResultMemberPlan {
+    const checked_fn_root = checkedResultPlanSourcePayload(artifact, erased.source_fn_ty_payload, erased.source_fn_ty);
+    const members = try allocator.alloc(checked_artifact.CallableResultMemberPlan, descriptor.members.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (members[0..initialized]) |member| deinitCallableResultMemberTargetPlan(allocator, member.target);
+        allocator.free(members);
+    }
+    for (descriptor.members, original_targets, 0..) |descriptor_member, target_key, i| {
+        if (descriptor_member.capture_slots.len != 0) {
+            compileTimeFinalizationInvariant("persisted materialized finite erased adapter descriptor member with captures requires published branch capture transforms");
+        }
+        switch (descriptor_member.proc_value.template) {
+            .lifted => compileTimeFinalizationInvariant("persisted materialized finite erased adapter descriptor retained a lifted procedure value"),
+            .checked,
+            .synthetic,
+            => {},
+        }
+        var member_proc = descriptor_member.proc_value;
+        member_proc.source_fn_ty = erased.source_fn_ty;
+        members[i] = .{
+            .member = descriptor_member.member,
+            .member_proc = member_proc,
+            .member_proc_source_fn_ty_payload = checked_fn_root,
+            .member_lifted_owner_source_fn_ty_payload = null,
+            .target = try memberTargetPlanFromExecutableKey(allocator, target_key, erased.source_fn_ty),
+            .capture_slots = &.{},
+        };
+        initialized += 1;
+    }
+    return members;
+}
+
+fn checkedPayloadForLiftedMemberOwnerIfNeeded(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    member_proc: canonical.ProcedureCallableRef,
+) Allocator.Error!?checked_artifact.CheckedTypeId {
+    return switch (member_proc.template) {
+        .lifted => |lifted| artifact.checked_types.rootForKey(lifted.owner_mono_specialization.requested_mono_fn_ty) orelse {
+            compileTimeFinalizationInvariant("lifted no-hidden-capture finite adapter member owner type has no checked payload");
+        },
+        .checked,
+        .synthetic,
+        => null,
+    };
+}
+
+fn memberTargetPlanFromExecutableKey(
+    allocator: Allocator,
+    target_key: canonical.ExecutableSpecializationKey,
+    requested_source_fn_ty: canonical.CanonicalTypeKey,
+) Allocator.Error!checked_artifact.CallableResultMemberTargetPlan {
+    return .{ .member_proc_relative = .{
+        .requested_fn_ty = requested_source_fn_ty,
+        .exec_arg_tys = try cloneExecValueTypeKeySlice(allocator, target_key.exec_arg_tys),
+        .exec_ret_ty = target_key.exec_ret_ty,
+        .callable_repr_mode = target_key.callable_repr_mode,
+        .capture_shape_key = target_key.capture_shape_key,
+    } };
+}
+
+fn persistedSingletonAdapterMembers(
+    allocator: Allocator,
+    artifact: *checked_artifact.CheckedModuleArtifact,
+    adapter: canonical.ErasedAdapterKey,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    source_proc: canonical.MirProcedureRef,
+    proc_value: canonical.ProcedureCallableRef,
     member_proc_source_fn_ty_payload: checked_artifact.CheckedTypeId,
     member_lifted_owner_source_fn_ty_payload: ?checked_artifact.CheckedTypeId,
     target_key: canonical.ExecutableSpecializationKey,
-) Allocator.Error![]const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan {
+    transform_provenance: []const checked_artifact.BoxErasureProvenance,
+) Allocator.Error![]const checked_artifact.SealedFiniteErasedAdapterMember {
     if (target_key.exec_arg_tys.len != erased.executable_signature_payloads.erased_call_arg_keys.len) {
         compileTimeFinalizationInvariant("persisted finite-set adapter branch target arity differs from erased ABI");
     }
@@ -3155,12 +3593,14 @@ fn persistedSingletonAdapterBranches(
         compileTimeFinalizationInvariant("persisted finite-set adapter branch target return differs from erased ABI");
     }
 
-    const branches = try allocator.alloc(checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan, 1);
-    @memset(branches, .{
+    const members = try allocator.alloc(checked_artifact.SealedFiniteErasedAdapterMember, 1);
+    @memset(members, .{
         .member = .{
             .callable_set_key = adapter.callable_set_key,
             .member_index = undefined,
         },
+        .source_proc = source_proc,
+        .proc_value = proc_value,
         .member_proc_source_fn_ty_payload = undefined,
         .member_lifted_owner_source_fn_ty_payload = null,
         .target_key = .{
@@ -3178,7 +3618,7 @@ fn persistedSingletonAdapterBranches(
             .transform = undefined,
         },
     });
-    errdefer deinitPublishedFiniteSetEraseAdapterBranches(allocator, branches);
+    errdefer deinitSealedFiniteErasedAdapterMembers(allocator, members);
 
     const arg_transforms: []checked_artifact.PublishedExecutableValueTransformRef = if (target_key.exec_arg_tys.len == 0)
         &.{}
@@ -3186,11 +3626,10 @@ fn persistedSingletonAdapterBranches(
         try allocator.alloc(checked_artifact.PublishedExecutableValueTransformRef, target_key.exec_arg_tys.len);
     errdefer if (arg_transforms.len > 0) allocator.free(arg_transforms);
 
-    const provenance = [_]checked_artifact.BoxErasureProvenance{.{ .promoted_wrapper = owner_proc }};
     var planner = PublishedValueTransformPlanner{
         .allocator = allocator,
         .artifact = artifact,
-        .provenance = provenance[0..],
+        .provenance = transform_provenance,
     };
 
     for (target_key.exec_arg_tys, erased.executable_signature_payloads.erased_call_args, erased.executable_signature_payloads.erased_call_arg_keys, 0..) |target_arg_key, erased_arg_ty, erased_arg_key, i| {
@@ -3203,11 +3642,13 @@ fn persistedSingletonAdapterBranches(
         );
     }
 
-    branches[0] = .{
+    members[0] = .{
         .member = .{
             .callable_set_key = adapter.callable_set_key,
             .member_index = canonical.onlyCallableSetMemberId(),
         },
+        .source_proc = source_proc,
+        .proc_value = proc_value,
         .member_proc_source_fn_ty_payload = member_proc_source_fn_ty_payload,
         .member_lifted_owner_source_fn_ty_payload = member_lifted_owner_source_fn_ty_payload,
         .target_key = try repr.cloneExecutableSpecializationKey(allocator, target_key),
@@ -3221,7 +3662,7 @@ fn persistedSingletonAdapterBranches(
             },
         ),
     };
-    return branches;
+    return members;
 }
 
 fn erasedSignaturePayloadsWithHiddenCapture(
@@ -3268,9 +3709,6 @@ fn persistedSingletonAdapterMemberTarget(
     erased: checked_artifact.ErasedCallableResultPlan,
     original_target: canonical.ExecutableSpecializationKey,
 ) Allocator.Error!canonical.ExecutableSpecializationKey {
-    if (!std.meta.eql(proc_value.source_fn_ty.bytes, original_target.requested_fn_ty.bytes)) {
-        compileTimeFinalizationInvariant("persisted singleton adapter member source function type differs from original target");
-    }
     if (original_target.exec_arg_tys.len != erased.executable_signature_payloads.param_exec_ty_keys.len) {
         compileTimeFinalizationInvariant("persisted singleton adapter member arity differs from promoted executable signature");
     }
@@ -3385,6 +3823,12 @@ fn materializeErasedPromotedCapture(
             }
             break :blk .{ .zero_sized_typed = ty };
         },
+        .materialized_capture => |capture| blk: {
+            if (!std.meta.eql(capture.owner.bytes, artifact.key.bytes)) {
+                compileTimeFinalizationInvariant("erased callable materialized capture belongs to an unavailable artifact");
+            }
+            break :blk capture.capture;
+        },
         .whole_hidden_capture_value => |capture| blk: {
             const physical = erasedClosureHiddenCapturePhysical(
                 &lowered.lir_result.layouts,
@@ -3467,10 +3911,17 @@ fn materializedFiniteCallableSetValue(
     if (selected.descriptor_member.capture_slots.len != selected.planned_member.capture_slots.len) {
         compileTimeFinalizationInvariant("materialized finite erased capture selected member capture schema disagrees with result plan");
     }
+    if (selected.descriptor_member.published_proc_value == null) {
+        return try materializedFiniteCallableSetValueWithPromotedMember(
+            allocator,
+            lowered,
+            capture_builder,
+            result_plan,
+            selected,
+        );
+    }
     if (capture_builder.dependencies) |dependencies| {
-        const published_member_proc = selected.descriptor_member.published_proc_value orelse
-            compileTimeFinalizationInvariant("materialized finite callable set tried to persist a runtime-only procedure identity");
-        try dependencies.appendProcedureCallable(published_member_proc);
+        try dependencies.appendProcedureCallable(selected.descriptor_member.published_proc_value.?);
     }
     const captures = try allocator.alloc(checked_artifact.ErasedCaptureExecutableMaterializationPlan, selected.planned_member.capture_slots.len);
     errdefer allocator.free(captures);
@@ -3492,6 +3943,89 @@ fn materializedFiniteCallableSetValue(
     };
 }
 
+fn materializedFiniteCallableSetValueWithPromotedMember(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    capture_builder: *PrivateCaptureBuilder,
+    result_plan: checked_artifact.CallableResultPlanId,
+    selected: SelectedFiniteCallableResult,
+) Allocator.Error!checked_artifact.MaterializedFiniteCallableSetValue {
+    var context = capture_builder.promotion_context orelse
+        compileTimeFinalizationInvariant("materialized finite callable set promotion requires explicit promoted procedure provenance");
+    context.path = capture_builder.path;
+
+    const checked_fn_root = checkedResultPlanSourcePayload(
+        capture_builder.artifact,
+        selected.result_plan.source_fn_ty_payload,
+        selected.result_plan.source_fn_ty,
+    );
+    const published_member = try publishCallableResult(
+        allocator,
+        capture_builder.artifact,
+        lowered,
+        context,
+        checked_fn_root,
+        result_plan,
+        selected,
+    );
+    const source_proc = mirProcedureRefForPublishedCallable(published_member.proc_value);
+    var target_key = try promotedFiniteCallableMemberTargetKey(
+        allocator,
+        published_member.proc_value,
+        source_proc,
+        selected.planned_member.target,
+    );
+    defer repr.deinitExecutableSpecializationKey(allocator, &target_key);
+
+    const callable_set_key = persistedSingletonCallableSetKey(published_member.proc_value, source_proc, target_key);
+    try publishPersistedSingletonCallableSetDescriptor(
+        allocator,
+        capture_builder.artifact,
+        callable_set_key,
+        published_member.proc_value,
+        source_proc,
+    );
+    if (capture_builder.dependencies) |dependencies| try dependencies.appendProcedureCallable(published_member.proc_value);
+    return .{
+        .source_fn_ty = published_member.proc_value.source_fn_ty,
+        .callable_set_key = callable_set_key,
+        .selected_member = canonical.onlyCallableSetMemberId(),
+        .captures = &.{},
+    };
+}
+
+fn promotedFiniteCallableMemberTargetKey(
+    allocator: Allocator,
+    proc_value: canonical.ProcedureCallableRef,
+    source_proc: canonical.MirProcedureRef,
+    target: checked_artifact.CallableResultMemberTargetPlan,
+) Allocator.Error!canonical.ExecutableSpecializationKey {
+    const endpoint = callableResultMemberTargetEndpoint(target);
+    return .{
+        .base = source_proc.proc.proc_base,
+        .requested_fn_ty = proc_value.source_fn_ty,
+        .exec_arg_tys = try cloneExecValueTypeKeySlice(allocator, endpoint.exec_arg_tys),
+        .exec_ret_ty = endpoint.exec_ret_ty,
+        .callable_repr_mode = .direct,
+        .capture_shape_key = repr.captureShapeKeyForExecKeys(&.{}),
+    };
+}
+
+fn callableResultMemberTargetEndpoint(
+    target: checked_artifact.CallableResultMemberTargetPlan,
+) checked_artifact.ExecutableSpecializationEndpoint {
+    return switch (target) {
+        .artifact_owned => |key| .{
+            .requested_fn_ty = key.requested_fn_ty,
+            .exec_arg_tys = key.exec_arg_tys,
+            .exec_ret_ty = key.exec_ret_ty,
+            .callable_repr_mode = key.callable_repr_mode,
+            .capture_shape_key = key.capture_shape_key,
+        },
+        .member_proc_relative => |endpoint| endpoint,
+    };
+}
+
 fn materializedErasedCallableValue(
     capture_builder: *PrivateCaptureBuilder,
     erased: checked_artifact.ErasedCallableResultPlan,
@@ -3505,21 +4039,51 @@ fn materializedErasedCallableValue(
         layout_idx,
         value,
     );
+    switch (code) {
+        .direct_proc_value => {},
+        .finite_set_adapter => |adapter| {
+            var context = capture_builder.promotion_context orelse
+                compileTimeFinalizationInvariant("materialized erased callable finite adapter requires promotion context");
+            context.path = capture_builder.path;
+            const publication = try persistConcreteFiniteAdapterAsSingletonWithContext(
+                capture_builder.allocator,
+                capture_builder.artifact,
+                capture_builder.lowered,
+                context,
+                erased.provenance,
+                adapter,
+                erased,
+                layout_idx,
+                value,
+            );
+            var publication_owned = true;
+            errdefer if (publication_owned) deinitPersistedErasedCallablePublication(capture_builder.allocator, publication);
+            if (capture_builder.dependencies) |dependencies| try dependencies.collectSealedErasedCallableValue(publication.sealed);
+            const materialized = checked_artifact.MaterializedErasedCallableValue{
+                .sealed = publication.sealed,
+            };
+            publication_owned = false;
+            return materialized;
+        },
+    }
     if (capture_builder.dependencies) |dependencies| try dependencies.collectErasedCodeRef(code);
     return .{
-        .source_fn_ty = erased.source_fn_ty,
-        .sig_key = erased.sig_key,
-        .code = code,
-        .capture = try materializeErasedPromotedCapture(
-            capture_builder.allocator,
-            capture_builder.artifact,
-            capture_builder.lowered,
-            capture_builder,
-            erased,
-            layout_idx,
-            value,
-        ),
-        .provenance = try cloneBoxBoundarySpan(capture_builder.allocator, erased.provenance),
+        .sealed = .{
+            .boundary = try sealedErasedCallableBoundaryForResult(capture_builder.allocator, capture_builder.artifact, erased, erased.provenance),
+            .code = switch (code) {
+                .direct_proc_value => |direct| .{ .direct_proc = .{ .code = direct } },
+                .finite_set_adapter => compileTimeFinalizationInvariant("direct erased callable materialization reached finite adapter after adapter branch was handled"),
+            },
+            .capture = try materializeErasedPromotedCapture(
+                capture_builder.allocator,
+                capture_builder.artifact,
+                capture_builder.lowered,
+                capture_builder,
+                erased,
+                layout_idx,
+                value,
+            ),
+        },
     };
 }
 
@@ -3572,6 +4136,18 @@ fn finiteAdapterMemberTargetsForResolvedErasedCode(
     compileTimeFinalizationInvariant("finite erased callable code was not published in lowered code map");
 }
 
+fn validateLoweredFiniteAdapterMemberTarget(
+    member: repr.CanonicalCallableSetMember,
+    target: canonical.ExecutableSpecializationKey,
+) void {
+    if (member.source_proc.proc.proc_base != target.base) {
+        compileTimeFinalizationInvariant("lowered finite adapter member target base differs from descriptor member");
+    }
+    if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, target.requested_fn_ty)) {
+        compileTimeFinalizationInvariant("lowered finite adapter member target source type differs from procedure value");
+    }
+}
+
 fn erasedCallableCodeRefEql(a: canonical.ErasedCallableCodeRef, b: canonical.ErasedCallableCodeRef) bool {
     return switch (a) {
         .direct_proc_value => |left| switch (b) {
@@ -3609,6 +4185,113 @@ fn cloneExecutableSpecializationKeySlice(
         initialized += 1;
     }
     return out;
+}
+
+fn cloneSealedErasedCallableCode(
+    allocator: Allocator,
+    code: checked_artifact.SealedErasedCallableCode,
+) Allocator.Error!checked_artifact.SealedErasedCallableCode {
+    return switch (code) {
+        .direct_proc => |direct| .{ .direct_proc = direct },
+        .finite_adapter => |finite| .{ .finite_adapter = .{
+            .adapter_key = finite.adapter_key,
+            .members = try cloneSealedFiniteErasedAdapterMembers(allocator, finite.members),
+        } },
+    };
+}
+
+fn cloneSealedFiniteErasedAdapterMembers(
+    allocator: Allocator,
+    members: []const checked_artifact.SealedFiniteErasedAdapterMember,
+) Allocator.Error![]const checked_artifact.SealedFiniteErasedAdapterMember {
+    if (members.len == 0) return &.{};
+    const out = try allocator.alloc(checked_artifact.SealedFiniteErasedAdapterMember, members.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (out[0..initialized]) |member| deinitSealedFiniteErasedAdapterMemberPayloads(allocator, member);
+        allocator.free(out);
+    }
+    for (members, 0..) |member, i| {
+        out[i] = .{
+            .member = member.member,
+            .source_proc = member.source_proc,
+            .proc_value = member.proc_value,
+            .member_proc_source_fn_ty_payload = member.member_proc_source_fn_ty_payload,
+            .member_lifted_owner_source_fn_ty_payload = member.member_lifted_owner_source_fn_ty_payload,
+            .target_key = try repr.cloneExecutableSpecializationKey(allocator, member.target_key),
+            .arg_transforms = if (member.arg_transforms.len == 0)
+                &.{}
+            else
+                try allocator.dupe(checked_artifact.PublishedExecutableValueTransformRef, member.arg_transforms),
+            .capture_transforms = if (member.capture_transforms.len == 0)
+                &.{}
+            else
+                try allocator.dupe(checked_artifact.PublishedExecutableValueTransformRef, member.capture_transforms),
+            .result_transform = member.result_transform,
+        };
+        initialized += 1;
+    }
+    return out;
+}
+
+fn deinitSealedErasedCallableValue(
+    allocator: Allocator,
+    sealed: *checked_artifact.SealedErasedCallableValue,
+) void {
+    allocator.free(sealed.boundary.provenance);
+    switch (sealed.code) {
+        .direct_proc => {},
+        .finite_adapter => |finite| deinitSealedFiniteErasedAdapterMembers(allocator, finite.members),
+    }
+}
+
+fn deinitSealedFiniteErasedAdapterMembers(
+    allocator: Allocator,
+    members: []const checked_artifact.SealedFiniteErasedAdapterMember,
+) void {
+    for (members) |member| deinitSealedFiniteErasedAdapterMemberPayloads(allocator, member);
+    if (members.len > 0) allocator.free(members);
+}
+
+fn deinitSealedFiniteErasedAdapterMemberPayloads(
+    allocator: Allocator,
+    member: checked_artifact.SealedFiniteErasedAdapterMember,
+) void {
+    var target_key = member.target_key;
+    repr.deinitExecutableSpecializationKey(allocator, &target_key);
+    if (member.arg_transforms.len > 0) allocator.free(member.arg_transforms);
+    if (member.capture_transforms.len > 0) allocator.free(member.capture_transforms);
+}
+
+fn sealedErasedCallableBoundaryForResult(
+    allocator: Allocator,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    erased: checked_artifact.ErasedCallableResultPlan,
+    provenance: []const checked_artifact.BoxErasureProvenance,
+) Allocator.Error!checked_artifact.ErasedCallableBoundary {
+    const checked_fn_root = checkedResultPlanSourcePayload(artifact, erased.source_fn_ty_payload, erased.source_fn_ty);
+    return .{
+        .source_fn_ty = erased.source_fn_ty,
+        .checked_fn_root = checked_fn_root,
+        .sig_key = erased.sig_key,
+        .provenance = try cloneBoxBoundarySpan(allocator, provenance),
+    };
+}
+
+fn checkedResultPlanSourcePayload(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    payload: checked_artifact.CheckedTypeId,
+    expected: canonical.CanonicalTypeKey,
+) checked_artifact.CheckedTypeId {
+    const index = @intFromEnum(payload);
+    if (index >= artifact.checked_types.roots.len) {
+        compileTimeFinalizationInvariant("callable result source type payload referenced a missing checked root");
+    }
+    const actual = artifact.checked_types.roots[index].key;
+    if (!repr.canonicalTypeKeyEql(actual, expected)) {
+        compileTimeFinalizationInvariant("callable result source type payload key differs from result source type");
+    }
+    return payload;
 }
 
 fn cloneCallableResultMemberTargetPlanForSource(
@@ -3667,19 +4350,6 @@ fn deinitExecutableSpecializationKeySlice(
     if (keys.len > 0) allocator.free(keys);
 }
 
-fn deinitPublishedFiniteSetEraseAdapterBranches(
-    allocator: Allocator,
-    branches: []const checked_artifact.PublishedFiniteSetEraseAdapterBranchPlan,
-) void {
-    for (branches) |branch| {
-        var target_key = branch.target_key;
-        repr.deinitExecutableSpecializationKey(allocator, &target_key);
-        if (branch.arg_transforms.len > 0) allocator.free(branch.arg_transforms);
-        if (branch.capture_transforms.len > 0) allocator.free(branch.capture_transforms);
-    }
-    if (branches.len > 0) allocator.free(branches);
-}
-
 fn executableEndpointForKey(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     key: canonical.CanonicalExecValueTypeKey,
@@ -3699,9 +4369,6 @@ fn validateLoweredErasedCallableCodeEntry(
     erased: checked_artifact.ErasedCallableResultPlan,
     entry: lir.CheckedPipeline.LoweredErasedCallableCodeEntry,
 ) void {
-    if (!repr.canonicalTypeKeyEql(entry.source_fn_ty, erased.source_fn_ty)) {
-        compileTimeFinalizationInvariant("interpreted erased callable source function type differs from result plan");
-    }
     if (!repr.captureShapeKeyEql(entry.capture_shape_key, erased.executable_signature_payloads.capture_shape_key)) {
         compileTimeFinalizationInvariant("interpreted erased callable capture shape differs from result plan");
     }
@@ -3723,9 +4390,6 @@ fn validateLoweredErasedCallableCodeEntry(
 
     switch (entry.code) {
         .direct_proc_value => |direct| {
-            if (!repr.canonicalTypeKeyEql(direct.proc_value.source_fn_ty, erased.source_fn_ty)) {
-                compileTimeFinalizationInvariant("interpreted direct erased code source function type differs from result plan");
-            }
             if (!repr.captureShapeKeyEql(direct.capture_shape_key, entry.capture_shape_key)) {
                 compileTimeFinalizationInvariant("interpreted direct erased code capture shape differs from lowered entry");
             }
@@ -3734,11 +4398,16 @@ fn validateLoweredErasedCallableCodeEntry(
             if (entry.finite_adapter_member_targets.len == 0) {
                 compileTimeFinalizationInvariant("interpreted finite-set adapter code has no member targets");
             }
-            if (!repr.canonicalTypeKeyEql(adapter.source_fn_ty, erased.source_fn_ty)) {
-                compileTimeFinalizationInvariant("interpreted finite-set adapter source function type differs from result plan");
+            if (!canonical.erasedFnAbiKeyEql(adapter.erased_fn_sig_key.abi, erased.sig_key.abi)) {
+                compileTimeFinalizationInvariant("interpreted finite-set adapter erased ABI differs from result plan");
             }
-            if (!repr.erasedFnSigKeyEql(adapter.erased_fn_sig_key, erased.sig_key)) {
-                compileTimeFinalizationInvariant("interpreted finite-set adapter erased signature differs from result plan");
+            if ((adapter.erased_fn_sig_key.capture_ty == null) != (erased.sig_key.capture_ty == null)) {
+                compileTimeFinalizationInvariant("interpreted finite-set adapter hidden capture presence differs from result plan");
+            }
+            if (adapter.erased_fn_sig_key.capture_ty) |adapter_capture| {
+                if (!repr.canonicalExecValueTypeKeyEql(adapter_capture, erased.sig_key.capture_ty.?)) {
+                    compileTimeFinalizationInvariant("interpreted finite-set adapter hidden capture key differs from result plan");
+                }
             }
             if (!repr.captureShapeKeyEql(adapter.capture_shape_key, entry.capture_shape_key)) {
                 compileTimeFinalizationInvariant("interpreted finite-set adapter capture shape differs from lowered entry");
@@ -4197,16 +4866,23 @@ const PublishedValueTransformPlanner = struct {
         source: checked_artifact.ExecutableErasedFnPayload,
         target: checked_artifact.ExecutableErasedFnPayload,
     ) Allocator.Error!checked_artifact.ExecutableValueTransformPlanId {
-        if (!repr.erasedFnSigKeyEql(source.sig_key, target.sig_key)) {
-            compileTimeFinalizationInvariant("published erased-wrapper already-erased transform changed erased signature");
-        }
-        return try self.append(from, to, .none, .{ .already_erased_callable = .{ .sig_key = target.sig_key } });
+        const transform: checked_artifact.AlreadyErasedCallableTransformPlan = if (repr.erasedFnSigKeyEql(source.sig_key, target.sig_key))
+            .{ .exact = target.sig_key }
+        else if (canonical.erasedFnAbiKeyEql(source.sig_key.abi, target.sig_key.abi))
+            .{ .same_abi_retype = .{
+                .source_sig = source.sig_key,
+                .target_sig = target.sig_key,
+            } }
+        else
+            compileTimeFinalizationInvariant("published erased-wrapper already-erased transform changed erased ABI");
+        return try self.append(from, to, .none, .{ .already_erased_callable = transform });
     }
 
     fn localBoxBoundary(self: *PublishedValueTransformPlanner) ?canonical.BoxBoundaryId {
         for (self.provenance) |provenance| {
             switch (provenance) {
                 .local_box_boundary => |boundary| return boundary,
+                .const_graph_box => {},
                 .promoted_wrapper => {},
             }
         }
@@ -4317,6 +4993,43 @@ fn cloneBoxBoundarySpan(
         compileTimeFinalizationInvariant("erased callable publication had no Box(T) provenance");
     }
     return try allocator.dupe(checked_artifact.BoxErasureProvenance, provenance);
+}
+
+fn appendUniqueBoxErasureProvenance(
+    allocator: Allocator,
+    out: *std.ArrayList(checked_artifact.BoxErasureProvenance),
+    provenance: checked_artifact.BoxErasureProvenance,
+) Allocator.Error!void {
+    for (out.items) |existing| {
+        if (boxErasureProvenanceEql(existing, provenance)) return;
+    }
+    try out.append(allocator, provenance);
+}
+
+fn boxErasureProvenanceEql(
+    a: checked_artifact.BoxErasureProvenance,
+    b: checked_artifact.BoxErasureProvenance,
+) bool {
+    return switch (a) {
+        .local_box_boundary => |left| switch (b) {
+            .local_box_boundary => |right| left == right,
+            .const_graph_box,
+            .promoted_wrapper,
+            => false,
+        },
+        .const_graph_box => |left| switch (b) {
+            .const_graph_box => |right| std.meta.eql(left.artifact, right.artifact) and left.box_plan == right.box_plan,
+            .local_box_boundary,
+            .promoted_wrapper,
+            => false,
+        },
+        .promoted_wrapper => |left| switch (b) {
+            .local_box_boundary,
+            .const_graph_box,
+            => false,
+            .promoted_wrapper => |right| canonical.mirProcedureRefEql(left, right),
+        },
+    };
 }
 
 fn promotedWrapperParamsForFnRoot(
@@ -4621,7 +5334,7 @@ const PrivateCaptureBuilder = struct {
             leaf.source_scheme,
         );
 
-        var leaf_dependencies = ConcreteDependencyCollector.init(self.allocator, self.artifact);
+        var leaf_dependencies = ConcreteDependencyCollector.init(self.allocator, self.artifact, self.lowered);
         defer leaf_dependencies.deinit();
 
         var reifier = ComptimeReifier{
@@ -4694,7 +5407,7 @@ const PrivateCaptureBuilder = struct {
         leaf: checked_artifact.SerializableCaptureLeafPlan,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
-        var leaf_dependencies = ConcreteDependencyCollector.init(self.allocator, self.artifact);
+        var leaf_dependencies = ConcreteDependencyCollector.init(self.allocator, self.artifact, self.lowered);
         defer leaf_dependencies.deinit();
 
         var reifier = ComptimeReifier{
@@ -4780,9 +5493,11 @@ const PrivateCaptureBuilder = struct {
                     physical.layout_idx,
                     physical.value,
                 );
-                const checked_fn_root = self.artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
-                    compileTimeFinalizationInvariant("captured finite callable leaf source function type was not published in checked type store");
-                };
+                const checked_fn_root = checkedResultPlanSourcePayload(
+                    self.artifact,
+                    selected.result_plan.source_fn_ty_payload,
+                    selected.result_plan.source_fn_ty,
+                );
                 break :blk try publishCallableResult(
                     self.allocator,
                     self.artifact,
@@ -4794,9 +5509,11 @@ const PrivateCaptureBuilder = struct {
                 );
             },
             .erased => |erased| blk: {
-                const checked_fn_root = self.artifact.checked_types.rootForKey(erased.source_fn_ty) orelse {
-                    compileTimeFinalizationInvariant("captured erased callable leaf source function type was not published in checked type store");
-                };
+                const checked_fn_root = checkedResultPlanSourcePayload(
+                    self.artifact,
+                    erased.source_fn_ty_payload,
+                    erased.source_fn_ty,
+                );
                 break :blk try publishErasedCallableResult(
                     self.allocator,
                     self.artifact,
@@ -5215,6 +5932,34 @@ fn runtimeCallableSetMember(
     return null;
 }
 
+fn selectedDescriptorMemberFromRuntime(
+    member: repr.CanonicalCallableSetMember,
+) SelectedCallableDescriptorMember {
+    return .{
+        .member = member.member,
+        .proc_value = member.proc_value,
+        .source_proc = member.source_proc,
+        .published_proc_value = member.published_proc_value,
+        .published_source_proc = member.published_source_proc,
+        .capture_slots = member.capture_slots,
+        .capture_shape_key = member.capture_shape_key,
+    };
+}
+
+fn selectedDescriptorMemberFromPersisted(
+    member: canonical.CanonicalCallableSetMember,
+) SelectedCallableDescriptorMember {
+    return .{
+        .member = member.member,
+        .proc_value = member.proc_value,
+        .source_proc = member.source_proc,
+        .published_proc_value = member.proc_value,
+        .published_source_proc = member.source_proc,
+        .capture_slots = member.capture_slots,
+        .capture_shape_key = member.capture_shape_key,
+    };
+}
+
 fn persistedCallableSetDescriptor(
     descriptors: []const check.CanonicalNames.CanonicalCallableSetDescriptor,
     key: check.CanonicalNames.CanonicalCallableSetKey,
@@ -5353,6 +6098,7 @@ const ComptimeReifier = struct {
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor,
     active_schemas: std.AutoHashMap(checked_artifact.ConstGraphReificationPlanId, checked_artifact.ComptimeSchemaId),
     promotion_context: ?PromotedCallablePublicationContext = null,
+    current_box_erasure_witness: ?checked_artifact.ConstGraphBoxErasureWitness = null,
     path: ReificationPathKey = .{},
     dependencies: ?*ConcreteDependencyCollector = null,
 
@@ -5385,7 +6131,7 @@ const ComptimeReifier = struct {
             .scalar => self.reifyScalar(layout_idx, value),
             .string => self.reifyStr(layout_idx, value),
             .list => |list| self.reifyListPlan(list.elem, layout_idx, value),
-            .box => |box| self.reifyBoxPlan(box.payload, layout_idx, value),
+            .box => |box| self.reifyBoxPlan(plan_id, box.payload, layout_idx, value),
             .tuple => |items| self.reifyTuplePlan(items, layout_idx, value),
             .record => |fields| self.reifyRecordPlan(fields, layout_idx, value),
             .tag_union => |variants| self.reifyTagUnionPlan(variants, layout_idx, value),
@@ -5527,20 +6273,55 @@ const ComptimeReifier = struct {
                     layout_idx,
                     value,
                 );
-                if (self.dependencies) |dependencies| try dependencies.collectErasedCodeRef(code);
-                const callable_leaf = checked_artifact.CallableLeafInstance{ .erased_boxed = .{
-                    .source_fn_ty = erased.source_fn_ty,
-                    .sig_key = erased.sig_key,
-                    .provenance = try cloneBoxBoundarySpan(self.allocator, erased.provenance),
-                    .code = code,
-                    .capture = try self.materializeErasedCallableLeafCapture(erased, layout_idx, value),
-                } };
+                const provenance = try self.persistedErasedCallableProvenance(erased.provenance);
+                var provenance_owned = true;
+                errdefer if (provenance_owned) self.allocator.free(provenance);
+                const callable_leaf = try self.materializeErasedCallableLeafInstance(
+                    erased,
+                    code,
+                    provenance,
+                    layout_idx,
+                    value,
+                );
+                self.allocator.free(provenance);
+                provenance_owned = false;
+                if (self.dependencies) |dependencies| try dependencies.appendCallableLeafInstance(callable_leaf);
                 break :blk .{
                     .schema = try self.values.addSchema(.{ .callable = erased.source_fn_ty }),
                     .value = try self.values.addValue(.{ .callable = callable_leaf }),
                 };
             },
         };
+    }
+
+    fn persistedErasedCallableProvenance(
+        self: *ComptimeReifier,
+        provenance: []const checked_artifact.BoxErasureProvenance,
+    ) Allocator.Error![]const checked_artifact.BoxErasureProvenance {
+        if (provenance.len == 0) {
+            compileTimeFinalizationInvariant("erased callable publication had no Box(T) provenance");
+        }
+
+        var out = std.ArrayList(checked_artifact.BoxErasureProvenance).empty;
+        errdefer out.deinit(self.allocator);
+        for (provenance) |item| {
+            const persisted: checked_artifact.BoxErasureProvenance = switch (item) {
+                .local_box_boundary => blk: {
+                    const witness = self.current_box_erasure_witness orelse {
+                        compileTimeFinalizationInvariant("erased callable leaf attempted to persist session-local BoxBoundaryId outside a const-graph Box(T) reification");
+                    };
+                    break :blk .{ .const_graph_box = witness };
+                },
+                .const_graph_box,
+                .promoted_wrapper,
+                => item,
+            };
+            try appendUniqueBoxErasureProvenance(self.allocator, &out, persisted);
+        }
+        if (out.items.len == 0) {
+            compileTimeFinalizationInvariant("erased callable publication normalized to empty Box(T) provenance");
+        }
+        return try out.toOwnedSlice(self.allocator);
     }
 
     fn materializeErasedCallableLeafCapture(
@@ -5575,6 +6356,52 @@ const ComptimeReifier = struct {
         );
     }
 
+    fn materializeErasedCallableLeafInstance(
+        self: *ComptimeReifier,
+        erased: checked_artifact.ErasedCallableResultPlan,
+        code: canonical.ErasedCallableCodeRef,
+        provenance: []const checked_artifact.BoxErasureProvenance,
+        layout_idx: layout_mod.Idx,
+        value: Value,
+    ) Allocator.Error!checked_artifact.CallableLeafInstance {
+        switch (code) {
+            .direct_proc_value => return .{ .erased_boxed = .{
+                .sealed = .{
+                    .boundary = try sealedErasedCallableBoundaryForResult(self.allocator, self.artifact.?, erased, provenance),
+                    .code = switch (code) {
+                        .direct_proc_value => |direct| .{ .direct_proc = .{ .code = direct } },
+                        .finite_set_adapter => unreachable,
+                    },
+                    .capture = try self.materializeErasedCallableLeafCapture(erased, layout_idx, value),
+                },
+            } },
+            .finite_set_adapter => |adapter| {
+                const artifact = self.artifact orelse reifierInvariant("erased boxed callable finite adapter reification requires mutable checked artifact");
+                const lowered = self.lowered orelse reifierInvariant("erased boxed callable finite adapter reification requires lowered LIR context");
+                var context = self.promotion_context orelse reifierInvariant("erased boxed callable finite adapter reification requires promotion context");
+                context.path = self.path;
+                const publication = try persistConcreteFiniteAdapterAsSingletonWithContext(
+                    self.allocator,
+                    artifact,
+                    lowered,
+                    context,
+                    provenance,
+                    adapter,
+                    erased,
+                    layout_idx,
+                    value,
+                );
+                var publication_owned = true;
+                errdefer if (publication_owned) deinitPersistedErasedCallablePublication(self.allocator, publication);
+                const leaf = checked_artifact.CallableLeafInstance{ .erased_boxed = .{
+                    .sealed = publication.sealed,
+                } };
+                publication_owned = false;
+                return leaf;
+            },
+        }
+    }
+
     fn schemaForCallableLeaf(
         self: *ComptimeReifier,
         leaf: checked_artifact.CallableLeafReificationPlan,
@@ -5605,9 +6432,11 @@ const ComptimeReifier = struct {
         const lowered = self.lowered orelse reifierInvariant("captured callable leaf reification requires lowered LIR context");
         var context = self.promotion_context orelse reifierInvariant("captured callable leaf reification requires explicit promoted procedure provenance");
         context.path = self.path;
-        const checked_fn_root = artifact.checked_types.rootForKey(selected.result_plan.source_fn_ty) orelse {
-            reifierInvariant("captured callable leaf source function type was not published in checked type store");
-        };
+        const checked_fn_root = checkedResultPlanSourcePayload(
+            artifact,
+            selected.result_plan.source_fn_ty_payload,
+            selected.result_plan.source_fn_ty,
+        );
         const published = try publishCallableResult(
             self.allocator,
             artifact,
@@ -5696,32 +6525,41 @@ const ComptimeReifier = struct {
 
     fn reifyBoxPlan(
         self: *ComptimeReifier,
+        box_plan_id: checked_artifact.ConstGraphReificationPlanId,
         payload_plan: checked_artifact.ConstGraphReificationPlanId,
         layout_idx: layout_mod.Idx,
         value: Value,
     ) Allocator.Error!ReifiedValue {
         const layout = self.layouts.getLayout(layout_idx);
-        const elem_layout_idx = switch (layout.tag) {
-            .box => layout.data.box,
-            .box_of_zst => layout_mod.Idx.zst,
-            else => reifierInvariant("Box(T) const graph plan did not lower to box layout"),
+        const payload = switch (layout.tag) {
+            .box => PhysicalValue{
+                .layout_idx = layout.data.box,
+                .value = .{ .ptr = value.read(?[*]u8) orelse reifierInvariant("Box(T) value had null payload pointer") },
+            },
+            .box_of_zst => PhysicalValue{
+                .layout_idx = layout_mod.Idx.zst,
+                .value = Value.zst,
+            },
+            .erased_callable => PhysicalValue{
+                .layout_idx = layout_idx,
+                .value = value,
+            },
+            else => reifierInvariant("Box(T) const graph plan did not lower to box or erased-callable layout"),
         };
-        const child = if (layout.tag == .box_of_zst)
-            try self.reifyPlanAtPath(
-                reificationPathWithU32(self.path, "box-payload", 0),
-                payload_plan,
-                elem_layout_idx,
-                Value.zst,
-            )
-        else blk: {
-            const payload = value.read(?[*]u8) orelse reifierInvariant("Box(T) value had null payload pointer");
-            break :blk try self.reifyPlanAtPath(
-                reificationPathWithU32(self.path, "box-payload", 0),
-                payload_plan,
-                elem_layout_idx,
-                .{ .ptr = payload },
-            );
-        };
+        const previous_witness = self.current_box_erasure_witness;
+        if (self.artifact) |artifact| {
+            self.current_box_erasure_witness = .{
+                .artifact = artifact.key,
+                .box_plan = box_plan_id,
+            };
+        }
+        defer self.current_box_erasure_witness = previous_witness;
+        const child = try self.reifyPlanAtPath(
+            reificationPathWithU32(self.path, "box-payload", 0),
+            payload_plan,
+            payload.layout_idx,
+            payload.value,
+        );
         return .{
             .schema = try self.values.addSchema(.{ .box = child.schema }),
             .value = try self.values.addValue(.{ .box = child.value }),
@@ -6150,7 +6988,7 @@ fn callableLeafSourceFnTy(
 ) check.CanonicalNames.CanonicalTypeKey {
     return switch (leaf) {
         .finite => |finite| finite.proc_value.source_fn_ty,
-        .erased_boxed => |erased| erased.source_fn_ty,
+        .erased_boxed => |erased| erased.sealed.boundary.source_fn_ty,
     };
 }
 

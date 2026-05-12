@@ -5287,6 +5287,51 @@ pub const PublishedFiniteSetEraseAdapterBranchPlan = struct {
     result_transform: PublishedExecutableValueTransformRef,
 };
 
+/// Public `ErasedCallableBoundary` declaration.
+pub const ErasedCallableBoundary = struct {
+    source_fn_ty: canonical.CanonicalTypeKey,
+    checked_fn_root: CheckedTypeId,
+    sig_key: canonical.ErasedFnSigKey,
+    provenance: []const BoxErasureProvenance,
+};
+
+/// Public `SealedDirectErasedProc` declaration.
+pub const SealedDirectErasedProc = struct {
+    code: canonical.ErasedDirectProcCodeRef,
+};
+
+/// Public `SealedFiniteErasedAdapterMember` declaration.
+pub const SealedFiniteErasedAdapterMember = struct {
+    member: canonical.CallableSetMemberRef,
+    source_proc: canonical.MirProcedureRef,
+    proc_value: canonical.ProcedureCallableRef,
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
+    target_key: canonical.ExecutableSpecializationKey,
+    arg_transforms: []const PublishedExecutableValueTransformRef = &.{},
+    capture_transforms: []const PublishedExecutableValueTransformRef = &.{},
+    result_transform: PublishedExecutableValueTransformRef,
+};
+
+/// Public `SealedFiniteErasedAdapter` declaration.
+pub const SealedFiniteErasedAdapter = struct {
+    adapter_key: canonical.ErasedAdapterKey,
+    members: []const SealedFiniteErasedAdapterMember,
+};
+
+/// Public `SealedErasedCallableCode` declaration.
+pub const SealedErasedCallableCode = union(enum) {
+    direct_proc: SealedDirectErasedProc,
+    finite_adapter: SealedFiniteErasedAdapter,
+};
+
+/// Public `SealedErasedCallableValue` declaration.
+pub const SealedErasedCallableValue = struct {
+    boundary: ErasedCallableBoundary,
+    code: SealedErasedCallableCode,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+};
+
 /// Public `ProcValueToErasedPlan` declaration.
 pub const ProcValueToErasedPlan = struct {
     proc_value: canonical.ProcedureCallableRef,
@@ -5297,14 +5342,35 @@ pub const ProcValueToErasedPlan = struct {
 };
 
 /// Public `AlreadyErasedCallableTransformPlan` declaration.
-pub const AlreadyErasedCallableTransformPlan = struct {
-    sig_key: canonical.ErasedFnSigKey,
+pub const AlreadyErasedCallableTransformPlan = union(enum) {
+    /// Source and target endpoints have the same erased source function type
+    /// and erased ABI. Lowering verifies both endpoints against this signature.
+    exact: canonical.ErasedFnSigKey,
+
+    /// Source and target endpoints use the same erased ABI but have different
+    /// canonical source function identities, for example a transparent function
+    /// type alias versus its expanded function type. This is a typed executable
+    /// reclassification of the same runtime erased callable value; it must not
+    /// allocate, repack, or synthesize an adapter.
+    same_abi_retype: struct {
+        source_sig: canonical.ErasedFnSigKey,
+        target_sig: canonical.ErasedFnSigKey,
+    },
+};
+
+/// Public `ConstGraphBoxErasureWitness` declaration.
+pub const ConstGraphBoxErasureWitness = struct {
+    artifact: CheckedModuleArtifactKey,
+    box_plan: ConstGraphReificationPlanId,
 };
 
 /// Public `BoxErasureProvenance` declaration.
 pub const BoxErasureProvenance = union(enum) {
     /// Local Box(T) boundary from the representation solve session that created the erased value.
+    /// This is not artifact-stable and must not be stored in compile-time values.
     local_box_boundary: canonical.BoxBoundaryId,
+    /// Stable checked-artifact Box(T) witness for an already-reified compile-time value.
+    const_graph_box: ConstGraphBoxErasureWitness,
     /// Promoted executable wrapper whose sealed plan already carries Box(T) erasure authorization.
     promoted_wrapper: canonical.MirProcedureRef,
 };
@@ -5365,6 +5431,7 @@ pub const ExecutableValueTransformPlanStore = struct {
                     .box_erasure => {},
                     .none => std.debug.panic("checked artifact invariant violated: callable-to-erased transform has no Box(T) provenance", .{}),
                 },
+                .already_erased_callable => |erased| verifyAlreadyErasedCallableTransformPlan(payloads, plan, erased),
                 else => {},
             }
             verifyExecutableValueTransformOp(self, plan.op);
@@ -5855,6 +5922,12 @@ pub const ErasedCaptureExecutableMaterializationPlan = union(enum) {
     node: ErasedCaptureExecutableMaterializationNodeId,
 };
 
+/// Public `ArtifactErasedCaptureMaterializationRef` declaration.
+pub const ArtifactErasedCaptureMaterializationRef = struct {
+    owner: CheckedModuleArtifactKey,
+    capture: ErasedCaptureExecutableMaterializationPlan,
+};
+
 /// Public `NoReachableCallableSlotsProof` declaration.
 pub const NoReachableCallableSlotsProof = enum {
     checked_artifact_verified,
@@ -5901,11 +5974,7 @@ pub const MaterializedFiniteCallableSetValue = struct {
 
 /// Public `MaterializedErasedCallableValue` declaration.
 pub const MaterializedErasedCallableValue = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    sig_key: canonical.ErasedFnSigKey,
-    code: canonical.ErasedCallableCodeRef,
-    capture: ErasedCaptureExecutableMaterializationPlan,
-    provenance: []const BoxErasureProvenance,
+    sealed: SealedErasedCallableValue,
 };
 
 /// Public `ErasedCaptureExecutableMaterializationNode` declaration.
@@ -5930,18 +5999,12 @@ pub const ErasedCaptureExecutableMaterializationNode = union(enum) {
 
 /// Public `ErasedPromotedWrapperBodyPlan` declaration.
 pub const ErasedPromotedWrapperBodyPlan = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
+    sealed: SealedErasedCallableValue,
     params: []const PromotedWrapperParam = &.{},
     executable_signature: ErasedPromotedProcedureExecutableSignature,
-    sig_key: canonical.ErasedFnSigKey,
-    code: canonical.ErasedCallableCodeRef,
-    finite_adapter_member_targets: []const canonical.ExecutableSpecializationKey = &.{},
-    finite_adapter_branches: []const PublishedFiniteSetEraseAdapterBranchPlan = &.{},
-    capture: ErasedCaptureExecutableMaterializationPlan,
     arg_transforms: []const PublishedExecutableValueTransformRef = &.{},
     hidden_capture_arg: ErasedHiddenCaptureArgPlan = .none,
     result_transform: PublishedExecutableValueTransformRef,
-    provenance: []const BoxErasureProvenance,
 };
 
 /// Public `PromotedCallableBodyPlan` declaration.
@@ -9516,6 +9579,14 @@ const PlatformAppRelationTypeResolver = struct {
             return try self.mergeIdentityWith(app_root, platform_root, platform_payload, context);
         }
 
+        switch (platform_payload) {
+            .alias => {},
+            else => switch (app_payload) {
+                .alias => |alias| return try self.merge(platform_root, alias.backing, context),
+                else => {},
+            },
+        }
+
         return switch (platform_payload) {
             .pending => checkedArtifactInvariant("platform/app relation merge reached pending platform payload", .{}),
             .flex, .rigid => unreachable,
@@ -11100,11 +11171,7 @@ pub const FiniteCallableLeafInstance = struct {
 
 /// Public `ErasedCallableLeafInstance` declaration.
 pub const ErasedCallableLeafInstance = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    sig_key: canonical.ErasedFnSigKey,
-    provenance: []const BoxErasureProvenance,
-    code: canonical.ErasedCallableCodeRef,
-    capture: ErasedCaptureExecutableMaterializationPlan,
+    sealed: SealedErasedCallableValue,
 };
 
 /// Public `CallableLeafInstance` declaration.
@@ -11269,6 +11336,7 @@ pub const CallableResultMemberPlan = struct {
 /// Public `FiniteCallableResultPlan` declaration.
 pub const FiniteCallableResultPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
+    source_fn_ty_payload: CheckedTypeId,
     callable_set_key: canonical.CanonicalCallableSetKey,
     members: []const CallableResultMemberPlan,
 };
@@ -11277,6 +11345,7 @@ pub const FiniteCallableResultPlan = struct {
 pub const ErasedCaptureReificationPlan = union(enum) {
     none,
     zero_sized_typed: canonical.CanonicalExecValueTypeKey,
+    materialized_capture: ArtifactErasedCaptureMaterializationRef,
     whole_hidden_capture_value: ErasedCaptureSlotReificationRef,
     proc_capture_tuple: []const ErasedCaptureSlotReificationRef,
     finite_callable_set_value: CallableResultPlanId,
@@ -11297,6 +11366,7 @@ pub const ErasedCallableResultCodePlan = union(enum) {
 /// Public `ErasedCallableResultPlan` declaration.
 pub const ErasedCallableResultPlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
+    source_fn_ty_payload: CheckedTypeId,
     sig_key: canonical.ErasedFnSigKey,
     provenance: []const BoxErasureProvenance,
     code_plan: ErasedCallableResultCodePlan,
@@ -11689,10 +11759,7 @@ fn deinitCallableLeafReificationPlan(allocator: Allocator, leaf: *CallableLeafRe
 fn deinitCallableLeafInstance(allocator: Allocator, leaf: *CallableLeafInstance) void {
     switch (leaf.*) {
         .finite => {},
-        .erased_boxed => |erased| {
-            allocator.free(erased.provenance);
-            deinitErasedCaptureExecutableMaterializationPlan(allocator, erased.capture);
-        },
+        .erased_boxed => |*erased| deinitSealedErasedCallableValue(allocator, &erased.sealed),
     }
 }
 
@@ -11700,6 +11767,7 @@ fn deinitErasedCaptureReificationPlan(allocator: Allocator, capture: ErasedCaptu
     switch (capture) {
         .none,
         .zero_sized_typed,
+        .materialized_capture,
         .whole_hidden_capture_value,
         .finite_callable_set_value,
         => {},
@@ -11728,8 +11796,28 @@ fn deinitMaterializedFiniteCallableSetValue(allocator: Allocator, finite: *Mater
 }
 
 fn deinitMaterializedErasedCallableValue(allocator: Allocator, erased: *MaterializedErasedCallableValue) void {
-    allocator.free(erased.provenance);
-    deinitErasedCaptureExecutableMaterializationPlan(allocator, erased.capture);
+    deinitSealedErasedCallableValue(allocator, &erased.sealed);
+}
+
+fn deinitSealedErasedCallableValue(allocator: Allocator, sealed: *SealedErasedCallableValue) void {
+    allocator.free(sealed.boundary.provenance);
+    deinitSealedErasedCallableCode(allocator, &sealed.code);
+    deinitErasedCaptureExecutableMaterializationPlan(allocator, sealed.capture);
+}
+
+fn deinitSealedErasedCallableCode(allocator: Allocator, code: *SealedErasedCallableCode) void {
+    switch (code.*) {
+        .direct_proc => {},
+        .finite_adapter => |finite| {
+            for (finite.members) |member| {
+                var target_key = member.target_key;
+                deinitExecutableSpecializationKey(allocator, &target_key);
+                if (member.arg_transforms.len > 0) allocator.free(member.arg_transforms);
+                if (member.capture_transforms.len > 0) allocator.free(member.capture_transforms);
+            }
+            if (finite.members.len > 0) allocator.free(finite.members);
+        },
+    }
 }
 
 fn deinitErasedCaptureExecutableMaterializationNode(allocator: Allocator, node: *ErasedCaptureExecutableMaterializationNode) void {
@@ -11853,12 +11941,10 @@ fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableB
         .erased => |erased| {
             var signature = erased.executable_signature;
             deinitErasedPromotedProcedureExecutableSignature(allocator, &signature);
-            deinitExecutableSpecializationKeySlice(allocator, erased.finite_adapter_member_targets);
-            deinitPublishedFiniteSetEraseAdapterBranches(allocator, erased.finite_adapter_branches);
             allocator.free(erased.params);
             allocator.free(erased.arg_transforms);
-            allocator.free(erased.provenance);
-            deinitErasedCaptureExecutableMaterializationPlan(allocator, erased.capture);
+            var sealed = erased.sealed;
+            deinitSealedErasedCallableValue(allocator, &sealed);
             deinitErasedHiddenCaptureArgPlan(allocator, erased.hidden_capture_arg);
         },
     }
@@ -11902,6 +11988,54 @@ fn canonicalExecValueTypeKeyEql(a: canonical.CanonicalExecValueTypeKey, b: canon
 
 fn captureShapeKeyEql(a: canonical.CaptureShapeKey, b: canonical.CaptureShapeKey) bool {
     return std.meta.eql(a.bytes, b.bytes);
+}
+
+fn erasedFnAbiKeyEql(a: canonical.ErasedFnAbiKey, b: canonical.ErasedFnAbiKey) bool {
+    return std.meta.eql(a.bytes, b.bytes);
+}
+
+fn erasedFnSigKeyEql(a: canonical.ErasedFnSigKey, b: canonical.ErasedFnSigKey) bool {
+    return canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty) and erasedFnAbiKeyEql(a.abi, b.abi);
+}
+
+fn verifyAlreadyErasedCallableTransformPlan(
+    payloads: *const ExecutableTypePayloadStore,
+    plan: ExecutableValueTransformPlan,
+    erased: AlreadyErasedCallableTransformPlan,
+) void {
+    const source = switch (payloads.get(plan.from.ty.payload)) {
+        .erased_fn => |payload| payload,
+        else => std.debug.panic("checked artifact invariant violated: already-erased transform source endpoint is not erased", .{}),
+    };
+    const target = switch (payloads.get(plan.to.ty.payload)) {
+        .erased_fn => |payload| payload,
+        else => std.debug.panic("checked artifact invariant violated: already-erased transform target endpoint is not erased", .{}),
+    };
+
+    switch (erased) {
+        .exact => |sig_key| {
+            if (!erasedFnSigKeyEql(source.sig_key, sig_key)) {
+                std.debug.panic("checked artifact invariant violated: already-erased exact transform source signature differs", .{});
+            }
+            if (!erasedFnSigKeyEql(target.sig_key, sig_key)) {
+                std.debug.panic("checked artifact invariant violated: already-erased exact transform target signature differs", .{});
+            }
+        },
+        .same_abi_retype => |retype| {
+            if (!erasedFnSigKeyEql(source.sig_key, retype.source_sig)) {
+                std.debug.panic("checked artifact invariant violated: already-erased retype source signature differs", .{});
+            }
+            if (!erasedFnSigKeyEql(target.sig_key, retype.target_sig)) {
+                std.debug.panic("checked artifact invariant violated: already-erased retype target signature differs", .{});
+            }
+            if (!erasedFnAbiKeyEql(retype.source_sig.abi, retype.target_sig.abi)) {
+                std.debug.panic("checked artifact invariant violated: already-erased retype changed erased ABI", .{});
+            }
+            if (canonicalTypeKeyEql(retype.source_sig.source_fn_ty, retype.target_sig.source_fn_ty)) {
+                std.debug.panic("checked artifact invariant violated: already-erased retype did not change source function identity", .{});
+            }
+        },
+    }
 }
 
 fn callableSetCaptureSlotEql(a: canonical.CallableSetCaptureSlot, b: canonical.CallableSetCaptureSlot) bool {
@@ -11990,6 +12124,7 @@ fn verifyCallableResultPlan(
             if (finite.members.len == 0) {
                 std.debug.panic("checked artifact invariant violated: finite callable result plan has no members", .{});
             }
+            verifyCheckedTypePayloadKey(checked_types, finite.source_fn_ty_payload, finite.source_fn_ty, "finite callable result source type payload differs from result source type");
             for (finite.members) |member| {
                 verifyCheckedTypePayloadKey(checked_types, member.member_proc_source_fn_ty_payload, member.member_proc.source_fn_ty, "finite callable result member proc source type payload differs from member proc source type");
                 switch (member.member_proc.template) {
@@ -12015,6 +12150,7 @@ fn verifyCallableResultPlan(
             if (erased.provenance.len == 0) {
                 std.debug.panic("checked artifact invariant violated: erased callable result plan has no Box(T) provenance", .{});
             }
+            verifyCheckedTypePayloadKey(checked_types, erased.source_fn_ty_payload, erased.source_fn_ty, "erased callable result source type payload differs from result source type");
             if (!std.meta.eql(erased.source_fn_ty.bytes, erased.sig_key.source_fn_ty.bytes)) {
                 std.debug.panic("checked artifact invariant violated: erased callable result source type differs from signature source type", .{});
             }
@@ -12023,19 +12159,18 @@ fn verifyCallableResultPlan(
             }
             switch (erased.code_plan) {
                 .materialized_by_lowering => |code| switch (code) {
-                    .direct_proc_value => |direct| {
-                        if (!std.meta.eql(direct.proc_value.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
-                            std.debug.panic("checked artifact invariant violated: direct erased result code source type differs from result source type", .{});
-                        }
-                    },
+                    .direct_proc_value => {},
                     .finite_set_adapter => |adapter| {
-                        if (!std.meta.eql(adapter.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
-                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code source type differs from result source type", .{});
+                        if (!std.meta.eql(adapter.erased_fn_sig_key.abi.bytes, erased.sig_key.abi.bytes)) {
+                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code ABI differs from result signature", .{});
                         }
-                        if (!std.meta.eql(adapter.erased_fn_sig_key.source_fn_ty.bytes, erased.sig_key.source_fn_ty.bytes) or
-                            !std.meta.eql(adapter.erased_fn_sig_key.abi.bytes, erased.sig_key.abi.bytes))
-                        {
-                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code signature differs from result signature", .{});
+                        if ((adapter.erased_fn_sig_key.capture_ty == null) != (erased.sig_key.capture_ty == null)) {
+                            std.debug.panic("checked artifact invariant violated: finite adapter erased result capture presence differs from result signature", .{});
+                        }
+                        if (adapter.erased_fn_sig_key.capture_ty) |adapter_capture| {
+                            if (!std.meta.eql(adapter_capture.bytes, erased.sig_key.capture_ty.?.bytes)) {
+                                std.debug.panic("checked artifact invariant violated: finite adapter erased result capture key differs from result signature", .{});
+                            }
                         }
                     },
                 },
@@ -12048,6 +12183,7 @@ fn verifyCallableResultPlan(
                 .whole_hidden_capture_value => |value| verifyErasedCaptureSlotReificationRef(store, value),
                 .proc_capture_tuple => |values| for (values) |value| verifyErasedCaptureSlotReificationRef(store, value),
                 .finite_callable_set_value => |result| verifyCallableResultRef(store, result),
+                .materialized_capture => {},
             }
         },
     }
@@ -12145,12 +12281,7 @@ fn verifyCallableLeafInstance(
 ) void {
     switch (leaf) {
         .finite => {},
-        .erased_boxed => |erased| {
-            if (erased.provenance.len == 0) {
-                std.debug.panic("checked artifact invariant violated: erased callable leaf has no Box(T) provenance", .{});
-            }
-            verifyErasedCaptureExecutableMaterializationPlan(store, erased.capture);
-        },
+        .erased_boxed => |erased| verifySealedErasedCallableValue(store, erased.sealed),
     }
 }
 
@@ -12190,10 +12321,65 @@ fn verifyMaterializedErasedCallableValue(
     store: *const CompileTimePlanStore,
     erased: MaterializedErasedCallableValue,
 ) void {
-    if (erased.provenance.len == 0) {
-        std.debug.panic("checked artifact invariant violated: materialized erased callable value has no Box(T) provenance", .{});
+    verifySealedErasedCallableValue(store, erased.sealed);
+}
+
+fn verifySealedErasedCallableValue(
+    store: *const CompileTimePlanStore,
+    sealed: SealedErasedCallableValue,
+) void {
+    if (sealed.boundary.provenance.len == 0) {
+        std.debug.panic("checked artifact invariant violated: sealed erased callable has no Box(T) provenance", .{});
     }
-    verifyErasedCaptureExecutableMaterializationPlan(store, erased.capture);
+    if (!std.meta.eql(sealed.boundary.sig_key.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
+        std.debug.panic("checked artifact invariant violated: sealed erased callable signature source type differs from boundary", .{});
+    }
+    for (sealed.boundary.provenance) |provenance| {
+        switch (provenance) {
+            .local_box_boundary => std.debug.panic("checked artifact invariant violated: sealed erased callable contains session-local BoxBoundaryId", .{}),
+            .const_graph_box,
+            .promoted_wrapper,
+            => {},
+        }
+    }
+    switch (sealed.code) {
+        .direct_proc => {},
+        .finite_adapter => |finite| {
+            if (finite.members.len == 0) {
+                std.debug.panic("checked artifact invariant violated: sealed finite erased adapter has no members", .{});
+            }
+            if (!std.meta.eql(finite.adapter_key.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
+                std.debug.panic("checked artifact invariant violated: sealed finite adapter source type differs from boundary", .{});
+            }
+            if (!std.meta.eql(finite.adapter_key.erased_fn_sig_key.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes) or
+                !std.meta.eql(finite.adapter_key.erased_fn_sig_key.abi.bytes, sealed.boundary.sig_key.abi.bytes) or
+                ((finite.adapter_key.erased_fn_sig_key.capture_ty == null) != (sealed.boundary.sig_key.capture_ty == null)))
+            {
+                std.debug.panic("checked artifact invariant violated: sealed finite adapter signature differs from boundary", .{});
+            }
+            if (finite.adapter_key.erased_fn_sig_key.capture_ty) |left| {
+                const right = sealed.boundary.sig_key.capture_ty orelse unreachable;
+                if (!std.meta.eql(left.bytes, right.bytes)) {
+                    std.debug.panic("checked artifact invariant violated: sealed finite adapter hidden capture key differs from boundary", .{});
+                }
+            }
+            for (finite.members) |member| {
+                if (!canonical.procedureCallableRefEql(member.source_proc.callable, member.proc_value)) {
+                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member procedure refs disagree", .{});
+                }
+                if (member.source_proc.proc.proc_base != member.target_key.base) {
+                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member target base differs from source proc", .{});
+                }
+                if (!std.meta.eql(member.target_key.requested_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
+                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member target source type differs from boundary", .{});
+                }
+                if (!std.meta.eql(member.proc_value.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
+                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member proc value source type differs from boundary", .{});
+                }
+            }
+        },
+    }
+    verifyErasedCaptureExecutableMaterializationPlan(store, sealed.capture);
 }
 
 fn verifyErasedCaptureExecutableMaterializationPlan(
@@ -12322,16 +12508,17 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     signature: ErasedPromotedProcedureExecutableSignature,
     erased: ErasedPromotedWrapperBodyPlan,
 ) void {
-    const abi = erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
+    const boundary = erased.sealed.boundary;
+    const abi = erased_fn_abis.abiFor(boundary.sig_key.abi) orelse {
         std.debug.panic("checked artifact invariant violated: erased promoted executable signature ABI is not published", .{});
     };
-    if (!std.meta.eql(signature.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
+    if (!std.meta.eql(signature.source_fn_ty.bytes, boundary.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable signature source type differs from wrapper source type", .{});
     }
-    if (!std.meta.eql(erased.sig_key.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
+    if (!std.meta.eql(boundary.sig_key.source_fn_ty.bytes, boundary.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable signature key source type differs from wrapper source type", .{});
     }
-    if (!std.meta.eql(signature.specialization_key.requested_fn_ty.bytes, erased.source_fn_ty.bytes)) {
+    if (!std.meta.eql(signature.specialization_key.requested_fn_ty.bytes, boundary.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable specialization source type differs from wrapper source type", .{});
     }
     if (signature.specialization_key.callable_repr_mode != .erased_callable) {
@@ -12374,14 +12561,14 @@ fn verifyErasedPromotedProcedureExecutableSignature(
     if (!std.meta.eql(signature.erased_call_ret_key.bytes, abi.ret_exec_key.bytes)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call return key differs from ABI payload", .{});
     }
-    if ((erased.sig_key.capture_ty == null) != (signature.hidden_capture == null)) {
+    if ((boundary.sig_key.capture_ty == null) != (signature.hidden_capture == null)) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture presence differs from signature key", .{});
     }
     if (abi.capture_arg == null) {
         std.debug.panic("checked artifact invariant violated: erased promoted executable ABI has no opaque capture argument", .{});
     }
     if (signature.hidden_capture) |hidden| {
-        const capture_ty = erased.sig_key.capture_ty orelse unreachable;
+        const capture_ty = boundary.sig_key.capture_ty orelse unreachable;
         if (!std.meta.eql(hidden.exec_ty_key.bytes, capture_ty.bytes)) {
             std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture key differs from signature key", .{});
         }
@@ -12490,31 +12677,14 @@ fn verifyPromotedCallableBodyPlan(
             for (finite.call_args) |arg| verifyPromotedWrapperArg(store, arg);
         },
         .erased => |erased| {
-            if (erased.provenance.len == 0) {
-                std.debug.panic("checked artifact invariant violated: erased promoted callable body has no Box(T) provenance", .{});
-            }
-            switch (erased.code) {
-                .direct_proc_value => {
-                    if (erased.finite_adapter_member_targets.len != 0) {
-                        std.debug.panic("checked artifact invariant violated: direct erased promoted callable body carried finite adapter member targets", .{});
-                    }
-                    if (erased.finite_adapter_branches.len != 0) {
-                        std.debug.panic("checked artifact invariant violated: direct erased promoted callable body carried finite adapter branches", .{});
-                    }
+            verifySealedErasedCallableValue(store, erased.sealed);
+            switch (erased.sealed.code) {
+                .direct_proc => {},
+                .finite_adapter => |finite| for (finite.members) |member| {
+                    for (member.arg_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
+                    for (member.capture_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
+                    verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, member.result_transform);
                 },
-                .finite_set_adapter => {
-                    if (erased.finite_adapter_member_targets.len == 0) {
-                        std.debug.panic("checked artifact invariant violated: finite erased promoted callable body has no adapter member targets", .{});
-                    }
-                    if (erased.finite_adapter_branches.len != erased.finite_adapter_member_targets.len) {
-                        std.debug.panic("checked artifact invariant violated: finite erased promoted callable body branch count differs from member target count", .{});
-                    }
-                },
-            }
-            for (erased.finite_adapter_branches) |branch| {
-                for (branch.arg_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
-                for (branch.capture_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
-                verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, branch.result_transform);
             }
             if (erased.arg_transforms.len != erased.params.len) {
                 std.debug.panic("checked artifact invariant violated: erased promoted callable arg transform count differs from wrapper params", .{});
@@ -12528,7 +12698,6 @@ fn verifyPromotedCallableBodyPlan(
                 erased.executable_signature,
                 erased,
             );
-            verifyErasedCaptureExecutableMaterializationPlan(store, erased.capture);
             switch (erased.hidden_capture_arg) {
                 .none => {},
                 .materialized_capture => |capture| verifyErasedCaptureExecutableMaterializationPlan(store, capture),
