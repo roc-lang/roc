@@ -38,6 +38,13 @@ const can = @import("can");
 const check = @import("check");
 const bundle = @import("bundle");
 const unbundle = @import("unbundle");
+
+comptime {
+    if (builtin.is_test) {
+        _ = @import("libc_finder.zig");
+        _ = @import("test_shared_memory_system.zig");
+    }
+}
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
@@ -170,11 +177,6 @@ const BuiltinsObjects = struct {
         };
     }
 };
-
-test "main cli tests" {
-    _ = @import("libc_finder.zig");
-    _ = @import("test_shared_memory_system.zig");
-}
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //

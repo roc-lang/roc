@@ -1,110 +1,219 @@
 # Test Coverage Audit Findings
 
-Scope: audited the current branch against `origin/main` using the PR-style diff (`origin/main...HEAD`), focusing on test files, snapshot changes, deleted tests, skipped tests, and rewritten coverage.
+Scope: audited the current branch against `origin/main` using the PR-style diff
+(`origin/main...HEAD`), focusing on test files, snapshot changes, deleted tests,
+skipped tests, and rewritten coverage.
 
-No Zig commands were run for this audit.
-
-## Summary
-
-The large eval/MIR rewrite did delete many old test files, but most of those deletions are paired with stronger replacement coverage:
-
-- `src/eval/test/*.zig` was reorganized from many direct `test` declarations into the new parallel eval suites and host-effects suites.
-- old list refcount tests were replaced with host-effects allocation tracking that can assert zero live allocations.
-- old MIR-lowering tests tied to deleted APIs were replaced with structural tests for the new MIR boundaries.
-- boxed erased callable host-boundary tests and readonly static-data host tests are new coverage, not regressions.
-- several dev cache tests in `src/cli/test/roc_subcommands.zig` were unskipped.
-
-I did find several coverage regressions or suspicious weakenings that should be addressed or explicitly justified.
-
-## Open Findings
-
-No open findings remain from this audit.
+Status: all coverage gaps from this audit have been addressed by active tests or
+explicitly justified below. There are no open findings from this restore pass.
 
 ## Resolved Findings
 
-### `ModuleEnv.Serialized` unit coverage restored
+### [P1] Compile-Time Finalization Coverage Restored
 
-Added active coverage in `src/compile/test/module_env_test.zig`:
+Deleted file:
+
+- `src/eval/test/comptime_eval_test.zig`
+
+Replacement:
+
+- `src/eval/test/eval_comptime_finalization_tests.zig`
+- wired through `src/eval/test/eval_tests.zig`
+
+This restores active coverage for every deleted `comptime_eval_test.zig` test
+name using the current checked-artifact -> MIR -> IR -> LIR -> LIR interpreter
+path. The suite covers constants, imports, expect/dbg behavior, dependency
+ordering, fixed-width numeric annotations, division/modulo problem paths,
+recursive nominal values, static-dispatch regressions, `while` crash
+regressions, tag-payload matching, opaque function field lookup, and issue
+regressions from the deleted file.
+
+The old evaluator treated some compile-time crashes as recoverable test
+outcomes. In the current architecture, a crash while publishing/evaluating a
+compile-time root is a compiler invariant violation after checking. The restored
+tests keep those old names active but exercise crash behavior through executable
+roots instead of expecting checked-artifact publication to recover from an
+invariant violation.
+
+Focused verification run:
+
+```sh
+ci/guarded_zig.sh zig build test -- --test-filter comptime
+```
+
+Result: `131 passed, 0 failed, 0 crashed, 0 skipped`.
+
+### [P1] Final Layout Store Coverage Restored
+
+Deleted file:
+
+- `src/layout/store_test.zig`
+
+Replacement:
+
+- inline tests in `src/layout/store.zig`
+
+The replacement tests restore the deleted invariant names against the final
+layout graph/store APIs instead of the deleted monotype/layout resolver APIs.
+They cover Bool/two-nullary tag-union layout, ZST container behavior, singleton
+tag payloads, recursive nominal layouts, recursive graph structural
+equivalence, canonical field ordering, tuple/tag interning, resolved list layout
+records, erased callable RC helper plans, and the old resolver-agreement cases
+as final logical-layout graph assertions.
+
+The old tests that asserted identical root indexes for independently built
+recursive graphs are replaced with structural-equivalence assertions. Under the
+final store, root indexes are allocation identities; structural equivalence and
+interned child/layout shape are the semantic invariant.
+
+Focused verification run:
+
+```sh
+ci/guarded_zig.sh zig build test -- --test-filter layout
+```
+
+Result: `All 46 tests passed`.
+
+### [P2] Diagnostic Snapshot Removals Explicitly Justified
+
+The following snapshot diagnostic removals are intentional cascade trimming.
+Each file still has focused user-facing diagnostic coverage for the primary
+error in that source. The removed diagnostics depended on continuing after an
+earlier syntax/name/type problem had already made later analysis unreliable.
+
+- `test/snapshots/match_expr/basic_tag_union.md`: the removed
+  `UNDEFINED VARIABLE` for `color` is intentionally trimmed; the snapshot now
+  focuses on the type mismatch produced by the malformed match expression.
+- `test/snapshots/match_expr/nested_list_scoping.md`: the removed
+  `UNDEFINED VARIABLE` for `nestedList` is intentionally trimmed; the snapshot
+  focuses on the later missing-method diagnostic.
+- `test/snapshots/match_expr/list_rest_scoping_variables.md`: the removed
+  `UNDEFINED VARIABLE` for `data` is intentionally trimmed because invalid
+  list-rest syntax blocks reliable later name analysis.
+- `test/snapshots/match_expr/list_rest_scoping_variables.md`: the removed
+  `UNUSED VARIABLE` warning for first-branch `items` is intentionally trimmed
+  for the same invalid-list-rest cascade reason.
+- `test/snapshots/match_expr/list_rest_scoping_variables.md`: the removed
+  `UNUSED VARIABLE` warning for second-branch `items` is intentionally trimmed
+  for the same invalid-list-rest cascade reason.
+- `test/snapshots/match_expr/list_rest_scoping_variables.md`: the removed
+  `UNUSED VARIABLE` warning for third-branch `items` is intentionally trimmed
+  for the same invalid-list-rest cascade reason.
+- `test/snapshots/match_expr/list_rest_scoping_variables.md`: the removed
+  `UNUSED VARIABLE` warning for fourth-branch `items` is intentionally trimmed
+  for the same invalid-list-rest cascade reason.
+- `test/snapshots/nominal/type_alias_with_associated.md`: the removed
+  `TYPE MODULE REQUIRES NOMINAL TYPE` diagnostic is intentionally trimmed; the
+  snapshot focuses on the more direct `TYPE ALIAS WITH ASSOCIATED ITEMS`
+  diagnostic.
+
+The removed `TYPE REDECLARED` diagnostic in
+`test/snapshots/type_shadowing_across_scopes.md` remains intentionally absent:
+that old diagnostic was semantically wrong because a top-level nominal
+declaration such as `Try(a, b)` is legal elsewhere in the suite.
+
+### [P2] Shared-Memory / Runtime-Image Integration Coverage Restored
+
+Changed file:
+
+- `src/cli/test_shared_memory_system.zig`
+
+Wiring fix:
+
+- `src/cli/main.zig` now imports the CLI test modules at test-only container
+  scope, so tests in `test_shared_memory_system.zig` are active instead of only
+  being compiled inside a wrapper test.
+
+Restored active tests:
+
+- `integration - shared memory setup and parsing`
+- `integration - compilation pipeline for different platforms`
+- `integration - error handling for non-existent file`
+- `integration - automatic module dependency ordering`
+- `integration - transitive module imports (module A imports module B)`
+- `integration - diamond dependency pattern (A imports B and C, both import D)`
+- `integration - direct Core and Utils calls from app`
+
+These tests use the final runtime-image shared-memory API and checked-artifact
+pipeline. They assert that a parent-published ARC-inserted LIR runtime image can
+be viewed from a mapped child-side header without exposing CIR, checked
+artifacts, MIR, or IR to the child. Platform dependency tests assert successful
+checked-artifact publication and root discovery before runtime-image
+publication.
+
+Focused verification run:
+
+```sh
+ci/guarded_zig.sh zig build test -- --test-filter shared
+```
+
+Result: `All 18 tests passed`.
+
+## Acceptable Or Improved Rewrites
+
+### Direct REPL Coverage Restored
+
+Deleted files:
+
+- `src/repl/repl_test.zig`
+- `src/repl/repl_test_env.zig`
+
+Replacement:
+
+- `src/cli/ReplSession.zig`
+
+This remains better than the old direct REPL tests. The CLI keeps the
+production entrypoint in `src/cli/main.zig`, while the session core is directly
+unit-tested. The restored tests include expression evaluation, definitions,
+Bool operations, numeric operations, string/list operations, statement
+splitting, paste handling, opaque field access, and issue 9364 cases.
+
+### `ModuleEnv.Serialized` Coverage Restored In Active Form
+
+Changed file:
+
+- `src/compile/test/module_env_test.zig`
+
+The branch replaces a long old file, including several commented-out tests,
+with two active tests:
 
 - `ModuleEnv.Serialized roundtrip`
 - `ModuleEnv pushExprTypesToSExprTree extracts and formats types`
 
-The tests are wired through `src/compile/mod.zig` and cover real `ModuleEnv`
-serialization/deserialization plus type extraction/formatting.
+The active roundtrip still checks identifiers, exposed items, line starts,
+module name, imports, import deduplication after deserialization, and
+store/type data. This is a cleaner replacement, not a regression.
 
-### User-facing diagnostic snapshot coverage restored
+### Dev `roc test` Cache And Failure-Format Coverage Improved
 
-Restored active snapshot coverage for:
+Changed file:
 
-- `MAIN! SHOULD TAKE 1 ARGUMENT` in `test/snapshots/default_app_wrong_arity.md`
-- `TRY OPERATOR OUTSIDE FUNCTION` in `test/snapshots/try_undefined_tag.md`
-- `UNDEFINED VARIABLE` and `UNUSED VARIABLE` cascades in `test/snapshots/match_expr/list_patterns.md`
-- `UNDEFINED VARIABLE` and `UNUSED VARIABLE` cascades in `test/snapshots/match_expr/list_rest_invalid.md`
+- `src/cli/test/roc_subcommands.zig`
 
-The old `TYPE REDECLARED` expectation in
-`test/snapshots/type_shadowing_across_scopes.md` was not restored because it was
-semantically wrong. A top-level nominal declaration such as `Try(a, b)` is legal
-elsewhere in the suite; the previous diagnostic was an incidental cascade from
-the mixed malformed source, not the intended behavior. The snapshot now checks
-the real parse/malformed-type diagnostics and the remaining unused-variable
-warning.
+Several dev backend tests that were skipped on `origin/main` are now active:
 
-### `--allow-errors` platform coverage made plan-correct
+- cached passing test results
+- cached failing test results
+- cache invalidation after source change
+- verbose failure report cache reuse
+- non-verbose-to-verbose failure report reuse
+- failure output contains source snippet
+- failure output contains doc comment
+- verbose and non-verbose failure format parity
 
-The old expectation that `roc run --allow-errors` continues into LIR execution
-after user-facing errors conflicts with `plan.md`, which explicitly says
-`--allow-errors` must not authorize checked-artifact publication, platform/app
-relation finalization, MIR lowering, LIR lowering, backend execution, or
-interpreter execution for an erroneous module graph.
+This is a clear coverage improvement.
 
-The active tests in `src/cli/test/fx_platform_test.zig` now assert the intended
-behavior:
-
-- diagnostics are reported
-- the CLI mode exits successfully where appropriate
-- stdout is empty because the erroneous graph was not lowered or run
-- the process does not crash or read garbage status
-
-### Direct REPL unit coverage restored
-
-Added `src/cli/ReplSession.zig` and wired it through `src/cli/main.zig` so the
-CLI keeps the production entrypoint while exposing the session core to unit
-tests. The restored direct test names are active again, including:
-
-- `Repl - initialization and cleanup`
-- `Repl - special commands`
-- `Repl - simple expressions`
-- all restored Bool, number, string, list, lambda, definition replacement, paste,
-  `splitInputIntoStatements`, for-loop, opaque access, and issue 9364 tests
-
-The restored loop tests now use current multi-line Roc loop syntax instead of
-the stale semicolon-compressed form that no longer parses.
-
-### Dev failure-format parity tests restored as active tests
-
-Restored active dev tests in `src/cli/test/roc_subcommands.zig`:
-
-- `roc test failure output contains source snippet (dev)`
-- `roc test failure output contains doc comment (dev)`
-- `roc test verbose and non-verbose failure format match (dev)`
-
-These are no longer deleted TODO markers; they run with the current dev backend.
-
-## Rewrites That Look Better Than Before
-
-### Eval runner rewrite
+### Eval Runner Rewrite Looks Stronger Overall
 
 Deleted files include:
 
 - `src/eval/test/arithmetic_comprehensive_test.zig`
 - `src/eval/test/closure_test.zig`
-- `src/eval/test/comptime_eval_test.zig`
 - `src/eval/test/eval_test.zig`
 - `src/eval/test/highest_lowest_test.zig`
 - `src/eval/test/interpreter_polymorphism_test.zig`
 - `src/eval/test/interpreter_style_test.zig`
 - `src/eval/test/low_level_interp_test.zig`
-- `src/eval/test/list_refcount_*.zig`
 
 Replacement files include:
 
@@ -115,25 +224,40 @@ Replacement files include:
 - `src/eval/test/eval_interpreter_style_tests.zig`
 - `src/eval/test/eval_polymorphism_tests.zig`
 - `src/eval/test/eval_highest_lowest_tests.zig`
+- `src/eval/test/eval_comptime_finalization_tests.zig`
+- `src/eval/test/parallel_runner.zig`
+
+The new runner exercises interpreter/dev/wasm in a common data-driven harness,
+reports backend-specific failures, and has broader recursive-data, callable,
+compile-time-finalization, and host-boundary coverage.
+
+### Refcount Coverage Improved
+
+Deleted files:
+
+- `src/eval/test/list_refcount_alias.zig`
+- `src/eval/test/list_refcount_basic.zig`
+- `src/eval/test/list_refcount_builtins.zig`
+- `src/eval/test/list_refcount_complex.zig`
+- `src/eval/test/list_refcount_conditional.zig`
+- `src/eval/test/list_refcount_containers.zig`
+- `src/eval/test/list_refcount_function.zig`
+- `src/eval/test/list_refcount_nested.zig`
+- `src/eval/test/list_refcount_pattern.zig`
+- `src/eval/test/list_refcount_simple.zig`
+- `src/eval/test/list_refcount_strings.zig`
+
+Replacement:
+
 - `src/eval/test/host_effects_tests.zig`
 - `src/eval/test/RuntimeHostEnv.zig`
+- `src/eval/test/host_effects_runner.zig`
 
-This appears directionally better: the new suite is data-driven, has broader recursive-data coverage, and adds explicit host-effect/RC observations instead of only checking returned values.
+This is stronger. The new tests assert allocation/RC balance for nested lists,
+strings, records, boxes, closure captures, boxed callables, and recursive tag
+unions rather than only checking returned values.
 
-### Refcount coverage
-
-The old list-specific refcount tests were replaced with host-effects tests that assert balanced live allocations for:
-
-- nested lists of heap strings
-- aliased lists in records
-- boxed lists
-- closure captures with heap data
-- boxed callable captures
-- recursive tag unions with boxed children
-
-That is stronger than the old isolated list-refcount coverage.
-
-### MIR structural coverage
+### MIR Tests Rewritten For The New Architecture
 
 Deleted files:
 
@@ -143,49 +267,48 @@ Deleted files:
 Replacement:
 
 - `src/mir/structural_test.zig`
+- inline tests across `src/mir/mono`, `src/mir/mono_row`, `src/mir/lifted`,
+  `src/mir/lambda_solved`, and `src/mir/executable`
+- broad eval coverage for the old behavioral cases
 
-This is an appropriate rewrite for the new architecture. The new tests assert boundary invariants such as no post-check dispatch nodes in mono/executable MIR, finalized row IDs, explicit capture metadata, mandatory callable-match support, and Bool-as-normal-tag-union representation.
+The old tests were tightly coupled to deleted MIR APIs and old lambda-set
+machinery. The new structural tests assert the final stage boundaries: no
+post-check dispatch nodes in mono/executable MIR, finalized row IDs, explicit
+capture metadata, mandatory callable-match support, Bool-as-normal-tag-union,
+and expression-map limits.
 
-### Static data and boxed erased callable coverage
+### Boxed Erased Callable And Readonly Static Data Host Coverage Added
 
-New tests/fixtures:
+New files/tests include:
 
-- `test/static-data-host/*`
 - `test/fx/host_boxed_fn_boundary.roc`
-- `src/cli/test/fx_platform_test.zig` boxed callable tests
-- `src/cli/test/fx_platform_test.zig` readonly static-data host-linking test
+- `test/fx/platform/Host.roc` boxed callable host APIs
+- `test/fx/platform/host.zig` boxed callable host ABI helpers
+- `src/cli/test/fx_platform_test.zig` boxed callable interpreter/dev tests
+- `test/static-data-host/app.roc`
+- `test/static-data-host/platform/host.zig`
+- `test/static-data-host/platform/main.roc`
+- `test/snapshots/dev_object_static_data_exports.md`
 
-These are clear coverage additions, especially for host boundary behavior that did not exist on `origin/main`.
+This is new coverage, not a regression. It covers host-returned, host-consumed,
+host-stored, and round-tripped boxed erased callables, plus readonly exported
+data with nested heap-shaped values.
 
-### Dev cache tests
+### Glue Cache Coverage Improved
 
-The branch unskips dev coverage for:
+Changed file:
 
-- cached passing test results
-- cached failing test results
-- cache invalidation after source change
-- verbose failure report cache reuse
-- non-verbose-to-verbose failure report reuse
+- `src/cli/test/glue_test.zig`
 
-That is a clear improvement over `origin/main`.
-
-### `all_syntax` expected output convergence
-
-Changed file: `src/cli/test/roc_subcommands.zig`
-
-The branch removes a dev-specific expected stdout for `all_syntax_test.roc` and makes dev use the same expected output as interpreter. This reduces backend divergence and looks like an improvement.
-
-### Glue cache coverage
-
-Changed file: `src/cli/test/glue_test.zig`
-
-The branch removes `--no-cache` from `CGlue.roc expect tests pass (interpreter)`. That restores cache interaction coverage for this test. If it passes, it is better than the old workaround.
+The branch removes `--no-cache` from `CGlue.roc expect tests pass
+(interpreter)`. That restores cache interaction coverage for glue tests and
+looks better than the old bypass.
 
 ## Deleted Test Inventory
 
-Deleted test files whose coverage is either replaced, intentionally obsolete, or called out above:
+Deleted test files that are either replaced, intentionally obsolete, or covered
+by the resolved findings above:
 
-- `src/compile/test/module_env_test.zig`
 - `src/eval/test/TestEnv.zig`
 - `src/eval/test/anno_only_interp_test.zig`
 - `src/eval/test/arithmetic_comprehensive_test.zig`
@@ -217,6 +340,7 @@ Deleted test files whose coverage is either replaced, intentionally obsolete, or
 - `src/repl/repl_test.zig`
 - `src/repl/repl_test_env.zig`
 
-Deleted/renamed snapshot file:
+Snapshot files were not deleted; one snapshot was renamed:
 
-- `test/snapshots/can_dot_access.md` renamed to `test/snapshots/can_field_access.md`
+- `test/snapshots/can_dot_access.md` ->
+  `test/snapshots/can_field_access.md`

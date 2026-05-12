@@ -171,6 +171,7 @@ else
 /// Public `RuntimeImageProgram` declaration.
 pub const RuntimeImageProgram = struct {
     shm: SharedMemoryAllocator,
+    runtime_header: *RuntimeImage.Header,
     view: RuntimeImage.ProgramView,
 
     /// First explicit LIR root for eval helpers. The root set was selected by
@@ -827,6 +828,7 @@ fn lowerParsedProgramToLir(
     const view = try RuntimeImage.viewMappedImage(runtime_header, shm.base_ptr, shm.getUsedSize());
     return .{
         .shm = shm,
+        .runtime_header = runtime_header,
         .view = view,
     };
 }

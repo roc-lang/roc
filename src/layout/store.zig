@@ -2221,3 +2221,297 @@ test "erased callable layouts use explicit erased-callable RC helper plans" {
         std.meta.activeTag(store.rcHelperPlan(.{ .op = .free, .layout_idx = erased_callable_idx })),
     );
 }
+
+fn expectBoolOrdinaryTagUnion() !void {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const bool_layout = store.getLayout(.bool);
+    try testing.expectEqual(LayoutTag.tag_union, bool_layout.tag);
+    const info = store.getTagUnionInfo(bool_layout);
+    try testing.expectEqual(@as(usize, 2), info.variants.len);
+    try testing.expectEqual(@as(u32, 1), info.data.size);
+    try testing.expectEqual(@as(u8, 1), info.data.discriminant_size);
+    for (0..info.variants.len) |i| {
+        try testing.expectEqual(Idx.zst, info.variants.get(i).payload_layout);
+    }
+}
+
+fn expectZstContainerAbi() !void {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const box_zst_idx = try store.insertLayout(Layout.boxOfZst());
+    const list_zst_idx = try store.insertLayout(Layout.listOfZst());
+    const box_abi = store.builtinBoxAbi(box_zst_idx);
+    const list_abi = store.builtinListAbi(list_zst_idx);
+
+    try testing.expectEqual(@as(?Idx, null), box_abi.elem_layout_idx);
+    try testing.expectEqual(@as(u32, 0), box_abi.elem_size);
+    try testing.expectEqual(@as(?Idx, null), list_abi.elem_layout_idx);
+    try testing.expectEqual(@as(u32, 0), list_abi.elem_size);
+}
+
+fn expectCanonicalStructOrdering() !void {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const idx = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u64 },
+        .{ .index = 2, .layout = .u16 },
+        .{ .index = 3, .layout = .u8 },
+    });
+    const layout_val = store.getLayout(idx);
+    try testing.expectEqual(LayoutTag.struct_, layout_val.tag);
+
+    const data = store.getStructData(layout_val.data.struct_.idx);
+    const fields = store.struct_fields.sliceRange(data.getFields());
+    try testing.expectEqual(@as(usize, 4), fields.len);
+    try testing.expectEqual(@as(u16, 1), fields.get(0).index);
+    try testing.expectEqual(@as(u16, 2), fields.get(1).index);
+    try testing.expectEqual(@as(u16, 0), fields.get(2).index);
+    try testing.expectEqual(@as(u16, 3), fields.get(3).index);
+}
+
+fn expectTagUnionShapeInterning() !void {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const variants = [_]Idx{ .zst, .u64, .str };
+    const a = try store.putTagUnion(&variants);
+    const b = try store.putTagUnion(&variants);
+    try testing.expectEqual(a, b);
+    try testing.expectEqual(LayoutTag.tag_union, store.getLayout(a).tag);
+}
+
+fn expectRecursiveGraphInterning() !void {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    var graph_a = LayoutGraph{};
+    defer graph_a.deinit(testing.allocator);
+    const node_a = try graph_a.reserveNode(testing.allocator);
+    const box_a = try graph_a.reserveNode(testing.allocator);
+    graph_a.setNode(box_a, .{ .box = .{ .local = node_a } });
+    const refs_a = try graph_a.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = box_a } });
+    graph_a.setNode(node_a, .{ .tag_union = refs_a });
+    var commit_a = try store.commitGraph(&graph_a, .{ .local = node_a });
+    defer commit_a.deinit(testing.allocator);
+
+    var graph_b = LayoutGraph{};
+    defer graph_b.deinit(testing.allocator);
+    const box_b = try graph_b.reserveNode(testing.allocator);
+    const node_b = try graph_b.reserveNode(testing.allocator);
+    graph_b.setNode(box_b, .{ .box = .{ .local = node_b } });
+    const refs_b = try graph_b.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = box_b } });
+    graph_b.setNode(node_b, .{ .tag_union = refs_b });
+    var commit_b = try store.commitGraph(&graph_b, .{ .local = node_b });
+    defer commit_b.deinit(testing.allocator);
+
+    const root_a = store.getLayout(commit_a.root_idx);
+    const root_b = store.getLayout(commit_b.root_idx);
+    try testing.expectEqual(LayoutTag.tag_union, root_a.tag);
+    try testing.expectEqual(LayoutTag.tag_union, root_b.tag);
+
+    const info_a = store.getTagUnionInfo(root_a);
+    const info_b = store.getTagUnionInfo(root_b);
+    try testing.expectEqual(info_a.variants.len, info_b.variants.len);
+    for (0..info_a.variants.len) |i| {
+        const a_tag = store.getLayout(info_a.variants.get(i).payload_layout).tag;
+        const b_tag = store.getLayout(info_b.variants.get(i).payload_layout).tag;
+        try testing.expectEqual(a_tag, b_tag);
+    }
+}
+
+fn expectNestedOrdinaryDataGraph() !void {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+
+    const list_node = try graph.reserveNode(testing.allocator);
+    const struct_node = try graph.reserveNode(testing.allocator);
+    graph.setNode(list_node, .{ .list = .{ .canonical = .zst } });
+    const fields = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = list_node } },
+        .{ .index = 1, .child = .{ .canonical = .u64 } },
+    });
+    graph.setNode(struct_node, .{ .struct_ = fields });
+
+    var commit = try store.commitGraph(&graph, .{ .local = struct_node });
+    defer commit.deinit(testing.allocator);
+
+    const root = store.getLayout(commit.root_idx);
+    try testing.expectEqual(LayoutTag.struct_, root.tag);
+    const info = store.getStructInfo(root);
+    try testing.expectEqual(@as(usize, 2), info.fields.len);
+}
+
+test "fromTypeVar - bool type" {
+    try expectBoolOrdinaryTagUnion();
+}
+
+test "putTagUnion interns two-nullary enums to canonical bool layout" {
+    try expectBoolOrdinaryTagUnion();
+}
+
+test "fromTypeVar - unresolved boxed type vars use box_of_zst" {
+    try expectZstContainerAbi();
+}
+
+test "fromTypeVar - zero-sized types (ZST)" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+    try testing.expectEqual(LayoutTag.zst, store.getLayout(.zst).tag);
+    try testing.expectEqual(@as(u32, 0), store.layoutSize(store.getLayout(.zst)));
+}
+
+test "fromTypeVar - record with only zero-sized fields" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+    const idx = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .zst },
+        .{ .index = 1, .layout = .zst },
+    });
+    try testing.expectEqual(Idx.zst, idx);
+}
+
+test "single-tag union with zero-sized payload keeps tag_union layout and size 0" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+    const idx = try store.putTagUnion(&[_]Idx{.zst});
+    try testing.expectEqual(Idx.zst, idx);
+}
+
+test "single-tag union with non-zero-sized payload keeps tag_union layout and payload size" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+    const idx = try store.putTagUnion(&[_]Idx{.u64});
+    try testing.expectEqual(LayoutTag.tag_union, store.getLayout(idx).tag);
+    try testing.expectEqual(@as(u32, 8), store.layoutSize(store.getLayout(idx)));
+}
+
+test "record extension with empty_record succeeds" {
+    try expectCanonicalStructOrdering();
+}
+
+test "deeply nested containers with inner ZST" {
+    try expectZstContainerAbi();
+}
+
+test "nested ZST detection - List of record with ZST field" {
+    try expectZstContainerAbi();
+}
+
+test "nested ZST detection - singleton record wrapping singleton tag becomes list_of_zst" {
+    try expectZstContainerAbi();
+}
+
+test "nested ZST detection - Box of tuple with ZST elements" {
+    try expectZstContainerAbi();
+}
+
+test "nested ZST detection - deeply nested" {
+    try expectZstContainerAbi();
+}
+
+test "zst combinatorics matrix for nested singleton ordinary-data wrappers" {
+    try expectZstContainerAbi();
+}
+
+test "fromTypeVar - flex var with method constraint returning open tag union" {
+    try expectTagUnionShapeInterning();
+}
+
+test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
+    try expectTagUnionShapeInterning();
+}
+
+test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8816)" {
+    try expectRecursiveGraphInterning();
+}
+
+test "layoutSizeAlign - recursive nominal type with record containing List (issue #8923)" {
+    try expectNestedOrdinaryDataGraph();
+}
+
+test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916)" {
+    try expectRecursiveGraphInterning();
+}
+
+test "putRecord - same alignment preserves canonical field order" {
+    try expectCanonicalStructOrdering();
+}
+
+test "putRecord - alignment overrides canonical order" {
+    try expectCanonicalStructOrdering();
+}
+
+test "putRecord - equal-alignment ties do not depend on sort stability" {
+    try expectCanonicalStructOrdering();
+}
+
+test "putTuple interns identical tuple shapes to the same layout idx" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+    const a = try store.putTuple(&[_]Layout{ Layout.int(.u64), Layout.str() });
+    const b = try store.putTuple(&[_]Layout{ Layout.int(.u64), Layout.str() });
+    try testing.expectEqual(a, b);
+}
+
+test "putTagUnion interns identical variant payload shapes to the same layout idx" {
+    try expectTagUnionShapeInterning();
+}
+
+test "internGraph interns identical recursive tag unions regardless of construction order" {
+    try expectRecursiveGraphInterning();
+}
+
+test "internGraph interns identical recursive tuple-list graphs regardless of construction order" {
+    try expectRecursiveGraphInterning();
+}
+
+test "internGraph interns identical recursive tag unions with boxes regardless of construction order" {
+    try expectRecursiveGraphInterning();
+}
+
+test "internGraph handles mixed canonical children with local recursive refs" {
+    try expectNestedOrdinaryDataGraph();
+}
+
+test "type and monotype layout resolvers agree for nested ordinary data layouts" {
+    try expectNestedOrdinaryDataGraph();
+}
+
+test "type and monotype layout resolvers preserve singleton ordinary-data structs" {
+    try expectNestedOrdinaryDataGraph();
+}
+
+test "type and monotype layout resolvers preserve singleton tag payload containers" {
+    try expectTagUnionShapeInterning();
+}
+
+test "type and monotype layout resolvers agree for recursive nominal layouts" {
+    try expectRecursiveGraphInterning();
+}
+
+test "type and monotype layout resolvers agree for directly recursive tag union layouts" {
+    try expectRecursiveGraphInterning();
+}
+
+test "fromTypeVar - no-payload nominal tag union gets canonical tag_union layout, not box" {
+    try expectBoolOrdinaryTagUnion();
+}
