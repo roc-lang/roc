@@ -1472,7 +1472,7 @@ test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/issue9388_sort_with_top_level_expect.roc");
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/Issue9388SortWithTopLevelExpect.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1494,17 +1494,17 @@ test "roc test issue 9392 numeric utility expects are deterministic with no cach
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
 
-    const path = "test/cli/issue9392_num_utils_deterministic.roc";
+    const path = "test/cli/Issue9392NumUtilsDeterministic.roc";
 
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try expectRocTestAllPassed(result1, "11 passed");
+    try expectRocTestAllPassed(result1, "All (11) tests passed");
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-    try expectRocTestAllPassed(result2, "11 passed");
+    try expectRocTestAllPassed(result2, "All (11) tests passed");
 }
 
 // --- Echo platform (headerless app) tests ---

@@ -31,15 +31,15 @@ ten_pow_neg = |n| {
     1.0 / $power
 }
 
-expect is_approx_eq(1.0, 1.0)
-expect is_approx_eq(1.0, 1.0000005)
-expect is_approx_eq(1.0, 0.9999995)
-expect !is_approx_eq(1.0, 1.00001)
-expect !is_approx_eq(1.0, 0.99999)
-expect !is_approx_eq(1.0, 0.5)
+expect Issue9392NumUtilsDeterministic.is_approx_eq(1.0, 1.0)
+expect Issue9392NumUtilsDeterministic.is_approx_eq(1.0, 1.0000005)
+expect Issue9392NumUtilsDeterministic.is_approx_eq(1.0, 0.9999995)
+expect !Issue9392NumUtilsDeterministic.is_approx_eq(1.0, 1.00001)
+expect !Issue9392NumUtilsDeterministic.is_approx_eq(1.0, 0.99999)
+expect !Issue9392NumUtilsDeterministic.is_approx_eq(1.0, 0.5)
 
-expect is_approx_eq_to_places(1.0, 1.0, 10)
-expect is_approx_eq_to_places(1.0, 1.0000001, 5)
-expect !is_approx_eq_to_places(1.0, 1.0001, 5)
-expect is_approx_eq_to_places(1.0, 0.9999, 3)
-expect !is_approx_eq_to_places(1.0, 0.9999, 5)
+expect Issue9392NumUtilsDeterministic.is_approx_eq_to_places(1.0, 1.0, 10)
+expect Issue9392NumUtilsDeterministic.is_approx_eq_to_places(1.0, 1.0000001, 5)
+expect !Issue9392NumUtilsDeterministic.is_approx_eq_to_places(1.0, 1.0001, 5)
+expect Issue9392NumUtilsDeterministic.is_approx_eq_to_places(1.0, 0.9999, 3)
+expect !Issue9392NumUtilsDeterministic.is_approx_eq_to_places(1.0, 0.9999, 5)
