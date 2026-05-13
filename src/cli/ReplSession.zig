@@ -182,10 +182,10 @@ fn validateDefinitions(self: *ReplSession) !bool {
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
     defer self.allocator.free(source);
 
-    var compiled = eval.test_helpers.compileInspectedProgram(self.allocator, .module, source, &.{}) catch {
+    const parsed = eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(self.allocator, .module, source, &.{}) catch {
         return false;
     };
-    defer compiled.deinit(self.allocator);
+    defer eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
     return true;
 }
 
@@ -196,13 +196,17 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = {s}\n", .{ definitions, expr });
     defer self.allocator.free(source);
 
-    var compiled = try eval.test_helpers.compileInspectedProgram(self.allocator, .module, source, &.{});
+    const target_usize: base.target.TargetUsize = switch (self.backend_kind) {
+        .interpreter, .dev, .llvm => .native,
+        .wasm => .u32,
+    };
+    var compiled = try eval.test_helpers.compileInspectedProgramForTarget(self.allocator, .module, source, &.{}, target_usize);
     defer compiled.deinit(self.allocator);
 
     return switch (self.backend_kind) {
         .interpreter => eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered),
         .dev, .llvm => eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered),
-        .wasm => eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.wasm_lowered),
+        .wasm => eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.lowered),
     };
 }
 
@@ -415,9 +419,47 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
 }
 
 fn expectAllNative(expr: []const u8, expected: []const u8) !void {
-    try expectBackend(.interpreter, expr, expected);
-    try expectBackend(.dev, expr, expected);
-    try expectBackend(.wasm, expr, expected);
+    var repl = ReplSession.init(testing.allocator, .interpreter);
+    defer repl.deinit();
+
+    const line = std.mem.trim(u8, expr, " \t\r\n");
+    const input_info = try repl.classifyInput(line) orelse return error.ParseError;
+    try testing.expectEqual(InputKind.expression, input_info.kind);
+
+    const definitions = try repl.definitionsSource();
+    defer testing.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(testing.allocator, "{s}\nmain = {s}\n", .{ definitions, line });
+    defer testing.allocator.free(source);
+
+    var compiled = try eval.test_helpers.compileInspectedProgram(testing.allocator, .module, source, &.{});
+    defer compiled.deinit(testing.allocator);
+
+    try expectCompiledBackend(.interpreter, expr, expected, &compiled.lowered);
+    try expectCompiledBackend(.dev, expr, expected, &compiled.lowered);
+    try expectCompiledBackend(.wasm, expr, expected, &compiled.wasm_lowered);
+}
+
+fn expectCompiledBackend(
+    backend: TestBackend,
+    expr: []const u8,
+    expected: []const u8,
+    lowered: *eval.test_helpers.LoweredProgram,
+) !void {
+    const eval_backend = toEvalBackend(backend);
+    if (!eval.backendAvailable(eval_backend)) return;
+
+    const result = switch (backend) {
+        .interpreter => try eval.test_helpers.lirInterpreterInspectedStr(testing.allocator, lowered),
+        .dev => try eval.test_helpers.devEvaluatorInspectedStr(testing.allocator, lowered),
+        .wasm => try eval.test_helpers.wasmEvaluatorInspectedStr(testing.allocator, lowered),
+    };
+    defer testing.allocator.free(result);
+
+    testing.expectEqualStrings(expected, result) catch |err| {
+        std.debug.print("{s} FAILED for: {s}\n", .{ backendName(backend), expr });
+        return err;
+    };
 }
 
 fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) !void {

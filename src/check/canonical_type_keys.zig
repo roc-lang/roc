@@ -99,8 +99,8 @@ const Builder = struct {
     store: *const TypeStore,
     idents: *const Ident.Store,
     hasher: std.crypto.hash.sha2.Sha256,
-    active: std.AutoHashMap(Var, u32),
-    identity_variables: std.AutoHashMap(Var, u32),
+    active: std.ArrayList(Var),
+    identity_variables: std.ArrayList(Var),
     require_concrete: bool = false,
     contains_identity_variables: bool = false,
 
@@ -110,14 +110,14 @@ const Builder = struct {
             .store = store,
             .idents = idents,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
-            .active = std.AutoHashMap(Var, u32).init(allocator),
-            .identity_variables = std.AutoHashMap(Var, u32).init(allocator),
+            .active = .empty,
+            .identity_variables = .empty,
         };
     }
 
     fn deinit(self: *Builder) void {
-        self.identity_variables.deinit();
-        self.active.deinit();
+        self.identity_variables.deinit(self.allocator);
+        self.active.deinit(self.allocator);
     }
 
     fn writeVar(self: *Builder, var_: Var) Allocator.Error!void {
@@ -146,16 +146,16 @@ const Builder = struct {
             else => {},
         }
 
-        if (self.active.get(root)) |slot| {
+        if (varSlot(self.active.items, root)) |slot| {
             self.writeTag("cycle");
             self.writeU32(slot);
             return;
         }
 
-        const slot: u32 = @intCast(self.active.count());
-        try self.active.put(root, slot);
+        try self.active.append(self.allocator, root);
+        errdefer _ = self.active.pop();
         try self.writeContent(resolved.desc.content);
-        _ = self.active.remove(root);
+        _ = self.active.pop();
     }
 
     fn writeIdentityVariable(
@@ -166,18 +166,25 @@ const Builder = struct {
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) Allocator.Error!void {
         self.contains_identity_variables = true;
-        if (self.identity_variables.get(root)) |slot| {
+        if (varSlot(self.identity_variables.items, root)) |slot| {
             self.writeTag("identity_var_ref");
             self.writeU32(slot);
             return;
         }
 
-        const slot: u32 = @intCast(self.identity_variables.count());
-        try self.identity_variables.put(root, slot);
+        const slot: u32 = @intCast(self.identity_variables.items.len);
+        try self.identity_variables.append(self.allocator, root);
         self.writeTag(tag);
         self.writeU32(slot);
         try self.writeOptionalIdent(name);
         try self.writeConstraints(constraints);
+    }
+
+    fn varSlot(vars: []const Var, var_: Var) ?u32 {
+        for (vars, 0..) |candidate, slot| {
+            if (candidate == var_) return @intCast(slot);
+        }
+        return null;
     }
 
     fn writeContent(self: *Builder, content: types.Content) Allocator.Error!void {
@@ -322,16 +329,16 @@ const Builder = struct {
         try self.appendRecordFieldsForKey(&fields, head);
 
         var tail = ext;
-        var seen = std.AutoHashMap(Var, void).init(self.allocator);
-        defer seen.deinit();
+        var seen = std.ArrayList(Var).empty;
+        defer seen.deinit(self.allocator);
         while (tail) |tail_var| {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
-            if (self.active.contains(root)) break;
-            if (seen.contains(root)) {
+            if (varSlot(self.active.items, root) != null) break;
+            if (varSlot(seen.items, root) != null) {
                 invariantViolation("canonical type key row normalization reached a cyclic record row");
             }
-            try seen.put(root, {});
+            try seen.append(self.allocator, root);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
                     .empty_record => {
@@ -394,16 +401,16 @@ const Builder = struct {
         try self.appendTagsForKey(&tags, head);
 
         var tail: ?Var = ext;
-        var seen = std.AutoHashMap(Var, void).init(self.allocator);
-        defer seen.deinit();
+        var seen = std.ArrayList(Var).empty;
+        defer seen.deinit(self.allocator);
         while (tail) |tail_var| {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
-            if (self.active.contains(root)) break;
-            if (seen.contains(root)) {
+            if (varSlot(self.active.items, root) != null) break;
+            if (varSlot(seen.items, root) != null) {
                 invariantViolation("canonical type key row normalization reached a cyclic tag row");
             }
-            try seen.put(root, {});
+            try seen.append(self.allocator, root);
             switch (resolved.desc.content) {
                 .structure => |flat| switch (flat) {
                     .empty_tag_union => {

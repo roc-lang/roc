@@ -1457,8 +1457,19 @@ const CheckedTypePublication = struct {
 
     pub fn rootForSourceVar(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) ?CheckedTypeId {
         const resolved = module.typeStoreConst().resolveVar(var_).var_;
-        for (self.source_type_roots) |entry| {
-            if (entry.source_var == resolved) return entry.checked_root;
+        var low: usize = 0;
+        var high: usize = self.source_type_roots.len;
+        const needle = @intFromEnum(resolved);
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const entry = self.source_type_roots[mid];
+            const candidate = @intFromEnum(entry.source_var);
+            if (candidate == needle) return entry.checked_root;
+            if (candidate < needle) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
         }
         return null;
     }
@@ -3378,7 +3389,12 @@ fn sourceTypeRootsFromIndex(
             .checked_root = entry.value_ptr.*,
         };
     }
+    std.mem.sort(CheckedSourceTypeRoot, out, {}, checkedSourceTypeRootLessThan);
     return out;
+}
+
+fn checkedSourceTypeRootLessThan(_: void, a: CheckedSourceTypeRoot, b: CheckedSourceTypeRoot) bool {
+    return @intFromEnum(a.source_var) < @intFromEnum(b.source_var);
 }
 
 fn copyCheckedTypePayload(
@@ -6496,6 +6512,9 @@ pub const ResolvedValueRefTable = struct {
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
 
+        var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module);
+        defer local_pattern_roles.deinit(allocator);
+
         const by_checked_expr = try allocator.alloc(?ResolvedValueRefId, checked_bodies.exprs.len);
         errdefer allocator.free(by_checked_expr);
         @memset(by_checked_expr, null);
@@ -6532,6 +6551,7 @@ pub const ResolvedValueRefTable = struct {
                 platform_required_declarations,
                 platform_required_bindings,
                 top_level_values,
+                &local_pattern_roles,
                 checked_bodies,
             );
             const checked_type_key = try canonical_type_keys.fromVar(
@@ -6605,6 +6625,7 @@ fn categorizeValueRef(
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
+    local_pattern_roles: *const LocalPatternRoleIndex,
     checked_bodies: *const CheckedBodyStore,
 ) Allocator.Error!ResolvedValueRef {
     const expr = module.expr(expr_idx);
@@ -6615,6 +6636,7 @@ fn categorizeValueRef(
             local.pattern_idx,
             hosted_procs,
             top_level_values,
+            local_pattern_roles,
             checked_bodies,
         ),
         .e_lookup_external => |external| categorizeImportedValueRef(
@@ -6815,6 +6837,7 @@ fn categorizeLocalValueRef(
     pattern: CIR.Pattern.Idx,
     hosted_procs: *const HostedProcTable,
     top_level_values: *const TopLevelValueTable,
+    local_pattern_roles: *const LocalPatternRoleIndex,
     checked_bodies: *const CheckedBodyStore,
 ) ResolvedValueRef {
     const checked_pattern = checked_bodies.patternIdForSource(pattern) orelse {
@@ -6876,20 +6899,15 @@ fn categorizeLocalValueRef(
         unreachable;
     };
 
-    if (patternIsLambdaArg(module, pattern)) {
+    if (local_pattern_roles.isLambdaArg(pattern)) {
         return .{ .local_param = .{ .binder = binder } };
     }
 
-    if (localStatementForPattern(module, pattern)) |statement| {
-        switch (statement) {
-            .s_var => return .{ .local_mutable_version = .{ .binder = binder } },
-            .s_decl => |decl| {
-                if (isLocalProcExpr(module, decl.expr)) {
-                    return .{ .local_proc = .{ .binder = binder } };
-                }
-                return .{ .local_value = .{ .binder = binder } };
-            },
-            else => {},
+    if (local_pattern_roles.statementRole(pattern)) |role| {
+        switch (role) {
+            .mutable_version => return .{ .local_mutable_version = .{ .binder = binder } },
+            .local_proc => return .{ .local_proc = .{ .binder = binder } },
+            .local_value => return .{ .local_value = .{ .binder = binder } },
         }
     }
 
@@ -7109,54 +7127,110 @@ fn platformBindingForRequiredIndex(table: *const PlatformRequiredBindingTable, r
     return table.lookupByRequiredIndex(requires_idx);
 }
 
-fn localStatementForPattern(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) ?CIR.Statement {
-    const statements = module.moduleEnvConst().store.sliceStatements(module.moduleEnvConst().all_statements);
-    for (statements) |statement_idx| {
-        const statement = module.getStatement(statement_idx);
-        switch (statement) {
-            .s_decl => |decl| if (decl.pattern == pattern) return statement,
-            .s_var => |var_| if (var_.pattern_idx == pattern) return statement,
-            else => {},
-        }
-    }
-    return null;
-}
+const LocalPatternStatementRole = enum {
+    mutable_version,
+    local_proc,
+    local_value,
+};
 
-fn patternIsLambdaArg(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
-    var node_idx: u32 = 0;
-    while (node_idx < module.nodeCount()) : (node_idx += 1) {
-        if (module.nodeTag(@enumFromInt(node_idx)) != .expr_lambda) continue;
-        const expr = module.expr(@enumFromInt(node_idx));
-        const lambda = switch (expr.data) {
-            .e_lambda => |lambda| lambda,
-            else => unreachable,
-        };
-        for (module.slicePatterns(lambda.args)) |arg| {
-            if (arg == pattern) return true;
+const LocalPatternRoleIndex = struct {
+    lambda_args: []bool = &.{},
+    statement_roles: []?LocalPatternStatementRole = &.{},
+
+    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalPatternRoleIndex {
+        const node_count = module.nodeCount();
+        const lambda_args = try allocator.alloc(bool, node_count);
+        errdefer allocator.free(lambda_args);
+        const statement_roles = try allocator.alloc(?LocalPatternStatementRole, node_count);
+        errdefer allocator.free(statement_roles);
+        @memset(lambda_args, false);
+        @memset(statement_roles, null);
+
+        const statements = module.moduleEnvConst().store.sliceStatements(module.moduleEnvConst().all_statements);
+        for (statements) |statement_idx| {
+            const statement = module.getStatement(statement_idx);
+            switch (statement) {
+                .s_decl => |decl| {
+                    const raw_pattern = @intFromEnum(decl.pattern);
+                    if (raw_pattern >= node_count) {
+                        checkedArtifactInvariant("checked artifact invariant violated: local declaration pattern is out of range", .{});
+                    }
+                    statement_roles[raw_pattern] = if (isLocalProcExpr(module, decl.expr)) .local_proc else .local_value;
+                },
+                .s_var => |var_| {
+                    const raw_pattern = @intFromEnum(var_.pattern_idx);
+                    if (raw_pattern >= node_count) {
+                        checkedArtifactInvariant("checked artifact invariant violated: local var pattern is out of range", .{});
+                    }
+                    statement_roles[raw_pattern] = .mutable_version;
+                },
+                else => {},
+            }
         }
+
+        var node_idx: u32 = 0;
+        while (node_idx < node_count) : (node_idx += 1) {
+            if (module.nodeTag(@enumFromInt(node_idx)) != .expr_lambda) continue;
+            const expr = module.expr(@enumFromInt(node_idx));
+            const lambda = switch (expr.data) {
+                .e_lambda => |lambda| lambda,
+                else => unreachable,
+            };
+            for (module.slicePatterns(lambda.args)) |arg| {
+                const raw_pattern = @intFromEnum(arg);
+                if (raw_pattern >= node_count) {
+                    checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
+                }
+                lambda_args[raw_pattern] = true;
+            }
+        }
+
+        return .{
+            .lambda_args = lambda_args,
+            .statement_roles = statement_roles,
+        };
     }
-    return false;
-}
+
+    fn isLambdaArg(self: *const LocalPatternRoleIndex, pattern: CIR.Pattern.Idx) bool {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.lambda_args.len) {
+            checkedArtifactInvariant("checked artifact invariant violated: lambda argument lookup pattern is out of range", .{});
+        }
+        return self.lambda_args[raw];
+    }
+
+    fn statementRole(self: *const LocalPatternRoleIndex, pattern: CIR.Pattern.Idx) ?LocalPatternStatementRole {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.statement_roles.len) {
+            checkedArtifactInvariant("checked artifact invariant violated: local statement lookup pattern is out of range", .{});
+        }
+        return self.statement_roles[raw];
+    }
+
+    fn deinit(self: *LocalPatternRoleIndex, allocator: Allocator) void {
+        allocator.free(self.statement_roles);
+        allocator.free(self.lambda_args);
+        self.* = .{};
+    }
+};
 
 fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
-    var node_idx: u32 = 0;
-    while (node_idx < module.nodeCount()) : (node_idx += 1) {
-        const tag = module.nodeTag(@enumFromInt(node_idx));
-        switch (tag) {
-            .pattern_identifier,
-            .pattern_as,
-            .pattern_applied_tag,
-            .pattern_nominal,
-            .pattern_nominal_external,
-            .pattern_record_destructure,
-            .pattern_list,
-            .pattern_tuple,
-            => {},
-            else => continue,
-        }
-        if (node_idx == @intFromEnum(pattern)) return true;
+    const raw = @intFromEnum(pattern);
+    if (raw >= module.nodeCount()) {
+        checkedArtifactInvariant("checked artifact invariant violated: binder lookup pattern is out of range", .{});
     }
-    return false;
+    return switch (module.nodeTag(@enumFromInt(raw))) {
+        .pattern_identifier,
+        .pattern_as,
+        .pattern_applied_tag,
+        .pattern_nominal,
+        .pattern_nominal_external,
+        .pattern_record_destructure,
+        .pattern_list,
+        .pattern_tuple,
+        => true,
+        else => false,
+    };
 }
 
 fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
