@@ -748,6 +748,11 @@ const CheckPostcheckArchitectureStep = struct {
     fn make(step: *Step, _: Step.MakeOptions) !void {
         const b = step.owner;
 
+        if (builtin.os.tag == .windows) {
+            std.debug.print("Skipping post-check architecture check on Windows (perl not available)\n", .{});
+            return;
+        }
+
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
 
@@ -772,6 +777,62 @@ const CheckPostcheckArchitectureStep = struct {
             },
             else => {
                 return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
+            },
+        }
+    }
+};
+
+/// Build step that runs the perl-based semantic audit gate.
+/// Skipped on Windows because perl is not preinstalled there;
+/// Linux/macOS CI still enforces this gate.
+const SemanticAuditStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *SemanticAuditStep {
+        const self = b.allocator.create(SemanticAuditStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "semantic-audit",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+
+        if (builtin.os.tag == .windows) {
+            std.debug.print("Skipping semantic audit on Windows (perl not available)\n", .{});
+            return;
+        }
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "perl");
+        try child_argv.append(b.allocator, "ci/semantic_audit.pl");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Semantic audit failed. Run 'perl ci/semantic_audit.pl' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("ci/semantic_audit.pl terminated abnormally", .{});
             },
         }
     }
@@ -1624,6 +1685,11 @@ const MiniCiStep = struct {
         const b = step.owner;
         std.debug.print("---- minici: running semantic audit ----\n", .{});
 
+        if (builtin.os.tag == .windows) {
+            std.debug.print("Skipping semantic audit on Windows (perl not available)\n", .{});
+            return;
+        }
+
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
 
@@ -1823,6 +1889,11 @@ const MiniCiStep = struct {
     fn checkPostcheckArchitecture(step: *Step) !void {
         const b = step.owner;
         std.debug.print("---- minici: checking post-check architecture ----\n", .{});
+
+        if (builtin.os.tag == .windows) {
+            std.debug.print("Skipping post-check architecture check on Windows (perl not available)\n", .{});
+            return;
+        }
 
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
@@ -3273,7 +3344,7 @@ pub fn build(b: *std.Build) void {
     check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
 
     // Add check that semantic compiler stages do not recover missing facts.
-    const run_semantic_audit = b.addSystemCommand(&.{ "perl", "ci/semantic_audit.pl" });
+    const run_semantic_audit = SemanticAuditStep.create(b);
     check_semantic_audit_step.dependOn(&run_semantic_audit.step);
     test_step.dependOn(&run_semantic_audit.step);
     eval_test_step.dependOn(&run_semantic_audit.step);
