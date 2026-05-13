@@ -1,8 +1,7 @@
 //! MIR-family post-check lowering pipeline.
 //!
-//! `plan.md` is the source of truth for these type-state boundaries. The
-//! submodules here are the implementation work areas for the hard cutover from
-//! the old top-level post-check stages to the final MIR-family architecture.
+//! `design.md` is the source of truth for these type-state boundaries. The
+//! submodules here implement the post-check MIR-family architecture.
 
 const std = @import("std");
 
