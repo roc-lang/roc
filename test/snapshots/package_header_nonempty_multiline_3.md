@@ -10,9 +10,20 @@ package
 	{ somePkg: "../main.roc", }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - package_header_nonempty_multiline_3.md:2:14:2:22
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_3.md:2:3:2:12
-EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_3.md:2:14:2:22
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `SomeType` was not found in this Roc project.
+
+You're attempting to use this module here:
+**package_header_nonempty_multiline_3.md:2:14:2:22:**
+```roc
+	[something, SomeType,]
+```
+	            ^^^^^^^^
+
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `something` is exposed, but it is not defined anywhere in this module.
 
@@ -22,16 +33,6 @@ The module header says that `something` is exposed, but it is not defined anywhe
 ```
 	 ^^^^^^^^^
 You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
-
-**package_header_nonempty_multiline_3.md:2:14:2:22:**
-```roc
-	[something, SomeType,]
-```
-	            ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -67,7 +68,9 @@ package
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-import (module "SomeType")
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

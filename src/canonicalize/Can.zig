@@ -2084,6 +2084,15 @@ pub fn canonicalizeFile(
         try self.injectEchoPlatform();
     }
 
+    // For `package [Mod1, Mod2, ...] {}` headers, auto-import each exposed
+    // module unless the user wrote an explicit `import Mod` (which then takes
+    // precedence — including its `exposing` clause, e.g. `import Mod exposing []`).
+    var auto_imports: std.array_list.Managed(AutoImportedModule) = .init(self.env.gpa);
+    defer auto_imports.deinit();
+    if (header == .package) {
+        try self.collectPackageHeaderAutoImports(header.package.exposes, file.statements, &auto_imports);
+    }
+
     // Phase 0: Register module aliases and import indices early so they are available
     // during type declaration and associated block canonicalization (Phases 1a-1.7).
     // Without this, qualified type references inside associated blocks
@@ -2095,6 +2104,9 @@ pub fn canonicalizeFile(
         if (stmt == .import) {
             try self.registerImportModuleAlias(stmt.import);
         }
+    }
+    for (auto_imports.items) |auto_imp| {
+        try self.registerAutoImportModuleAlias(auto_imp.module_name);
     }
 
     // First pass (1a): Process type declarations WITH associated blocks to introduce them into scope
@@ -2529,6 +2541,13 @@ pub fn canonicalizeFile(
                 }
             }
         }
+    }
+
+    // Auto-imports from the package header: process them like explicit `import Mod`
+    // statements, but before any user-written statements so they appear at the top
+    // of the canonicalized import list.
+    for (auto_imports.items) |auto_imp| {
+        _ = try self.canonicalizeAutoImport(auto_imp.module_name, auto_imp.region);
     }
 
     // Second pass: Process all other statements
@@ -3930,6 +3949,85 @@ fn registerImportModuleAlias(
     // 5. Store the import index mapping and add to scope for qualified lookups
     try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+}
+
+/// A module from `package [Mod1, Mod2, ...] {}` that will be auto-imported.
+const AutoImportedModule = struct {
+    module_name: Ident.Idx,
+    region: Region,
+};
+
+/// Collect modules to auto-import from a `package` header. Skips any module that
+/// already has an explicit unqualified `import` statement in the file — the explicit
+/// form (with its optional `exposing`) takes precedence.
+fn collectPackageHeaderAutoImports(
+    self: *Self,
+    exposes: AST.Collection.Idx,
+    statements: AST.Statement.Span,
+    out: *std.array_list.Managed(AutoImportedModule),
+) std.mem.Allocator.Error!void {
+    // Build the set of module names the user already imported explicitly. Only
+    // unqualified, non-nested imports can shadow a package-header auto-import.
+    var explicit: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{};
+    defer explicit.deinit(self.env.gpa);
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt != .import) continue;
+        const imp = stmt.import;
+        if (imp.qualifier_tok != null or imp.nested_import) continue;
+        const name_ident = self.parse_ir.tokens.resolveIdentifier(imp.module_name_tok) orelse continue;
+        try explicit.put(self.env.gpa, name_ident, {});
+    }
+
+    const collection = self.parse_ir.store.getCollection(exposes);
+    const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
+    for (exposed_items) |exposed_idx| {
+        const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
+        const name_token: Token.Idx, const tok_region = switch (exposed) {
+            .upper_ident => |ui| .{ ui.ident, ui.region },
+            .upper_ident_star => |ui| .{ ui.ident, ui.region },
+            // Lower idents in a package header refer to value re-exports, not
+            // submodules — leave them alone. Malformed items already produced
+            // a parse diagnostic.
+            .lower_ident, .malformed => continue,
+        };
+        const name_ident = self.parse_ir.tokens.resolveIdentifier(name_token) orelse continue;
+        if (explicit.contains(name_ident)) continue;
+        try out.append(.{
+            .module_name = name_ident,
+            .region = self.parse_ir.tokenizedRegionToRegion(tok_region),
+        });
+    }
+}
+
+/// Phase-0 alias registration for an auto-imported package-header module.
+/// Mirrors the unqualified, non-aliased branch of `registerImportModuleAlias`.
+fn registerAutoImportModuleAlias(self: *Self, module_name: Ident.Idx) std.mem.Allocator.Error!void {
+    const module_name_text = self.env.getIdent(module_name);
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
+        self.env.gpa,
+        self.env.common.getStringStore(),
+        module_name_text,
+        module_name,
+    );
+    const alias = try self.extractModuleName(module_name);
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    _ = try current_scope.introduceModuleAlias(self.env.gpa, alias, module_name, false, null);
+    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+}
+
+/// Second-pass canonicalization for an auto-imported package-header module.
+/// Equivalent to writing `import <module_name>` with no alias and no exposing list.
+fn canonicalizeAutoImport(
+    self: *Self,
+    module_name: Ident.Idx,
+    import_region: Region,
+) std.mem.Allocator.Error!?Statement.Idx {
+    // Empty exposed-items span.
+    const scratch_start = self.env.store.scratchExposedItemTop();
+    const empty_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
+    return try self.importAliased(module_name, null, empty_exposes, import_region, false);
 }
 
 /// Resolve the module alias name from either explicit alias or module name

@@ -10,17 +10,18 @@ package [
 ] {}
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - main.md:2:5:2:10
+MODULE NOT FOUND - main.md:2:5:2:10
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Color` is exposed, but it is not defined anywhere in this module.
+**MODULE NOT FOUND**
+The module `Color` was not found in this Roc project.
 
+You're attempting to use this module here:
 **main.md:2:5:2:10:**
 ```roc
     Color,
 ```
     ^^^^^
-You can fix this by either defining `Color` in this module, or by removing it from the list of exposed values.
+
 
 # TOKENS
 ~~~zig
@@ -48,7 +49,9 @@ package
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-import (module "Color")
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
