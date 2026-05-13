@@ -5477,6 +5477,11 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
     defer build_env.freeDrainedReports(drained);
 
+    // Capture rendered reports into a buffer so they can be persisted in the
+    // test cache and replayed on subsequent runs.
+    var compilation_error_buffer: std.Io.Writer.Allocating = .init(ctx.gpa);
+    defer compilation_error_buffer.deinit();
+
     var has_compilation_errors = false;
     for (drained) |mod| {
         for (mod.reports) |*report| {
@@ -5485,6 +5490,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
             if (report.severity == .fatal or report.severity == .runtime_error) {
                 has_compilation_errors = true;
+                reporting.renderReportToTerminal(report, &compilation_error_buffer.writer, palette, config) catch {};
             }
         }
     }
@@ -5941,10 +5947,19 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
     // --- Store test cache blob ---
-    const cache_outcome: TestCacheOutcome = if (total_failed == 0 and !has_compilation_errors) .all_passed else .some_failed;
+    const cache_outcome: TestCacheOutcome = if (has_compilation_errors)
+        .compilation_error
+    else if (total_failed == 0)
+        .all_passed
+    else
+        .some_failed;
 
     if (!args.no_cache) {
         if (source) |src| {
+            const comptime_report = if (has_compilation_errors)
+                compilation_error_buffer.written()
+            else
+                "";
             if (buildTestCacheBlob(
                 ctx.gpa,
                 cache_outcome,
@@ -5952,7 +5967,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
                 total_failed,
                 cache_entries.items,
                 cache_failure_reports.items,
-                "", // No comptime report in new BuildEnv architecture
+                comptime_report,
             )) |blob| {
                 defer ctx.gpa.free(blob);
                 if (cache_config.getTestCacheDir(ctx.gpa)) |dir| {
