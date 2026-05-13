@@ -2712,9 +2712,19 @@ fn extractNonPlatformPackages(
                         const str_region = parse_ast.tokenizedRegionToRegion(str.region);
                         const raw_path = source[str_region.start.offset..str_region.end.offset];
                         if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
-                            const pkg_rel_path = raw_path[1 .. raw_path.len - 1];
-                            // Make absolute path relative to app directory
-                            const pkg_abs_path = try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_rel_path });
+                            const pkg_spec = raw_path[1 .. raw_path.len - 1];
+                            // If this is a URL, download and resolve to the cached main.roc.
+                            // Otherwise, treat it as a relative file path under app_dir.
+                            const pkg_abs_path = if (base.url.isSafeUrl(pkg_spec)) blk: {
+                                // Dupe into the arena since `source` is freed when this
+                                // function returns but error reports may reference the URL.
+                                const url_owned = try ctx.arena.dupe(u8, pkg_spec);
+                                const cached = resolveUrlBundle(ctx, url_owned) catch |err| switch (err) {
+                                    error.CliError => return error.CliError,
+                                    error.OutOfMemory => return error.OutOfMemory,
+                                };
+                                break :blk try ctx.gpa.dupe(u8, cached);
+                            } else try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_spec });
                             try packages.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
                         }
                     },
@@ -3286,16 +3296,17 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
-/// Resolve a URL platform specification by downloading and caching the bundle.
+/// Resolve a URL bundle (platform or package) by downloading and caching it.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
-fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
+/// Returns the path to `main.roc` inside the cache directory.
+fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})![]const u8 {
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
     const base58_hash = download.validateUrl(url) catch {
         return ctx.fail(.{ .invalid_url = .{
             .url = url,
-            .reason = "Invalid platform URL format or missing hash",
+            .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
         } });
     };
 
@@ -3317,7 +3328,7 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
 
     if (!already_cached) {
         // Not cached - need to download
-        std.log.info("Downloading platform from {s}...", .{url});
+        std.log.info("Downloading bundle from {s}...", .{url});
 
         // Create cache directory structure
         ensureCompilerCacheDirExists(cache_dir_path) catch |make_err| {
@@ -3348,21 +3359,26 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
             } });
         };
 
-        std.log.info("Platform cached at {s}", .{package_dir_path});
+        std.log.info("Bundle cached at {s}", .{package_dir_path});
     }
 
-    // Platforms must have a main.roc entry point
-    const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
-    std.fs.cwd().access(platform_source_path, .{}) catch {
+    // Bundles must have a main.roc entry point
+    const source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
+    std.fs.cwd().access(source_path, .{}) catch {
         return ctx.fail(.{ .platform_source_not_found = .{
             .platform_path = package_dir_path,
-            .searched_paths = &.{platform_source_path},
+            .searched_paths = &.{source_path},
         } });
     };
 
-    return PlatformPaths{
-        .platform_source_path = platform_source_path,
-    };
+    return source_path;
+}
+
+/// Resolve a URL platform specification by downloading and caching the bundle.
+/// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
+fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
+    const source_path = try resolveUrlBundle(ctx, url);
+    return PlatformPaths{ .platform_source_path = source_path };
 }
 
 /// Extract all entrypoint names from platform header provides record into ArrayList
