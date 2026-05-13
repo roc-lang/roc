@@ -1504,6 +1504,8 @@ pub const CheckedTypeStore = struct {
         defer active.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module);
         defer local_type_declarations.deinit();
+        var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
+        defer top_level_defs.deinit(allocator);
 
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
@@ -1519,7 +1521,7 @@ pub const CheckedTypeStore = struct {
                     else => {},
                 }
             } else if (isPatternNodeTag(tag)) {
-                const pattern_source_var = checkedPatternSourceTypeVar(module, @enumFromInt(node_idx));
+                const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @enumFromInt(node_idx));
                 _ = try appendCheckedTypeRoot(
                     allocator,
                     module,
@@ -4052,6 +4054,9 @@ pub const CheckedBodyStore = struct {
         @memset(pattern_by_node, null);
         @memset(statement_by_node, null);
 
+        var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
+        defer top_level_defs.deinit(allocator);
+
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
@@ -4074,7 +4079,7 @@ pub const CheckedBodyStore = struct {
                 expr_by_node[node_idx] = id;
             } else if (isPatternNodeTag(tag)) {
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
-                const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, pattern_idx)) orelse {
+                const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
                     if (builtin.mode == .Debug) {
                         std.debug.panic("checked artifact invariant violated: checked pattern type root was not published", .{});
                     }
@@ -7062,15 +7067,32 @@ fn categorizeRequiredValueRef(
     };
 }
 
-fn topLevelDefByPattern(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) ?CIR.Def.Idx {
-    for (module.allDefs()) |def_idx| {
-        if (module.def(def_idx).pattern.idx == pattern) return def_idx;
-    }
-    return null;
-}
+const TopLevelDefPatternIndex = struct {
+    by_pattern: []?CIR.Def.Idx = &.{},
 
-fn checkedPatternSourceTypeVar(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) Var {
-    if (topLevelDefByPattern(module, pattern)) |def_idx| {
+    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!TopLevelDefPatternIndex {
+        const by_pattern = try allocator.alloc(?CIR.Def.Idx, module.nodeCount());
+        @memset(by_pattern, null);
+        for (module.allDefs()) |def_idx| {
+            by_pattern[@intFromEnum(module.def(def_idx).pattern.idx)] = def_idx;
+        }
+        return .{ .by_pattern = by_pattern };
+    }
+
+    fn defForPattern(self: *const TopLevelDefPatternIndex, pattern: CIR.Pattern.Idx) ?CIR.Def.Idx {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.by_pattern.len) return null;
+        return self.by_pattern[raw];
+    }
+
+    fn deinit(self: *TopLevelDefPatternIndex, allocator: Allocator) void {
+        allocator.free(self.by_pattern);
+        self.* = .{};
+    }
+};
+
+fn checkedPatternSourceTypeVar(module: TypedCIR.Module, top_level_defs: *const TopLevelDefPatternIndex, pattern: CIR.Pattern.Idx) Var {
+    if (top_level_defs.defForPattern(pattern)) |def_idx| {
         return module.defType(def_idx);
     }
     return module.patternType(pattern);
