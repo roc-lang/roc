@@ -19,6 +19,9 @@ const AST = parse.AST;
 /// 2. Are uppercase identifiers (module names start with uppercase)
 /// 3. Are not "Builtin" (always available)
 ///
+/// In addition to explicit `import` statements, the upper-cased entries in a
+/// `package [Mod1, Mod2, ...] {}` header are treated as auto-imports.
+///
 /// This is used to identify which sibling modules need to be compiled
 /// before canonicalizing the current module.
 ///
@@ -37,8 +40,25 @@ pub fn extractImportsFromAST(
         result.deinit(gpa);
     }
 
-    // Get the file and its statements
     const file = parse_ast.store.getFile();
+
+    // Modules listed in a `package [...]` header are auto-imported.
+    const header = parse_ast.store.getHeader(file.header);
+    if (header == .package) {
+        const collection = parse_ast.store.getCollection(header.package.exposes);
+        const exposed_items = parse_ast.store.exposedItemSlice(.{ .span = collection.span });
+        for (exposed_items) |exposed_idx| {
+            const exposed = parse_ast.store.getExposedItem(exposed_idx);
+            const name_token = switch (exposed) {
+                .upper_ident => |ui| ui.ident,
+                .upper_ident_star => |ui| ui.ident,
+                .lower_ident, .malformed => continue,
+            };
+            const module_name = parse_ast.resolve(name_token);
+            try appendModuleName(gpa, &result, module_name);
+        }
+    }
+
     const stmt_slice = parse_ast.store.statementSlice(file.statements);
 
     for (stmt_slice) |stmt_idx| {
@@ -58,30 +78,32 @@ pub fn extractImportsFromAST(
                 else
                     module_name_raw;
 
-                // Skip "Builtin" - always available
-                if (std.mem.eql(u8, module_name, "Builtin")) continue;
-
-                // Check if it looks like a module name (starts with uppercase)
-                if (module_name.len == 0) continue;
-                if (module_name[0] < 'A' or module_name[0] > 'Z') continue;
-
-                // Check for duplicates using linear scan (typically few imports)
-                var found = false;
-                for (result.items) |existing| {
-                    if (std.mem.eql(u8, existing, module_name)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    try result.append(gpa, try gpa.dupe(u8, module_name));
-                }
+                try appendModuleName(gpa, &result, module_name);
             },
             else => {},
         }
     }
 
     return result.toOwnedSlice(gpa);
+}
+
+fn appendModuleName(
+    gpa: Allocator,
+    result: *std.ArrayList([]const u8),
+    module_name: []const u8,
+) !void {
+    // Skip "Builtin" - always available
+    if (std.mem.eql(u8, module_name, "Builtin")) return;
+
+    // Check if it looks like a module name (starts with uppercase)
+    if (module_name.len == 0) return;
+    if (module_name[0] < 'A' or module_name[0] > 'Z') return;
+
+    // Check for duplicates using linear scan (typically few imports)
+    for (result.items) |existing| {
+        if (std.mem.eql(u8, existing, module_name)) return;
+    }
+    try result.append(gpa, try gpa.dupe(u8, module_name));
 }
 
 /// Extract qualified/external imports from the AST.
