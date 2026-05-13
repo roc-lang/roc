@@ -14,6 +14,7 @@
 //!   --verbose            Print PASS results and timing details
 
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
@@ -207,6 +208,13 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 
 var roc_binary_path: []const u8 = "";
 
+fn currentProcessIdForFilename() u64 {
+    if (comptime builtin.os.tag == .windows) {
+        return std.os.windows.GetCurrentProcessId();
+    }
+    return @intCast(std.c.getpid());
+}
+
 fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
@@ -214,7 +222,7 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
         return .{ .status = .crash, .message = "failed to create cache dirs" };
     defer cache_dirs.deinit(allocator);
 
-    const pid = std.c.getpid();
+    const pid = currentProcessIdForFilename();
     const output_name = std.fmt.allocPrint(allocator, "./.test_output_{d}", .{pid}) catch
         return .{ .status = .crash, .message = "OOM" };
     defer std.fs.cwd().deleteFile(output_name) catch {};
