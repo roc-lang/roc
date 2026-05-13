@@ -2,16 +2,17 @@
 
 Scope: audited the current branch against `origin/main` using the PR-style diff
 `origin/main...HEAD`. I focused on changed files that contain tests, deleted
-test files, deleted inline `test` blocks in production files, skipped/commented
-tests, snapshot expectation reductions, and rewritten test harnesses.
+test files, deleted inline Zig `test` blocks in production files, skipped or
+commented-out tests, snapshot expectation reductions, and rewritten harnesses.
 
 Mechanical summary:
 
-- Test-adjacent changed paths: 539
-- Added test-adjacent paths: 72
-- Deleted test-adjacent paths: 34
-- Modified test-adjacent paths: 431
-- Renamed test-adjacent paths: 2
+- Total changed paths: 820
+- Test-adjacent changed paths: 525
+- Added test-adjacent paths: 68
+- Deleted test-adjacent paths: 28
+- Modified test-adjacent paths: 428
+- Renamed test-adjacent paths: 1
 
 ## Open Findings
 
@@ -19,21 +20,151 @@ None.
 
 ## Resolved Findings
 
+### Deleted Direct Dev-Backend Codegen Structural Coverage Was Restored
+
+Deleted inline test file:
+
+- `src/backend/dev/LirCodeGen.zig`
+
+Replacement:
+
+- `src/backend/dev/LirCodeGen.zig`
+
+The deleted tests now have final-architecture replacements that build current
+statement-only `LIR.CFStmt` procedures and exercise the dev backend's current
+machine-code generation boundary. These replacements do not restore old
+`LirExprStore`, old MIR stores, monotype helpers, or pre-cutover backend APIs.
+
+Active restored test names:
+
+- `proc params and mutable list cells use distinct stack slots`
+- `two-arg proc list loop returns full length`
+- `generate i64 literal`
+- `generate bool literal`
+- `tag payload bind invariant rejects mismatched pattern layout`
+- `generate addition`
+- `record equality uses layout-aware comparison`
+- `generate modulo`
+- `generate shift left`
+- `generate shift right`
+- `generate shift right zero-fill`
+- `generate unary minus`
+
+The primitive literal/binop/unary tests now execute generated dev code and
+assert returned values instead of only asserting that code bytes were emitted.
+The list-loop test executes a two-argument statement-only LIR proc and verifies
+the generated loop returns the full list length. The record equality test uses
+a layout whose physical field order differs from source order and verifies
+layout-aware comparison at the dev codegen boundary. The tag-payload mismatch
+test pins the final-LIR invariant that a payload projection target layout must
+match the published runtime payload layout; executing the invalid LIR would
+trigger the backend's debug assertion/release `unreachable` path.
+
+## Reviewed Rewrites With No Open Coverage Regression
+
+### Compile-Time Finalization Coverage Was Restored
+
+Deleted file:
+
+- `src/eval/test/comptime_eval_test.zig`
+
+Replacement:
+
+- `src/eval/test/eval_comptime_finalization_tests.zig`
+- wired through `src/eval/test/eval_tests.zig`
+
+This restores active coverage for the deleted compile-time-eval suite using
+the current checked-artifact -> MIR -> IR -> LIR -> LIR interpreter path. The
+suite covers constants, imports, expect/dbg behavior, dependency ordering,
+fixed-width numeric annotations, division/modulo problem paths, recursive
+nominal values, static-dispatch regressions, while-loop crash regressions,
+tag-payload matching, opaque function field lookup, and issue regressions from
+the deleted file.
+
+The old evaluator treated some compile-time crashes as recoverable test
+outcomes. Under the current plan, a crash while publishing or evaluating a
+compile-time root is a compiler invariant violation after checking. The
+replacement tests keep those old names active where practical, but route them
+through the final architecture instead of restoring the deleted evaluator.
+
+### Eval Runner Rewrite Looks Stronger Overall
+
+Deleted files include:
+
+- `src/eval/test/anno_only_interp_test.zig`
+- `src/eval/test/arithmetic_comprehensive_test.zig`
+- `src/eval/test/closure_test.zig`
+- `src/eval/test/eval_test.zig`
+- `src/eval/test/highest_lowest_test.zig`
+- `src/eval/test/interpreter_polymorphism_test.zig`
+- `src/eval/test/interpreter_style_test.zig`
+- `src/eval/test/low_level_interp_test.zig`
+- `src/eval/test/mono_emit_test.zig`
+
+Replacement files include:
+
+- `src/eval/test/eval_tests.zig`
+- `src/eval/test/eval_low_level_tests.zig`
+- `src/eval/test/eval_closure_recursion_tests.zig`
+- `src/eval/test/eval_recursive_data_tests.zig`
+- `src/eval/test/eval_interpreter_style_tests.zig`
+- `src/eval/test/eval_polymorphism_tests.zig`
+- `src/eval/test/eval_highest_lowest_tests.zig`
+- `src/eval/test/eval_comptime_finalization_tests.zig`
+- `src/eval/test/parallel_runner.zig`
+
+This is an improvement for executable behavior. The new runner exercises
+interpreter/dev/wasm through a common data-driven harness, reports
+backend-specific failures, and compares `Str.inspect` output across backends.
+The active restored suites do not use per-case backend skips as placeholder
+coverage. LLVM is reported as `NOT_IMPLEMENTED` by the runner because
+statement-only LIR LLVM support is not present; that is not a newly skipped
+test case.
+
+### Refcount Behavioral Coverage Was Improved
+
+Deleted files:
+
+- `src/eval/test/list_refcount_alias.zig`
+- `src/eval/test/list_refcount_basic.zig`
+- `src/eval/test/list_refcount_builtins.zig`
+- `src/eval/test/list_refcount_complex.zig`
+- `src/eval/test/list_refcount_conditional.zig`
+- `src/eval/test/list_refcount_containers.zig`
+- `src/eval/test/list_refcount_function.zig`
+- `src/eval/test/list_refcount_nested.zig`
+- `src/eval/test/list_refcount_pattern.zig`
+- `src/eval/test/list_refcount_simple.zig`
+- `src/eval/test/list_refcount_strings.zig`
+
+Replacement:
+
+- `src/eval/test/host_effects_tests.zig`
+- `src/eval/test/RuntimeHostEnv.zig`
+- `src/eval/test/host_effects_runner.zig`
+
+This is stronger behaviorally. The new tests assert allocation/refcount balance
+for nested lists, strings, records, boxes, closure captures, boxed callables,
+and recursive tag unions rather than only checking returned values.
+
 ### Deleted LIR/ARC Unit Tests Have Final-Architecture Structural Replacements
 
-The deleted LIR/ARC tests from the old architecture are now represented by
-active final-architecture tests in `src/lir/arc.zig`. The replacements build
-current statement-only `LIR.CFStmt` graphs, run `lir.arc.insert`, and inspect
-the resulting explicit `incref`, `decref`, and `free` statements. They do not
-restore deleted old APIs such as `MirToLir`, `rc_insert`,
-`OwnershipNormalize`, old MIR stores, borrow concepts, or monotype helpers.
+Deleted files:
 
-This restore pass also found and fixed a real ARC bug: branch-local cleanup was
-skipped when a branch continuation rewrote to the same statement id as the
-original continuation. The fix makes the explicit ARC stop boundary take
-precedence over the replacement fast path.
+- `src/lir/rc_insert.zig`
+- relevant old helper tests in `src/eval/test/helpers.zig`
 
-The active restored test names are:
+Replacement:
+
+- `src/lir/arc.zig`
+
+The replacements build current statement-only `LIR.CFStmt` graphs, run
+`lir.arc.insert`, and inspect explicit `incref`, `decref`, and `free`
+statements. They do not restore deleted old APIs such as `MirToLir`,
+`rc_insert`, `OwnershipNormalize`, old MIR stores, borrow concepts, or
+monotype helpers.
+
+Active restored test names include:
 
 - `RC pass-through: non-refcounted i64 block unchanged`
 - `RC: string binding used twice gets incref`
@@ -79,96 +210,6 @@ The active restored test names are:
 - `dev lowering: mutable loop append decrefs mutable result binding once`
 - `dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol`
 
-## Reviewed Rewrites With No Open Coverage Regression
-
-### Compile-Time Finalization Coverage Was Restored
-
-Deleted file:
-
-- `src/eval/test/comptime_eval_test.zig`
-
-Replacement:
-
-- `src/eval/test/eval_comptime_finalization_tests.zig`
-- wired through `src/eval/test/eval_tests.zig`
-
-This restores active coverage for every deleted `comptime_eval_test.zig` test
-name using the current checked-artifact -> MIR -> IR -> LIR -> LIR interpreter
-path. The suite covers constants, imports, expect/dbg behavior, dependency
-ordering, fixed-width numeric annotations, division/modulo problem paths,
-recursive nominal values, static-dispatch regressions, `while` crash
-regressions, tag-payload matching, opaque function field lookup, and issue
-regressions from the deleted file.
-
-The old evaluator treated some compile-time crashes as recoverable test
-outcomes. Under the current plan, a crash while publishing/evaluating a
-compile-time root is a compiler invariant violation after checking. The
-replacement tests keep those old names active but exercise crash behavior
-through executable roots instead of expecting checked-artifact publication to
-recover from an invariant violation.
-
-### Eval Runner Rewrite Looks Stronger Overall
-
-Deleted files include:
-
-- `src/eval/test/anno_only_interp_test.zig`
-- `src/eval/test/arithmetic_comprehensive_test.zig`
-- `src/eval/test/closure_test.zig`
-- `src/eval/test/eval_test.zig`
-- `src/eval/test/highest_lowest_test.zig`
-- `src/eval/test/interpreter_polymorphism_test.zig`
-- `src/eval/test/interpreter_style_test.zig`
-- `src/eval/test/low_level_interp_test.zig`
-- `src/eval/test/mono_emit_test.zig`
-
-Replacement files include:
-
-- `src/eval/test/eval_tests.zig`
-- `src/eval/test/eval_low_level_tests.zig`
-- `src/eval/test/eval_closure_recursion_tests.zig`
-- `src/eval/test/eval_recursive_data_tests.zig`
-- `src/eval/test/eval_interpreter_style_tests.zig`
-- `src/eval/test/eval_polymorphism_tests.zig`
-- `src/eval/test/eval_highest_lowest_tests.zig`
-- `src/eval/test/eval_comptime_finalization_tests.zig`
-- `src/eval/test/parallel_runner.zig`
-
-The new runner is a real coverage improvement for executable behavior. It runs
-interpreter/dev/wasm through a common data-driven harness, reports
-backend-specific failures, and compares `Str.inspect` output across backends.
-There are no data-driven test cases with backend-specific `.skip = .{...}` in
-the restored suites. LLVM is reported as `NOT_IMPLEMENTED` by the runner because
-statement-only LIR LLVM support is not present; that is not a newly skipped test
-case.
-
-### Refcount Behavioral Coverage Was Improved
-
-Deleted files:
-
-- `src/eval/test/list_refcount_alias.zig`
-- `src/eval/test/list_refcount_basic.zig`
-- `src/eval/test/list_refcount_builtins.zig`
-- `src/eval/test/list_refcount_complex.zig`
-- `src/eval/test/list_refcount_conditional.zig`
-- `src/eval/test/list_refcount_containers.zig`
-- `src/eval/test/list_refcount_function.zig`
-- `src/eval/test/list_refcount_nested.zig`
-- `src/eval/test/list_refcount_pattern.zig`
-- `src/eval/test/list_refcount_simple.zig`
-- `src/eval/test/list_refcount_strings.zig`
-
-Replacement:
-
-- `src/eval/test/host_effects_tests.zig`
-- `src/eval/test/RuntimeHostEnv.zig`
-- `src/eval/test/host_effects_runner.zig`
-
-This is stronger behaviorally. The new tests assert allocation/RC balance for
-nested lists, strings, records, boxes, closure captures, boxed callables, and
-recursive tag unions rather than only checking returned values. The structural
-ARC gap is covered separately by the final-LIR tests in `src/lir/arc.zig`; this
-section covers the behavioral side.
-
 ### Final Layout Store Coverage Was Restored
 
 Deleted file:
@@ -179,10 +220,10 @@ Replacement:
 
 - inline tests in `src/layout/store.zig`
 
-The replacement tests restore the deleted invariant names against the final
-layout graph/store APIs instead of the deleted monotype/layout resolver APIs.
-They cover Bool/two-nullary tag-union layout, ZST container behavior, singleton
-tag payloads, recursive nominal layouts, recursive graph structural equivalence,
+The replacement tests restore the deleted invariant names against final layout
+graph/store APIs instead of the deleted monotype/layout resolver APIs. They
+cover Bool/two-nullary tag-union layout, ZST container behavior, singleton tag
+payloads, recursive nominal layouts, recursive graph structural equivalence,
 canonical field ordering, tuple/tag interning, resolved list layout records,
 erased callable RC helper plans, and the old resolver-agreement cases as final
 logical-layout graph assertions.
@@ -232,12 +273,6 @@ Changed file:
 
 - `src/cli/test_shared_memory_system.zig`
 
-Wiring:
-
-- `src/cli/main.zig` imports the CLI test modules at test-only container scope,
-  so tests in `test_shared_memory_system.zig` are active instead of only being
-  compiled inside a wrapper test.
-
 Restored active tests:
 
 - `integration - shared memory setup and parsing`
@@ -273,9 +308,27 @@ mono/executable MIR, finalized row IDs, explicit capture metadata, mandatory
 callable-match support, Bool-as-normal-tag-union, annotation-only exclusion, and
 stage-local expression-map limits.
 
-I did not mark this as an open regression because the deleted APIs are
-intentionally gone. The open LIR/ARC finding above is narrower: it is about
-statement-only LIR and ARC behavior that still exists in the final architecture.
+### Deleted Tail-Recursion Pass Tests Are Tied To A Deleted Pass
+
+Deleted file:
+
+- `src/lir/TailRecursion.zig`
+
+Deleted tests:
+
+- `TailRecursionPass initialization`
+- `TailRecursionPass: tail call is transformed to jump`
+- `TailRecursionPass: non-tail call is not transformed`
+- `makeTailRecursive: end-to-end transforms tail-recursive body`
+- `TailRecursionPass: tail call inside switch_stmt branch is transformed`
+- `TailRecursionPass: direct ret f(...) is transformed to jump`
+- `TailRecursionPass: call to non-target function is not detected as tail call`
+
+I am not marking this as an open test regression because the old pass is gone,
+and the final LIR has explicit joins/jumps from IR lowering rather than this
+standalone tail-recursion transform. If tail-call optimization is still a
+required final-architecture feature, it should get a separate design entry and
+final-stage tests instead of restoring the deleted pass tests.
 
 ### Dev `roc test` Failure-Format And Cache Coverage Improved
 
@@ -294,7 +347,7 @@ Several dev backend tests that were skipped on `origin/main` are now active:
 - failure output contains doc comment
 - verbose and non-verbose failure format parity
 
-This is a clear coverage improvement.
+This is a coverage improvement.
 
 ### Boxed Erased Callable And Readonly Static Data Host Coverage Was Added
 
@@ -329,18 +382,17 @@ a corrected assertion for the final post-check boundary.
 
 ### Existing Skipped CLI Tests Were Not Newly Hidden
 
-The audit found `return error.SkipZigTest` in CLI/glue/fx tests, but the
-remaining skipped cases I checked are pre-existing from `origin/main` or are
-platform-specific skips that were already present. The branch also removes
+The audit found `return error.SkipZigTest` in CLI/glue/fx tests. The remaining
+skipped cases I checked are pre-existing from `origin/main`, architecture/OS
+specific, or unrelated to the current test deletions. The branch also removes
 several dev-backend skips in `src/cli/test/roc_subcommands.zig`.
 
-No new deleted test was replaced by a skipped placeholder.
+No deleted test in this audit was replaced by a skipped placeholder.
 
 ### Snapshot Diagnostic Reductions Are Mostly Cascade Trimming Or Semantic Reclassification
 
-The diff changes many snapshot files. A mechanical pass found 134 snapshot files
-where at least one old diagnostic summary heading disappeared. I reviewed the
-high-risk removals that had previously represented known coverage gaps:
+The diff changes many snapshot files. I reviewed the high-risk removals that
+had previously represented known coverage gaps:
 
 - `test/snapshots/default_app_wrong_arity.md` still asserts
   `MAIN! SHOULD TAKE 1 ARGUMENT`.
@@ -383,8 +435,14 @@ broader than deleted/commented tests.
 
 Deleted test files or test-bearing obsolete modules reviewed in this audit:
 
+- `src/backend/dev/LirCodeGen.zig`
+- `src/cli/main.zig`
+- `src/cli/test/glue_test.zig`
+- `src/cli/test_shared_memory_system.zig`
+- `src/compile/coordinator.zig`
 - `src/eval/comptime_value.zig`
 - `src/eval/dev_evaluator.zig`
+- `src/eval/interpreter.zig`
 - `src/eval/llvm_evaluator.zig`
 - `src/eval/test/TestEnv.zig`
 - `src/eval/test/anno_only_interp_test.zig`
@@ -424,7 +482,7 @@ Deleted test files or test-bearing obsolete modules reviewed in this audit:
 - `src/repl/repl_test.zig`
 - `src/repl/repl_test_env.zig`
 
-Snapshot files were not deleted; one snapshot was renamed:
+Snapshot files were not deleted. One snapshot was renamed:
 
 - `test/snapshots/can_dot_access.md` ->
   `test/snapshots/can_field_access.md`

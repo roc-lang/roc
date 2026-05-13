@@ -13867,6 +13867,8 @@ pub const HostLirCodeGen = blk: {
 
 // Tests
 
+const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+
 const TestLayoutState = struct {
     layout_store: layout.Store,
     module_env: *@import("can").ModuleEnv,
@@ -13886,6 +13888,240 @@ const TestLayoutState = struct {
     }
 };
 
+const TestRocOps = struct {
+    allocator: Allocator,
+    roc_ops: RocOps,
+
+    fn init(allocator: Allocator) TestRocOps {
+        return .{
+            .allocator = allocator,
+            .roc_ops = .{
+                .env = undefined,
+                .roc_alloc = rocAlloc,
+                .roc_dealloc = rocDealloc,
+                .roc_realloc = rocRealloc,
+                .roc_dbg = rocDbg,
+                .roc_expect_failed = rocExpectFailed,
+                .roc_crashed = rocCrashed,
+                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+            },
+        };
+    }
+
+    fn getOps(self: *TestRocOps) *RocOps {
+        self.roc_ops.env = @ptrCast(self);
+        return &self.roc_ops;
+    }
+
+    fn metaBytes(alignment: usize) usize {
+        return @max(alignment, @alignOf(usize));
+    }
+
+    fn rocAlloc(args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
+        const self: *TestRocOps = @ptrCast(@alignCast(env));
+        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+        const meta = metaBytes(args.alignment);
+        const total = args.length + meta;
+        const alloc_base = self.allocator.rawAlloc(total, align_enum, @returnAddress()) orelse
+            @panic("TestRocOps alloc failed");
+        const size_ptr: *usize = @ptrFromInt(@intFromPtr(alloc_base) + meta - @sizeOf(usize));
+        size_ptr.* = total;
+        args.answer = @ptrFromInt(@intFromPtr(alloc_base) + meta);
+    }
+
+    fn rocDealloc(args: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
+        const self: *TestRocOps = @ptrCast(@alignCast(env));
+        const meta = metaBytes(args.alignment);
+        const total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.ptr) - @sizeOf(usize));
+        const total = total_ptr.*;
+        const alloc_base: [*]u8 = @ptrFromInt(@intFromPtr(args.ptr) - meta);
+        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+        self.allocator.rawFree(alloc_base[0..total], align_enum, @returnAddress());
+    }
+
+    fn rocRealloc(args: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
+        const self: *TestRocOps = @ptrCast(@alignCast(env));
+        const meta = metaBytes(args.alignment);
+        const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.answer) - @sizeOf(usize));
+        const old_total = old_total_ptr.*;
+        const old_base: [*]u8 = @ptrFromInt(@intFromPtr(args.answer) - meta);
+        const new_total = args.new_length + meta;
+        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+        const new_base = self.allocator.rawAlloc(new_total, align_enum, @returnAddress()) orelse
+            @panic("TestRocOps realloc failed");
+        @memcpy(new_base[0..@min(old_total, new_total)], old_base[0..@min(old_total, new_total)]);
+        self.allocator.rawFree(old_base[0..old_total], align_enum, @returnAddress());
+        const new_total_ptr: *usize = @ptrFromInt(@intFromPtr(new_base) + meta - @sizeOf(usize));
+        new_total_ptr.* = new_total;
+        args.answer = @ptrFromInt(@intFromPtr(new_base) + meta);
+    }
+
+    fn rocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+        @panic("unexpected dbg in TestRocOps");
+    }
+
+    fn rocExpectFailed(_: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
+        @panic("unexpected expect failure in TestRocOps");
+    }
+
+    fn rocCrashed(args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
+        std.debug.panic("roc crashed: {s}", .{args.utf8_bytes[0..args.len]});
+    }
+};
+
+fn addLocal(store: *LirStore, layout_idx: layout.Idx) !LocalId {
+    return try store.addLocal(.{ .layout_idx = layout_idx });
+}
+
+fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+    return try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = LocalSpan.empty(),
+        .body = body,
+        .ret_layout = ret_layout,
+    });
+}
+
+fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+    return try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(args),
+        .body = body,
+        .ret_layout = ret_layout,
+    });
+}
+
+fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+    const result = try addLocal(store, ret_layout);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = value,
+        .next = ret,
+    } });
+    return try addNoArgProc(store, assign, ret_layout);
+}
+
+fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, operand_layout: layout.Idx, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+    const operand = try addLocal(store, operand_layout);
+    const result = try addLocal(store, ret_layout);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const args = try store.addLocalSpan(&.{operand});
+    const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = op,
+        .rc_effect = op.rcEffect(),
+        .args = args,
+        .next = ret,
+    } });
+    const assign_operand = try store.addCFStmt(.{ .assign_literal = .{
+        .target = operand,
+        .value = .{ .i64_literal = .{ .value = operand_value, .layout_idx = operand_layout } },
+        .next = assign_op,
+    } });
+    return try addNoArgProc(store, assign_operand, ret_layout);
+}
+
+fn addBinaryLowLevelProc(
+    store: *LirStore,
+    op: lir.LowLevel,
+    lhs_value: i64,
+    rhs_value: i64,
+    operand_layout: layout.Idx,
+    ret_layout: layout.Idx,
+) !lir.LIR.LirProcSpecId {
+    const lhs = try addLocal(store, operand_layout);
+    const rhs = try addLocal(store, operand_layout);
+    const result = try addLocal(store, ret_layout);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const args = try store.addLocalSpan(&.{ lhs, rhs });
+    const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = op,
+        .rc_effect = op.rcEffect(),
+        .args = args,
+        .next = ret,
+    } });
+    const assign_rhs = try store.addCFStmt(.{ .assign_literal = .{
+        .target = rhs,
+        .value = .{ .i64_literal = .{ .value = rhs_value, .layout_idx = operand_layout } },
+        .next = assign_op,
+    } });
+    const assign_lhs = try store.addCFStmt(.{ .assign_literal = .{
+        .target = lhs,
+        .value = .{ .i64_literal = .{ .value = lhs_value, .layout_idx = operand_layout } },
+        .next = assign_rhs,
+    } });
+    return try addNoArgProc(store, assign_lhs, ret_layout);
+}
+
+fn compileRoot(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) !struct {
+    code: []const u8,
+    entry_offset: usize,
+} {
+    const allocator = std.testing.allocator;
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, null);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    const result = try codegen.generateCode(root_proc, ret_layout, 1);
+    return .{ .code = result.code, .entry_offset = result.entry_offset };
+}
+
+fn runRootI64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId) !i64 {
+    const allocator = std.testing.allocator;
+    const compiled = try compileRoot(store, layout_store, root_proc, .i64);
+    defer allocator.free(compiled.code);
+
+    var executable = try ExecutableMemory.initWithEntryOffset(compiled.code, compiled.entry_offset);
+    defer executable.deinit();
+
+    var test_ops = TestRocOps.init(allocator);
+    var out: i64 = undefined;
+    const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    func(@ptrCast(&out), @ptrCast(test_ops.getOps()));
+    return out;
+}
+
+fn runRootU64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) !u64 {
+    const allocator = std.testing.allocator;
+    const compiled = try compileRoot(store, layout_store, root_proc, ret_layout);
+    defer allocator.free(compiled.code);
+
+    var executable = try ExecutableMemory.initWithEntryOffset(compiled.code, compiled.entry_offset);
+    defer executable.deinit();
+
+    var test_ops = TestRocOps.init(allocator);
+    var out: u64 = undefined;
+    const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    func(@ptrCast(&out), @ptrCast(test_ops.getOps()));
+    return out;
+}
+
+fn runRootU8(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) !u8 {
+    const allocator = std.testing.allocator;
+    const compiled = try compileRoot(store, layout_store, root_proc, ret_layout);
+    defer allocator.free(compiled.code);
+
+    var executable = try ExecutableMemory.initWithEntryOffset(compiled.code, compiled.entry_offset);
+    defer executable.deinit();
+
+    var test_ops = TestRocOps.init(allocator);
+    var out: u8 = undefined;
+    const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    func(@ptrCast(&out), @ptrCast(test_ops.getOps()));
+    return out;
+}
+
+fn stackOffsetOfTestLocation(loc: anytype) i32 {
+    return switch (loc) {
+        .stack => |s| s.offset,
+        .list_stack => |s| s.struct_offset,
+        .stack_i128, .stack_str => |off| off,
+        else => unreachable,
+    };
+}
+
 test "code generator initialization" {
     if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
         return error.SkipZigTest;
@@ -13899,6 +14135,415 @@ test "code generator initialization" {
 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
     defer codegen.deinit();
+}
+
+test "proc params and mutable list cells use distinct stack slots" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(.u32));
+
+    const start = try addLocal(&store, .u32);
+    const end = try addLocal(&store, .u32);
+    const answer = try addLocal(&store, list_layout);
+    const one = try addLocal(&store, .u32);
+    const appended = try addLocal(&store, list_layout);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = appended } });
+    const append_args = try store.addLocalSpan(&.{ answer, one });
+    const append_stmt = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = appended,
+        .op = .list_append_unsafe,
+        .rc_effect = lir.LowLevel.list_append_unsafe.rcEffect(),
+        .args = append_args,
+        .next = ret,
+    } });
+    const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u32 } },
+        .next = append_stmt,
+    } });
+    const empty_elems = try store.addLocalSpan(&.{});
+    const answer_stmt = try store.addCFStmt(.{ .assign_list = .{
+        .target = answer,
+        .elems = empty_elems,
+        .next = one_stmt,
+    } });
+    const args = try store.addLocalSpan(&.{ start, end });
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    const HostCodeGen = @TypeOf(codegen.codegen);
+    if (comptime builtin.cpu.arch == .aarch64) {
+        codegen.codegen.stack_offset = 16 + HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    } else {
+        codegen.codegen.stack_offset = -HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    }
+
+    try codegen.bindProcParams(args, 0);
+    try codegen.ensureStableLocationsForStmtLocals(answer_stmt);
+
+    const end_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@intFromEnum(end)).?);
+    const answer_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@intFromEnum(answer)).?);
+    const appended_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@intFromEnum(appended)).?);
+
+    try std.testing.expect(answer_slot != end_slot);
+    try std.testing.expect(appended_slot != end_slot);
+    try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "two-arg proc list loop returns full length" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(.i64));
+
+    const list_arg = try addLocal(&store, list_layout);
+    const ignored_arg = try addLocal(&store, .i64);
+    const acc = try addLocal(&store, .i64);
+    const elem = try addLocal(&store, .i64);
+    const one = try addLocal(&store, .i64);
+    const next_acc = try addLocal(&store, .i64);
+
+    const loop_continue = try store.addCFStmt(.loop_continue);
+    const set_acc = try store.addCFStmt(.{ .set_local = .{
+        .target = acc,
+        .value = next_acc,
+        .mode = .replace_existing,
+        .next = loop_continue,
+    } });
+    const add_args = try store.addLocalSpan(&.{ acc, one });
+    const add_acc = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = next_acc,
+        .op = .num_plus,
+        .rc_effect = lir.LowLevel.num_plus.rcEffect(),
+        .args = add_args,
+        .next = set_acc,
+    } });
+    const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+        .next = add_acc,
+    } });
+    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } });
+    const for_stmt = try store.addCFStmt(.{ .for_list = .{
+        .elem = elem,
+        .elem_source = .aliases_iterable_element,
+        .iterable = list_arg,
+        .iterable_elem_layout = .i64,
+        .body = one_stmt,
+        .next = ret_acc,
+    } });
+    const init_acc = try store.addCFStmt(.{ .assign_literal = .{
+        .target = acc,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
+        .next = for_stmt,
+    } });
+    const len_proc = try addProc(&store, &.{ list_arg, ignored_arg }, init_acc, .i64);
+
+    const root_elems = [_]i64{ 10, 20, 30, 40, 50 };
+    var elem_locals: [root_elems.len]LocalId = undefined;
+    for (&elem_locals) |*local| local.* = try addLocal(&store, .i64);
+
+    const root_list = try addLocal(&store, list_layout);
+    const ignored = try addLocal(&store, .i64);
+    const result = try addLocal(&store, .i64);
+
+    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const drop_list = try store.addCFStmt(.{ .decref = .{
+        .value = root_list,
+        .next = ret_result,
+    } });
+    const call_args = try store.addLocalSpan(&.{ root_list, ignored });
+    const call_len = try store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = len_proc,
+        .args = call_args,
+        .next = drop_list,
+    } });
+    const ignored_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = ignored,
+        .value = .{ .i64_literal = .{ .value = 123, .layout_idx = .i64 } },
+        .next = call_len,
+    } });
+    const list_elems = try store.addLocalSpan(&elem_locals);
+    const list_stmt = try store.addCFStmt(.{ .assign_list = .{
+        .target = root_list,
+        .elems = list_elems,
+        .next = ignored_stmt,
+    } });
+
+    var current = list_stmt;
+    var i: usize = root_elems.len;
+    while (i > 0) {
+        i -= 1;
+        current = try store.addCFStmt(.{ .assign_literal = .{
+            .target = elem_locals[i],
+            .value = .{ .i64_literal = .{ .value = root_elems[i], .layout_idx = .i64 } },
+            .next = current,
+        } });
+    }
+    const root_proc = try addNoArgProc(&store, current, .i64);
+
+    try std.testing.expectEqual(@as(i64, root_elems.len), try runRootI64(&store, &test_state.layout_store, root_proc));
+}
+
+test "generate i64 literal" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const proc = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
+    try std.testing.expectEqual(@as(i64, 42), try runRootI64(&store, &test_state.layout_store, proc));
+}
+
+test "generate bool literal" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const result = try addLocal(&store, .bool);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const assign_true = try store.addCFStmt(.{ .assign_tag = .{
+        .target = result,
+        .discriminant = 1,
+        .payload = null,
+        .next = ret,
+    } });
+    const proc = try addNoArgProc(&store, assign_true, .bool);
+
+    try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, proc, .bool));
+}
+
+test "tag payload bind invariant rejects mismatched pattern layout" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const tag_union_layout = try test_state.layout_store.putTagUnion(&.{.u64});
+    const source = try addLocal(&store, tag_union_layout);
+    const mismatched_target = try addLocal(&store, .u8);
+
+    const tag_union = test_state.layout_store.getLayout(tag_union_layout);
+    const variants = test_state.layout_store.getTagUnionVariants(
+        test_state.layout_store.getTagUnionData(tag_union.data.tag_union.idx),
+    );
+    const runtime_payload_layout = variants.get(0).payload_layout;
+
+    try std.testing.expectEqual(layout.Idx.u64, runtime_payload_layout);
+    try std.testing.expect(runtime_payload_layout != store.getLocal(mismatched_target).layout_idx);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = mismatched_target } });
+    _ = try store.addCFStmt(.{ .assign_ref = .{
+        .target = mismatched_target,
+        .op = .{ .tag_payload = .{
+            .source = source,
+            .payload_idx = 0,
+            .tag_discriminant = 0,
+        } },
+        .next = ret,
+    } });
+}
+
+test "generate addition" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const proc = try addBinaryLowLevelProc(&store, .num_plus, 40, 2, .i64, .i64);
+    try std.testing.expectEqual(@as(i64, 42), try runRootI64(&store, &test_state.layout_store, proc));
+}
+
+test "record equality uses layout-aware comparison" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const record_layout = try test_state.layout_store.putStructFields(&.{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const record_layout_val = test_state.layout_store.getLayout(record_layout);
+    const record_idx = record_layout_val.data.struct_.idx;
+    const record_data = test_state.layout_store.getStructData(record_idx);
+    const committed_fields = test_state.layout_store.struct_fields.sliceRange(record_data.getFields());
+    try std.testing.expectEqual(layout.Idx.i64, committed_fields.get(0).layout);
+    try std.testing.expectEqual(@as(u32, 8), test_state.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0));
+    try std.testing.expectEqual(@as(u32, 0), test_state.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1));
+
+    const lhs_small = try addLocal(&store, .u8);
+    const lhs_large = try addLocal(&store, .i64);
+    const rhs_small = try addLocal(&store, .u8);
+    const rhs_large = try addLocal(&store, .i64);
+    const lhs_record = try addLocal(&store, record_layout);
+    const rhs_record = try addLocal(&store, record_layout);
+    const eq_result = try addLocal(&store, .bool);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = eq_result } });
+    const eq_args = try store.addLocalSpan(&.{ lhs_record, rhs_record });
+    const eq_stmt = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = eq_result,
+        .op = .num_is_eq,
+        .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
+        .args = eq_args,
+        .next = ret,
+    } });
+    const rhs_fields = try store.addLocalSpan(&.{ rhs_small, rhs_large });
+    const rhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
+        .target = rhs_record,
+        .fields = rhs_fields,
+        .next = eq_stmt,
+    } });
+    const lhs_fields = try store.addLocalSpan(&.{ lhs_small, lhs_large });
+    const lhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
+        .target = lhs_record,
+        .fields = lhs_fields,
+        .next = rhs_record_stmt,
+    } });
+    const assign_rhs_large = try store.addCFStmt(.{ .assign_literal = .{
+        .target = rhs_large,
+        .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
+        .next = lhs_record_stmt,
+    } });
+    const assign_rhs_small = try store.addCFStmt(.{ .assign_literal = .{
+        .target = rhs_small,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
+        .next = assign_rhs_large,
+    } });
+    const assign_lhs_large = try store.addCFStmt(.{ .assign_literal = .{
+        .target = lhs_large,
+        .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
+        .next = assign_rhs_small,
+    } });
+    const assign_lhs_small = try store.addCFStmt(.{ .assign_literal = .{
+        .target = lhs_small,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
+        .next = assign_lhs_large,
+    } });
+    const proc = try addNoArgProc(&store, assign_lhs_small, .bool);
+
+    try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, proc, .bool));
+}
+
+test "generate modulo" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const proc = try addBinaryLowLevelProc(&store, .num_mod_by, 10, 3, .i64, .i64);
+    try std.testing.expectEqual(@as(i64, 1), try runRootI64(&store, &test_state.layout_store, proc));
+}
+
+test "generate shift left" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const proc = try addBinaryLowLevelProc(&store, .num_shift_left_by, 1, 4, .i64, .i64);
+    try std.testing.expectEqual(@as(i64, 16), try runRootI64(&store, &test_state.layout_store, proc));
+}
+
+test "generate shift right" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const proc = try addBinaryLowLevelProc(&store, .num_shift_right_by, -8, 1, .i64, .i64);
+    try std.testing.expectEqual(@as(i64, -4), try runRootI64(&store, &test_state.layout_store, proc));
+}
+
+test "generate shift right zero-fill" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const lhs_bits: i64 = @bitCast(@as(u64, 0x8000_0000_0000_0000));
+    const proc = try addBinaryLowLevelProc(&store, .num_shift_right_zf_by, lhs_bits, 63, .u64, .u64);
+    try std.testing.expectEqual(@as(u64, 1), try runRootU64(&store, &test_state.layout_store, proc, .u64));
+}
+
+test "generate unary minus" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const proc = try addUnaryLowLevelProc(&store, .num_negate, 42, .i64, .i64);
+    try std.testing.expectEqual(@as(i64, -42), try runRootI64(&store, &test_state.layout_store, proc));
 }
 
 test "entrypoint arg offsets preserve Roc alignment order" {
