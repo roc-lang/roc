@@ -6822,16 +6822,16 @@ fn categorizeLocalValueRef(
         unreachable;
     };
 
-    if (topLevelDefByPattern(module, pattern)) |def_idx| {
-        const entry = topLevelValueForPattern(top_level_values, checked_pattern) orelse {
+    if (top_level_values.lookupByPattern(checked_pattern)) |entry| {
+        if (entry.pattern != checked_pattern) {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
-                    "checked artifact invariant violated: top-level pattern {d} has no top-level value entry",
+                    "checked artifact invariant violated: top-level pattern index {d} resolved to mismatched entry",
                     .{@intFromEnum(pattern)},
                 );
             }
             unreachable;
-        };
+        }
 
         switch (entry.value) {
             .const_ref => |const_ref| return .{ .top_level_const = .{
@@ -6839,7 +6839,7 @@ fn categorizeLocalValueRef(
                 .requested_source_ty_template = .{},
             } },
             .procedure_binding => |binding| {
-                if (hostedProcForDef(hosted_procs, def_idx)) |hosted| {
+                if (hostedProcForDef(hosted_procs, entry.def)) |hosted| {
                     return .{ .hosted_proc = .{
                         .binding = .{ .hosted = .{
                             .module_idx = hosted.module_idx,
@@ -7074,13 +7074,6 @@ fn checkedPatternSourceTypeVar(module: TypedCIR.Module, pattern: CIR.Pattern.Idx
         return module.defType(def_idx);
     }
     return module.patternType(pattern);
-}
-
-fn topLevelValueForPattern(table: *const TopLevelValueTable, pattern: CheckedPatternId) ?TopLevelValueEntry {
-    for (table.entries) |entry| {
-        if (entry.pattern == pattern) return entry;
-    }
-    return null;
 }
 
 fn hostedProcForDef(table: *const HostedProcTable, def_idx: CIR.Def.Idx) ?HostedProc {
@@ -12753,6 +12746,8 @@ pub const TopLevelValueEntry = struct {
 /// Public `TopLevelValueTable` declaration.
 pub const TopLevelValueTable = struct {
     entries: []TopLevelValueEntry = &.{},
+    by_pattern: []?u32 = &.{},
+    by_def: []?u32 = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -12768,6 +12763,14 @@ pub const TopLevelValueTable = struct {
     ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
+
+        const by_pattern = try allocator.alloc(?u32, checked_bodies.patterns.len);
+        errdefer allocator.free(by_pattern);
+        @memset(by_pattern, null);
+
+        const by_def = try allocator.alloc(?u32, module.nodeCount());
+        errdefer allocator.free(by_def);
+        @memset(by_def, null);
 
         for (module.allDefs()) |def_idx| {
             const def = module.def(def_idx);
@@ -12831,6 +12834,7 @@ pub const TopLevelValueTable = struct {
                 source_scheme,
             ) };
 
+            const entry_idx: u32 = @intCast(entries.items.len);
             try entries.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .def = def_idx,
@@ -12839,26 +12843,34 @@ pub const TopLevelValueTable = struct {
                 .source_scheme = source_scheme,
                 .value = value,
             });
+            by_pattern[@intFromEnum(checked_pattern)] = entry_idx;
+            by_def[@intFromEnum(def_idx)] = entry_idx;
         }
 
-        return .{ .entries = try entries.toOwnedSlice(allocator) };
+        return .{
+            .entries = try entries.toOwnedSlice(allocator),
+            .by_pattern = by_pattern,
+            .by_def = by_def,
+        };
     }
 
     pub fn lookupByPattern(self: *const TopLevelValueTable, pattern: CheckedPatternId) ?TopLevelValueEntry {
-        for (self.entries) |entry| {
-            if (entry.pattern == pattern) return entry;
-        }
-        return null;
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.by_pattern.len) return null;
+        const idx = self.by_pattern[raw] orelse return null;
+        return self.entries[idx];
     }
 
     pub fn lookupByDef(self: *const TopLevelValueTable, def: CIR.Def.Idx) ?TopLevelValueEntry {
-        for (self.entries) |entry| {
-            if (entry.def == def) return entry;
-        }
-        return null;
+        const raw = @intFromEnum(def);
+        if (raw >= self.by_def.len) return null;
+        const idx = self.by_def[raw] orelse return null;
+        return self.entries[idx];
     }
 
     pub fn deinit(self: *TopLevelValueTable, allocator: Allocator) void {
+        allocator.free(self.by_def);
+        allocator.free(self.by_pattern);
         allocator.free(self.entries);
         self.* = .{};
     }

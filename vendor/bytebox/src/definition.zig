@@ -3048,10 +3048,10 @@ pub const ModuleDefinition = struct {
                             .opcode = .Call_Import,
                             .immediate = InstructionImmediates{ .Index = @intCast(index) },
                         };
-                        self.code.instructions.addOneAssumeCapacity().* = Instruction{
-                            .opcode = .End,
-                            .immediate = InstructionImmediates{ .Index = 0 },
-                        };
+                        var end_instruction: Instruction = undefined;
+                        end_instruction.immediate = InstructionImmediates{ .Void = {} };
+                        end_instruction.opcode = .End;
+                        self.code.instructions.addOneAssumeCapacity().* = end_instruction;
                         const instructions_end = self.code.instructions.items.len;
 
                         try self.code.validation_immediates.ensureUnusedCapacity(2);

@@ -202,15 +202,16 @@ test "execute aarch64 code" {
 test "execute x86_64 with result ptr" {
     if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
 
-    // Windows x64: RCX = result_ptr, RDX = roc_ops (ignored)
-    // System V: RDI = result_ptr, RSI = roc_ops (ignored)
-    // mov qword [arg0], 42; ret
+    // Roc ABI: fn(roc_ops, result_ptr, args_ptr)
+    // Windows x64: RCX = roc_ops (ignored), RDX = result_ptr
+    // System V: RDI = roc_ops (ignored), RSI = result_ptr
+    // mov qword [arg1], 42; ret
     const code = if (builtin.os.tag == .windows)
-        // Windows: mov qword ptr [rcx], 42; ret
-        [_]u8{ 0x48, 0xC7, 0x01, 0x2A, 0x00, 0x00, 0x00, 0xC3 }
+        // Windows: mov qword ptr [rdx], 42; ret
+        [_]u8{ 0x48, 0xC7, 0x02, 0x2A, 0x00, 0x00, 0x00, 0xC3 }
     else
-        // System V: mov qword ptr [rdi], 42; ret
-        [_]u8{ 0x48, 0xC7, 0x07, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
+        // System V: mov qword ptr [rsi], 42; ret
+        [_]u8{ 0x48, 0xC7, 0x06, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
 
     var mem = try ExecutableMemory.init(&code);
     defer mem.deinit();
@@ -226,13 +227,13 @@ test "execute x86_64 with full prologue/epilogue" {
 
     // This mimics the generated code structure:
     // - Prologue: push rbp; mov rbp,rsp; push rbx; push r12; sub rsp,1024
-    // - Save args: mov rbx, rcx/rdi (result ptr); mov r12, rdx/rsi (roc_ops - ignored)
+    // - Save args: mov rbx, rdx/rsi (result ptr); mov r12, rcx/rdi (roc_ops - ignored)
     // - Compute: mov rax, 42
     // - Store result: mov [rbx], rax
     // - Epilogue: add rsp,1024; pop r12; pop rbx; pop rbp; ret
 
     const code = if (builtin.os.tag == .windows) blk: {
-        // Windows x64: RCX = result_ptr, RDX = roc_ops
+        // Windows x64: RCX = roc_ops, RDX = result_ptr
         break :blk [_]u8{
             // Prologue
             0x55, // push rbp
@@ -241,8 +242,8 @@ test "execute x86_64 with full prologue/epilogue" {
             0x41, 0x54, // push r12
             0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
             // Save args
-            0x48, 0x89, 0xCB, // mov rbx, rcx (result ptr)
-            0x49, 0x89, 0xD4, // mov r12, rdx (roc_ops)
+            0x48, 0x89, 0xD3, // mov rbx, rdx (result ptr)
+            0x49, 0x89, 0xCC, // mov r12, rcx (roc_ops)
             // Compute result
             0x48, 0xC7, 0xC0, 0x2A, 0x00, 0x00, 0x00, // mov rax, 42
             // Store to result ptr
@@ -255,7 +256,7 @@ test "execute x86_64 with full prologue/epilogue" {
             0xC3, // ret
         };
     } else blk: {
-        // System V: RDI = result_ptr, RSI = roc_ops
+        // System V: RDI = roc_ops, RSI = result_ptr
         break :blk [_]u8{
             // Prologue
             0x55, // push rbp
@@ -264,8 +265,8 @@ test "execute x86_64 with full prologue/epilogue" {
             0x41, 0x54, // push r12
             0x48, 0x81, 0xEC, 0x00, 0x04, 0x00, 0x00, // sub rsp, 1024
             // Save args
-            0x48, 0x89, 0xFB, // mov rbx, rdi (result ptr)
-            0x49, 0x89, 0xF4, // mov r12, rsi (roc_ops)
+            0x48, 0x89, 0xF3, // mov rbx, rsi (result ptr)
+            0x49, 0x89, 0xFC, // mov r12, rdi (roc_ops)
             // Compute result
             0x48, 0xC7, 0xC0, 0x2A, 0x00, 0x00, 0x00, // mov rax, 42
             // Store to result ptr

@@ -5033,13 +5033,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const signedness: std.builtin.Signedness = if (operand_layout == .u128) .unsigned else .signed;
             const lhs_parts = try self.getI128Parts(lhs_loc, signedness);
 
-            // Allocate registers for result
-            const result_low = try self.allocTempGeneral();
-            const result_high = try self.allocTempGeneral();
-
             const is_unsigned = operand_layout == .u128;
 
             if (op == .num_shift_left_by or op == .num_shift_right_by or op == .num_shift_right_zf_by) {
+                const result_low = try self.allocTempGeneral();
+                const result_high = try self.allocTempGeneral();
+
                 try self.callI128Shift(lhs_parts, rhs_loc, result_low, result_high, operand_layout, op);
                 self.codegen.freeGeneral(lhs_parts.low);
                 self.codegen.freeGeneral(lhs_parts.high);
@@ -5056,6 +5055,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Get low and high parts of the RHS for non-shift operations.
             const rhs_parts = try self.getI128Parts(rhs_loc, signedness);
+
+            // Allocate result registers after both operands. On x86_64,
+            // 128-bit multiply must reserve RAX/RDX for the widening MUL
+            // instruction, so results must not be allocated into that pair.
+            const result_low = try self.allocTempGeneral();
+            const result_high = try self.allocTempGeneral();
 
             switch (op) {
                 .num_plus => {
@@ -10263,9 +10268,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             switch (result_layout) {
-                .i64, .i32, .i16, .u64, .u32, .u16 => {
+                .i64, .u64 => {
                     const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                    try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 8);
+                },
+                .i32, .u32 => {
+                    const reg = try self.ensureInGeneralReg(loc);
+                    try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 4);
+                },
+                .i16, .u16 => {
+                    const reg = try self.ensureInGeneralReg(loc);
+                    try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 2);
                 },
                 .u8 => {
                     // Zero-extend to 64 bits before storing, since the register
@@ -10274,7 +10287,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitShlImm(.w64, reg, reg, 56);
                     try self.emitLsrImm(.w64, reg, reg, 56);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                    try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 1);
                 },
                 .i8 => {
                     // Sign-extend to 64 bits before storing, since the register
@@ -10283,7 +10296,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitShlImm(.w64, reg, reg, 56);
                     try self.emitAsrImm(.w64, reg, reg, 56);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                    try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 1);
                 },
                 .f64 => {
                     switch (loc) {
@@ -10429,7 +10442,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             } else if (sa.size > 0) {
                                 // Small scalars (1-8 bytes)
                                 const reg = try self.ensureInGeneralReg(loc);
-                                try self.emitStoreToMem(saved_ptr_reg, reg);
+                                try self.emitStoreScalarToPtr(saved_ptr_reg, reg, sa.size);
                             }
                             return;
                         },
@@ -11158,6 +11171,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Store general register to memory at [ptr_reg] (architecture-specific)
         fn emitStoreToMem(self: *Self, ptr_reg: anytype, src_reg: GeneralReg) !void {
             try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0);
+        }
+
+        fn emitStoreScalarToPtr(self: *Self, ptr_reg: GeneralReg, src_reg: GeneralReg, size: u32) !void {
+            switch (size) {
+                0 => {},
+                1 => {
+                    if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                        try self.codegen.emit.strbRegMem(src_reg, ptr_reg, 0);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w8, ptr_reg, 0, src_reg);
+                    }
+                },
+                2 => {
+                    if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                        try self.codegen.emit.strhRegMem(src_reg, ptr_reg, 0);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w16, ptr_reg, 0, src_reg);
+                    }
+                },
+                4 => try self.emitStoreToPtr(.w32, src_reg, ptr_reg, 0),
+                8 => try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0),
+                else => if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: scalar result size {d} is not register-sized", .{size});
+                } else unreachable,
+            }
         }
 
         /// Store float register to memory at [ptr_reg] (architecture-specific)
@@ -13349,9 +13387,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addMemArg(frame_ptr, str_offset);
-            try builder.addMemArg(frame_ptr, str_offset + @as(i32, @intCast(target_ptr_size)));
-            try builder.addMemArg(frame_ptr, str_offset + 2 * @as(i32, @intCast(target_ptr_size)));
+            try builder.addLeaArg(frame_ptr, str_offset);
             try builder.addRegArg(self.roc_ops_reg orelse unreachable);
             try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_dbg_str), .dbg_str);
         }
