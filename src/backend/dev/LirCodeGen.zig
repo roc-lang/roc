@@ -13853,17 +13853,25 @@ pub const X64LinuxLirCodeGen = LirCodeGen(.x64linux);
 /// x86_64 ELF (generic)
 pub const X64ElfLirCodeGen = LirCodeGen(.x64elf);
 
-/// Host LirCodeGen for the host platform (the machine running the compiler).
-/// Fails at compile time on architectures that don't support native code generation.
-pub const HostLirCodeGen = blk: {
-    const native_target = RocTarget.detectNative();
-    const arch = native_target.toCpuArch();
-    if (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be) {
-        break :blk LirCodeGen(native_target);
-    } else {
-        break :blk void;
-    }
-};
+const host_lir_codegen_target = RocTarget.detectNative();
+
+/// Whether this compiler build has a fast native dev backend for the target it
+/// is being compiled to run on.
+///
+/// 32-bit ARM builds intentionally report false for now. The long-term fix is
+/// for dev builds on those targets to route through LLVM rather than trying to
+/// instantiate a nonexistent fast native backend.
+pub const host_lir_codegen_available =
+    switch (host_lir_codegen_target.toCpuArch()) {
+        .x86_64, .aarch64, .aarch64_be => true,
+        else => false,
+    };
+
+/// Host LirCodeGen for the target this compiler build runs on.
+pub const HostLirCodeGen = if (host_lir_codegen_available)
+    LirCodeGen(host_lir_codegen_target)
+else
+    void;
 
 // Tests
 

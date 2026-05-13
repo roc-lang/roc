@@ -6660,6 +6660,10 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
         }
         if (!has_from_numeral) continue;
 
+        if (try self.resolveFromNumeralFlexFromConcreteDispatchArg(resolved.var_, constraints, env)) {
+            continue;
+        }
+
         // Look for a desugared_binop constraint with a concrete peer argument or return type.
         for (constraints) |c| {
             if (c.origin != .desugared_binop) continue;
@@ -6703,6 +6707,137 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
     // now have their dispatch constraints deferred, and checkAllConstraints
     // will resolve them through the normal dispatch machinery.
     try self.checkAllConstraints(env);
+}
+
+fn resolveFromNumeralFlexFromConcreteDispatchArg(
+    self: *Self,
+    dispatcher_var: Var,
+    constraints: []const StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!bool {
+    const dispatcher_resolved = self.types.resolveVar(dispatcher_var);
+
+    for (constraints) |constraint| {
+        if (constraint.origin == .from_numeral) continue;
+
+        const fn_content = self.types.resolveVar(constraint.fn_var).desc.content;
+        const func = fn_content.unwrapFunc() orelse continue;
+
+        for (self.types.sliceVars(func.args)) |arg| {
+            const arg_resolved = self.types.resolveVar(arg);
+            if (arg_resolved.var_ == dispatcher_resolved.var_) continue;
+            if (!self.isBuiltinNumericNominal(arg_resolved.var_)) continue;
+
+            if (try self.builtinNumericCandidateSatisfiesStaticDispatchConstraints(
+                dispatcher_resolved.var_,
+                arg_resolved.var_,
+                constraints,
+                env,
+            )) {
+                _ = try self.unify(dispatcher_resolved.var_, arg_resolved.var_, env);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+fn builtinNumericCandidateSatisfiesStaticDispatchConstraints(
+    self: *Self,
+    dispatcher_var: Var,
+    candidate_var: Var,
+    constraints: []const StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!bool {
+    if (!self.isBuiltinNumericNominal(candidate_var)) return false;
+
+    const from_numeral_count = self.types.from_numeral_flex_count;
+    const regions_len = self.regions.items.items.len;
+    var store_snapshot = try self.types.snapshot();
+    defer {
+        self.types.rollbackTo(&store_snapshot);
+        self.types.from_numeral_flex_count = from_numeral_count;
+        self.regions.items.shrinkRetainingCapacity(regions_len);
+        store_snapshot.deinit(self.gpa);
+    }
+
+    var probe_env = try self.env_pool.acquire();
+    defer self.env_pool.release(probe_env);
+    try probe_env.reset(env.rank());
+
+    if (!try self.probeUnifyWithoutRecordingProblems(dispatcher_var, candidate_var)) return false;
+
+    for (constraints) |constraint| {
+        if (constraint.origin == .from_numeral) continue;
+        if (!try self.staticDispatchConstraintAcceptsCandidate(constraint, candidate_var, &probe_env)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn staticDispatchConstraintAcceptsCandidate(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    candidate_var: Var,
+    env: *Env,
+) Allocator.Error!bool {
+    const candidate_resolved = self.types.resolveVar(candidate_var);
+    const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
+    const original_env = self.getNominalOriginEnv(nominal_type);
+
+    const method_ident = original_env.lookupMethodIdentFromEnvConst(
+        self.cir,
+        nominal_type.ident.ident_idx,
+        constraint.fn_name,
+    ) orelse return false;
+
+    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse return false;
+    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
+    const def_var: Var = ModuleEnv.varFrom(def_idx);
+
+    const method_var = if (nominal_type.origin_module.eql(self.builtin_ctx.module_name)) blk: {
+        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+        }
+        break :blk def_var;
+    } else blk: {
+        const copied_var = try self.copyVar(def_var, original_env, self.getRegionAt(candidate_var));
+        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = self.getRegionAt(candidate_var) });
+    };
+
+    return try self.probeUnifyWithoutRecordingProblems(method_var, constraint.fn_var);
+}
+
+fn probeUnifyWithoutRecordingProblems(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+) Allocator.Error!bool {
+    var probe_problems = try ProblemStore.initCapacity(self.gpa, 1);
+    defer probe_problems.deinit(self.gpa);
+
+    var probe_snapshots = try SnapshotStore.initCapacity(self.gpa, 8);
+    defer probe_snapshots.deinit();
+
+    const result = try unifier.unifyInContext(
+        self.cir.gpa,
+        self.cir.getIdentStoreConst(),
+        self.cir.qualified_module_ident,
+        self.types,
+        &probe_problems,
+        &probe_snapshots,
+        &self.type_writer,
+        &self.unify_scratch,
+        &self.occurs_scratch,
+        expected,
+        actual,
+        .none,
+    );
+
+    return result.isOk();
 }
 
 fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Error!void {

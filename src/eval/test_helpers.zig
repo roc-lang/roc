@@ -1165,65 +1165,69 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
 
 /// Public `devEvaluatorInspectedStr` function.
 pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
-    var codegen = try HostLirCodeGen.init(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-        null,
-    );
-    defer codegen.deinit();
-    try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
+    if (comptime !backend.host_lir_codegen_available) {
+        return error.DevBackendUnavailable;
+    } else {
+        var codegen = try HostLirCodeGen.init(
+            allocator,
+            &lowered.view.store,
+            &lowered.view.layouts,
+            null,
+        );
+        defer codegen.deinit();
+        try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
 
-    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
-    defer allocator.free(arg_layouts);
-    const entrypoint = try codegen.generateEntrypointWrapper(
-        "roc_eval_test_main",
-        lowered.mainProc(),
-        arg_layouts,
-        proc.ret_layout,
-    );
-    var exec_mem = try ExecutableMemory.initWithEntryOffset(
-        codegen.getGeneratedCode(),
-        entrypoint.offset,
-    );
-    defer exec_mem.deinit();
+        const proc = lowered.view.store.getProcSpec(lowered.mainProc());
+        const arg_layouts = try mainProcArgLayouts(allocator, lowered);
+        defer allocator.free(arg_layouts);
+        const entrypoint = try codegen.generateEntrypointWrapper(
+            "roc_eval_test_main",
+            lowered.mainProc(),
+            arg_layouts,
+            proc.ret_layout,
+        );
+        var exec_mem = try ExecutableMemory.initWithEntryOffset(
+            codegen.getGeneratedCode(),
+            entrypoint.offset,
+        );
+        defer exec_mem.deinit();
 
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
+        var runtime_env = RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
 
-    const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
-    defer if (arg_buffer) |buf| allocator.free(buf);
+        const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
+        defer if (arg_buffer) |buf| allocator.free(buf);
 
-    const ret_layout = proc.ret_layout;
-    const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
-    const alloc_len = @max(size_align.size, 1);
-    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
-    defer allocator.free(ret_buf);
-    @memset(ret_buf, 0);
+        const ret_layout = proc.ret_layout;
+        const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
+        const alloc_len = @max(size_align.size, 1);
+        const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
+        defer allocator.free(ret_buf);
+        @memset(ret_buf, 0);
 
-    var crash_boundary = runtime_env.enterCrashBoundary();
-    defer crash_boundary.deinit();
-    const sj = crash_boundary.set();
-    if (sj != 0) return error.Crash;
+        var crash_boundary = runtime_env.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
+        if (sj != 0) return error.Crash;
 
-    exec_mem.callRocABI(
-        @ptrCast(runtime_env.get_ops()),
-        @ptrCast(ret_buf.ptr),
-        if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-    );
-    switch (runtime_env.crashState()) {
-        .did_not_crash => {},
-        .crashed => return error.Crash,
+        exec_mem.callRocABI(
+            @ptrCast(runtime_env.get_ops()),
+            @ptrCast(ret_buf.ptr),
+            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        );
+        switch (runtime_env.crashState()) {
+            .did_not_crash => {},
+            .crashed => return error.Crash,
+        }
+
+        return copyReturnedRocStr(
+            allocator,
+            &lowered.view.layouts,
+            ret_layout,
+            ret_buf.ptr,
+            runtime_env.get_ops(),
+        );
     }
-
-    return copyReturnedRocStr(
-        allocator,
-        &lowered.view.layouts,
-        ret_layout,
-        ret_buf.ptr,
-        runtime_env.get_ops(),
-    );
 }
 
 /// Public `wasmEvaluatorInspectedStr` function.

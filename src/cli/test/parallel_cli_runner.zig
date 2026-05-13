@@ -26,6 +26,9 @@ const util = @import("util.zig");
 
 /// A single CLI test operation — one atomic unit of work.
 const CliTestSpec = struct {
+    /// Unique id within this runner invocation. This keeps generated binary
+    /// names distinct even on hosts that run all specs in the same process.
+    id: usize,
     /// Human-readable name, e.g. "test/fx/hello_world.roc [dev]"
     name: []const u8,
     /// Path to .roc file (relative to project root)
@@ -73,6 +76,7 @@ fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const Cl
                 const name = try fmtTestName(allocator, roc_file, cfg.backend);
                 if (matchesFilters(name, roc_file, filters)) {
                     try specs.append(allocator, .{
+                        .id = specs.items.len,
                         .name = name,
                         .roc_file = roc_file,
                         .platform = platform.name,
@@ -83,9 +87,12 @@ fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const Cl
             },
             .spec_list => |io_specs| {
                 for (io_specs) |spec| {
+                    if (skipIoSpecOnHost(spec)) continue;
+
                     const name = try fmtTestName(allocator, spec.roc_file, cfg.backend);
                     if (matchesFilters(name, spec.roc_file, filters)) {
                         try specs.append(allocator, .{
+                            .id = specs.items.len,
                             .name = name,
                             .roc_file = spec.roc_file,
                             .platform = platform.name,
@@ -100,6 +107,7 @@ fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const Cl
                     const name = try fmtTestName(allocator, spec.roc_file, cfg.backend);
                     if (matchesFilters(name, spec.roc_file, filters)) {
                         try specs.append(allocator, .{
+                            .id = specs.items.len,
                             .name = name,
                             .roc_file = spec.roc_file,
                             .platform = platform.name,
@@ -113,6 +121,10 @@ fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const Cl
     }
 
     return specs.toOwnedSlice(allocator);
+}
+
+fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
+    return spec.skip_on_windows and builtin.os.tag == .windows;
 }
 
 fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8) ![]const u8 {
@@ -215,6 +227,31 @@ fn currentProcessIdForFilename() u64 {
     return @intCast(std.c.getpid());
 }
 
+fn deleteIfExists(path: []const u8) !void {
+    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn deleteOutputArtifacts(allocator: Allocator, output_name: []const u8) !void {
+    try deleteIfExists(output_name);
+
+    if (comptime builtin.os.tag == .windows) {
+        const exe_name = try std.fmt.allocPrint(allocator, "{s}.exe", .{output_name});
+        defer allocator.free(exe_name);
+        try deleteIfExists(exe_name);
+
+        const pdb_name = try std.fmt.allocPrint(allocator, "{s}.pdb", .{output_name});
+        defer allocator.free(pdb_name);
+        try deleteIfExists(pdb_name);
+    }
+}
+
+fn cleanupOutputArtifacts(allocator: Allocator, output_name: []const u8) void {
+    deleteOutputArtifacts(allocator, output_name) catch {};
+}
+
 fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
@@ -223,9 +260,13 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
     defer cache_dirs.deinit(allocator);
 
     const pid = currentProcessIdForFilename();
-    const output_name = std.fmt.allocPrint(allocator, "./.test_output_{d}", .{pid}) catch
+    const output_name = std.fmt.allocPrint(allocator, "./.test_output_{d}_{d}", .{ pid, spec.id }) catch
         return .{ .status = .crash, .message = "OOM" };
-    defer std.fs.cwd().deleteFile(output_name) catch {};
+    deleteOutputArtifacts(allocator, output_name) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "failed to remove stale output artifact: {}", .{err}) catch "failed to remove stale output artifact";
+        return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
+    };
+    defer cleanupOutputArtifacts(allocator, output_name);
 
     var env_map = std.process.getEnvMap(allocator) catch
         return .{ .status = .crash, .message = "failed to get env" };

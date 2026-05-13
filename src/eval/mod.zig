@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const backend = @import("backend");
 
 /// Backends available for evaluating Roc code.
 pub const EvalBackend = enum {
@@ -18,7 +19,7 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
     if (builtin.target.os.tag == .freestanding and backend_kind != .wasm) return false;
     return switch (backend_kind) {
         .interpreter => true,
-        .dev => true,
+        .dev => backend.host_lir_codegen_available,
         .wasm => true,
         // TODO: implement statement-only LIR LLVM codegen.
         .llvm => false,
@@ -26,7 +27,6 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 }
 
 /// Executable memory for running generated code (re-exported from backend module)
-const backend = @import("backend");
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");

@@ -57,6 +57,7 @@ const has_fork = harness.has_fork;
 
 const NUM_BACKENDS = 2;
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev" };
+const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 
 const BackendStatus = enum(u8) {
     pass,
@@ -64,6 +65,7 @@ const BackendStatus = enum(u8) {
     fail,
     crash,
     skip,
+    not_implemented,
 };
 
 const BackendDetail = struct {
@@ -339,55 +341,59 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
 }
 
 fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
-    var codegen = try HostLirCodeGen.init(
-        allocator,
-        &lowered.view.store,
-        &lowered.view.layouts,
-        null,
-    );
-    defer codegen.deinit();
-    try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
-
-    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-    const arg_layouts = try helpers.mainProcArgLayouts(allocator, lowered);
-    defer allocator.free(arg_layouts);
-    const entrypoint = try codegen.generateEntrypointWrapper(
-        "roc_eval_host_effects_main",
-        lowered.mainProc(),
-        arg_layouts,
-        proc.ret_layout,
-    );
-    var exec_mem = try ExecutableMemory.initWithEntryOffset(
-        codegen.getGeneratedCode(),
-        entrypoint.offset,
-    );
-    defer exec_mem.deinit();
-
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-
-    const arg_buffer = try helpers.zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
-    defer if (arg_buffer) |buf| allocator.free(buf);
-
-    const ret_layout = proc.ret_layout;
-    const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
-    const alloc_len = @max(size_align.size, 1);
-    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
-    defer allocator.free(ret_buf);
-    @memset(ret_buf, 0);
-
-    var crash_boundary = runtime_env.enterCrashBoundary();
-    defer crash_boundary.deinit();
-    const sj = crash_boundary.set();
-    if (sj == 0) {
-        exec_mem.callRocABI(
-            @ptrCast(runtime_env.get_ops()),
-            @ptrCast(ret_buf.ptr),
-            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+    if (comptime !DEV_BACKEND_IMPLEMENTED) {
+        return error.DevBackendUnavailable;
+    } else {
+        var codegen = try HostLirCodeGen.init(
+            allocator,
+            &lowered.view.store,
+            &lowered.view.layouts,
+            null,
         );
-    }
+        defer codegen.deinit();
+        try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
 
-    return runtime_env.snapshot(allocator);
+        const proc = lowered.view.store.getProcSpec(lowered.mainProc());
+        const arg_layouts = try helpers.mainProcArgLayouts(allocator, lowered);
+        defer allocator.free(arg_layouts);
+        const entrypoint = try codegen.generateEntrypointWrapper(
+            "roc_eval_host_effects_main",
+            lowered.mainProc(),
+            arg_layouts,
+            proc.ret_layout,
+        );
+        var exec_mem = try ExecutableMemory.initWithEntryOffset(
+            codegen.getGeneratedCode(),
+            entrypoint.offset,
+        );
+        defer exec_mem.deinit();
+
+        var runtime_env = RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+
+        const arg_buffer = try helpers.zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
+        defer if (arg_buffer) |buf| allocator.free(buf);
+
+        const ret_layout = proc.ret_layout;
+        const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
+        const alloc_len = @max(size_align.size, 1);
+        const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, alloc_len);
+        defer allocator.free(ret_buf);
+        @memset(ret_buf, 0);
+
+        var crash_boundary = runtime_env.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
+        if (sj == 0) {
+            exec_mem.callRocABI(
+                @ptrCast(runtime_env.get_ops()),
+                @ptrCast(ret_buf.ptr),
+                if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+            );
+        }
+
+        return runtime_env.snapshot(allocator);
+    }
 }
 
 fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
@@ -449,6 +455,10 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
     };
 
     for (backend_specs, 0..) |backend_spec, i| {
+        if (i == 1 and !DEV_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
         if (backend_spec.skip) {
             any_skip = true;
             backends[i] = .{ .status = .skip };
@@ -823,6 +833,7 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
                 std.debug.print("\n", .{});
             },
             .skip => std.debug.print("SKIP\n", .{}),
+            .not_implemented => std.debug.print("NOT_IMPLEMENTED\n", .{}),
         }
     }
 }

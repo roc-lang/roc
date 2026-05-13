@@ -42,6 +42,9 @@ pub const LirCodeGenMod = @import("LirCodeGen.zig");
 /// Pre-instantiated LirCodeGen for the host platform (the machine running the compiler)
 pub const HostLirCodeGen = LirCodeGenMod.HostLirCodeGen;
 
+/// Whether the direct dev backend can generate code for the host architecture.
+pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
+
 /// Object file compiler for generating object files from Mono IR.
 /// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)

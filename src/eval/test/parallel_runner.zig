@@ -133,6 +133,7 @@ const BackendDetail = struct {
 
 const NUM_BACKENDS = 4; // interpreter, dev, wasm, llvm
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev", "wasm", "llvm" };
+const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
 const LLVM_BACKEND_IMPLEMENTED = false;
 
@@ -485,6 +486,10 @@ fn runInspectTest(
     var any_failure = false;
 
     for (0..NUM_BACKENDS) |i| {
+        if (i == 1 and !DEV_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
         if (i == 2 and !WASM_BACKEND_IMPLEMENTED) {
             backends[i] = .{ .status = .not_implemented };
             continue;
@@ -692,6 +697,10 @@ fn runCrashTest(
     var any_failure = false;
 
     for (0..NUM_BACKENDS) |i| {
+        if (i == 1 and !DEV_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
         if (i == 2 and !WASM_BACKEND_IMPLEMENTED) {
             backends[i] = .{ .status = .not_implemented };
             continue;

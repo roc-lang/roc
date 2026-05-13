@@ -1468,6 +1468,45 @@ test "roc test polymorphic list reverse within same module" {
     try testing.expect(has_passed);
 }
 
+test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/issue9388_sort_with_top_level_expect.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "overflowed its stack") == null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Segmentation fault") == null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "passed") != null);
+}
+
+fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) !void {
+    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, expected_pass_count) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "failed") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "FAIL:") == null);
+}
+
+test "roc test issue 9392 numeric utility expects are deterministic with no cache" {
+    const gpa = std.testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    const path = "test/cli/issue9392_num_utils_deterministic.roc";
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+    try expectRocTestAllPassed(result1, "11 passed");
+
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+    try expectRocTestAllPassed(result2, "11 passed");
+}
+
 // --- Echo platform (headerless app) tests ---
 // These test the echo platform path (rocRunDefaultApp) with both backends.
 
