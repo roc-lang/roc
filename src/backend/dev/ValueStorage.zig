@@ -3,6 +3,18 @@
 //! This module provides infrastructure for tracking where computed values
 //! are stored (registers, stack, immediates) and managing register allocation.
 //! It serves as a foundation for the architecture-specific code generators.
+//!
+//! TODO: investigate removing or refactoring this module. The
+//! `ValueStorage(...)` factory below appears to be a stalled abstraction
+//! attempt — it is not instantiated anywhere, and the architecture-specific
+//! backends in `x86_64/CodeGen.zig` and `aarch64/CodeGen.zig` duplicate the
+//! same bitmask freelist logic directly. Only the `ValueLoc` and `NumKind`
+//! enums are consumed by callers, and `ValueLoc` here is structurally
+//! poorer than `LirCodeGen.ValueLocation` (raw `u8` register fields, fewer
+//! variants). Either delete the factory and move the enums next to their
+//! consumers, or finish the original intent by routing both backends
+//! through this layer (and adding the constraint-aware primitives the
+//! current naive allocator lacks).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
