@@ -41,10 +41,14 @@ rules in `AGENTS.md`.
   - Backend/output lifetime for code buffers, object writers, wasm modules, and
     executable memory.
 
-- The code has several allocator-related policy smells that are worth fixing
-  before introducing more arenas: silent allocation failure catches, `page_allocator`
-  bypasses, parse-time allocator objects that are not deinitialized, and one
-  legacy import string leak.
+- The first round of allocator correctness cleanup has landed on this branch:
+  parse-time `base.Allocators` values are deinitialized, legacy external import
+  strings are freed, `Scratch.SetView` no longer bypasses the caller allocator,
+  `PackageState` maps no longer use `page_allocator`, and coordinator
+  parse/canonicalize/typecheck worker failures now return explicit failure
+  results instead of fake success values. The remaining work is structural:
+  wiring real task scratch through workers, simplifying ownership transfer, and
+  turning append-heavy stores into arena-safe builders.
 
 ## High-Level Lifetime Map
 
@@ -91,29 +95,32 @@ paths where it is not relevant.
 
 `src/base/Scratch.zig` is a reusable stack-like `Managed` array list with
 `clearFrom(start)` retaining capacity. This is the right shape for recursive
-scratch, but there are two issues:
+scratch. Current status:
 
 - Scratch objects are initialized with a normal allocator and individually
   deinitialized. That is fine, but a per-task scratch allocator would let the
   compiler bulk-reset all scratch capacity between phase tasks.
-- `Scratch.SetView` uses `std.heap.page_allocator` directly for larger ranges
-  and silently returns to linear scan if allocation fails. That is both an
-  allocator bypass and a fallback outside parsing/error reporting. Callers
-  outside parsing/error reporting should not rely on this behavior. A caller
-  should pass explicit scratch storage or use one deterministic structure.
+- `Scratch.SetView` now takes a caller-provided allocator and returns allocation
+  errors instead of catching them. The canonicalizer call sites pass `env.gpa`.
+  This removes both the direct `page_allocator` bypass and the non-parse
+  allocation-failure fallback.
+- The remaining opportunity is to pass a true canonicalization/task scratch
+  allocator instead of durable module `gpa`, once that scratch lifetime exists.
 
 ### `page_allocator`
 
 `std.heap.page_allocator` appears in several important places:
 
 - The coordinator uses it for module/worker allocations in multi-threaded mode.
-- `PackageState` maps in `compile/coordinator.zig` are initialized with
-  `page_allocator`.
 - Coordinator channels use `page_allocator` when threads are available.
-- `Scratch.SetView` uses `page_allocator`.
 - `lir/runtime_image.zig` uses `page_allocator` in child-side non-owning views.
 - Some debug-only maps in `base/Ident.zig` use `page_allocator`.
 - Backend relocation/object helper code has small direct `page_allocator` use.
+
+This branch removed two avoidable bypasses: `PackageState` maps now use the
+coordinator allocator, and `Scratch.SetView` uses an explicit caller allocator.
+Those were correctness and policy issues because their data is normal compiler
+state, not OS-backed runtime image state.
 
 The coordinator use is understandable as a thread-safety shortcut, but it makes
 bulk phase teardown impossible and pushes many small allocations to mmap/munmap
@@ -203,21 +210,30 @@ The coordinator owns package and module state:
 
 The header comment says workers should be pure and that the coordinator owns
 mutable state. This is the right model. The allocator details currently weaken
-it:
+it in one remaining major area:
 
 - `WorkerAllocators` has a backing allocator and an arena reset function, but
   worker execution calls `executeTaskInline(t)` and the `execute*` functions use
   `self.getWorkerAllocator()` instead of `worker_allocs.arena`.
 - In multi-threaded mode, `getWorkerAllocator()` and `getModuleAllocator()`
   return `page_allocator`.
-- `executeParse` creates a `base.Allocators` value and does not deinitialize it.
-  Today the parse arena is not used, so this is usually harmless. If parsing
-  starts using `allocators.arena`, this becomes a real leak.
-- `executeCanonicalize` creates and deinitializes `base.Allocators` properly.
-- `executeParse` and `executeCanonicalize` contain several `catch {}` or
-  `catch &[_]...{}` paths that silently continue after allocation or compiler
-  failures. Some are in parsing/error-reporting territory, but the general
-  pattern should not leak into later stages.
+
+The branch fixed the earlier coordinator correctness issues:
+
+- `executeParse` now deinitializes its temporary `base.Allocators`.
+- `PackageState` maps are initialized with the coordinator allocator instead of
+  `page_allocator`.
+- Parse, canonicalize, and typecheck worker execution is split into fallible
+  helpers. Allocation and infrastructure failures now return explicit
+  `parse_failed` or `compile_failed` worker results instead of continuing with
+  incomplete state.
+- The coordinator can now receive a `compile_failed` result, preserve any
+  partial module environment and reports attached to it, mark the module done,
+  decrement pending counters, and wake dependents deterministically.
+- Import extraction, report construction, source normalization, qualified module
+  name construction, and typecheck report building now propagate allocation
+  errors. Error-reporting paths still own their reports explicitly and clean
+  them up if appending fails.
 
 The coordinator should get an explicit task allocator model:
 
@@ -236,17 +252,17 @@ transferred. It also has its own parse/canonicalize/typecheck code paths.
 Important details:
 
 - `PackageEnv.init` preallocates module capacity with `ensureTotalCapacity(...,
-  256) catch {}` in multi-thread mode. This silently ignores allocation failure
-  and should be removed or made explicit.
+  256) catch {}` in multi-thread mode. This remains a non-fatal performance
+  hint, and the code now says so. Later appends still report real allocation
+  failures.
 - `doParse` heap-allocates `ModuleEnv` and source bytes, caches the AST, and
-  extracts imports. It initializes `base.Allocators` but does not deinitialize
-  it. As with the coordinator parse path, this must be fixed before parse uses
-  `allocators.arena`.
+  extracts imports. It now deinitializes its temporary `base.Allocators`, so a
+  future parse arena will not leak on this path.
 - `doCanonicalize` creates a fresh `base.Allocators` and deinitializes it.
-- `ModuleState.deinit` frees external import strings in the coordinator version,
-  but the legacy `PackageEnv.ModuleState.deinit` deinitializes the
-  `external_imports` list without freeing the duplicated strings appended by
-  `doParse`. That is a likely leak in the legacy path.
+- `ModuleState.deinit` now frees duplicated `external_imports` strings before
+  deinitializing the list in both coordinator and legacy package states.
+- Typecheck report construction now propagates allocation errors instead of
+  silently dropping reports when `ReportBuilder.build` fails.
 - `tryEmitReady` moves reports into the ordered sink and clears the module report
   list retaining capacity to avoid double frees.
 
@@ -738,20 +754,26 @@ module or artifact owners.
 
 ## Recommended Allocation Strategy
 
-### 1. Fix allocator correctness issues first
+### 1. Keep allocator correctness ahead of arena conversion
 
-Before adding more arenas:
+The first cleanup pass fixed the known correctness issues that would have made
+arena conversion misleading or unsafe:
 
-- Deinitialize `base.Allocators` in parse paths that currently skip it:
-  `compile_package.doParse` and `coordinator.executeParse`.
-- Free legacy `PackageEnv.ModuleState.external_imports` strings.
-- Remove `ensureTotalCapacity(..., 256) catch {}` in `PackageEnv.init`.
-- Replace `Scratch.SetView` direct `page_allocator` use and allocation-failure
-  fallback with an explicit caller-provided scratch map or deterministic path.
-- Audit coordinator `catch {}` and `catch &[_]...{}` sites and keep tolerant
-  behavior only in parsing/error-reporting code.
-- Either wire `WorkerAllocators.arena` into worker task execution or remove the
-  unused arena/comment until it is real.
+- `compile_package.doParse` and coordinator parse now deinitialize temporary
+  `base.Allocators`.
+- Legacy `PackageEnv.ModuleState.external_imports` strings are freed.
+- `PackageEnv.init` documents its best-effort preallocation as a performance
+  hint, while real append failures still propagate normally.
+- `Scratch.SetView` takes a caller allocator and propagates allocation errors.
+- `PackageState` maps use the coordinator allocator.
+- Coordinator parse/canonicalize/typecheck tasks now return explicit
+  `parse_failed` or `compile_failed` results on allocation/infrastructure
+  failures.
+
+The next correctness-oriented step is to wire `WorkerAllocators.arena` into
+worker task execution or remove the unused arena/comment until it is real. That
+is the last obvious mismatch between documented allocator intent and actual
+worker behavior.
 
 ### 2. Introduce explicit task scratch
 
@@ -833,18 +855,16 @@ builtin/runtime helper calls.
 
 ## Priority List
 
-1. Fix parse `base.Allocators` deinit omissions and the legacy external import
-   string leak.
-2. Remove allocator failure fallbacks and direct `page_allocator` bypasses from
-   non-parse/non-error-reporting paths.
-3. Wire real per-worker task scratch into the coordinator.
-4. Replace checked artifact allocate-copy-free append tables with builders.
-5. Make `CheckedModuleArtifact` optionally arena-owned after builder sealing.
-6. Split `ModuleEnv` durable storage from canonicalizer/checker scratch in APIs.
-7. Convert hot append-only stores (`CIR`, MIR AST stores, IR store, LIR store)
+1. Wire real per-worker task scratch into the coordinator.
+2. Replace checked artifact allocate-copy-free append tables with builders.
+3. Make `CheckedModuleArtifact` optionally arena-owned after builder sealing.
+4. Split `ModuleEnv` durable storage from canonicalizer/checker scratch in APIs.
+5. Convert hot append-only stores (`CIR`, MIR AST stores, IR store, LIR store)
    to chunked or sealed builders before using arenas underneath them.
-8. Add per-stage post-check arena ownership once stage outputs do not borrow
+6. Add per-stage post-check arena ownership once stage outputs do not borrow
    from soon-to-be-reset memory.
+7. Continue removing direct `page_allocator` uses where the data is ordinary
+   compiler state rather than OS-backed runtime or debug-only state.
 
 ## Bottom Line
 
@@ -859,4 +879,6 @@ or append-then-seal stores, and its deinit logic is both large and easy to get
 wrong. The next most important target is worker/task scratch in the coordinator:
 the intended arena exists but is not wired through task execution, so the build
 currently pays for many individual allocations in places where bulk reset is the
-natural lifetime.
+natural lifetime. The recent fixes removed the allocator-policy distractions
+around silent failures and stray ownership leaks, so the remaining work is now
+mostly lifetime design rather than leak cleanup.
