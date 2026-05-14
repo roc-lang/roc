@@ -8326,12 +8326,19 @@ pub const Interpreter = struct {
                             // Propagate mappings from the concrete receiver to this type
                             try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
                         }
-                        // Also propagate mappings to the return type. This is needed when the
-                        // return type has type variables that should match the parameter's type
-                        // variables but may be represented as separate variables in the type store
-                        // after serialization. For example, identity : Iter(s) -> Iter(s) needs
-                        // both the parameter and return type's `s` to be mapped.
-                        try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
+                        // Also propagate mappings to the return type, but only when the
+                        // return type and receiver type share the same nominal head. This
+                        // handles cases like `identity : Iter(s) -> Iter(s)` where the two
+                        // `s` rigids may have different var IDs after serialization but
+                        // conceptually represent the same type variable.
+                        //
+                        // Skipping the propagation when the heads differ avoids the bug
+                        // where, e.g., `values : Dict(k, v) -> List(v)` would have the
+                        // single arg of `List` positionally aligned with the first arg
+                        // of `Dict`, incorrectly mapping `v` to the key type.
+                        if (try self.shouldPropagateRetToReceiver(@constCast(origin_env), fn_type.ret, recv_rt_var)) {
+                            try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
+                        }
                     },
                     else => {},
                 }
@@ -8941,6 +8948,15 @@ pub const Interpreter = struct {
                     }
                     try collectRigidsFromType(allocator, module, f.ret, rigids, visited);
                 },
+                .nominal_type => |nom| {
+                    // Recurse into the nominal's instantiation args at this site.
+                    // We deliberately do NOT recurse into the nominal's backing — the backing
+                    // uses the declaration's own rigid vars, which are a different scope from the
+                    // rigids we want to collect (those used at the call site, exposed via args).
+                    for (module.types.sliceNominalArgs(nom)) |arg| {
+                        try collectRigidsFromType(allocator, module, arg, rigids, visited);
+                    }
+                },
                 else => {},
             },
             .alias => |alias| {
@@ -9002,6 +9018,14 @@ pub const Interpreter = struct {
                     }
                     try self.collectRigidsFromRuntimeType(allocator, f.ret, rigids, visited);
                 },
+                .nominal_type => |nom| {
+                    // Recurse into the nominal's instantiation args at this site, mirroring
+                    // collectRigidsFromType — we don't traverse the backing because it uses the
+                    // declaration's own rigid vars.
+                    for (self.runtime_types.sliceNominalArgs(nom)) |arg| {
+                        try self.collectRigidsFromRuntimeType(allocator, arg, rigids, visited);
+                    }
+                },
                 else => {},
             },
             .alias => |alias| {
@@ -9052,17 +9076,54 @@ pub const Interpreter = struct {
     }
 
     /// Put a value into flex_type_context, incrementing the generation counter if
-    /// the value for this key is changing. This ensures that translate_cache entries
-    /// from a different polymorphic context are properly invalidated.
+    /// the value for this key is new or changing. This ensures that translate_cache
+    /// entries from a different polymorphic context are properly invalidated — adding
+    /// a fresh mapping changes how downstream lookups resolve, so cached translations
+    /// that pre-date the mapping must not be reused.
     fn putFlexTypeContext(self: *Interpreter, key: ModuleVarKey, rt_var: types.Var) Error!void {
-        // Check if there's an existing value that differs
-        if (self.flex_type_context.get(key)) |existing| {
-            if (@intFromEnum(existing) != @intFromEnum(rt_var)) {
-                // Value is changing - increment generation to invalidate stale cache entries
-                self.poly_context_generation +%= 1;
-            }
+        const should_bump = if (self.flex_type_context.get(key)) |existing|
+            @intFromEnum(existing) != @intFromEnum(rt_var)
+        else
+            true; // New entry — bump so stale cache hits don't bypass the new mapping
+        if (should_bump) {
+            self.poly_context_generation +%= 1;
         }
         try self.flex_type_context.put(key, rt_var);
+    }
+
+    /// Return true when `ret_ct_var` and `recv_rt_var` share the same nominal head — i.e.,
+    /// both are nominal types with the same name. In that case it is safe to walk them
+    /// in parallel via `propagateFlexMappings`, since their type arguments are positionally
+    /// aligned. When the heads differ (e.g., `List(v) -> Dict(k, v)` for `Dict.values`),
+    /// propagation would misalign the args and incorrectly map type variables.
+    ///
+    /// We translate the CT ident into the runtime layout store's ident space before
+    /// comparing, because the CT and RT type stores intern idents independently — the same
+    /// nominal type has different ident indices in each store.
+    fn shouldPropagateRetToReceiver(
+        self: *Interpreter,
+        module: *can.ModuleEnv,
+        ret_ct_var: types.Var,
+        recv_rt_var: types.Var,
+    ) Error!bool {
+        const ret_resolved = module.types.resolveVar(ret_ct_var);
+        const recv_resolved = self.runtime_types.resolveVar(recv_rt_var);
+
+        if (ret_resolved.desc.content != .structure or
+            recv_resolved.desc.content != .structure)
+        {
+            return false;
+        }
+
+        const ret_st = ret_resolved.desc.content.structure;
+        const recv_st = recv_resolved.desc.content.structure;
+        if (ret_st != .nominal_type or recv_st != .nominal_type) return false;
+
+        const ret_name = module.getIdent(ret_st.nominal_type.ident.ident_idx);
+        const rt_idents = self.runtime_layout_store.getMutableEnv().?;
+        const ret_name_rt = try rt_idents.insertIdent(base_pkg.Ident.for_text(ret_name));
+
+        return ret_name_rt.eql(recv_st.nominal_type.ident.ident_idx);
     }
 
     /// Propagate flex type context mappings by walking compile-time and runtime types in parallel.
@@ -9527,6 +9588,12 @@ pub const Interpreter = struct {
                             const ct_backing = module.types.getNominalBackingVar(nom);
                             const ct_args = module.types.sliceNominalArgs(nom);
 
+                            // Snapshot the substitution map so a nested nominal translation
+                            // (e.g. List inside Dict's backing) doesn't clobber our caller's
+                            // mappings when it clears the map after translating its own backing.
+                            var saved_translate_rigid_subst = try self.translate_rigid_subst.clone();
+                            defer saved_translate_rigid_subst.deinit();
+
                             // Build rigid → type arg substitution map before translating backing
                             if (ct_args.len > 0) {
                                 // Collect rigids from backing type
@@ -9577,8 +9644,14 @@ pub const Interpreter = struct {
                             const rt_backing = try self.translateTypeVar(module, ct_backing);
                             self.recursive_nominal_placeholder = saved_recursive_nominal;
 
-                            // Clear substitution map for next nominal type
+                            // Restore the caller's substitution map: args use the call-site's
+                            // scope (e.g. a parent nominal's rigids), not this nominal's
+                            // declaration scope which only applied to the backing translation.
                             self.translate_rigid_subst.clearRetainingCapacity();
+                            var saved_subst_iter = saved_translate_rigid_subst.iterator();
+                            while (saved_subst_iter.next()) |saved_entry| {
+                                try self.translate_rigid_subst.put(saved_entry.key_ptr.*, saved_entry.value_ptr.*);
+                            }
                             var buf = try self.allocator.alloc(types.Var, ct_args.len);
                             defer self.allocator.free(buf);
                             for (ct_args, 0..) |ct_arg, i| {

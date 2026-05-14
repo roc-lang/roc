@@ -3080,51 +3080,6 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
-/// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
-/// This is for cases like List.repeat(7.I64, 0) which returns an empty list.
-pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    var test_env_instance = TestEnv.init(interpreter_allocator);
-    defer test_env_instance.deinit();
-
-    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
-    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
-    defer interpreter.deinit();
-
-    const enable_trace = should_trace == .trace;
-    if (enable_trace) {
-        interpreter.startTrace();
-    }
-    defer if (enable_trace) interpreter.endTrace();
-
-    const ops = test_env_instance.get_ops();
-    const result = try interpreter.eval(resources.expr_idx, ops);
-    const layout_cache = &interpreter.runtime_layout_store;
-    defer result.decref(layout_cache, ops);
-    defer interpreter.bindings.items.len = 0;
-
-    // Verify we got a .list_of_zst layout (empty list optimization)
-    if (result.layout.tag != .list_of_zst) {
-        std.debug.print("\nExpected .list_of_zst layout but got .{s}\n", .{@tagName(result.layout.tag)});
-        return error.TestExpectedEqual;
-    }
-
-    // Use the ListAccessor to verify the list is empty
-    const elem_layout = interpreter_layout.Layout.zst();
-    const list_accessor = try result.asList(layout_cache, elem_layout, ops);
-    try std.testing.expectEqual(@as(usize, 0), list_accessor.len());
-
-    // Compare with DevEvaluator using canonical RocValue.format()
-    const roc_val = stackValueToRocValue(result, null);
-    const fmt_ctx = interpreterFormatCtx(&interpreter.runtime_layout_store);
-    const interpreter_str = roc_val.format(test_allocator, fmt_ctx) catch return;
-    defer test_allocator.free(interpreter_str);
-    try compareWithDevEvaluator(test_allocator, interpreter_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-}
-
 /// Helper function to run an expression and expect a unit/ZST result.
 /// This tests expressions that return `{}` (the unit type / empty record).
 /// Accepts both .zst layout and .struct_ layout with size 0 (empty record).
