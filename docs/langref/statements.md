@@ -1,27 +1,27 @@
 # Statements
 
 Statements are run as soon as they are encountered at runtime.
-They do not [evaluate](expressions#evaluation) to a [value](expressions#value).
+They do not [evaluate](expressions.md#evaluation) to a [value](expressions.md#value).
 
 ## [`=` (assignment)](#assignment) {#assignment}
 
-An _assignment statement_ gives a name to a [value](expressions#value) inside the current scope.
+An _assignment statement_ gives a name to a [value](expressions.md#value) inside the current scope.
 
 ### [Assignment Order](#assignment-order) {#assignment-order}
 
-Assignments inside expressions can only reference names that were assigned earlier in scope. 
+Assignments inside expressions can only reference names that were assigned earlier in scope.
 For example, this would be an error:
 
 ```roc
 foo({
     y = z + 1
     z = 5
-    
+
     z + 1
 })
 ```
 
-However, at the top level of a module, assignments can reference each other 
+However, at the top level of a module, assignments can reference each other
 regardless of declaration order:
 
 ```roc
@@ -31,7 +31,7 @@ y = 5
 
 ### [Assignment Cycles](#assignment-cycles) {#assignment-cycles}
 
-Top-level assignments can only mutually reference each other if they are all assigning to functions. 
+Top-level assignments can only mutually reference each other if they are all assigning to functions.
 This gives an error at compile time:
 
 ```roc
@@ -50,7 +50,7 @@ y = |arg| if arg <= 9 { x(arg + 1) } else { 0 }
 
 ### [Reassignment](#reassignment) {#reassignment}
 
-Reassigning to an existing name is only allowed when the name was declared with 
+Reassigning to an existing name is only allowed when the name was declared with
 [`var`](pattern-matching#var). This is allowed:
 
 ```roc
@@ -58,7 +58,7 @@ var $foo = 0
 $foo = 1
 ```
 
-However, this gives a [shadowing](naming#shadowing) error:
+However, this gives a [shadowing](naming.md#shadowing) error:
 
 ```roc
 foo = 0
@@ -67,7 +67,7 @@ foo = 1
 
 ## [`import`](#import) {#import}
 
-The `import` statement imports a [type](types) into scope from a [type module](modules#type-modules).
+The `import` statement imports a [type](types.md) into scope from a [type module](modules.md#type-modules).
 
 ### [`import` with `exposing`](#import-exposing) {#import-exposing}
 
@@ -87,10 +87,10 @@ The `return` statement immediately exits a function, returning the given value.
 my_func = |arg| {
     if arg == 0 {
         return 0
-        
+
         # This line will never be reached.
     }
-    
+
     arg - 1
 }
 ```
@@ -121,10 +121,10 @@ and have some way of continuing the process, but others may terminate the proces
 
 ## [Block Statements](#block-statements) {#block-statements}
 
-A _block statement_ is a group of statements which has its own scope, so 
+A _block statement_ is a group of statements which has its own scope, so
 anything [assigned](#assignment) in it can't be accessed outsdie the block.
 
-It's different from a [block expression](expressions#block-expressions) in that
+It's different from a [block expression](expressions.md#block-expressions) in that
 a block statement does not have an expression at the end. A common block
 statement is one that does an early `return` in a conditional branch:
 
@@ -133,7 +133,7 @@ if foo {
     …
 } else {
     bar = …
-    
+
     return bar
 }
 ```
