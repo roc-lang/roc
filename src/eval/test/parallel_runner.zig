@@ -12,7 +12,7 @@
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
 //!   3. **WASM backend** — statement-only LIR compiled to wasm.
-//!   4. **LLVM backend** — currently not implemented for statement-only LIR.
+//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
 //! This catches bugs where a backend produces a value of the right type but
@@ -135,7 +135,7 @@ const NUM_BACKENDS = 4; // interpreter, dev, wasm, llvm
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev", "wasm", "llvm" };
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
-const LLVM_BACKEND_IMPLEMENTED = false;
+const LLVM_BACKEND_IMPLEMENTED = eval.backendAvailable(.llvm);
 
 /// Set from `cli.verbose` in `main` after arg parsing. Read by `onTestStarted`,
 /// which is registered as a comptime Pool callback and can't take a closure.
@@ -482,7 +482,7 @@ fn runInspectTest(
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
         helpers.wasmEvaluatorInspectedStr,
-        helpers.devEvaluatorInspectedStr, // llvm placeholder
+        helpers.llvmEvaluatorInspectedStr,
     };
 
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
@@ -694,7 +694,7 @@ fn runCrashTest(
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
         helpers.wasmEvaluatorInspectedStr,
-        helpers.devEvaluatorInspectedStr, // llvm placeholder
+        helpers.llvmEvaluatorInspectedStr,
     };
 
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
@@ -1154,8 +1154,6 @@ fn printHelp() void {
         \\Runs eval tests across backends (interpreter, dev, wasm, llvm) in parallel
         \\and compares results via Str.inspect. Each backend evaluation runs in
         \\a forked child process for crash isolation.
-        \\(WASM and LLVM backends are currently marked NOT_IMPLEMENTED until
-        \\ statement-only code generation is implemented for each.)
         \\
         \\USAGE:
         \\  zig build test-eval               Run with defaults.
@@ -1231,7 +1229,7 @@ fn printHelp() void {
 ///       interpreter:    PASS (12.0ms)
 ///       dev:            PASS (41.3ms)
 ///       wasm:           FAIL 'WasmExecFailed' (25.2ms)
-///       llvm:           NOT_IMPLEMENTED
+///       llvm:           PASS (38.7ms)
 fn writeFailureDetail(r: TestResult) void {
     if (r.expected_str) |es| {
         std.debug.print("        expected:       {s}\n", .{es});

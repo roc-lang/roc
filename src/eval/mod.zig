@@ -21,8 +21,7 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
         .interpreter => true,
         .dev => backend.host_lir_codegen_available,
         .wasm => true,
-        // TODO: implement statement-only LIR LLVM codegen.
-        .llvm => false,
+        .llvm => builtin.target.os.tag != .freestanding,
     };
 }
 

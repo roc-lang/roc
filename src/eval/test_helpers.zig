@@ -1250,6 +1250,83 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
     }
 }
 
+/// Public `llvmEvaluatorInspectedStr` function.
+pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+    if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
+
+    const llvm_compile = @import("llvm_compile");
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, &lowered.view.store);
+    codegen.layout_store = &lowered.view.layouts;
+    defer codegen.deinit();
+
+    const proc = lowered.view.store.getProcSpec(lowered.mainProc());
+    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
+    defer allocator.free(arg_layouts);
+
+    const bitcode = try codegen.generateEntrypointModule("roc_eval_test_module", &.{
+        .{
+            .symbol_name = "roc_eval_test_main",
+            .proc = lowered.mainProc(),
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+        },
+    });
+    defer {
+        var owned = bitcode;
+        owned.deinit();
+    }
+
+    const dylib_path = try llvm_compile.compileToSharedLibrary(allocator, bitcode.bitcode, .{
+        .function_sections = false,
+        .use_module_target_triple = true,
+    });
+    defer {
+        std.fs.cwd().deleteFile(std.mem.sliceTo(dylib_path, 0)) catch {};
+        allocator.free(dylib_path);
+    }
+
+    var lib = try std.DynLib.open(std.mem.sliceTo(dylib_path, 0));
+    defer lib.close();
+
+    const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
+    const entry = lib.lookup(EntryFn, "roc_eval_test_main") orelse return error.LlvmBackendUnavailable;
+
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
+    defer if (arg_buffer) |buf| allocator.free(buf);
+
+    const ret_layout = proc.ret_layout;
+    const size_align = lowered.view.layouts.layoutSizeAlign(lowered.view.layouts.getLayout(ret_layout));
+    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
+    defer allocator.free(ret_buf);
+    @memset(ret_buf, 0);
+
+    var crash_boundary = runtime_env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+    const sj = crash_boundary.set();
+    if (sj != 0) return error.Crash;
+
+    entry(
+        runtime_env.get_ops(),
+        ret_buf.ptr,
+        if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+    );
+    switch (runtime_env.crashState()) {
+        .did_not_crash => {},
+        .crashed => return error.Crash,
+    }
+
+    return copyReturnedRocStr(
+        allocator,
+        &lowered.view.layouts,
+        ret_layout,
+        ret_buf.ptr,
+        runtime_env.get_ops(),
+    );
+}
+
 /// Public `wasmEvaluatorInspectedStr` function.
 pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
