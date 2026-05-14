@@ -476,7 +476,7 @@ fn runInspectTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -688,7 +688,7 @@ fn runCrashTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
