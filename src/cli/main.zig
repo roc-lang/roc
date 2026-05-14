@@ -2192,9 +2192,19 @@ fn extractNonPlatformPackages(
                         const str_region = parse_ast.tokenizedRegionToRegion(str.region);
                         const raw_path = source[str_region.start.offset..str_region.end.offset];
                         if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
-                            const pkg_rel_path = raw_path[1 .. raw_path.len - 1];
-                            // Make absolute path relative to app directory
-                            const pkg_abs_path = try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_rel_path });
+                            const pkg_spec = raw_path[1 .. raw_path.len - 1];
+                            // If this is a URL, download and resolve to the cached main.roc.
+                            // Otherwise, treat it as a relative file path under app_dir.
+                            const pkg_abs_path = if (base.url.isSafeUrl(pkg_spec)) blk: {
+                                // Dupe into the arena since `source` is freed when this
+                                // function returns but error reports may reference the URL.
+                                const url_owned = try ctx.arena.dupe(u8, pkg_spec);
+                                const cached = resolveUrlBundle(ctx, url_owned) catch |err| switch (err) {
+                                    error.CliError => return error.CliError,
+                                    error.OutOfMemory => return error.OutOfMemory,
+                                };
+                                break :blk try ctx.gpa.dupe(u8, cached);
+                            } else try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_spec });
                             try packages.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
                         }
                     },
@@ -2420,16 +2430,17 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
-/// Resolve a URL platform specification by downloading and caching the bundle.
+/// Resolve a URL bundle (platform or package) by downloading and caching it.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
-fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
+/// Returns the path to `main.roc` inside the cache directory.
+fn resolveUrlBundle(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})![]const u8 {
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
     const base58_hash = download.validateUrl(url) catch {
         return ctx.fail(.{ .invalid_url = .{
             .url = url,
-            .reason = "Invalid platform URL format or missing hash",
+            .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
         } });
     };
 
@@ -2451,7 +2462,7 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
 
     if (!already_cached) {
         // Not cached - need to download
-        std.log.info("Downloading platform from {s}...", .{url});
+        std.log.info("Downloading bundle from {s}...", .{url});
 
         // Create cache directory structure
         ensureCompilerCacheDirExists(cache_dir_path) catch |make_err| {
@@ -2482,21 +2493,26 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
             } });
         };
 
-        std.log.info("Platform cached at {s}", .{package_dir_path});
+        std.log.info("Bundle cached at {s}", .{package_dir_path});
     }
 
-    // Platforms must have a main.roc entry point
-    const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
-    std.fs.cwd().access(platform_source_path, .{}) catch {
+    // Bundles must have a main.roc entry point
+    const source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
+    std.fs.cwd().access(source_path, .{}) catch {
         return ctx.fail(.{ .platform_source_not_found = .{
             .platform_path = package_dir_path,
-            .searched_paths = &.{platform_source_path},
+            .searched_paths = &.{source_path},
         } });
     };
 
-    return PlatformPaths{
-        .platform_source_path = platform_source_path,
-    };
+    return source_path;
+}
+
+/// Resolve a URL platform specification by downloading and caching the bundle.
+/// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
+fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
+    const source_path = try resolveUrlBundle(ctx, url);
+    return PlatformPaths{ .platform_source_path = source_path };
 }
 
 /// Extract the embedded roc_shim library to the specified path for the given target.
@@ -2578,13 +2594,16 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
     };
 }
 
-/// Validate a bundle by using the Coordinator to discover all transitive module
-/// dependencies, then checking that every discovered .roc file is present in the
-/// bundle file list. Also validates platform target binaries if a platform is found.
-fn validateBundleWithCoordinator(
+/// Use the Coordinator to discover every transitive module the entry point
+/// imports (directly, via re-exports, or via a `package [...]` header) and
+/// append any not already in `file_paths` so the bundle includes them
+/// automatically. `uncompressed_size` is updated to reflect the newly added
+/// files. Also validates platform target binaries if a platform is found.
+fn discoverAndAddBundleModules(
     ctx: *CliContext,
     first_roc_file: []const u8,
-    bundled_file_paths: []const []const u8,
+    file_paths: *std.ArrayList([]const u8),
+    uncompressed_size: *u64,
     stderr: anytype,
 ) !void {
     // Resolve the entry point to an absolute path
@@ -2625,43 +2644,48 @@ fn validateBundleWithCoordinator(
     // Detect platform from BuildEnv packages using the accessor
     const platform_root_file = build_env.getPlatformRootFile();
 
-    // Collect all discovered module paths from the Coordinator
-    var required_paths = std.ArrayList([]const u8).empty;
-    defer required_paths.deinit(ctx.gpa);
-
-    if (build_env.coordinator) |coord| {
-        var coord_pkg_it = coord.packages.iterator();
-        while (coord_pkg_it.next()) |pkg_entry| {
-            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
-                try required_paths.append(ctx.gpa, mod_state.path);
-            }
-        }
-    }
-
-    // Build a set of absolute paths from the bundle file list for quick lookup
+    // Build a set of absolute paths already in the bundle list for dedup.
     var bundled_set = std.StringHashMap(void).init(ctx.gpa);
     defer bundled_set.deinit();
 
-    for (bundled_file_paths) |rel_path| {
+    for (file_paths.items) |rel_path| {
         const abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, rel_path) catch continue;
         defer ctx.gpa.free(abs_path);
         try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
     }
 
-    // Compare discovered module paths against bundled file list
-    var missing_count: u32 = 0;
-    for (required_paths.items) |req_path| {
-        if (!bundled_set.contains(req_path)) {
-            // Try to make the path relative for a nicer error message
-            const display_path = std.fs.path.relative(ctx.arena, ".", req_path) catch req_path;
-            try stderr.print("Error: Required module file is missing from bundle: {s}\n", .{display_path});
-            missing_count += 1;
-        }
-    }
+    // Append any discovered module that is not already in the bundle list.
+    // The Coordinator yields absolute paths; convert each to a path relative
+    // to cwd so it round-trips through `cwd.openFile` and survives the
+    // bundle's path-validation step (which rejects absolute paths).
+    if (build_env.coordinator) |coord| {
+        var coord_pkg_it = coord.packages.iterator();
+        while (coord_pkg_it.next()) |pkg_entry| {
+            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
+                const abs_path = mod_state.path;
+                if (bundled_set.contains(abs_path)) continue;
 
-    if (missing_count > 0) {
-        try stderr.print("Error: {} required module file(s) missing from bundle\n", .{missing_count});
-        return error.MissingBundleFiles;
+                const rel_path = std.fs.path.relative(ctx.arena, cwd, abs_path) catch {
+                    try stderr.print("Error: Discovered module path is outside the current directory and cannot be bundled: {s}\n", .{abs_path});
+                    return error.MissingBundleFiles;
+                };
+
+                // Confirm the file is actually readable from cwd before adding it.
+                const file = std.fs.cwd().openFile(rel_path, .{}) catch |err| {
+                    try stderr.print("Error: Could not open discovered module '{s}': {}\n", .{ rel_path, err });
+                    return err;
+                };
+                const stat = file.stat() catch |err| {
+                    file.close();
+                    return err;
+                };
+                file.close();
+
+                try file_paths.append(ctx.arena, rel_path);
+                try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
+                uncompressed_size.* += stat.size;
+            }
+        }
     }
 
     // If a platform was detected, validate target binaries exist
@@ -2679,6 +2703,65 @@ fn validateBundleWithCoordinator(
             }
         }
     }
+}
+
+/// Find the longest directory path that is an ancestor of every input in `abs_paths`.
+/// All inputs must be absolute paths (they may be paths to files or directories).
+/// Returns the common parent directory with no trailing path separator (except for
+/// a filesystem root such as "/"). Returns an empty slice if the inputs share no
+/// directory ancestor (e.g. two Windows paths on different drives).
+fn longestCommonParentDir(allocator: std.mem.Allocator, abs_paths: []const []const u8) ![]u8 {
+    std.debug.assert(abs_paths.len > 0);
+
+    const isSep = struct {
+        fn f(byte: u8) bool {
+            return byte == '/' or byte == '\\';
+        }
+    }.f;
+
+    // Start with the dirname of the first path.
+    var common = std.ArrayList(u8).empty;
+    errdefer common.deinit(allocator);
+    const first_dir = std.fs.path.dirname(abs_paths[0]) orelse abs_paths[0];
+    try common.appendSlice(allocator, first_dir);
+
+    for (abs_paths[1..]) |path| {
+        const dir = std.fs.path.dirname(path) orelse path;
+
+        // Find longest byte prefix shared between `common` and `dir`.
+        var i: usize = 0;
+        const max = @min(common.items.len, dir.len);
+        while (i < max and common.items[i] == dir[i]) : (i += 1) {}
+
+        // i is on a directory boundary if it is at the end of either path
+        // OR the next byte of either path is a separator.
+        const at_boundary = (i == common.items.len and (i == dir.len or isSep(dir[i]))) or
+            (i == dir.len and (i == common.items.len or isSep(common.items[i])));
+
+        if (!at_boundary) {
+            // Back up to the last separator within [0..i). Drop everything after it.
+            var j: usize = i;
+            while (j > 0) {
+                j -= 1;
+                if (isSep(common.items[j])) {
+                    // Keep the separator only when it's the root sep at index 0.
+                    i = if (j == 0) 1 else j;
+                    break;
+                }
+            } else {
+                i = 0;
+            }
+        }
+
+        common.items.len = @min(common.items.len, i);
+    }
+
+    // Strip trailing separators (preserve a single root separator).
+    while (common.items.len > 1 and isSep(common.items[common.items.len - 1])) {
+        common.items.len -= 1;
+    }
+
+    return common.toOwnedSlice(allocator);
 }
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
@@ -2718,6 +2801,20 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
     // Remember the first path from CLI args (before sorting)
     const first_cli_path = paths_to_use[0];
 
+    // Detect whether any input path is absolute. Absolute paths are not allowed
+    // inside the archive (the unbundle side rejects them, and a relative path
+    // is what the user actually wants extracted). If any input is absolute we
+    // rebase all paths against their longest common parent directory and pass
+    // that directory to the bundle library — so the archive itself only ever
+    // contains relative paths.
+    var any_absolute = false;
+    for (paths_to_use) |path| {
+        if (std.fs.path.isAbsolute(path)) {
+            any_absolute = true;
+            break;
+        }
+    }
+
     // Check that all files exist and collect their sizes
     for (paths_to_use) |path| {
         const file = cwd.openFile(path, .{}) catch |err| {
@@ -2730,6 +2827,18 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         uncompressed_size += stat.size;
 
         try file_paths.append(ctx.arena, path);
+    }
+
+    // Find the first .roc file to use as entry point for module discovery
+    const first_roc_file: ?[]const u8 = for (paths_to_use) |path| {
+        if (std.mem.endsWith(u8, path, ".roc")) break path;
+    } else null;
+
+    // Use the Coordinator to discover all transitive module dependencies
+    // (explicit imports plus modules exposed by a `package [...]` header)
+    // and append any not already in the file list.
+    if (first_roc_file) |roc_file| {
+        try discoverAndAddBundleModules(ctx, roc_file, &file_paths, &uncompressed_size, stderr);
     }
 
     // Sort and deduplicate paths
@@ -2770,14 +2879,53 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         }
     }
 
-    // Find the first .roc file to use as entry point for Coordinator-based validation
-    const first_roc_file: ?[]const u8 = for (file_paths.items) |path| {
-        if (std.mem.endsWith(u8, path, ".roc")) break path;
-    } else null;
+    // If any input was absolute, rebase all paths against their longest common
+    // parent directory so the archive only contains relative paths. The opened
+    // directory becomes the base_dir passed to the bundle library.
+    //
+    // Discovery (above) added transitively imported modules as cwd-relative
+    // paths; `realpathAlloc` resolves both forms so they share the common
+    // parent uniformly here.
+    var rebased_base_dir: ?std.fs.Dir = null;
+    defer if (rebased_base_dir) |*d| d.close();
+    var archive_paths: []const []const u8 = file_paths.items;
+    if (any_absolute) {
+        const resolved = try ctx.arena.alloc([]u8, file_paths.items.len);
+        for (file_paths.items, 0..) |p, i| {
+            resolved[i] = cwd.realpathAlloc(ctx.arena, p) catch |err| {
+                try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ p, err });
+                return err;
+            };
+        }
 
-    // Use the Coordinator to discover all transitive module dependencies and validate
-    if (first_roc_file) |roc_file| {
-        try validateBundleWithCoordinator(ctx, roc_file, file_paths.items, stderr);
+        const common = try longestCommonParentDir(ctx.arena, resolved);
+        if (common.len == 0) {
+            try stderr.print("Error: Input file paths have no common parent directory.\n", .{});
+            return error.InvalidPath;
+        }
+
+        const opened_dir = std.fs.openDirAbsolute(common, .{}) catch |err| {
+            try stderr.print("Error: Could not open common parent directory '{s}': {}\n", .{ common, err });
+            return err;
+        };
+        rebased_base_dir = opened_dir;
+
+        // Build relative-to-common paths for the archive.
+        const rel_paths = try ctx.arena.alloc([]const u8, resolved.len);
+        for (resolved, 0..) |abs, i| {
+            // abs must start with `common`; everything after is the relative path.
+            // common has no trailing separator, so skip the leading separator byte
+            // that follows it within abs.
+            if (abs.len <= common.len or
+                !std.mem.eql(u8, abs[0..common.len], common) or
+                !(abs[common.len] == '/' or abs[common.len] == '\\'))
+            {
+                try stderr.print("Error: Path '{s}' is not under the common parent '{s}'.\n", .{ abs, common });
+                return error.InvalidPath;
+            }
+            rel_paths[i] = abs[common.len + 1 ..];
+        }
+        archive_paths = rel_paths;
     }
 
     // Create temporary output file
@@ -2802,19 +2950,20 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         }
     };
 
-    var iter = FilePathIterator{ .paths = file_paths.items };
+    var iter = FilePathIterator{ .paths = archive_paths };
 
     // Bundle the files
     var allocator_copy = ctx.arena;
     var error_ctx: bundle.ErrorContext = undefined;
     var temp_writer_buffer: [4096]u8 = undefined;
     var temp_writer = temp_file.writer(&temp_writer_buffer);
+    const bundle_base_dir = rebased_base_dir orelse cwd;
     const final_filename = bundle.bundleFiles(
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
         &temp_writer.interface,
-        cwd,
+        bundle_base_dir,
         null, // path_prefix parameter - null means no stripping
         &error_ctx,
     ) catch |err| {
@@ -5678,4 +5827,38 @@ test "classifyNativeRunTermination preserves signal termination" {
 
     try testing.expect(result == .signal);
     try testing.expectEqual(@as(u32, 11), result.signal);
+}
+
+test "longestCommonParentDir" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const cases = [_]struct {
+        paths: []const []const u8,
+        expected: []const u8,
+    }{
+        // Single file: parent directory of that file.
+        .{ .paths = &.{"/tmp/pkg/main.roc"}, .expected = "/tmp/pkg" },
+        // Two files sharing a parent.
+        .{ .paths = &.{ "/tmp/pkg/main.roc", "/tmp/pkg/Mod.roc" }, .expected = "/tmp/pkg" },
+        // Files in sibling subdirectories: common parent.
+        .{ .paths = &.{ "/tmp/nested/a/main.roc", "/tmp/nested/b/Mod.roc" }, .expected = "/tmp/nested" },
+        // Names share a byte prefix but no directory boundary — must back up.
+        .{ .paths = &.{ "/tmp/abc/a.roc", "/tmp/abd/b.roc" }, .expected = "/tmp" },
+        // Only root in common.
+        .{ .paths = &.{ "/etc/foo.roc", "/var/bar.roc" }, .expected = "/" },
+        // Three files with same parent.
+        .{ .paths = &.{ "/a/b/c/x.roc", "/a/b/c/y.roc", "/a/b/c/z.roc" }, .expected = "/a/b/c" },
+        // Three files where the third narrows the common parent.
+        .{ .paths = &.{ "/a/b/c/x.roc", "/a/b/c/y.roc", "/a/b/d/z.roc" }, .expected = "/a/b" },
+    };
+
+    for (cases) |tc| {
+        const got = try longestCommonParentDir(allocator, tc.paths);
+        defer allocator.free(got);
+        testing.expectEqualStrings(tc.expected, got) catch |err| {
+            std.debug.print("Failed case: expected='{s}' got='{s}'\n", .{ tc.expected, got });
+            return err;
+        };
+    }
 }

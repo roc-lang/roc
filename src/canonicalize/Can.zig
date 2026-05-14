@@ -2402,6 +2402,15 @@ pub fn canonicalizeFile(
         try self.injectEchoPlatform();
     }
 
+    // For `package [Mod1, Mod2, ...] {}` headers, auto-import each exposed
+    // module unless the user wrote an explicit `import Mod` (which then takes
+    // precedence — including its `exposing` clause, e.g. `import Mod exposing []`).
+    var auto_imports: std.array_list.Managed(AutoImportedModule) = .init(self.env.gpa);
+    defer auto_imports.deinit();
+    if (header == .package) {
+        try self.collectPackageHeaderAutoImports(header.package.exposes, file.statements, &auto_imports);
+    }
+
     // Phase 0: Register module aliases and import indices early so they are available
     // during type declaration and associated block canonicalization (Phases 1a-1.7).
     // Without this, qualified type references inside associated blocks
@@ -2413,6 +2422,9 @@ pub fn canonicalizeFile(
         if (stmt == .import) {
             try self.registerImportModuleAlias(stmt.import);
         }
+    }
+    for (auto_imports.items) |auto_imp| {
+        try self.registerAutoImportModuleAlias(auto_imp.module_name);
     }
 
     // First pass (1a): Process type declarations WITH associated blocks to introduce them into scope
@@ -2856,6 +2868,13 @@ pub fn canonicalizeFile(
                 }
             }
         }
+    }
+
+    // Auto-imports from the package header: process them like explicit `import Mod`
+    // statements, but before any user-written statements so they appear at the top
+    // of the canonicalized import list.
+    for (auto_imports.items) |auto_imp| {
+        _ = try self.canonicalizeAutoImport(auto_imp.module_name, auto_imp.region);
     }
 
     // Second pass: Process all other statements
@@ -4396,6 +4415,85 @@ fn registerImportModuleAlias(
         .success => {},
         .already_imported => {},
     }
+}
+
+/// A module from `package [Mod1, Mod2, ...] {}` that will be auto-imported.
+const AutoImportedModule = struct {
+    module_name: Ident.Idx,
+    region: Region,
+};
+
+/// Collect modules to auto-import from a `package` header. Skips any module that
+/// already has an explicit unqualified `import` statement in the file — the explicit
+/// form (with its optional `exposing`) takes precedence.
+fn collectPackageHeaderAutoImports(
+    self: *Self,
+    exposes: AST.Collection.Idx,
+    statements: AST.Statement.Span,
+    out: *std.array_list.Managed(AutoImportedModule),
+) std.mem.Allocator.Error!void {
+    // Build the set of module names the user already imported explicitly. Only
+    // unqualified, non-nested imports can shadow a package-header auto-import.
+    var explicit: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{};
+    defer explicit.deinit(self.env.gpa);
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt != .import) continue;
+        const imp = stmt.import;
+        if (imp.qualifier_tok != null or imp.nested_import) continue;
+        const name_ident = self.parse_ir.tokens.resolveIdentifier(imp.module_name_tok) orelse continue;
+        try explicit.put(self.env.gpa, name_ident, {});
+    }
+
+    const collection = self.parse_ir.store.getCollection(exposes);
+    const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
+    for (exposed_items) |exposed_idx| {
+        const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
+        const name_token: Token.Idx, const tok_region = switch (exposed) {
+            .upper_ident => |ui| .{ ui.ident, ui.region },
+            .upper_ident_star => |ui| .{ ui.ident, ui.region },
+            // Lower idents in a package header refer to value re-exports, not
+            // submodules — leave them alone. Malformed items already produced
+            // a parse diagnostic.
+            .lower_ident, .malformed => continue,
+        };
+        const name_ident = self.parse_ir.tokens.resolveIdentifier(name_token) orelse continue;
+        if (explicit.contains(name_ident)) continue;
+        try out.append(.{
+            .module_name = name_ident,
+            .region = self.parse_ir.tokenizedRegionToRegion(tok_region),
+        });
+    }
+}
+
+/// Phase-0 alias registration for an auto-imported package-header module.
+/// Mirrors the unqualified, non-aliased branch of `registerImportModuleAlias`.
+fn registerAutoImportModuleAlias(self: *Self, module_name: Ident.Idx) std.mem.Allocator.Error!void {
+    const module_name_text = self.env.getIdent(module_name);
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
+        self.env.gpa,
+        self.env.common.getStringStore(),
+        module_name_text,
+        module_name,
+    );
+    const alias = try self.extractModuleName(module_name);
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    _ = try current_scope.introduceModuleAlias(self.env.gpa, alias, module_name, false, null);
+    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+}
+
+/// Second-pass canonicalization for an auto-imported package-header module.
+/// Equivalent to writing `import <module_name>` with no alias and no exposing list.
+fn canonicalizeAutoImport(
+    self: *Self,
+    module_name: Ident.Idx,
+    import_region: Region,
+) std.mem.Allocator.Error!?Statement.Idx {
+    // Empty exposed-items span.
+    const scratch_start = self.env.store.scratchExposedItemTop();
+    const empty_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
+    return try self.importAliased(module_name, null, empty_exposes, import_region, false);
 }
 
 /// Resolve the module alias name from either explicit alias or module name
@@ -6538,6 +6636,18 @@ pub fn canonicalizeExpr(
         .bin_op => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+            // Get the operator token
+            const op_token_early = self.parse_ir.tokens.tokens.get(e.operator);
+            // For the `?` binop, the rhs may be a bare tag constructor (e.g. `NoFirstError`)
+            // that should be applied to the err payload. Canonicalizing the rhs first would
+            // type it as a no-arg tag and break the application. Handle this special case
+            // before canonicalizing the rhs.
+            if (op_token_early.tag == .OpQuestion) {
+                const free_vars_start_q = self.scratch_free_vars.top();
+                const can_lhs_q = try self.canonicalizeExpr(e.left) orelse return null;
+                return try self.canonicalizeSingleQuestionBinop(e, region, can_lhs_q, free_vars_start_q);
+            }
+
             const free_vars_start = self.scratch_free_vars.top();
             // Canonicalize left and right operands
             const can_lhs = try self.canonicalizeExpr(e.left) orelse return null;
@@ -7557,6 +7667,284 @@ fn canonicalizeDoubleQuestionOp(
 
     // Combine free vars from both lhs and rhs
     const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
+}
+
+/// Canonicalize the `?` binop (single question with a right-hand side).
+/// Desugars `expr ? transform` into:
+///   match expr {
+///       Ok(#ok) => #ok,
+///       Err(#err) => return Err(transform(#err)),
+///   }
+/// The `transform` can be a tag constructor like `NoFirstError` (in which case
+/// the err is wrapped as `NoFirstError(err)`) or a function like
+/// `|e| NoFirstError(e)` — either way it is applied to the err payload.
+fn canonicalizeSingleQuestionBinop(
+    self: *Self,
+    e: AST.BinOp,
+    region: base.Region,
+    can_lhs: CanonicalizedExpr,
+    free_vars_start: u32,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    // Inspect the rhs AST: a bare tag constructor (e.g. `NoFirstError`) must be
+    // applied as a tag with the err as payload, not canonicalized as a no-arg
+    // tag and then called as a function (which would be a type error).
+    const rhs_ast = self.parse_ir.store.getExpr(e.right);
+    const rhs_is_bare_tag = rhs_ast == .tag;
+
+    // For the function case, canonicalize the rhs in the outer scope so its
+    // free variables are captured correctly. For the tag case, we'll handle
+    // the construction manually below.
+    const can_rhs_idx: ?Expr.Idx = if (rhs_is_bare_tag) null else blk: {
+        const can_rhs = try self.canonicalizeExpr(e.right) orelse {
+            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+        };
+        break :blk can_rhs.idx;
+    };
+    // Use pre-interned identifiers for the Ok/Err values and tag names
+    const ok_val_ident = self.env.idents.question_ok;
+    const err_val_ident = self.env.idents.question_err;
+    const ok_tag_ident = self.env.idents.ok;
+    const err_tag_ident = self.env.idents.err;
+
+    // Look up Try type for nominal wrapping (improves error messages)
+    const try_ident = self.env.idents.@"try";
+    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+        if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
+            switch (type_binding_loc.binding.*) {
+                .external_nominal => |ext| {
+                    if (ext.import_idx) |import_idx| {
+                        if (ext.target_node_idx) |target_node_idx| {
+                            break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+        break :blk null;
+    };
+
+    // Mark the start of scratch match branches
+    const scratch_top = self.env.store.scratchMatchBranchTop();
+
+    // === Branch 1: Ok(#ok) => #ok ===
+    {
+        try self.scopeEnter(self.env.gpa, false);
+        defer self.scopeExit(self.env.gpa) catch {};
+
+        const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
+            .assign = .{ .ident = ok_val_ident },
+        }, region);
+
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
+
+        const ok_patterns_start = self.env.store.scratchPatternTop();
+        try self.env.store.addScratchPattern(ok_assign_pattern_idx);
+        const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
+
+        const ok_tag_pattern_idx = ok_blk: {
+            const applied_tag_pattern = try self.env.addPattern(Pattern{
+                .applied_tag = .{
+                    .name = ok_tag_ident,
+                    .args = ok_args_span,
+                },
+            }, region);
+
+            if (try_nominal_info) |info| {
+                break :ok_blk try self.env.addPattern(Pattern{
+                    .nominal_external = .{
+                        .module_idx = info.import_idx,
+                        .target_node_idx = info.target_node_idx,
+                        .backing_pattern = applied_tag_pattern,
+                        .backing_type = .tag,
+                    },
+                }, region);
+            }
+            break :ok_blk applied_tag_pattern;
+        };
+
+        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+        const ok_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+            .pattern = ok_tag_pattern_idx,
+            .degenerate = false,
+        }, region);
+        try self.env.store.addScratchMatchBranchPattern(ok_branch_pattern_idx);
+        const ok_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+        const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+            .pattern_idx = ok_assign_pattern_idx,
+        } }, region);
+        try self.used_patterns.put(self.env.gpa, ok_assign_pattern_idx, {});
+
+        const ok_branch_idx = try self.env.addMatchBranch(
+            Expr.Match.Branch{
+                .patterns = ok_branch_pat_span,
+                .value = ok_lookup_idx,
+                .guard = null,
+                .redundant = try self.env.types.fresh(),
+            },
+            region,
+        );
+        try self.env.store.addScratchMatchBranch(ok_branch_idx);
+    }
+
+    // === Branch 2: Err(#err) => return Err(<rhs>(#err)) ===
+    {
+        try self.scopeEnter(self.env.gpa, false);
+        defer self.scopeExit(self.env.gpa) catch {};
+
+        const err_assign_pattern_idx = try self.env.addPattern(Pattern{
+            .assign = .{ .ident = err_val_ident },
+        }, region);
+
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, err_val_ident, err_assign_pattern_idx, false, true);
+
+        const err_patterns_start = self.env.store.scratchPatternTop();
+        try self.env.store.addScratchPattern(err_assign_pattern_idx);
+        const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
+
+        const err_tag_pattern_idx = err_blk: {
+            const applied_tag_pattern = try self.env.addPattern(Pattern{
+                .applied_tag = .{
+                    .name = err_tag_ident,
+                    .args = err_args_span,
+                },
+            }, region);
+
+            if (try_nominal_info) |info| {
+                break :err_blk try self.env.addPattern(Pattern{
+                    .nominal_external = .{
+                        .module_idx = info.import_idx,
+                        .target_node_idx = info.target_node_idx,
+                        .backing_pattern = applied_tag_pattern,
+                        .backing_type = .tag,
+                    },
+                }, region);
+            }
+            break :err_blk applied_tag_pattern;
+        };
+
+        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+        const err_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+            .pattern = err_tag_pattern_idx,
+            .degenerate = false,
+        }, region);
+        try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
+        const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+        // Build the branch body
+        const branch_value_idx = if (self.in_expect) blk: {
+            // Inside an expect: crash with a message instead of returning
+            break :blk try self.env.addExpr(CIR.Expr{ .e_crash = .{
+                .msg = try self.env.insertString("The ? operator returned an Err in an expect"),
+            } }, region);
+        } else blk: {
+            // Build lookup for the bound #err
+            const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                .pattern_idx = err_assign_pattern_idx,
+            } }, region);
+            try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+
+            // Build the transformed err: either Tag(#err) (when rhs is a bare
+            // tag constructor) or <rhs>(#err) (when rhs is any other expression).
+            const transformed_err_idx = if (rhs_is_bare_tag) blk_tag: {
+                const tag_token = rhs_ast.tag.token;
+                const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_token) orelse {
+                    break :blk_tag try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                        .region = region,
+                    } });
+                };
+                const tag_args_start = self.env.store.scratchExprTop();
+                try self.env.store.addScratchExpr(err_lookup_idx);
+                const tag_args_span = try self.env.store.exprSpanFrom(tag_args_start);
+                break :blk_tag try self.env.addExpr(CIR.Expr{
+                    .e_tag = .{
+                        .name = tag_name,
+                        .args = tag_args_span,
+                    },
+                }, region);
+            } else blk_call: {
+                const call_args_start = self.env.store.scratchExprTop();
+                try self.env.store.addScratchExpr(err_lookup_idx);
+                const call_args_span = try self.env.store.exprSpanFrom(call_args_start);
+                break :blk_call try self.env.addExpr(CIR.Expr{
+                    .e_call = .{
+                        .func = can_rhs_idx.?,
+                        .args = call_args_span,
+                        .called_via = CalledVia.apply,
+                    },
+                }, region);
+            };
+
+            // Wrap in Err(...)
+            const err_tag_args_start = self.env.store.scratchExprTop();
+            try self.env.store.addScratchExpr(transformed_err_idx);
+            const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
+
+            const err_tag_expr_idx = expr_blk: {
+                const tag_expr = try self.env.addExpr(CIR.Expr{
+                    .e_tag = .{
+                        .name = err_tag_ident,
+                        .args = err_tag_args_span,
+                    },
+                }, region);
+
+                if (try_nominal_info) |info| {
+                    break :expr_blk try self.env.addExpr(CIR.Expr{
+                        .e_nominal_external = .{
+                            .module_idx = info.import_idx,
+                            .target_node_idx = info.target_node_idx,
+                            .backing_expr = tag_expr,
+                            .backing_type = .tag,
+                        },
+                    }, region);
+                }
+                break :expr_blk tag_expr;
+            };
+
+            // Wrap in return
+            break :blk if (self.enclosing_lambda) |lambda_idx|
+                try self.env.addExpr(CIR.Expr{ .e_return = .{
+                    .expr = err_tag_expr_idx,
+                    .lambda = lambda_idx,
+                    .context = .try_suffix,
+                } }, region)
+            else
+                try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                    .region = region,
+                    .context = .try_suffix,
+                } });
+        };
+
+        const err_branch_idx = try self.env.addMatchBranch(
+            Expr.Match.Branch{
+                .patterns = err_branch_pat_span,
+                .value = branch_value_idx,
+                .guard = null,
+                .redundant = try self.env.types.fresh(),
+            },
+            region,
+        );
+        try self.env.store.addScratchMatchBranch(err_branch_idx);
+    }
+
+    const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
+
+    // is_try_suffix = true since this comes from `?` (early return semantics)
+    const match_expr = Expr.Match{
+        .cond = can_lhs.idx,
+        .branches = branches_span,
+        .exhaustive = try self.env.types.fresh(),
+        .is_try_suffix = true,
+    };
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
+
+    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 

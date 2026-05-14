@@ -47,7 +47,6 @@ MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 UNDECLARED TYPE - type_comprehensive_scope.md:16:38:16:42
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
-TOO MANY ARGS - type_comprehensive_scope.md:29:10:29:24
 # PROBLEMS
 **MUTUALLY RECURSIVE TYPE ALIASES**
 The type alias _Node_ and _Tree_ form a recursive cycle.
@@ -107,15 +106,6 @@ This type is referenced here:
 BadType : SomeUndeclaredType
 ```
           ^^^^^^^^^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects 0 arguments, but got 2 instead.
-**type_comprehensive_scope.md:29:10:29:24:**
-```roc
-MyDict : Dict(Str, U64)
-```
-         ^^^^^^^^^^^^^^
 
 
 # TOKENS

@@ -1097,8 +1097,403 @@ Builtin :: [].{
 		}
 	}
 
-	## TODO actually implement Dict
-	Dict :: [EmptyDict].{}
+	# TODO use hashing for better performance
+	Dict(k, v) :: [Pairs(List((k, v)))].{
+
+		## Returns `Bool.True` if the two dictionaries contain the same key-value
+		## pairs, and `Bool.False` otherwise.
+		is_eq : Dict(k, v), Dict(k, v) -> Bool
+			where [k.is_eq : k, k -> Bool, v.is_eq : v, v -> Bool]
+		is_eq = |dict_a, dict_b| {
+			if Dict.len(dict_a) != Dict.len(dict_b) {
+				return False
+			}
+
+			list_a = Dict.to_list(dict_a)
+			var $index = 0
+
+			while $index < List.len(list_a) {
+				(key, value) = list_get_unsafe(list_a, $index)
+				match Dict.get(dict_b, key) {
+					Try.Ok(value_b) => {
+						if value != value_b {
+							return False
+						}
+					}
+					Try.Err(_) => {
+						return False
+					}
+				}
+				$index = $index + 1
+			}
+
+			True
+		}
+
+		## Returns an empty `Dict`.
+		## ```roc
+		## empty_dict = Dict.empty()
+		## ```
+		empty : () -> Dict(_k, _v)
+		empty = || Pairs([])
+
+		## Returns a `Dict` containing the key and value provided as input.
+		## ```roc
+		## expect Dict.single("A", "B") == Dict.empty().insert("A", "B")
+		## ```
+		single : k, v -> Dict(k, v)
+		single = |key, value| Pairs([(key, value)])
+
+		## Returns the number of key-value pairs in the dictionary.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("One", "A Song")
+		##            .insert("Two", "Candy Canes")
+		##            .insert("Three", "Boughs of Holly")
+		##            .len() == 3
+		## ```
+		len : Dict(_k, _v) -> U64
+		len = |dict| match dict {
+			Pairs(list) => List.len(list)
+		}
+
+		## Check if the dictionary is empty.
+		## ```roc
+		## expect !Dict.empty().insert("key", 42).is_empty()
+		##
+		## expect Dict.empty().is_empty()
+		## ```
+		is_empty : Dict(_k, _v) -> Bool
+		is_empty = |dict| match dict {
+			Pairs(list) => List.is_empty(list)
+		}
+
+		## Get the value for a given key. If there is a value for the specified
+		## key it will return `Ok(value)`, otherwise return `Err(KeyNotFound)`.
+		## ```roc
+		## dictionary = Dict.empty()
+		##                  .insert(1, "Apple")
+		##                  .insert(2, "Orange")
+		##
+		## expect dictionary.get(1) == Ok("Apple")
+		## expect dictionary.get(2000) == Err(KeyNotFound)
+		## ```
+		get : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+			where [k.is_eq : k, k -> Bool]
+		get = |dict, key| match dict {
+			Pairs(list) => {
+				for (item_key, item_value) in list {
+					if item_key == key {
+						return Try.Ok(item_value)
+					}
+				}
+				Try.Err(KeyNotFound)
+			}
+		}
+
+		## Check if the dictionary has a value for a specified key.
+		## ```roc
+		## expect Dict.empty().insert(1234, "5678").contains(1234)
+		## ```
+		contains : Dict(k, _v), k -> Bool
+			where [k.is_eq : k, k -> Bool]
+		contains = |dict, key| match dict {
+			Pairs(list) => List.any(
+				list,
+				|(item_key, _)| item_key == key,
+			)
+		}
+
+		## Insert a value into the dictionary at a specified key. If the key
+		## already exists, the existing value is replaced.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12)
+		##            .get("Apples") == Ok(12)
+		## ```
+		insert : Dict(k, v), k, v -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool]
+		insert = |dict, key, value| match dict {
+			Pairs(list) => {
+				var $new_list = List.with_capacity(List.len(list))
+				for (item_key, item_value) in list {
+					if item_key != key {
+						$new_list = List.append($new_list, (item_key, item_value))
+					}
+				}
+				Pairs(List.append($new_list, (key, value)))
+			}
+		}
+
+		## Remove a value from the dictionary for a specified key.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Some", "Value")
+		##            .remove("Some")
+		##            .len() == 0
+		## ```
+		remove : Dict(k, v), k -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool]
+		remove = |dict, key| match dict {
+			Pairs(list) => {
+				var $new_list = List.with_capacity(List.len(list))
+				for (item_key, item_value) in list {
+					if item_key != key {
+						$new_list = List.append($new_list, (item_key, item_value))
+					}
+				}
+				Pairs($new_list)
+			}
+		}
+
+		## Returns the key-value pairs of a dictionary as a `List`.
+		## ```roc
+		## expect Dict.single(1, "One")
+		##            .insert(2, "Two")
+		##            .to_list() == [(1, "One"), (2, "Two")]
+		## ```
+		to_list : Dict(k, v) -> List((k, v))
+		to_list = |dict| match dict {
+			Pairs(list) => list
+		}
+
+		## Create a `Dict` from a `List` of key-value pairs. If the list
+		## contains duplicate keys, later values overwrite earlier ones.
+		## ```roc
+		## expect Dict.from_list([(1, "One"), (2, "Two")]) ==
+		## 	Dict.single(1, "One").insert(2, "Two")
+		## ```
+		from_list : List((k, v)) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool]
+		from_list = |list|
+			List.fold(list, Pairs([]), |dict, (k, v)| Dict.insert(dict, k, v))
+
+		## Returns the keys of a dictionary as a `List`.
+		## ```roc
+		## expect Dict.single(1, "One")
+		##            .insert(2, "Two")
+		##            .keys() == [1, 2]
+		## ```
+		keys : Dict(k, _v) -> List(k)
+		keys = |dict| match dict {
+			Pairs(list) => List.map(
+				list,
+				|(k, _)| k,
+			)
+		}
+
+		## Returns the values of a dictionary as a `List`.
+		## ```roc
+		## expect Dict.single(1, "One")
+		##            .insert(2, "Two")
+		##            .values() == ["One", "Two"]
+		## ```
+		values : Dict(_k, v) -> List(v)
+		values = |dict| match dict {
+			Pairs(list) => List.map(
+				list,
+				|(_, v)| v,
+			)
+		}
+
+		## Build a value by folding through each key-value pair in the
+		## dictionary. Starting with a given `state` value, this runs the
+		## given `step` function on each pair, using its return value as
+		## the new `state`. It returns the final `state` at the end.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .insert("Oranges", 24)
+		##            .fold(0, |count, _key, qty| count + qty) == 36
+		## ```
+		fold : Dict(k, v), state, (state, k, v -> state) -> state
+		fold = |dict, init, step|
+			List.fold(Dict.to_list(dict), init, |st, (k, v)| step(st, k, v))
+
+		## Run the given function on each key-value pair of a dictionary, and
+		## return a dictionary with just the pairs for which the function
+		## returned `Bool.True`.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Alice", 17.U64)
+		##            .insert("Bob", 18)
+		##            .insert("Charlie", 19)
+		##            .keep_if(|(_k, v)| v >= 18)
+		##            .len() == 2
+		## ```
+		keep_if : Dict(k, v), ((k, v) -> Bool) -> Dict(k, v)
+		keep_if = |dict, predicate| match dict {
+			Pairs(list) => Pairs(List.keep_if(list, predicate))
+		}
+
+		## Run the given function on each key-value pair of a dictionary, and
+		## return a dictionary with just the pairs for which the function
+		## returned `Bool.False`.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Alice", 17.U64)
+		##            .insert("Bob", 18)
+		##            .insert("Charlie", 19)
+		##            .drop_if(|(_k, v)| v >= 18)
+		##            .len() == 1
+		## ```
+		drop_if : Dict(k, v), ((k, v) -> Bool) -> Dict(k, v)
+		drop_if = |dict, predicate| match dict {
+			Pairs(list) => Pairs(List.drop_if(list, predicate))
+		}
+
+		## Convert each value in the dictionary to something new, by calling a
+		## conversion function on each of them which receives both the key
+		## and the old value. Then return a new dictionary containing the same
+		## keys and the converted values.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("a", 1.I64)
+		##            .insert("b", 2)
+		##            .map(|_k, v| v * 10)
+		##            == Dict.empty()
+		##                   .insert("a", 10)
+		##                   .insert("b", 20)
+		## ```
+		map : Dict(k, a), (k, a -> b) -> Dict(k, b)
+		map = |dict, transform| match dict {
+			Pairs(list) =>
+				Pairs(
+					List.map(
+						list,
+						|(k, v)| (k, transform(k, v)),
+					),
+				)
+			}
+
+		## Like [Dict.map], except the transformation function returns a
+		## dictionary. At the end, all the dictionaries are joined together
+		## (using [Dict.insert_all]) into one dictionary.
+		##
+		## You may know a similar function named `concat_map` in other languages.
+		join_map : Dict(a, b), (a, b -> Dict(x, y)) -> Dict(x, y)
+			where [x.is_eq : x, x -> Bool]
+		join_map = |dict, transform| {
+			var $acc = Dict.empty()
+			for (k, v) in Dict.to_list(dict) {
+				$acc = Dict.insert_all($acc, transform(k, v))
+			}
+			$acc
+		}
+
+		## Combine two dictionaries by keeping the
+		## [union](https://en.wikipedia.org/wiki/Union_(set_theory)) of all the
+		## key-value pairs. Where the same key is present in both dictionaries,
+		## the value from the second input is kept.
+		## ```roc
+		## expect {
+		## 	first = Dict.single(1, "Not Me").insert(2, "And Me")
+		## 	second = Dict.single(1, "Keep Me").insert(3, "Me Too")
+		## 	expected = Dict.single(1, "Keep Me").insert(2, "And Me").insert(3, "Me Too")
+		## 	Dict.is_eq(Dict.insert_all(first, second), expected)
+		## }
+		## ```
+		insert_all : Dict(k, v), Dict(k, v) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool]
+		insert_all = |xs, ys| {
+			var $acc = xs
+			for (k, v) in Dict.to_list(ys) {
+				$acc = Dict.insert($acc, k, v)
+			}
+			$acc
+		}
+
+		## Combine two dictionaries by keeping the
+		## [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
+		## of all the key-value pairs. Only pairs where the key exists in both
+		## dictionaries and the values are equal are kept.
+		## ```roc
+		## expect {
+		## 	first = Dict.single(1, "Keep Me").insert(2, "And Me").insert(3, "Not this one")
+		## 	second = Dict.single(1, "Keep Me").insert(2, "And Me").insert(3, "Different")
+		## 	expected = Dict.single(1, "Keep Me").insert(2, "And Me")
+		##
+		## 	Dict.is_eq(Dict.keep_shared(first, second), expected)
+		## }
+		## ```
+		keep_shared : Dict(k, v), Dict(k, v) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool, v.is_eq : v, v -> Bool]
+		keep_shared = |xs, ys| {
+			ys_list = Dict.to_list(ys)
+			var $acc = Dict.empty()
+			for (k, v) in Dict.to_list(xs) {
+				var $found_match = False
+				for (yk, yv) in ys_list {
+					if yk == k and yv == v {
+						$found_match = True
+					}
+				}
+				if $found_match {
+					$acc = Dict.insert($acc, k, v)
+				}
+			}
+			$acc
+		}
+
+		## Remove the key-value pairs in the first input whose keys are also in
+		## the second using the
+		## [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement).
+		## ```roc
+		## expect {
+		## 	first = Dict.single(1, "Keep Me").insert(2, "And Me").insert(3, "Remove Me")
+		## 	second = Dict.single(3, "Remove Me").insert(4, "I do nothing...")
+		## 	expected = Dict.single(1, "Keep Me").insert(2, "And Me")
+		##
+		## 	Dict.is_eq(Dict.remove_all(first, second), expected)
+		## }
+		## ```
+		remove_all : Dict(k, v), Dict(k, _w) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool]
+		remove_all = |xs, ys| {
+			var $acc = xs
+			for (k, _) in Dict.to_list(ys) {
+				$acc = Dict.remove($acc, k)
+			}
+			$acc
+		}
+
+		## Insert, update or remove a value for a specified key. This is more efficient
+		## than doing a `Dict.get` and then a `Dict.insert` call.
+		##
+		## The provided function receives:
+		## - `Ok(value)` if the key is currently in the dictionary.
+		## - `Err(Missing)` if the key is not currently in the dictionary.
+		##
+		## It should return:
+		## - `Ok(new_value)` to insert or update the value at the key.
+		## - `Err(Missing)` to remove the key (or leave it absent).
+		## ```roc
+		## alter = |possible_value| match possible_value {
+		## 	Err(Missing) => Ok(Bool.False)
+		## 	Ok(value) => if value Err(Missing) else Ok(Bool.True)
+		## }
+		##
+		## expect Dict.is_eq(
+		## 	Dict.update(Dict.empty(), "a", alter),
+		## 	Dict.single("a", Bool.False),
+		## )
+		## ```
+		update : Dict(k, v), k, (Try(v, [Missing]) -> Try(v, [Missing])) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool]
+		update = |dict, key, alter|
+			match Dict.get(dict, key) {
+				Try.Ok(value) =>
+					match alter(Try.Ok(value)) {
+						Try.Ok(new_value) => Dict.insert(dict, key, new_value)
+						Try.Err(Missing) => Dict.remove(dict, key)
+					}
+				Try.Err(_) =>
+					match alter(Try.Err(Missing)) {
+						Try.Ok(new_value) => Dict.insert(dict, key, new_value)
+						Try.Err(Missing) => dict
+					}
+				}
+	}
 
 	Set(item) :: [Items(List(item))].{
 

@@ -1619,6 +1619,8 @@ const all_syntax_common_prefix =
     "Unicode escape sequence: \u{00A0}\n" ++
     "This is an effectful function!\n" ++
     "Ok(1)\n" ++
+    "Err(NoFirstError(ListWasEmpty))\n" ++
+    "Err(NoFirstError(ListWasEmpty))\n" ++
     "15.0\n" ++
     "False\n" ++
     "10.0\n" ++
@@ -1715,6 +1717,37 @@ test "roc test complex_package --verbose passes all tests" {
 
     try testing.expect(std.mem.indexOf(u8, result.stdout, "tests passed") != null);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "PASS") != null);
+}
+
+test "roc bundle complex_package includes all transitively imported modules" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create a unique output directory so the produced .tar.zst does not
+    // pollute the working tree and parallel test runs do not collide.
+    const out_dir_rel = try std.fmt.allocPrint(gpa, ".zig-cache/roc-bundle-test/{d}", .{std.time.nanoTimestamp()});
+    defer gpa.free(out_dir_rel);
+    try std.fs.cwd().makePath(out_dir_rel);
+    defer std.fs.cwd().deleteTree(out_dir_rel) catch {};
+
+    // Pass the entry point as a path relative to cwd (the project root): the
+    // bundle command stores paths verbatim in the archive and rejects
+    // absolute paths.
+    const result = try util.runRocCommand(
+        gpa,
+        &.{ "bundle", "--output-dir", out_dir_rel, "test/complex_package/main.roc" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The bundle command should succeed: when bundling only `main.roc`, the
+    // compiler must auto-discover every transitively imported module file
+    // (Util.roc, Pipeline.roc, Field.roc, Transform.roc, Validator.roc,
+    // Taxonomy.roc) and include them in the archive — instead of reporting
+    // them as "missing from bundle".
+    try util.checkSuccess(result);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Created:") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "missing from bundle") == null);
 }
 
 test "failed inline expect exits with code 1 and continues program (dev)" {

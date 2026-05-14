@@ -8,9 +8,20 @@ type=file
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
 ~~~
 # EXPECTED
+MODULE NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
-EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:21:1:29
 # PROBLEMS
+**MODULE NOT FOUND**
+The module `SomeType` was not found in this Roc project.
+
+You're attempting to use this module here:
+**package_header_nonempty_singleline_1.md:1:21:1:29:**
+```roc
+package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
+```
+                    ^^^^^^^^
+
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `something` is exposed, but it is not defined anywhere in this module.
 
@@ -20,16 +31,6 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 ```
          ^^^^^^^^^
 You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
-
-**package_header_nonempty_singleline_1.md:1:21:1:29:**
-```roc
-package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
-```
-                    ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
@@ -59,7 +60,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-import (module "SomeType")
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

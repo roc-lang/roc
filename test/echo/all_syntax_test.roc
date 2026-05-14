@@ -59,7 +59,7 @@ match_list_patterns = |lst| {
 		[2, .., 1] => 88
 		[1, .. as tail] => 77 + tail.len()
 		[_head, 5] => 55
-		[ 99, x ] if x < 4 => 99 + x
+		[99, x] if x < 4 => 99 + x
 
 		# Note: avoid overusing `_` in a match branch, in general you should
 		# try to match all cases explicitly.
@@ -100,6 +100,23 @@ question_postfix = |strings| {
 	first_num = I64.from_str(first_str)?
 
 	Ok(first_num)
+}
+
+# `?` with a right-hand side maps the err payload before early returning.
+# The rhs can be a bare tag (applied as a constructor) or any function-like
+# expression (e.g. a lambda); the err payload is passed as its argument.
+question_with_err_map : List(Str) -> Try(Str, _)
+question_with_err_map = |strings| {
+	# `? NoFirstError` wraps the err as `NoFirstError(err)` before returning
+	first_str = strings.first() ? NoFirstError
+	Ok(first_str)
+}
+
+question_with_err_lambda : List(Str) -> Try(Str, _)
+question_with_err_lambda = |strings| {
+	# `? |e| NoFirstError(e)` is the explicit lambda form
+	first_str = strings.first() ? |e| NoFirstError(e)
+	Ok(first_str)
 }
 
 # three dots for things you want to fill in later, will crash if implement_me_later(arg) is called
@@ -341,6 +358,8 @@ main! = |_args| {
 	effect_demo!("This is an effectful function!")
 
 	print!(question_postfix(["1", "not a number", "100"]))
+	print!(question_with_err_map([]))
+	print!(question_with_err_lambda([]))
 
 	sum = for_loop([1, 2, 3, 4, 5])
 	print!(sum)
