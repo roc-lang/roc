@@ -1561,6 +1561,8 @@ const all_syntax_common_prefix =
     "Unicode escape sequence: \u{00A0}\n" ++
     "This is an effectful function!\n" ++
     "Ok(1)\n" ++
+    "Err(NoFirstError(ListWasEmpty))\n" ++
+    "Err(NoFirstError(ListWasEmpty))\n" ++
     "15.0\n" ++
     "False\n" ++
     "10.0\n" ++

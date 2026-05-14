@@ -2409,6 +2409,43 @@ test "early return: ? in first argument of multi-arg call" {
     , 0, .no_trace);
 }
 
+test "early return: ? binop with bare tag on Ok unwraps the value" {
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok((x ? NotFound))
+        \\    match compute(Ok(42.I64)) { Ok(v) => v, Err(_) => 0 }
+        \\}
+    , 42, .no_trace);
+}
+
+test "early return: ? binop with bare tag on Err wraps the error" {
+    // `? NotFound` should map the err payload by wrapping it in NotFound(...)
+    try runExpectStr(
+        \\{
+        \\    compute = |x| Ok((x ? NotFound))
+        \\    Str.inspect(compute(Err(BadInput)))
+        \\}
+    , "Err(NotFound(BadInput))", .no_trace);
+}
+
+test "early return: ? binop with lambda on Err maps the error" {
+    try runExpectStr(
+        \\{
+        \\    compute = |x| Ok((x ? |e| NotFound(e)))
+        \\    Str.inspect(compute(Err(BadInput)))
+        \\}
+    , "Err(NotFound(BadInput))", .no_trace);
+}
+
+test "early return: ? binop with lambda on Ok unwraps the value" {
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok((x ? |e| NotFound(e)))
+        \\    match compute(Ok(7.I64)) { Ok(v) => v, Err(_) => 0 }
+        \\}
+    , 7, .no_trace);
+}
+
 test "issue 8979 runtime: while (True) with conditional break evaluates" {
     try runExpectI64(
         \\{
