@@ -224,7 +224,10 @@ pub const ComptimeEvaluator = struct {
                 .roc_dbg = comptimeRocDbg,
                 .roc_expect_failed = comptimeRocExpectFailed,
                 .roc_crashed = comptimeRocCrashed,
-                .hosted_fns = undefined, // Not used in compile-time eval
+                // count must be 0 so the bounds check in callHostedFunction reliably
+                // fires (with `undefined`, release-mode garbage can pass the check and
+                // then segfault on the fns[] load).
+                .hosted_fns = .{ .count = 0, .fns = undefined },
             };
         }
         self.crash.reset();
