@@ -880,8 +880,9 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 
 /// Wrapper for the harness ProcessPool: runs a single test, captures timing,
 /// and serializes via the eval wire protocol.
+/// The "RUN <name>" log is emitted by the parent via `onTestStarted` so it
+/// stays coherent across N workers; see `Pool` config below.
 fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
-    std.debug.print("RUN  {s}\n", .{tc.name});
     var timer = Timer.start() catch unreachable;
     const outcome = runSingleTest(allocator, tc);
     const duration = timer.read();
@@ -896,6 +897,121 @@ fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
         .backends = backends,
         .expected_str = outcome.expected_str,
     };
+}
+
+fn onTestStarted(tc: TestCase) void {
+    std.debug.print("RUN  {s}\n", .{tc.name});
+}
+
+/// Restrict a `TestCase.Skip` to a single named backend for Phase-2 crash
+/// attribution: when the parent sees a Phase-1 failure, it respawns the test
+/// once per backend with `--worker-backend <name>` so we can pin down which
+/// backend was responsible.
+fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
+    skip.interpreter = !std.mem.eql(u8, name, "interpreter");
+    skip.dev = !std.mem.eql(u8, name, "dev");
+    skip.wasm = !std.mem.eql(u8, name, "wasm");
+    skip.llvm = !std.mem.eql(u8, name, "llvm");
+}
+
+/// Build argv used by the Windows ChildProcessPool to spawn worker copies of
+/// this runner. Starts with `selfExePath`, then preserves every original arg
+/// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
+/// per-worker; we strip any pre-existing instance so we don't double-add).
+fn buildWorkerArgvTemplate(arena: std.mem.Allocator) ![]const []const u8 {
+    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const self_path_slice = try std.fs.selfExePath(&self_path_buf);
+    const self_path = try arena.dupe(u8, self_path_slice);
+
+    const original_args = try std.process.argsAlloc(arena);
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    try argv.append(arena, self_path);
+
+    var i: usize = 1;
+    while (i < original_args.len) : (i += 1) {
+        const arg = original_args[i];
+        if (std.mem.eql(u8, arg, "--worker") or std.mem.eql(u8, arg, "--worker-backend")) {
+            i += 1; // also skip the value
+            continue;
+        }
+        try argv.append(arena, arg);
+    }
+
+    return try argv.toOwnedSlice(arena);
+}
+
+/// Phase-2 retry: re-run each failing/crashing/timed-out test once per
+/// backend with `--worker-backend <name>`, so we can attribute the crash.
+/// Only runs on Windows; POSIX uses fork-per-backend already (forkAndEval).
+///
+/// The allocator passed here MUST match the one used by the cleanup loop in
+/// main() (the GPA) so that gpa.free on bd.value in cleanup matches the
+/// allocator that duped the bytes during deserialize.
+fn retryFailedForAttribution(
+    gpa: std.mem.Allocator,
+    results: []TestResult,
+    worker_argv_template: []const []const u8,
+    hang_timeout_ms: u64,
+) void {
+    for (results, 0..) |*r, idx| {
+        const needs_retry = r.status == .fail or r.status == .crash or r.status == .timeout;
+        if (!needs_retry) continue;
+
+        var attributed: [NUM_BACKENDS]BackendDetail = undefined;
+        if (r.has_backend_details) {
+            attributed = r.backends;
+        } else {
+            for (&attributed) |*b| b.* = .{ .status = .fail };
+        }
+
+        for (BACKEND_NAMES, 0..) |name, bi| {
+            // Skip backends that aren't implemented at compile time — no
+            // point retrying. (When Phase-1 set has_backend_details=true,
+            // these rows are already populated correctly; when it didn't,
+            // the placeholder is .fail and we'd otherwise spuriously retry.)
+            if (bi == 1 and !DEV_BACKEND_IMPLEMENTED) {
+                attributed[bi] = .{ .status = .not_implemented };
+                continue;
+            }
+            if (bi == 2 and !WASM_BACKEND_IMPLEMENTED) {
+                attributed[bi] = .{ .status = .not_implemented };
+                continue;
+            }
+            if (bi == 3 and !LLVM_BACKEND_IMPLEMENTED) {
+                attributed[bi] = .{ .status = .not_implemented };
+                continue;
+            }
+            // Skip backends that already passed cleanly in Phase 1.
+            if (r.has_backend_details and attributed[bi].status == .pass) continue;
+            // Skip backends marked NOT_IMPLEMENTED / SKIP up front.
+            if (attributed[bi].status == .not_implemented or attributed[bi].status == .skip) continue;
+
+            const outcome = Pool.spawnSingleWorker(
+                gpa,
+                worker_argv_template,
+                idx,
+                &.{ "--worker-backend", name },
+                hang_timeout_ms,
+            );
+            // Dupe synthesized error strings into the gpa so the main()
+            // cleanup loop (which frees `bd.value` via `gpa.free`) sees
+            // uniformly gpa-owned strings and doesn't try to free a literal.
+            attributed[bi] = switch (outcome) {
+                .ok => |single| if (single.has_backend_details)
+                    single.backends[bi]
+                else
+                    BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "no detail returned") catch null },
+                .crashed => BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "isolated worker crashed") catch null },
+                .timed_out => BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "isolated worker timed out") catch null },
+            };
+        }
+
+        r.backends = attributed;
+        r.has_backend_details = true;
+        // r.status is intentionally not modified. The test did crash/fail in
+        // Phase 1; Phase 2 only refines per-backend attribution.
+    }
 }
 
 fn serializeResultForPool(fd: posix.fd_t, result: TestResult) void {
@@ -966,6 +1082,7 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .timeout_result = timeout_result,
     .stabilizeResult = &stabilizeResult,
     .getName = getTestName,
+    .onTestStarted = &onTestStarted,
 });
 
 //
@@ -1248,6 +1365,37 @@ pub fn main() !void {
         return;
     }
 
+    // Worker mode: the parent spawned us with `--worker <idx>` (and optionally
+    // `--worker-backend <name>`) to run a single test, serialize the result to
+    // stdout, and exit. Used on Windows where the harness runs N worker
+    // processes in parallel instead of forking. The child re-applies the same
+    // filters so idx is stable between parent and child.
+    if (cli.worker_index) |idx| {
+        if (idx >= tests.len) std.process.exit(2);
+        var tc = tests[idx];
+        if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
+
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+
+        var timer = Timer.start() catch unreachable;
+        const outcome = runSingleTest(arena.allocator(), tc);
+        const duration = timer.read();
+        var backends: [NUM_BACKENDS]BackendDetail = undefined;
+        if (outcome.has_backend_details) backends = outcome.backends;
+        const result = TestResult{
+            .status = outcome.status,
+            .message = outcome.message,
+            .duration_ns = duration,
+            .timings = outcome.timings,
+            .has_backend_details = outcome.has_backend_details,
+            .backends = backends,
+            .expected_str = outcome.expected_str,
+        };
+        serializeResultForPool(std.fs.File.stdout().handle, result);
+        return;
+    }
+
     const disable_fork_env = std.process.getEnvVarOwned(gpa, "ROC_EVAL_NO_FORK") catch null;
     defer if (disable_fork_env) |value| gpa.free(value);
 
@@ -1292,7 +1440,17 @@ pub fn main() !void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const max_children: usize = cli.max_threads orelse @min(cpu_count, tests.len);
+    // On Windows, each eval worker reserves ~2TB of virtual address space for
+    // the shared-memory LIR runtime image (see EVAL_SHARED_MEMORY_SIZE in
+    // src/eval/test_helpers.zig). Too many concurrent reservations trips
+    // MapViewOfFileFailed on the system limit, so we cap the default. Users
+    // can still pass `--threads N` explicitly to override.
+    const windows_default_cap: usize = 4;
+    const default_children = if (builtin.os.tag == .windows)
+        @min(cpu_count, windows_default_cap)
+    else
+        cpu_count;
+    const max_children: usize = cli.max_threads orelse @min(default_children, tests.len);
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
@@ -1310,7 +1468,22 @@ pub fn main() !void {
     else
         30_000;
 
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa);
+    // Build a worker_argv_template so Windows can spawn `Child` workers that
+    // re-invoke this binary with `--worker <idx>`. On POSIX the template is
+    // unused (fork path doesn't re-exec) but we build it uniformly.
+    const worker_argv_template = try buildWorkerArgvTemplate(args_arena.allocator());
+
+    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
+
+    // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
+    // whole worker before per-backend details land in the wire payload. For
+    // any failing/crashing/timed-out test, respawn it once per backend with
+    // `--worker-backend <name>` to attribute the crash. Common (passing) case
+    // pays zero retry cost. Skipped on POSIX where forkAndEval already
+    // attributes crashes per-backend within the worker.
+    if (builtin.os.tag == .windows) {
+        retryFailedForAttribution(gpa, results, worker_argv_template, hang_timeout_ms);
+    }
 
     const wall_elapsed = wall_timer.read();
 

@@ -893,7 +893,10 @@ pub fn main() !void {
     else
         30_000;
 
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa);
+    // worker_argv_template is null — this runner doesn't (yet) support
+    // Windows Child-based parallelism; on Windows it falls through to
+    // runSequential as before.
+    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, null);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;
