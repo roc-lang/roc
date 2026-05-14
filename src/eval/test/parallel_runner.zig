@@ -1321,15 +1321,53 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
 // Main
 //
 
+/// Worker boot-path instrumentation. Set the env var `ROC_EVAL_TIME_WORKER=1`
+/// to dump per-phase timestamps from inside a worker process. Used to figure
+/// out where the ~70ms per-Child overhead is going on Windows; disabled by
+/// default so it adds no cost.
+const WorkerTrace = struct {
+    enabled: bool,
+    start_ns: u64,
+    last_ns: u64,
+
+    fn init() WorkerTrace {
+        const enabled = blk: {
+            const v = std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_TIME_WORKER") catch null;
+            if (v) |val| {
+                std.heap.page_allocator.free(val);
+                break :blk true;
+            }
+            break :blk false;
+        };
+        const now = std.time.nanoTimestamp();
+        const start_ns: u64 = @intCast(@max(0, now));
+        return .{ .enabled = enabled, .start_ns = start_ns, .last_ns = start_ns };
+    }
+
+    fn stamp(self: *WorkerTrace, label: []const u8) void {
+        if (!self.enabled) return;
+        const now: u64 = @intCast(@max(0, std.time.nanoTimestamp()));
+        const since_start_us = (now -| self.start_ns) / 1_000;
+        const since_last_us = (now -| self.last_ns) / 1_000;
+        self.last_ns = now;
+        std.debug.print("[worker {d}us +{d}us] {s}\n", .{ since_start_us, since_last_us, label });
+    }
+};
+
 /// Entry point for the parallel eval test runner.
 pub fn main() !void {
+    var trace_worker = WorkerTrace.init();
+    trace_worker.stamp("main entry");
+
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
+    trace_worker.stamp("gpa init");
 
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
     const cli = try harness.parseStandardArgs(args_arena.allocator());
+    trace_worker.stamp("parseStandardArgs");
 
     if (cli.help_requested) {
         printHelp();
@@ -1337,6 +1375,7 @@ pub fn main() !void {
     }
 
     const all_tests = collectTests();
+    trace_worker.stamp("collectTests");
 
     // Apply filters (support multiple --filter values)
     var filtered_buf: std.ArrayListUnmanaged(TestCase) = .empty;
@@ -1356,6 +1395,7 @@ pub fn main() !void {
     } else {
         try filtered_buf.appendSlice(gpa, all_tests);
     }
+    trace_worker.stamp("filter pass");
 
     const tests = filtered_buf.items;
     if (tests.len == 0) {
@@ -1378,9 +1418,11 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
+        trace_worker.stamp("pre runSingleTest");
         var timer = Timer.start() catch unreachable;
         const outcome = runSingleTest(arena.allocator(), tc);
         const duration = timer.read();
+        trace_worker.stamp("post runSingleTest");
         var backends: [NUM_BACKENDS]BackendDetail = undefined;
         if (outcome.has_backend_details) backends = outcome.backends;
         const result = TestResult{
@@ -1393,6 +1435,7 @@ pub fn main() !void {
             .expected_str = outcome.expected_str,
         };
         serializeResultForPool(std.fs.File.stdout().handle, result);
+        trace_worker.stamp("serialize done");
         return;
     }
 
@@ -1440,17 +1483,7 @@ pub fn main() !void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    // On Windows, each eval worker reserves ~2TB of virtual address space for
-    // the shared-memory LIR runtime image (see EVAL_SHARED_MEMORY_SIZE in
-    // src/eval/test_helpers.zig). Too many concurrent reservations trips
-    // MapViewOfFileFailed on the system limit, so we cap the default. Users
-    // can still pass `--threads N` explicitly to override.
-    const windows_default_cap: usize = 4;
-    const default_children = if (builtin.os.tag == .windows)
-        @min(cpu_count, windows_default_cap)
-    else
-        cpu_count;
-    const max_children: usize = cli.max_threads orelse @min(default_children, tests.len);
+    const max_children: usize = cli.max_threads orelse @min(cpu_count, tests.len);
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
