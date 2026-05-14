@@ -791,9 +791,15 @@ fn canDiagnosticIsError(diag: anytype) bool {
 // Serialization — child-to-parent result protocol
 //
 
-/// Serialize a TestOutcome + duration to a pipe file descriptor.
-/// Called in child process after runSingleTest returns.
-fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+/// Build the wire bytes for a TestOutcome into an in-memory buffer. Used by
+/// both worker modes: one-shot streams the bytes directly to stdout, persistent
+/// mode prefixes them with a u32 length so the parent can frame results.
+fn serializeOutcomeToBuffer(
+    buf: *std.ArrayListUnmanaged(u8),
+    gpa: std.mem.Allocator,
+    outcome: TestOutcome,
+    duration_ns: u64,
+) !void {
     var header: WireHeader = .{
         .status = @intFromEnum(outcome.status),
         .backend_statuses = undefined,
@@ -819,17 +825,34 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
         }
     }
 
-    // Write header
-    harness.writeAll(fd, std.mem.asBytes(&header));
-
-    // Write variable-length strings
-    if (outcome.message) |m| harness.writeAll(fd, m);
-    if (outcome.expected_str) |e| harness.writeAll(fd, e);
+    try buf.appendSlice(gpa, std.mem.asBytes(&header));
+    if (outcome.message) |m| try buf.appendSlice(gpa, m);
+    if (outcome.expected_str) |e| try buf.appendSlice(gpa, e);
     if (outcome.has_backend_details) {
         for (outcome.backends) |bd| {
-            if (bd.value) |v| harness.writeAll(fd, v);
+            if (bd.value) |v| try buf.appendSlice(gpa, v);
         }
     }
+}
+
+/// Serialize a TestOutcome to fd (one-shot worker mode, parent reads to EOF).
+fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(std.heap.page_allocator);
+    serializeOutcomeToBuffer(&buf, std.heap.page_allocator, outcome, duration_ns) catch return;
+    harness.writeAll(fd, buf.items);
+}
+
+/// Serialize a TestOutcome to fd in stream mode: writes a `u32` length prefix
+/// before the wire bytes so the parent can frame multiple results.
+fn serializeOutcomeStreamed(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(std.heap.page_allocator);
+    serializeOutcomeToBuffer(&buf, std.heap.page_allocator, outcome, duration_ns) catch return;
+
+    const length: u32 = @intCast(buf.items.len);
+    harness.writeAll(fd, std.mem.asBytes(&length));
+    harness.writeAll(fd, buf.items);
 }
 
 /// Deserialize a TestResult from an accumulated pipe buffer.
@@ -935,6 +958,9 @@ fn buildWorkerArgvTemplate(arena: std.mem.Allocator) ![]const []const u8 {
             i += 1; // also skip the value
             continue;
         }
+        if (std.mem.eql(u8, arg, "--worker-stream")) {
+            continue; // no value
+        }
         try argv.append(arena, arg);
     }
 
@@ -1027,6 +1053,23 @@ fn serializeResultForPool(fd: posix.fd_t, result: TestResult) void {
         .expected_str = result.expected_str,
     };
     serializeOutcome(fd, outcome, result.duration_ns);
+}
+
+/// Streamed variant for persistent worker mode: writes a `u32` length prefix
+/// before the wire bytes so the parent can frame multiple results sharing
+/// the same stdout pipe.
+fn serializeResultStreamed(fd: posix.fd_t, result: TestResult) void {
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    if (result.has_backend_details) backends = result.backends;
+    const outcome = TestOutcome{
+        .status = result.status,
+        .message = result.message,
+        .timings = result.timings,
+        .has_backend_details = result.has_backend_details,
+        .backends = backends,
+        .expected_str = result.expected_str,
+    };
+    serializeOutcomeStreamed(fd, outcome, result.duration_ns);
 }
 
 fn getTestName(tc: TestCase) []const u8 {
@@ -1436,6 +1479,51 @@ pub fn main() !void {
         };
         serializeResultForPool(std.fs.File.stdout().handle, result);
         trace_worker.stamp("serialize done");
+        return;
+    }
+
+    // Persistent worker mode: read test indices from stdin (one decimal per
+    // line), run each, write a u32-length-prefixed result to stdout, loop
+    // until stdin EOFs. Amortizes the per-Child process-boot cost across
+    // many tests on the same worker.
+    if (cli.worker_stream) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+
+        const stdin = std.fs.File.stdin();
+        const stdout_handle = std.fs.File.stdout().handle;
+
+        var line_buf: [32]u8 = undefined;
+        outer: while (true) {
+            var line_len: usize = 0;
+            while (true) {
+                if (line_len >= line_buf.len) break :outer; // malformed
+                const n = stdin.read(line_buf[line_len .. line_len + 1]) catch break :outer;
+                if (n == 0) break :outer; // EOF — parent done
+                if (line_buf[line_len] == '\n') break;
+                line_len += 1;
+            }
+            const idx = std.fmt.parseInt(usize, line_buf[0..line_len], 10) catch continue;
+            if (idx >= tests.len) continue;
+
+            _ = arena.reset(.retain_capacity);
+
+            var timer = Timer.start() catch unreachable;
+            const outcome = runSingleTest(arena.allocator(), tests[idx]);
+            const duration = timer.read();
+            var backends: [NUM_BACKENDS]BackendDetail = undefined;
+            if (outcome.has_backend_details) backends = outcome.backends;
+            const result = TestResult{
+                .status = outcome.status,
+                .message = outcome.message,
+                .duration_ns = duration,
+                .timings = outcome.timings,
+                .has_backend_details = outcome.has_backend_details,
+                .backends = backends,
+                .expected_str = outcome.expected_str,
+            };
+            serializeResultStreamed(stdout_handle, result);
+        }
         return;
     }
 

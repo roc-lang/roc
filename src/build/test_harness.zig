@@ -254,11 +254,16 @@ pub const StandardArgs = struct {
     help_requested: bool = false,
     /// When set, the runner runs a single test (by index after filters) and
     /// serializes its result to stdout. Used by the Windows Child-based
-    /// parallel executor in `ProcessPool.runChildPool`.
+    /// parallel executor in `ProcessPool.runChildPool` for Phase-2 retry.
     worker_index: ?usize = null,
     /// When set alongside `worker_index`, restrict the run to a single named
     /// backend within that test. The runner interprets this string.
     worker_backend: ?[]const u8 = null,
+    /// Persistent worker mode: the runner reads test indices from stdin (one
+    /// decimal per line), runs each, writes a u32-length-prefixed serialized
+    /// result to stdout, and loops until stdin EOFs. Used by the Windows
+    /// Child-based executor to amortize process-boot cost across many tests.
+    worker_stream: bool = false,
     /// Remaining positional args (runner-specific)
     positional: []const []const u8 = &.{},
 };
@@ -302,6 +307,8 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
             if (i < raw_args.len) {
                 args.worker_backend = raw_args[i];
             }
+        } else if (std.mem.eql(u8, arg, "--worker-stream")) {
+            args.worker_stream = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             args.help_requested = true;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
@@ -760,77 +767,118 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             if (watchdog) |wd| wd.join();
         }
 
+        /// One persistent Child per worker thread. Spawns once in
+        /// `--worker-stream` mode, then loops: pull next test index from the
+        /// shared atomic counter, write `"<idx>\n"` to stdin, read a `u32`
+        /// length + that many bytes from stdout, pass to `cfg.deserialize`.
+        /// Closes stdin when the counter is exhausted; the worker reads EOF
+        /// and exits cleanly. Amortizes Child-spawn + main-bootstrap +
+        /// builtin-load cost across many tests on the same worker.
+        ///
+        /// Crash recovery is intentionally minimal: any I/O error mid-stream
+        /// marks the in-flight test as crashed and exits the thread. Other
+        /// workers continue; the runner's Phase-2 retry pass handles
+        /// per-backend attribution for any test that lost its details.
         fn workerThread(state: *ChildPoolState, slot_idx: usize) void {
+            const gpa = state.gpa;
+
+            var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer argv.deinit(gpa);
+            argv.appendSlice(gpa, state.template) catch return;
+            argv.append(gpa, "--worker-stream") catch return;
+
+            var child = std.process.Child.init(argv.items, gpa);
+            child.stdin_behavior = .Pipe;
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Inherit;
+            child.spawn() catch return;
+
+            if (comptime builtin.os.tag == .windows) {
+                if (state.job) |h| job_object.assign(h, child.id);
+            }
+
+            defer {
+                if (child.stdin) |stdin| stdin.close();
+                child.stdin = null;
+                _ = child.wait() catch {};
+            }
+
             while (true) {
                 const idx = state.next_test.fetchAdd(1, .monotonic);
                 if (idx >= state.specs.len) return;
 
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
 
-                state.results[idx] = runOneChild(state, slot_idx, idx, &.{});
+                state.slots_mutex.lock();
+                state.slots[slot_idx] = ActiveChild{
+                    .child = &child,
+                    .start_ms = std.time.milliTimestamp(),
+                    .timed_out = false,
+                };
+                state.slots_mutex.unlock();
+
+                const cmd = std.fmt.allocPrint(gpa, "{d}\n", .{idx}) catch {
+                    state.results[idx] = cfg.default_result;
+                    return;
+                };
+                defer gpa.free(cmd);
+
+                if (fileWriteAll(child.stdin.?, cmd)) |_| {} else |_| {
+                    state.results[idx] = cfg.default_result;
+                    return;
+                }
+
+                var length_bytes: [4]u8 = undefined;
+                if (fileReadExactly(child.stdout.?, &length_bytes)) |_| {} else |_| {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                }
+                const length = std.mem.readInt(u32, &length_bytes, .little);
+
+                const payload = gpa.alloc(u8, length) catch {
+                    state.results[idx] = cfg.default_result;
+                    return;
+                };
+                defer gpa.free(payload);
+                if (fileReadExactly(child.stdout.?, payload)) |_| {} else |_| {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                }
+
+                state.slots_mutex.lock();
+                const timed_out = if (state.slots[slot_idx]) |s| s.timed_out else false;
+                state.slots[slot_idx] = null;
+                state.slots_mutex.unlock();
+
+                state.results[idx] = if (timed_out)
+                    cfg.timeout_result
+                else
+                    cfg.deserialize(payload, gpa) orelse cfg.default_result;
             }
         }
 
-        fn runOneChild(
-            state: *ChildPoolState,
-            slot_idx: usize,
-            idx: usize,
-            extra_args: []const []const u8,
-        ) Result {
-            const gpa = state.gpa;
-
-            const idx_str = std.fmt.allocPrint(gpa, "{d}", .{idx}) catch return cfg.default_result;
-            defer gpa.free(idx_str);
-
-            var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-            defer argv.deinit(gpa);
-            argv.appendSlice(gpa, state.template) catch return cfg.default_result;
-            argv.append(gpa, "--worker") catch return cfg.default_result;
-            argv.append(gpa, idx_str) catch return cfg.default_result;
-            argv.appendSlice(gpa, extra_args) catch return cfg.default_result;
-
-            var child = std.process.Child.init(argv.items, gpa);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Inherit;
-            child.spawn() catch return cfg.default_result;
-
-            if (comptime builtin.os.tag == .windows) {
-                if (state.job) |h| job_object.assign(h, child.id);
-            }
-
-            state.slots_mutex.lock();
-            state.slots[slot_idx] = ActiveChild{
-                .child = &child,
-                .start_ms = std.time.milliTimestamp(),
-                .timed_out = false,
-            };
-            state.slots_mutex.unlock();
-
-            var buf: std.ArrayListUnmanaged(u8) = .empty;
-            defer buf.deinit(gpa);
-            var read_buf: [4096]u8 = undefined;
-            while (true) {
-                const n = child.stdout.?.read(&read_buf) catch break;
-                if (n == 0) break;
-                buf.appendSlice(gpa, read_buf[0..n]) catch break;
-            }
-
-            const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
-
+        fn handleReadFailure(state: *ChildPoolState, slot_idx: usize) Result {
             state.slots_mutex.lock();
             const timed_out = if (state.slots[slot_idx]) |s| s.timed_out else false;
             state.slots[slot_idx] = null;
             state.slots_mutex.unlock();
+            return if (timed_out) cfg.timeout_result else cfg.default_result;
+        }
 
-            if (timed_out) return cfg.timeout_result;
+        fn fileWriteAll(file: std.fs.File, bytes: []const u8) !void {
+            var off: usize = 0;
+            while (off < bytes.len) {
+                off += try file.write(bytes[off..]);
+            }
+        }
 
-            return switch (term) {
-                .Exited => |code| if (code == 0)
-                    cfg.deserialize(buf.items, gpa) orelse cfg.default_result
-                else
-                    cfg.default_result,
-                else => cfg.default_result,
-            };
+        fn fileReadExactly(file: std.fs.File, out: []u8) !void {
+            var off: usize = 0;
+            while (off < out.len) {
+                const n = try file.read(out[off..]);
+                if (n == 0) return error.UnexpectedEof;
+                off += n;
+            }
         }
 
         fn watchdogThread(state: *ChildPoolState) void {
