@@ -217,6 +217,9 @@ const ModuleState = struct {
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing external_imports (len={})\n", .{ self.name, self.external_imports.items.len });
         }
+        for (self.external_imports.items) |import_name| {
+            gpa.free(import_name);
+        }
         self.external_imports.deinit(gpa);
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing dependents (len={})\n", .{ self.name, self.dependents.items.len });
@@ -403,6 +406,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -441,6 +446,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -894,7 +901,7 @@ pub const PackageEnv = struct {
         // to CommonEnv remains valid after this function returns.
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(self.gpa);
-        // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
+        defer allocators.deinit();
         const parse_ast = parse.parse(&allocators, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             st.phase = .Canonicalize;
@@ -1543,7 +1550,8 @@ pub const PackageEnv = struct {
         );
         defer rb.deinit();
         for (typecheck_output.checker.problems.problems.items) |prob| {
-            const rep = rb.build(prob) catch continue;
+            var rep = try rb.build(prob);
+            errdefer rep.deinit();
             try st.reports.append(self.gpa, rep);
         }
         const check_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
