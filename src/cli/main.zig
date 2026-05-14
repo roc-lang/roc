@@ -3545,13 +3545,16 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
     };
 }
 
-/// Validate a bundle by using the Coordinator to discover all transitive module
-/// dependencies, then checking that every discovered .roc file is present in the
-/// bundle file list. Also validates platform target binaries if a platform is found.
-fn validateBundleWithCoordinator(
+/// Use the Coordinator to discover every transitive module the entry point
+/// imports (directly, via re-exports, or via a `package [...]` header) and
+/// append any not already in `file_paths` so the bundle includes them
+/// automatically. `uncompressed_size` is updated to reflect the newly added
+/// files. Also validates platform target binaries if a platform is found.
+fn discoverAndAddBundleModules(
     ctx: *CliContext,
     first_roc_file: []const u8,
-    bundled_file_paths: []const []const u8,
+    file_paths: *std.ArrayList([]const u8),
+    uncompressed_size: *u64,
     stderr: anytype,
 ) !void {
     // Resolve the entry point to an absolute path
@@ -3592,43 +3595,48 @@ fn validateBundleWithCoordinator(
     // Detect platform from BuildEnv packages using the accessor
     const platform_root_file = build_env.getPlatformRootFile();
 
-    // Collect all discovered module paths from the Coordinator
-    var required_paths = std.ArrayList([]const u8).empty;
-    defer required_paths.deinit(ctx.gpa);
-
-    if (build_env.coordinator) |coord| {
-        var coord_pkg_it = coord.packages.iterator();
-        while (coord_pkg_it.next()) |pkg_entry| {
-            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
-                try required_paths.append(ctx.gpa, mod_state.path);
-            }
-        }
-    }
-
-    // Build a set of absolute paths from the bundle file list for quick lookup
+    // Build a set of absolute paths already in the bundle list for dedup.
     var bundled_set = std.StringHashMap(void).init(ctx.gpa);
     defer bundled_set.deinit();
 
-    for (bundled_file_paths) |rel_path| {
+    for (file_paths.items) |rel_path| {
         const abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, rel_path) catch continue;
         defer ctx.gpa.free(abs_path);
         try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
     }
 
-    // Compare discovered module paths against bundled file list
-    var missing_count: u32 = 0;
-    for (required_paths.items) |req_path| {
-        if (!bundled_set.contains(req_path)) {
-            // Try to make the path relative for a nicer error message
-            const display_path = std.fs.path.relative(ctx.arena, ".", req_path) catch req_path;
-            try stderr.print("Error: Required module file is missing from bundle: {s}\n", .{display_path});
-            missing_count += 1;
-        }
-    }
+    // Append any discovered module that is not already in the bundle list.
+    // The Coordinator yields absolute paths; convert each to a path relative
+    // to cwd so it round-trips through `cwd.openFile` and survives the
+    // bundle's path-validation step (which rejects absolute paths).
+    if (build_env.coordinator) |coord| {
+        var coord_pkg_it = coord.packages.iterator();
+        while (coord_pkg_it.next()) |pkg_entry| {
+            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
+                const abs_path = mod_state.path;
+                if (bundled_set.contains(abs_path)) continue;
 
-    if (missing_count > 0) {
-        try stderr.print("Error: {} required module file(s) missing from bundle\n", .{missing_count});
-        return error.MissingBundleFiles;
+                const rel_path = std.fs.path.relative(ctx.arena, cwd, abs_path) catch {
+                    try stderr.print("Error: Discovered module path is outside the current directory and cannot be bundled: {s}\n", .{abs_path});
+                    return error.MissingBundleFiles;
+                };
+
+                // Confirm the file is actually readable from cwd before adding it.
+                const file = std.fs.cwd().openFile(rel_path, .{}) catch |err| {
+                    try stderr.print("Error: Could not open discovered module '{s}': {}\n", .{ rel_path, err });
+                    return err;
+                };
+                const stat = file.stat() catch |err| {
+                    file.close();
+                    return err;
+                };
+                file.close();
+
+                try file_paths.append(ctx.arena, rel_path);
+                try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
+                uncompressed_size.* += stat.size;
+            }
+        }
     }
 
     // If a platform was detected, validate target binaries exist
@@ -3772,6 +3780,18 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         try file_paths.append(ctx.arena, path);
     }
 
+    // Find the first .roc file to use as entry point for module discovery
+    const first_roc_file: ?[]const u8 = for (paths_to_use) |path| {
+        if (std.mem.endsWith(u8, path, ".roc")) break path;
+    } else null;
+
+    // Use the Coordinator to discover all transitive module dependencies
+    // (explicit imports plus modules exposed by a `package [...]` header)
+    // and append any not already in the file list.
+    if (first_roc_file) |roc_file| {
+        try discoverAndAddBundleModules(ctx, roc_file, &file_paths, &uncompressed_size, stderr);
+    }
+
     // Sort and deduplicate paths
     std.mem.sort([]const u8, file_paths.items, {}, struct {
         fn lessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -3810,22 +3830,13 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         }
     }
 
-    // Find the first .roc file to use as entry point for Coordinator-based validation
-    const first_roc_file: ?[]const u8 = for (file_paths.items) |path| {
-        if (std.mem.endsWith(u8, path, ".roc")) break path;
-    } else null;
-
-    // Use the Coordinator to discover all transitive module dependencies and validate.
-    // We pass the original (possibly absolute) paths here because the coordinator
-    // resolves them via std.fs.cwd().realpathAlloc, which works for both absolute
-    // and cwd-relative paths.
-    if (first_roc_file) |roc_file| {
-        try validateBundleWithCoordinator(ctx, roc_file, file_paths.items, stderr);
-    }
-
     // If any input was absolute, rebase all paths against their longest common
     // parent directory so the archive only contains relative paths. The opened
     // directory becomes the base_dir passed to the bundle library.
+    //
+    // Discovery (above) added transitively imported modules as cwd-relative
+    // paths; `realpathAlloc` resolves both forms so they share the common
+    // parent uniformly here.
     var rebased_base_dir: ?std.fs.Dir = null;
     defer if (rebased_base_dir) |*d| d.close();
     var archive_paths: []const []const u8 = file_paths.items;
