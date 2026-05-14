@@ -196,6 +196,36 @@ fn serializeResult(fd: posix.fd_t, result: TestResult) void {
     harness.writeAll(fd, message_out);
 }
 
+/// Streamed variant for persistent worker mode: writes a `u32` length prefix
+/// before the wire bytes so the parent can frame multiple results sharing
+/// the same stdout pipe.
+fn serializeResultStreamed(fd: posix.fd_t, result: TestResult) void {
+    const stderr_data = result.stderr_capture orelse "";
+    const stdout_data = result.stdout_capture orelse "";
+    const message_data = result.message orelse "";
+
+    const max_capture = 8192;
+    const stderr_out = stderr_data[0..@min(stderr_data.len, max_capture)];
+    const stdout_out = stdout_data[0..@min(stdout_data.len, max_capture)];
+    const message_out = message_data[0..@min(message_data.len, max_capture)];
+
+    const header = WireHeader{
+        .status = @intFromEnum(result.status),
+        .duration_ns = result.duration_ns,
+        .exit_code = result.exit_code,
+        .stderr_len = @intCast(stderr_out.len),
+        .stdout_len = @intCast(stdout_out.len),
+        .message_len = @intCast(message_out.len),
+    };
+
+    const length: u32 = @intCast(@sizeOf(WireHeader) + stderr_out.len + stdout_out.len + message_out.len);
+    harness.writeAll(fd, std.mem.asBytes(&length));
+    harness.writeAll(fd, std.mem.asBytes(&header));
+    harness.writeAll(fd, stderr_out);
+    harness.writeAll(fd, stdout_out);
+    harness.writeAll(fd, message_out);
+}
+
 fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
     if (buf.len < @sizeOf(WireHeader)) return null;
 
@@ -609,6 +639,39 @@ pub fn main() !void {
         defer arena.deinit();
         const result = runSingleTest(arena.allocator(), tests[idx]);
         serializeResult(std.fs.File.stdout().handle, result);
+        return;
+    }
+
+    // Persistent worker mode: read test indices from stdin (one decimal per
+    // line), run each, write a u32-length-prefixed result to stdout, loop
+    // until stdin EOFs. Amortizes the per-Child process-boot cost across
+    // many tests on the same worker. Without this branch, a worker spawned
+    // with `--worker-stream` would fall through to the parent path below
+    // and reentrantly spawn its own pool of workers — fork-bombing the box.
+    if (args.worker_stream) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+
+        const stdin = std.fs.File.stdin();
+        const stdout_handle = std.fs.File.stdout().handle;
+
+        var line_buf: [32]u8 = undefined;
+        outer: while (true) {
+            var line_len: usize = 0;
+            while (true) {
+                if (line_len >= line_buf.len) break :outer;
+                const n = stdin.read(line_buf[line_len .. line_len + 1]) catch break :outer;
+                if (n == 0) break :outer;
+                if (line_buf[line_len] == '\n') break;
+                line_len += 1;
+            }
+            const idx = std.fmt.parseInt(usize, line_buf[0..line_len], 10) catch continue;
+            if (idx >= tests.len) continue;
+
+            _ = arena.reset(.retain_capacity);
+            const result = runSingleTest(arena.allocator(), tests[idx]);
+            serializeResultStreamed(stdout_handle, result);
+        }
         return;
     }
 
