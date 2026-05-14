@@ -11,9 +11,9 @@ rules in `AGENTS.md`.
 
 - The compiler already has arena-shaped APIs, but most real allocations still
   use `gpa` or `std.heap.page_allocator`. `base.Allocators.arena` is threaded
-  through parse/canonicalize APIs but is mostly unused. The coordinator also has
-  a per-worker arena type, but worker task execution currently allocates through
-  `getWorkerAllocator()` instead of that arena.
+  through parse/canonicalize APIs but is mostly unused. The coordinator now has
+  explicit per-task allocator plumbing, so worker scratch allocations can use a
+  resettable arena while module/result payloads stay on durable allocators.
 
 - Manual `deinit` is doing a lot of work for objects whose natural lifetime is
   one phase, one module, one checked artifact, or one lowered program. The best
@@ -46,9 +46,10 @@ rules in `AGENTS.md`.
   strings are freed, `Scratch.SetView` no longer bypasses the caller allocator,
   `PackageState` maps no longer use `page_allocator`, and coordinator
   parse/canonicalize/typecheck worker failures now return explicit failure
-  results instead of fake success values. The remaining work is structural:
-  wiring real task scratch through workers, simplifying ownership transfer, and
-  turning append-heavy stores into arena-safe builders.
+  results instead of fake success values. A follow-up has wired real task
+  scratch through coordinator workers. The remaining work is structural:
+  simplifying ownership transfer and turning append-heavy stores into
+  arena-safe builders.
 
 ## High-Level Lifetime Map
 
@@ -209,14 +210,23 @@ The coordinator owns package and module state:
 - Worker task/result channels.
 
 The header comment says workers should be pure and that the coordinator owns
-mutable state. This is the right model. The allocator details currently weaken
-it in one remaining major area:
+mutable state. This is the right model. The task allocator plumbing now matches
+that model more closely:
 
-- `WorkerAllocators` has a backing allocator and an arena reset function, but
-  worker execution calls `executeTaskInline(t)` and the `execute*` functions use
-  `self.getWorkerAllocator()` instead of `worker_allocs.arena`.
-- In multi-threaded mode, `getWorkerAllocator()` and `getModuleAllocator()`
-  return `page_allocator`.
+- `WorkerAllocators` exposes explicit `module`, `result`, and `scratch`
+  allocators for each task.
+- `module` and `result` data may cross back to the coordinator. Source bytes,
+  `ModuleEnv`, cached ASTs, reports, discovered imports, semantic result
+  wrappers, and checked artifacts stay on those durable allocators.
+- `scratch` is reset after every task and is used only for non-escaping task
+  temporaries: parse import-name extraction, temporary qualified module names,
+  canonicalization-local allocator plumbing, and checker/session allocations.
+- Task payload arrays built by the coordinator for workers now use the same
+  worker/result allocator that the worker uses to free them. In multi-threaded
+  mode this avoids workers freeing coordinator-allocator memory.
+- In multi-threaded mode, the durable worker/module allocator is still
+  `page_allocator`. The structural improvement is that the page-backed durable
+  lifetime is now separated from resettable task scratch.
 
 The branch fixed the earlier coordinator correctness issues:
 
@@ -235,7 +245,8 @@ The branch fixed the earlier coordinator correctness issues:
   errors. Error-reporting paths still own their reports explicitly and clean
   them up if appending fails.
 
-The coordinator should get an explicit task allocator model:
+The remaining coordinator allocator work is to push more proven non-escaping
+data onto the scratch side of the existing model:
 
 - Durable module data: source bytes, `ModuleEnv`, cached AST, checked artifact.
 - Task scratch: import extraction arrays, diagnostic report construction,
@@ -770,33 +781,38 @@ arena conversion misleading or unsafe:
   `parse_failed` or `compile_failed` results on allocation/infrastructure
   failures.
 
-The next correctness-oriented step is to wire `WorkerAllocators.arena` into
-worker task execution or remove the unused arena/comment until it is real. That
-is the last obvious mismatch between documented allocator intent and actual
-worker behavior.
+The coordinator now has real task allocator plumbing, so the remaining
+correctness-oriented allocator work is smaller: keep moving only proven
+non-escaping temporaries to task scratch, and keep result/durable payloads on
+allocators that outlive the worker task.
 
 ### 2. Introduce explicit task scratch
 
-Add a task scratch allocator that is reset after parse/canonicalize/typecheck
-tasks. In coordinator mode, this should be per worker. In single-thread mode, it
-can be a reusable phase scratch arena.
+The coordinator now has a task scratch allocator that is reset after
+parse/canonicalize/typecheck tasks. In coordinator mode this is per worker. In
+single-thread mode, the inline worker path reuses the same shape.
 
-Use it for:
+Current scratch uses:
 
 - temporary import name arrays
-- report-building intermediate strings before promotion
-- canonicalizer local maps/scopes that do not escape
-- typecheck imported env/artifact slice construction
-- MIR/lowering helper arrays
-- ARC temporary sets
+- temporary qualified module names
+- canonicalization-local allocator plumbing
+- typecheck checker/session allocations
 
-Do not use it for:
+Continue using durable/result allocators for:
 
 - `ModuleEnv`
 - cached AST
 - checked artifact stores
 - report payloads that outlive the task
 - worker results returned to the coordinator unless they are promoted first
+
+Good future scratch candidates:
+
+- report-building intermediate strings before promotion
+- canonicalizer local maps/scopes that do not escape
+- MIR/lowering helper arrays
+- ARC temporary sets
 
 ### 3. Add artifact builders and seal them
 
@@ -855,16 +871,17 @@ builtin/runtime helper calls.
 
 ## Priority List
 
-1. Wire real per-worker task scratch into the coordinator.
-2. Replace checked artifact allocate-copy-free append tables with builders.
-3. Make `CheckedModuleArtifact` optionally arena-owned after builder sealing.
-4. Split `ModuleEnv` durable storage from canonicalizer/checker scratch in APIs.
-5. Convert hot append-only stores (`CIR`, MIR AST stores, IR store, LIR store)
+1. Replace checked artifact allocate-copy-free append tables with builders.
+2. Make `CheckedModuleArtifact` optionally arena-owned after builder sealing.
+3. Split `ModuleEnv` durable storage from canonicalizer/checker scratch in APIs.
+4. Convert hot append-only stores (`CIR`, MIR AST stores, IR store, LIR store)
    to chunked or sealed builders before using arenas underneath them.
-6. Add per-stage post-check arena ownership once stage outputs do not borrow
+5. Add per-stage post-check arena ownership once stage outputs do not borrow
    from soon-to-be-reset memory.
-7. Continue removing direct `page_allocator` uses where the data is ordinary
+6. Continue removing direct `page_allocator` uses where the data is ordinary
    compiler state rather than OS-backed runtime or debug-only state.
+7. Expand coordinator scratch use only where APIs prove the allocated data
+   cannot escape the task.
 
 ## Bottom Line
 
@@ -874,11 +891,8 @@ from putting the current `ArrayList` and `HashMap` allocations directly on
 arenas, but from making the lifetime scopes explicit and using arenas at those
 scope boundaries.
 
-The most important target is `checked_artifact.zig`: it contains many immutable
-or append-then-seal stores, and its deinit logic is both large and easy to get
-wrong. The next most important target is worker/task scratch in the coordinator:
-the intended arena exists but is not wired through task execution, so the build
-currently pays for many individual allocations in places where bulk reset is the
-natural lifetime. The recent fixes removed the allocator-policy distractions
-around silent failures and stray ownership leaks, so the remaining work is now
-mostly lifetime design rather than leak cleanup.
+The most important target is now `checked_artifact.zig`: it contains many
+immutable or append-then-seal stores, and its deinit logic is both large and easy
+to get wrong. The recent fixes removed the allocator-policy distractions around
+silent failures, stray ownership leaks, and unwired worker scratch, so the
+remaining work is mostly lifetime design rather than leak cleanup.

@@ -1307,8 +1307,12 @@ pub const PackageEnv = struct {
 
     /// Standalone type checking function that can be called from other tools (e.g., snapshot tool)
     /// This ensures all tools use the exact same type checking logic as production builds
+    ///
+    /// `check_alloc` owns checker/session data that dies with `TypeCheckOutput.deinit`.
+    /// `artifact_alloc` owns any published checked artifact returned in `TypeCheckOutput`.
     pub fn typeCheckModule(
-        gpa: Allocator,
+        check_alloc: Allocator,
+        artifact_alloc: Allocator,
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
@@ -1318,7 +1322,7 @@ pub const PackageEnv = struct {
         _: ?Io,
     ) !TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
-        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = env.qualified_module_ident,
@@ -1330,11 +1334,11 @@ pub const PackageEnv = struct {
         };
 
         // Create module_envs map for explicit imported modules used during canonicalization
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
         errdefer module_envs_map.deinit();
 
         var checker = try Check.init(
-            gpa,
+            check_alloc,
             &env.types,
             env,
             imported_envs,
@@ -1359,7 +1363,7 @@ pub const PackageEnv = struct {
         }
 
         var checked_artifact = try publishCheckedArtifactFromCheckedModule(
-            gpa,
+            artifact_alloc,
             env,
             imported_envs,
             imported_artifacts,
@@ -1370,7 +1374,7 @@ pub const PackageEnv = struct {
                 .available_artifacts = available_artifacts,
             },
         );
-        errdefer checked_artifact.deinit(gpa);
+        errdefer checked_artifact.deinit(artifact_alloc);
 
         return .{
             .checker = checker,
@@ -1517,6 +1521,7 @@ pub const PackageEnv = struct {
 
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         var typecheck_output = try typeCheckModule(
+            self.gpa,
             self.gpa,
             env,
             self.builtin_modules.builtin_module.env,
