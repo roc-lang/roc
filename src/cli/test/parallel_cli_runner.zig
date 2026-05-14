@@ -393,6 +393,33 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Build argv used by the Windows ChildProcessPool to spawn worker copies of
+/// this runner. Starts with `selfExePath`, then preserves every original arg
+/// *except* `--worker N` / `--worker-backend NAME` (stripped to avoid
+/// duplication when the harness appends `--worker <idx>` per spawn).
+fn buildCliWorkerArgvTemplate(arena: Allocator) ![]const []const u8 {
+    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const self_path_slice = try std.fs.selfExePath(&self_path_buf);
+    const self_path = try arena.dupe(u8, self_path_slice);
+
+    const original_args = try std.process.argsAlloc(arena);
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    try argv.append(arena, self_path);
+
+    var i: usize = 1;
+    while (i < original_args.len) : (i += 1) {
+        const arg = original_args[i];
+        if (std.mem.eql(u8, arg, "--worker") or std.mem.eql(u8, arg, "--worker-backend")) {
+            i += 1;
+            continue;
+        }
+        try argv.append(arena, arg);
+    }
+
+    return try argv.toOwnedSlice(arena);
+}
+
 fn getTestName(spec: CliTestSpec) []const u8 {
     return spec.name;
 }
@@ -573,6 +600,18 @@ pub fn main() !void {
     const tests = try buildTestSpecs(spec_arena.allocator(), args.filters);
     if (tests.len == 0) return;
 
+    // Worker mode: parent spawned us with `--worker <idx>` to run a single
+    // test and serialize the result to stdout. Used on Windows where the
+    // harness runs N worker processes in parallel instead of forking.
+    if (args.worker_index) |idx| {
+        if (idx >= tests.len) std.process.exit(2);
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const result = runSingleTest(arena.allocator(), tests[idx]);
+        serializeResult(std.fs.File.stdout().handle, result);
+        return;
+    }
+
     const cpu_count = std.Thread.getCpuCount() catch 4;
     const max_children = args.max_threads orelse @min(cpu_count, tests.len);
 
@@ -583,8 +622,14 @@ pub fn main() !void {
     defer gpa.free(results);
     @memset(results, .{ .status = .crash });
 
+    // Build a worker_argv_template so Windows can re-invoke this binary as a
+    // single-test Child worker. On POSIX it's unused (fork path doesn't
+    // re-exec). Always pass the positional `roc_binary` path through so the
+    // child uses the same binary.
+    const worker_argv_template = try buildCliWorkerArgvTemplate(spec_arena.allocator());
+
     var wall_timer = harness.Timer.start() catch @panic("no clock");
-    Pool.run(tests, results, max_children, args.timeout_ms, gpa);
+    Pool.run(tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
     const wall_ns = wall_timer.read();
 
     printResults(tests, results, args.verbose, gpa, wall_ns, max_children);

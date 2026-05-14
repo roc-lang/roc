@@ -791,9 +791,15 @@ fn canDiagnosticIsError(diag: anytype) bool {
 // Serialization — child-to-parent result protocol
 //
 
-/// Serialize a TestOutcome + duration to a pipe file descriptor.
-/// Called in child process after runSingleTest returns.
-fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+/// Build the wire bytes for a TestOutcome into an in-memory buffer. Used by
+/// both worker modes: one-shot streams the bytes directly to stdout, persistent
+/// mode prefixes them with a u32 length so the parent can frame results.
+fn serializeOutcomeToBuffer(
+    buf: *std.ArrayListUnmanaged(u8),
+    gpa: std.mem.Allocator,
+    outcome: TestOutcome,
+    duration_ns: u64,
+) !void {
     var header: WireHeader = .{
         .status = @intFromEnum(outcome.status),
         .backend_statuses = undefined,
@@ -819,17 +825,34 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
         }
     }
 
-    // Write header
-    harness.writeAll(fd, std.mem.asBytes(&header));
-
-    // Write variable-length strings
-    if (outcome.message) |m| harness.writeAll(fd, m);
-    if (outcome.expected_str) |e| harness.writeAll(fd, e);
+    try buf.appendSlice(gpa, std.mem.asBytes(&header));
+    if (outcome.message) |m| try buf.appendSlice(gpa, m);
+    if (outcome.expected_str) |e| try buf.appendSlice(gpa, e);
     if (outcome.has_backend_details) {
         for (outcome.backends) |bd| {
-            if (bd.value) |v| harness.writeAll(fd, v);
+            if (bd.value) |v| try buf.appendSlice(gpa, v);
         }
     }
+}
+
+/// Serialize a TestOutcome to fd (one-shot worker mode, parent reads to EOF).
+fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(std.heap.page_allocator);
+    serializeOutcomeToBuffer(&buf, std.heap.page_allocator, outcome, duration_ns) catch return;
+    harness.writeAll(fd, buf.items);
+}
+
+/// Serialize a TestOutcome to fd in stream mode: writes a `u32` length prefix
+/// before the wire bytes so the parent can frame multiple results.
+fn serializeOutcomeStreamed(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(std.heap.page_allocator);
+    serializeOutcomeToBuffer(&buf, std.heap.page_allocator, outcome, duration_ns) catch return;
+
+    const length: u32 = @intCast(buf.items.len);
+    harness.writeAll(fd, std.mem.asBytes(&length));
+    harness.writeAll(fd, buf.items);
 }
 
 /// Deserialize a TestResult from an accumulated pipe buffer.
@@ -880,8 +903,9 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 
 /// Wrapper for the harness ProcessPool: runs a single test, captures timing,
 /// and serializes via the eval wire protocol.
+/// The "RUN <name>" log is emitted by the parent via `onTestStarted` so it
+/// stays coherent across N workers; see `Pool` config below.
 fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
-    std.debug.print("RUN  {s}\n", .{tc.name});
     var timer = Timer.start() catch unreachable;
     const outcome = runSingleTest(allocator, tc);
     const duration = timer.read();
@@ -898,6 +922,124 @@ fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
     };
 }
 
+fn onTestStarted(tc: TestCase) void {
+    std.debug.print("RUN  {s}\n", .{tc.name});
+}
+
+/// Restrict a `TestCase.Skip` to a single named backend for Phase-2 crash
+/// attribution: when the parent sees a Phase-1 failure, it respawns the test
+/// once per backend with `--worker-backend <name>` so we can pin down which
+/// backend was responsible.
+fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
+    skip.interpreter = !std.mem.eql(u8, name, "interpreter");
+    skip.dev = !std.mem.eql(u8, name, "dev");
+    skip.wasm = !std.mem.eql(u8, name, "wasm");
+    skip.llvm = !std.mem.eql(u8, name, "llvm");
+}
+
+/// Build argv used by the Windows ChildProcessPool to spawn worker copies of
+/// this runner. Starts with `selfExePath`, then preserves every original arg
+/// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
+/// per-worker; we strip any pre-existing instance so we don't double-add).
+fn buildWorkerArgvTemplate(arena: std.mem.Allocator) ![]const []const u8 {
+    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const self_path_slice = try std.fs.selfExePath(&self_path_buf);
+    const self_path = try arena.dupe(u8, self_path_slice);
+
+    const original_args = try std.process.argsAlloc(arena);
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    try argv.append(arena, self_path);
+
+    var i: usize = 1;
+    while (i < original_args.len) : (i += 1) {
+        const arg = original_args[i];
+        if (std.mem.eql(u8, arg, "--worker") or std.mem.eql(u8, arg, "--worker-backend")) {
+            i += 1; // also skip the value
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--worker-stream")) {
+            continue; // no value
+        }
+        try argv.append(arena, arg);
+    }
+
+    return try argv.toOwnedSlice(arena);
+}
+
+/// Phase-2 retry: re-run each failing/crashing/timed-out test once per
+/// backend with `--worker-backend <name>`, so we can attribute the crash.
+/// Only runs on Windows; POSIX uses fork-per-backend already (forkAndEval).
+///
+/// The allocator passed here MUST match the one used by the cleanup loop in
+/// main() (the GPA) so that gpa.free on bd.value in cleanup matches the
+/// allocator that duped the bytes during deserialize.
+fn retryFailedForAttribution(
+    gpa: std.mem.Allocator,
+    results: []TestResult,
+    worker_argv_template: []const []const u8,
+    hang_timeout_ms: u64,
+) void {
+    for (results, 0..) |*r, idx| {
+        const needs_retry = r.status == .fail or r.status == .crash or r.status == .timeout;
+        if (!needs_retry) continue;
+
+        var attributed: [NUM_BACKENDS]BackendDetail = undefined;
+        if (r.has_backend_details) {
+            attributed = r.backends;
+        } else {
+            for (&attributed) |*b| b.* = .{ .status = .fail };
+        }
+
+        for (BACKEND_NAMES, 0..) |name, bi| {
+            // Skip backends that aren't implemented at compile time — no
+            // point retrying. (When Phase-1 set has_backend_details=true,
+            // these rows are already populated correctly; when it didn't,
+            // the placeholder is .fail and we'd otherwise spuriously retry.)
+            if (bi == 1 and !DEV_BACKEND_IMPLEMENTED) {
+                attributed[bi] = .{ .status = .not_implemented };
+                continue;
+            }
+            if (bi == 2 and !WASM_BACKEND_IMPLEMENTED) {
+                attributed[bi] = .{ .status = .not_implemented };
+                continue;
+            }
+            if (bi == 3 and !LLVM_BACKEND_IMPLEMENTED) {
+                attributed[bi] = .{ .status = .not_implemented };
+                continue;
+            }
+            // Skip backends that already passed cleanly in Phase 1.
+            if (r.has_backend_details and attributed[bi].status == .pass) continue;
+            // Skip backends marked NOT_IMPLEMENTED / SKIP up front.
+            if (attributed[bi].status == .not_implemented or attributed[bi].status == .skip) continue;
+
+            const outcome = Pool.spawnSingleWorker(
+                gpa,
+                worker_argv_template,
+                idx,
+                &.{ "--worker-backend", name },
+                hang_timeout_ms,
+            );
+            // Dupe synthesized error strings into the gpa so the main()
+            // cleanup loop (which frees `bd.value` via `gpa.free`) sees
+            // uniformly gpa-owned strings and doesn't try to free a literal.
+            attributed[bi] = switch (outcome) {
+                .ok => |single| if (single.has_backend_details)
+                    single.backends[bi]
+                else
+                    BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "no detail returned") catch null },
+                .crashed => BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "isolated worker crashed") catch null },
+                .timed_out => BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "isolated worker timed out") catch null },
+            };
+        }
+
+        r.backends = attributed;
+        r.has_backend_details = true;
+        // r.status is intentionally not modified. The test did crash/fail in
+        // Phase 1; Phase 2 only refines per-backend attribution.
+    }
+}
+
 fn serializeResultForPool(fd: posix.fd_t, result: TestResult) void {
     // Re-pack into the existing wire format (outcome + duration).
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
@@ -911,6 +1053,23 @@ fn serializeResultForPool(fd: posix.fd_t, result: TestResult) void {
         .expected_str = result.expected_str,
     };
     serializeOutcome(fd, outcome, result.duration_ns);
+}
+
+/// Streamed variant for persistent worker mode: writes a `u32` length prefix
+/// before the wire bytes so the parent can frame multiple results sharing
+/// the same stdout pipe.
+fn serializeResultStreamed(fd: posix.fd_t, result: TestResult) void {
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    if (result.has_backend_details) backends = result.backends;
+    const outcome = TestOutcome{
+        .status = result.status,
+        .message = result.message,
+        .timings = result.timings,
+        .has_backend_details = result.has_backend_details,
+        .backends = backends,
+        .expected_str = result.expected_str,
+    };
+    serializeOutcomeStreamed(fd, outcome, result.duration_ns);
 }
 
 fn getTestName(tc: TestCase) []const u8 {
@@ -966,6 +1125,7 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .timeout_result = timeout_result,
     .stabilizeResult = &stabilizeResult,
     .getName = getTestName,
+    .onTestStarted = &onTestStarted,
 });
 
 //
@@ -1204,15 +1364,53 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
 // Main
 //
 
+/// Worker boot-path instrumentation. Set the env var `ROC_EVAL_TIME_WORKER=1`
+/// to dump per-phase timestamps from inside a worker process. Used to figure
+/// out where the ~70ms per-Child overhead is going on Windows; disabled by
+/// default so it adds no cost.
+const WorkerTrace = struct {
+    enabled: bool,
+    start_ns: u64,
+    last_ns: u64,
+
+    fn init() WorkerTrace {
+        const enabled = blk: {
+            const v = std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_TIME_WORKER") catch null;
+            if (v) |val| {
+                std.heap.page_allocator.free(val);
+                break :blk true;
+            }
+            break :blk false;
+        };
+        const now = std.time.nanoTimestamp();
+        const start_ns: u64 = @intCast(@max(0, now));
+        return .{ .enabled = enabled, .start_ns = start_ns, .last_ns = start_ns };
+    }
+
+    fn stamp(self: *WorkerTrace, label: []const u8) void {
+        if (!self.enabled) return;
+        const now: u64 = @intCast(@max(0, std.time.nanoTimestamp()));
+        const since_start_us = (now -| self.start_ns) / 1_000;
+        const since_last_us = (now -| self.last_ns) / 1_000;
+        self.last_ns = now;
+        std.debug.print("[worker {d}us +{d}us] {s}\n", .{ since_start_us, since_last_us, label });
+    }
+};
+
 /// Entry point for the parallel eval test runner.
 pub fn main() !void {
+    var trace_worker = WorkerTrace.init();
+    trace_worker.stamp("main entry");
+
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
+    trace_worker.stamp("gpa init");
 
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
     const cli = try harness.parseStandardArgs(args_arena.allocator());
+    trace_worker.stamp("parseStandardArgs");
 
     if (cli.help_requested) {
         printHelp();
@@ -1220,6 +1418,7 @@ pub fn main() !void {
     }
 
     const all_tests = collectTests();
+    trace_worker.stamp("collectTests");
 
     // Apply filters (support multiple --filter values)
     var filtered_buf: std.ArrayListUnmanaged(TestCase) = .empty;
@@ -1239,11 +1438,91 @@ pub fn main() !void {
     } else {
         try filtered_buf.appendSlice(gpa, all_tests);
     }
+    trace_worker.stamp("filter pass");
 
     const tests = filtered_buf.items;
     if (tests.len == 0) {
         if (cli.filters.len == 0) {
             std.debug.print("No eval tests found.\n", .{});
+        }
+        return;
+    }
+
+    // Worker mode: the parent spawned us with `--worker <idx>` (and optionally
+    // `--worker-backend <name>`) to run a single test, serialize the result to
+    // stdout, and exit. Used on Windows where the harness runs N worker
+    // processes in parallel instead of forking. The child re-applies the same
+    // filters so idx is stable between parent and child.
+    if (cli.worker_index) |idx| {
+        if (idx >= tests.len) std.process.exit(2);
+        var tc = tests[idx];
+        if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
+
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+
+        trace_worker.stamp("pre runSingleTest");
+        var timer = Timer.start() catch unreachable;
+        const outcome = runSingleTest(arena.allocator(), tc);
+        const duration = timer.read();
+        trace_worker.stamp("post runSingleTest");
+        var backends: [NUM_BACKENDS]BackendDetail = undefined;
+        if (outcome.has_backend_details) backends = outcome.backends;
+        const result = TestResult{
+            .status = outcome.status,
+            .message = outcome.message,
+            .duration_ns = duration,
+            .timings = outcome.timings,
+            .has_backend_details = outcome.has_backend_details,
+            .backends = backends,
+            .expected_str = outcome.expected_str,
+        };
+        serializeResultForPool(std.fs.File.stdout().handle, result);
+        trace_worker.stamp("serialize done");
+        return;
+    }
+
+    // Persistent worker mode: read test indices from stdin (one decimal per
+    // line), run each, write a u32-length-prefixed result to stdout, loop
+    // until stdin EOFs. Amortizes the per-Child process-boot cost across
+    // many tests on the same worker.
+    if (cli.worker_stream) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+
+        const stdin = std.fs.File.stdin();
+        const stdout_handle = std.fs.File.stdout().handle;
+
+        var line_buf: [32]u8 = undefined;
+        outer: while (true) {
+            var line_len: usize = 0;
+            while (true) {
+                if (line_len >= line_buf.len) break :outer; // malformed
+                const n = stdin.read(line_buf[line_len .. line_len + 1]) catch break :outer;
+                if (n == 0) break :outer; // EOF — parent done
+                if (line_buf[line_len] == '\n') break;
+                line_len += 1;
+            }
+            const idx = std.fmt.parseInt(usize, line_buf[0..line_len], 10) catch continue;
+            if (idx >= tests.len) continue;
+
+            _ = arena.reset(.retain_capacity);
+
+            var timer = Timer.start() catch unreachable;
+            const outcome = runSingleTest(arena.allocator(), tests[idx]);
+            const duration = timer.read();
+            var backends: [NUM_BACKENDS]BackendDetail = undefined;
+            if (outcome.has_backend_details) backends = outcome.backends;
+            const result = TestResult{
+                .status = outcome.status,
+                .message = outcome.message,
+                .duration_ns = duration,
+                .timings = outcome.timings,
+                .has_backend_details = outcome.has_backend_details,
+                .backends = backends,
+                .expected_str = outcome.expected_str,
+            };
+            serializeResultStreamed(stdout_handle, result);
         }
         return;
     }
@@ -1310,7 +1589,22 @@ pub fn main() !void {
     else
         30_000;
 
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa);
+    // Build a worker_argv_template so Windows can spawn `Child` workers that
+    // re-invoke this binary with `--worker <idx>`. On POSIX the template is
+    // unused (fork path doesn't re-exec) but we build it uniformly.
+    const worker_argv_template = try buildWorkerArgvTemplate(args_arena.allocator());
+
+    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
+
+    // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
+    // whole worker before per-backend details land in the wire payload. For
+    // any failing/crashing/timed-out test, respawn it once per backend with
+    // `--worker-backend <name>` to attribute the crash. Common (passing) case
+    // pays zero retry cost. Skipped on POSIX where forkAndEval already
+    // attributes crashes per-backend within the worker.
+    if (builtin.os.tag == .windows) {
+        retryFailedForAttribution(gpa, results, worker_argv_template, hang_timeout_ms);
+    }
 
     const wall_elapsed = wall_timer.read();
 

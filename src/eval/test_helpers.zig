@@ -159,12 +159,21 @@ pub const ParsedResources = struct {
     }
 };
 
+// Per-test shared-memory reservation. Eval tests are small — most need a few
+// MB at most. The huge values that follow are mostly to ensure the runtime
+// image can grow if a test happens to construct large data; they are
+// reservations, not commitments. On Windows the reservation cost matters for
+// throughput because every parallel worker reserves its own region: keeping
+// it modest (1 GB) lets MapViewOfFile complete quickly and lets us scale to
+// many workers without tripping system address-space accounting.
 const EVAL_SHARED_MEMORY_SIZE: usize = if (builtin.target.os.tag == .freestanding)
     8 * 1024 * 1024
 else if (@sizeOf(usize) < 8)
     256 * 1024 * 1024
 else if (builtin.os.tag == .macos)
     8 * 1024 * 1024 * 1024
+else if (builtin.os.tag == .windows)
+    256 * 1024 * 1024 // 256 MB on Windows — reservation cost matters for parallel workers
 else
     2 * 1024 * 1024 * 1024 * 1024;
 

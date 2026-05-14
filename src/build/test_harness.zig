@@ -17,6 +17,90 @@ pub const Timer = std.time.Timer;
 /// Whether the platform supports `fork` for child process spawning.
 pub const has_fork = (builtin.os.tag != .windows);
 
+// Windows JobObject bindings (used by runChildPool to ensure that killing the
+// parent test runner tears down every still-running worker). The standard
+// library doesn't expose these.
+const job_object = if (builtin.os.tag == .windows) struct {
+    const windows = std.os.windows;
+    const HANDLE = windows.HANDLE;
+    const BOOL = windows.BOOL;
+    const DWORD = windows.DWORD;
+
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
+
+    const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
+        PerProcessUserTimeLimit: windows.LARGE_INTEGER,
+        PerJobUserTimeLimit: windows.LARGE_INTEGER,
+        LimitFlags: DWORD,
+        MinimumWorkingSetSize: usize,
+        MaximumWorkingSetSize: usize,
+        ActiveProcessLimit: DWORD,
+        Affinity: usize,
+        PriorityClass: DWORD,
+        SchedulingClass: DWORD,
+    };
+
+    const IO_COUNTERS = extern struct {
+        ReadOperationCount: u64,
+        WriteOperationCount: u64,
+        OtherOperationCount: u64,
+        ReadTransferCount: u64,
+        WriteTransferCount: u64,
+        OtherTransferCount: u64,
+    };
+
+    const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
+        BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        IoInfo: IO_COUNTERS,
+        ProcessMemoryLimit: usize,
+        JobMemoryLimit: usize,
+        PeakProcessMemoryUsed: usize,
+        PeakJobMemoryUsed: usize,
+    };
+
+    // JobObjectInfoClass values; we only need ExtendedLimitInformation = 9.
+    const JobObjectExtendedLimitInformation: c_int = 9;
+
+    extern "kernel32" fn CreateJobObjectW(
+        lpJobAttributes: ?*anyopaque,
+        lpName: ?[*:0]const u16,
+    ) callconv(.winapi) ?HANDLE;
+    extern "kernel32" fn SetInformationJobObject(
+        hJob: HANDLE,
+        JobObjectInfoClass: c_int,
+        lpJobObjectInfo: *anyopaque,
+        cbJobObjectInfoLength: DWORD,
+    ) callconv(.winapi) BOOL;
+    extern "kernel32" fn AssignProcessToJobObject(
+        hJob: HANDLE,
+        hProcess: HANDLE,
+    ) callconv(.winapi) BOOL;
+
+    fn create() ?HANDLE {
+        const job = CreateJobObjectW(null, null) orelse return null;
+        var info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(JOBOBJECT_EXTENDED_LIMIT_INFORMATION);
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info,
+            @sizeOf(JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
+        ) == 0) {
+            windows.CloseHandle(job);
+            return null;
+        }
+        return job;
+    }
+
+    fn assign(job: HANDLE, child_handle: HANDLE) void {
+        _ = AssignProcessToJobObject(job, child_handle);
+    }
+
+    fn close(job: HANDLE) void {
+        windows.CloseHandle(job);
+    }
+} else struct {};
+
 // Pipe I/O helpers
 
 /// Write all bytes to fd, looping on partial writes.
@@ -168,6 +252,18 @@ pub const StandardArgs = struct {
     timeout_provided: bool = false,
     verbose: bool = false,
     help_requested: bool = false,
+    /// When set, the runner runs a single test (by index after filters) and
+    /// serializes its result to stdout. Used by the Windows Child-based
+    /// parallel executor in `ProcessPool.runChildPool` for Phase-2 retry.
+    worker_index: ?usize = null,
+    /// When set alongside `worker_index`, restrict the run to a single named
+    /// backend within that test. The runner interprets this string.
+    worker_backend: ?[]const u8 = null,
+    /// Persistent worker mode: the runner reads test indices from stdin (one
+    /// decimal per line), runs each, writes a u32-length-prefixed serialized
+    /// result to stdout, and loops until stdin EOFs. Used by the Windows
+    /// Child-based executor to amortize process-boot cost across many tests.
+    worker_stream: bool = false,
     /// Remaining positional args (runner-specific)
     positional: []const []const u8 = &.{},
 };
@@ -201,6 +297,18 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
                 args.timeout_provided = true;
                 args.timeout_ms = std.fmt.parseInt(u64, raw_args[i], 10) catch 60_000;
             }
+        } else if (std.mem.eql(u8, arg, "--worker")) {
+            i += 1;
+            if (i < raw_args.len) {
+                args.worker_index = std.fmt.parseInt(usize, raw_args[i], 10) catch null;
+            }
+        } else if (std.mem.eql(u8, arg, "--worker-backend")) {
+            i += 1;
+            if (i < raw_args.len) {
+                args.worker_backend = raw_args[i];
+            }
+        } else if (std.mem.eql(u8, arg, "--worker-stream")) {
+            args.worker_stream = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             args.help_requested = true;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
@@ -259,6 +367,26 @@ test "parseStandardArgsFromSlice treats threads zero as default and keeps repeat
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
 }
 
+test "parseStandardArgsFromSlice parses --worker and --worker-backend without polluting positional" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "roc-binary",
+        "--worker",
+        "7",
+        "--worker-backend",
+        "dev",
+    }, arena.allocator());
+
+    try std.testing.expectEqual(@as(?usize, 7), args.worker_index);
+    try std.testing.expect(args.worker_backend != null);
+    try std.testing.expectEqualStrings("dev", args.worker_backend.?);
+    try std.testing.expectEqual(@as(usize, 1), args.positional.len);
+    try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
+}
+
 // Process pool (comptime-generic)
 
 /// Configuration for the process pool. The runner provides type-specific
@@ -282,6 +410,9 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         /// Use setsid() + kill(-pid) for process group cleanup.
         /// Enable when children spawn subprocesses (e.g., roc build).
         use_process_groups: bool = false,
+        /// Called from the parent thread right before launching each test.
+        /// Use for "RUN <name>" logging — keeps it coherent across N workers.
+        onTestStarted: ?*const fn (Spec) void = null,
     };
 }
 
@@ -321,6 +452,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
         fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize) bool {
             if (comptime !has_fork) return false;
+
+            if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
 
             const pipe_fds = posix.pipe() catch return false;
 
@@ -392,18 +525,29 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         }
 
         /// Run tests using a fork-based process pool.
-        /// On Windows, falls back to sequential in-process execution.
+        /// On Windows, dispatches to a `std.process.Child`-based pool when
+        /// `worker_argv_template` is provided (the runner knows how to re-invoke
+        /// itself as a single-test worker); otherwise falls back to sequential
+        /// in-process execution.
         pub fn run(
             specs: []const Spec,
             results: []Result,
             max_children: usize,
             timeout_ms: u64,
             gpa: Allocator,
+            worker_argv_template: ?[]const []const u8,
         ) void {
             if (comptime !has_fork) {
-                runSequential(specs, results, gpa);
+                if (worker_argv_template) |tmpl| {
+                    runChildPool(specs, results, max_children, timeout_ms, gpa, tmpl);
+                } else {
+                    runSequential(specs, results, gpa);
+                }
                 return;
             }
+            // On POSIX, children are forked in-place — the runtime template is
+            // unused. The parameter is still in the signature for a uniform API.
+            _ = &worker_argv_template;
 
             const slots = gpa.alloc(?ChildSlot, max_children) catch {
                 std.debug.print("fatal: failed to allocate process pool slots\n", .{});
@@ -526,14 +670,322 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         }
 
         /// Sequential fallback for platforms without fork (Windows).
+        /// Effectively unused under the Child-based path; kept as defense in
+        /// depth for callers that don't build a `worker_argv_template`.
         fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator) void {
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);
+                if (cfg.onTestStarted) |cb| cb(spec);
                 const unstable_result = cfg.runTest(arena.allocator(), spec);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
             }
+        }
+
+        // Windows-only Child-based parallel executor. See test_harness.zig
+        // module doc and `Pool.run` for the dispatch logic.
+
+        /// Outcome of `spawnSingleWorker`. Callers distinguish ok/crash/timeout
+        /// so they can synthesize placeholder results instead of reading
+        /// undefined memory from a `default_result`.
+        pub const SingleWorkerOutcome = union(enum) {
+            ok: Result,
+            crashed: void,
+            timed_out: void,
+        };
+
+        const ActiveChild = struct {
+            child: *std.process.Child,
+            start_ms: i64,
+            timed_out: bool,
+        };
+
+        const ChildPoolState = struct {
+            next_test: std.atomic.Value(usize),
+            slots: []?ActiveChild,
+            slots_mutex: std.Thread.Mutex,
+            watchdog_done: std.atomic.Value(bool),
+            template: []const []const u8,
+            job: ?if (builtin.os.tag == .windows) std.os.windows.HANDLE else void,
+            timeout_ms: u64,
+            gpa: Allocator,
+            specs: []const Spec,
+            results: []Result,
+        };
+
+        fn runChildPool(
+            specs: []const Spec,
+            results: []Result,
+            max_children: usize,
+            timeout_ms: u64,
+            gpa: Allocator,
+            template: []const []const u8,
+        ) void {
+            if (comptime builtin.os.tag != .windows) {
+                runSequential(specs, results, gpa);
+                return;
+            }
+
+            const job = job_object.create();
+            defer if (job) |h| job_object.close(h);
+
+            const slots = gpa.alloc(?ActiveChild, max_children) catch {
+                std.debug.print("fatal: failed to allocate child-pool slots\n", .{});
+                return;
+            };
+            defer gpa.free(slots);
+            @memset(slots, null);
+
+            var state = ChildPoolState{
+                .next_test = std.atomic.Value(usize).init(0),
+                .slots = slots,
+                .slots_mutex = .{},
+                .watchdog_done = std.atomic.Value(bool).init(false),
+                .template = template,
+                .job = job,
+                .timeout_ms = timeout_ms,
+                .gpa = gpa,
+                .specs = specs,
+                .results = results,
+            };
+
+            const threads = gpa.alloc(std.Thread, max_children) catch return;
+            defer gpa.free(threads);
+
+            var spawned: usize = 0;
+            for (threads, 0..) |*t, i| {
+                t.* = std.Thread.spawn(.{}, workerThread, .{ &state, i }) catch break;
+                spawned += 1;
+            }
+
+            const watchdog = std.Thread.spawn(.{}, watchdogThread, .{&state}) catch null;
+
+            for (threads[0..spawned]) |t| t.join();
+
+            state.watchdog_done.store(true, .release);
+            if (watchdog) |wd| wd.join();
+        }
+
+        /// One persistent Child per worker thread. Spawns once in
+        /// `--worker-stream` mode, then loops: pull next test index from the
+        /// shared atomic counter, write `"<idx>\n"` to stdin, read a `u32`
+        /// length + that many bytes from stdout, pass to `cfg.deserialize`.
+        /// Closes stdin when the counter is exhausted; the worker reads EOF
+        /// and exits cleanly. Amortizes Child-spawn + main-bootstrap +
+        /// builtin-load cost across many tests on the same worker.
+        ///
+        /// Crash recovery is intentionally minimal: any I/O error mid-stream
+        /// marks the in-flight test as crashed and exits the thread. Other
+        /// workers continue; the runner's Phase-2 retry pass handles
+        /// per-backend attribution for any test that lost its details.
+        fn workerThread(state: *ChildPoolState, slot_idx: usize) void {
+            const gpa = state.gpa;
+
+            var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer argv.deinit(gpa);
+            argv.appendSlice(gpa, state.template) catch return;
+            argv.append(gpa, "--worker-stream") catch return;
+
+            var child = std.process.Child.init(argv.items, gpa);
+            child.stdin_behavior = .Pipe;
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Inherit;
+            child.spawn() catch return;
+
+            if (comptime builtin.os.tag == .windows) {
+                if (state.job) |h| job_object.assign(h, child.id);
+            }
+
+            defer {
+                if (child.stdin) |stdin| stdin.close();
+                child.stdin = null;
+                _ = child.wait() catch {};
+            }
+
+            while (true) {
+                const idx = state.next_test.fetchAdd(1, .monotonic);
+                if (idx >= state.specs.len) return;
+
+                if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
+
+                state.slots_mutex.lock();
+                state.slots[slot_idx] = ActiveChild{
+                    .child = &child,
+                    .start_ms = std.time.milliTimestamp(),
+                    .timed_out = false,
+                };
+                state.slots_mutex.unlock();
+
+                const cmd = std.fmt.allocPrint(gpa, "{d}\n", .{idx}) catch {
+                    state.results[idx] = cfg.default_result;
+                    return;
+                };
+                defer gpa.free(cmd);
+
+                if (fileWriteAll(child.stdin.?, cmd)) |_| {} else |_| {
+                    state.results[idx] = cfg.default_result;
+                    return;
+                }
+
+                var length_bytes: [4]u8 = undefined;
+                if (fileReadExactly(child.stdout.?, &length_bytes)) |_| {} else |_| {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                }
+                const length = std.mem.readInt(u32, &length_bytes, .little);
+
+                const payload = gpa.alloc(u8, length) catch {
+                    state.results[idx] = cfg.default_result;
+                    return;
+                };
+                defer gpa.free(payload);
+                if (fileReadExactly(child.stdout.?, payload)) |_| {} else |_| {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                }
+
+                state.slots_mutex.lock();
+                const timed_out = if (state.slots[slot_idx]) |s| s.timed_out else false;
+                state.slots[slot_idx] = null;
+                state.slots_mutex.unlock();
+
+                state.results[idx] = if (timed_out)
+                    cfg.timeout_result
+                else
+                    cfg.deserialize(payload, gpa) orelse cfg.default_result;
+            }
+        }
+
+        fn handleReadFailure(state: *ChildPoolState, slot_idx: usize) Result {
+            state.slots_mutex.lock();
+            const timed_out = if (state.slots[slot_idx]) |s| s.timed_out else false;
+            state.slots[slot_idx] = null;
+            state.slots_mutex.unlock();
+            return if (timed_out) cfg.timeout_result else cfg.default_result;
+        }
+
+        fn fileWriteAll(file: std.fs.File, bytes: []const u8) !void {
+            var off: usize = 0;
+            while (off < bytes.len) {
+                off += try file.write(bytes[off..]);
+            }
+        }
+
+        fn fileReadExactly(file: std.fs.File, out: []u8) !void {
+            var off: usize = 0;
+            while (off < out.len) {
+                const n = try file.read(out[off..]);
+                if (n == 0) return error.UnexpectedEof;
+                off += n;
+            }
+        }
+
+        fn watchdogThread(state: *ChildPoolState) void {
+            while (!state.watchdog_done.load(.acquire)) {
+                std.Thread.sleep(100 * std.time.ns_per_ms);
+                if (state.timeout_ms == 0) continue;
+
+                const now = std.time.milliTimestamp();
+                state.slots_mutex.lock();
+                defer state.slots_mutex.unlock();
+                for (state.slots) |*slot_opt| {
+                    if (slot_opt.*) |*slot| {
+                        const elapsed: u64 = @intCast(@max(0, now - slot.start_ms));
+                        if (elapsed > state.timeout_ms and !slot.timed_out) {
+                            slot.timed_out = true;
+                            _ = slot.child.kill() catch {};
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Spawn one Child worker for a specific test index, with optional
+        /// extra args (e.g. `--worker-backend dev`), and return its outcome.
+        /// Used by runner Phase-2 retry: re-run a failing test once per
+        /// backend to attribute the crash.
+        pub fn spawnSingleWorker(
+            gpa: Allocator,
+            template: []const []const u8,
+            test_index: usize,
+            extra_args: []const []const u8,
+            timeout_ms: u64,
+        ) SingleWorkerOutcome {
+            if (comptime builtin.os.tag != .windows) {
+                return .crashed; // Not supported off-Windows (POSIX uses fork path).
+            }
+
+            const idx_str = std.fmt.allocPrint(gpa, "{d}", .{test_index}) catch return .crashed;
+            defer gpa.free(idx_str);
+
+            var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+            defer argv.deinit(gpa);
+            argv.appendSlice(gpa, template) catch return .crashed;
+            argv.append(gpa, "--worker") catch return .crashed;
+            argv.append(gpa, idx_str) catch return .crashed;
+            argv.appendSlice(gpa, extra_args) catch return .crashed;
+
+            var child = std.process.Child.init(argv.items, gpa);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Inherit;
+            child.spawn() catch return .crashed;
+
+            // Foreground watchdog: a thread that kills the child if it runs
+            // over budget. Pairs with the synchronous read-then-wait below.
+            const Watch = struct {
+                child_ptr: *std.process.Child,
+                deadline_ms: i64,
+                timed_out: std.atomic.Value(bool),
+                done: std.atomic.Value(bool),
+
+                fn run(self: *@This()) void {
+                    while (!self.done.load(.acquire)) {
+                        std.Thread.sleep(100 * std.time.ns_per_ms);
+                        if (self.done.load(.acquire)) return;
+                        if (std.time.milliTimestamp() >= self.deadline_ms) {
+                            self.timed_out.store(true, .release);
+                            _ = self.child_ptr.kill() catch {};
+                            return;
+                        }
+                    }
+                }
+            };
+
+            var watch = Watch{
+                .child_ptr = &child,
+                .deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms)),
+                .timed_out = std.atomic.Value(bool).init(false),
+                .done = std.atomic.Value(bool).init(false),
+            };
+            const watch_thread = if (timeout_ms > 0)
+                std.Thread.spawn(.{}, Watch.run, .{&watch}) catch null
+            else
+                null;
+
+            var buf: std.ArrayListUnmanaged(u8) = .empty;
+            defer buf.deinit(gpa);
+            var read_buf: [4096]u8 = undefined;
+            while (true) {
+                const n = child.stdout.?.read(&read_buf) catch break;
+                if (n == 0) break;
+                buf.appendSlice(gpa, read_buf[0..n]) catch break;
+            }
+
+            const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
+
+            watch.done.store(true, .release);
+            if (watch_thread) |t| t.join();
+
+            if (watch.timed_out.load(.acquire)) return .timed_out;
+
+            return switch (term) {
+                .Exited => |code| if (code == 0) blk: {
+                    const r = cfg.deserialize(buf.items, gpa) orelse break :blk SingleWorkerOutcome{ .crashed = {} };
+                    break :blk SingleWorkerOutcome{ .ok = r };
+                } else .crashed,
+                else => .crashed,
+            };
         }
     };
 }
