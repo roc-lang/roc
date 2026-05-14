@@ -137,6 +137,10 @@ const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
 const LLVM_BACKEND_IMPLEMENTED = false;
 
+/// Set from `cli.verbose` in `main` after arg parsing. Read by `onTestStarted`,
+/// which is registered as a comptime Pool callback and can't take a closure.
+var verbose_logging: bool = false;
+
 const TestOutcome = struct {
     status: Status,
     message: ?[]const u8 = null,
@@ -903,8 +907,8 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 
 /// Wrapper for the harness ProcessPool: runs a single test, captures timing,
 /// and serializes via the eval wire protocol.
-/// The "RUN <name>" log is emitted by the parent via `onTestStarted` so it
-/// stays coherent across N workers; see `Pool` config below.
+/// The "RUN <name>" log is emitted by the parent via `onTestStarted` (gated
+/// on --verbose) so it stays coherent across N workers; see `Pool` config below.
 fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
     var timer = Timer.start() catch unreachable;
     const outcome = runSingleTest(allocator, tc);
@@ -923,7 +927,7 @@ fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
 }
 
 fn onTestStarted(tc: TestCase) void {
-    std.debug.print("RUN  {s}\n", .{tc.name});
+    if (verbose_logging) std.debug.print("RUN  {s}\n", .{tc.name});
 }
 
 /// Restrict a `TestCase.Skip` to a single named backend for Phase-2 crash
@@ -1416,6 +1420,8 @@ pub fn main() !void {
         printHelp();
         return;
     }
+
+    verbose_logging = cli.verbose;
 
     const all_tests = collectTests();
     trace_worker.stamp("collectTests");
