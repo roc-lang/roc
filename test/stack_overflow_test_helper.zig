@@ -3,6 +3,10 @@
 const std = @import("std");
 const stack_overflow = @import("base").stack_overflow;
 
+pub const std_options: std.Options = .{
+    .enable_segfault_handler = false,
+};
+
 /// Install the compiler stack overflow handler and intentionally overflow the
 /// stack so tests can validate the emitted crash message in a child process.
 pub fn main() noreturn {

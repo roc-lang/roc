@@ -20,14 +20,19 @@
 //! For detailed documentation, see `src/interpreter_shim/README.md`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 /// Configure std library logging to suppress debug messages in production.
 /// This prevents debug logs from polluting stderr which should only contain
 /// actual program output (like Stderr.line! calls).
 pub const std_options: std.Options = .{
     .log_level = .warn,
+    // On Windows, Zig's default segfault handler installs a vectored exception
+    // handler that runs before SetUnhandledExceptionFilter and short-circuits
+    // our handler in src/base/stack_overflow.zig. Disable it on Windows so our
+    // signal-safe handler runs and we get stable exit codes (134/136/139).
+    .enable_segfault_handler = builtin.os.tag != .windows and std.debug.default_enable_segfault_handler,
 };
 const build_options = @import("build_options");
-const builtin = @import("builtin");
 const base = @import("base");
 const reporting = @import("reporting");
 const parse = @import("parse");
