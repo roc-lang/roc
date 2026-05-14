@@ -10968,6 +10968,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const field_patterns = self.store.getPatternSpan(s.fields);
 
+                    // A ZST struct has no in-memory representation, so callers pass the
+                    // immediate-ZST sentinel (e.g. for-loops over ZST elements at
+                    // line ~10023, or ZST tag payloads at line ~11173). Every field of
+                    // a ZST struct is itself ZST, so recurse with the same sentinel.
+                    if (ls.layoutSizeAlign(struct_layout).size == 0) {
+                        for (field_patterns) |field_pattern_id| {
+                            try self.bindPattern(field_pattern_id, .{ .immediate_i64 = 0 });
+                        }
+                        return;
+                    }
+
                     // Get the base offset of the struct
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |sv| sv.offset,
