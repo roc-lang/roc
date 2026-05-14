@@ -37,6 +37,12 @@ pub const RocCall = fn (
 /// Function pointer type for hosted functions provided by the platform.
 /// All hosted functions follow the RocCall ABI: (ops, ret_ptr, args_ptr).
 ///
+/// Roc transfers ownership of refcounted arguments to hosted functions. A host
+/// function must decref each owned refcounted argument when it is done with it,
+/// or transfer that ownership into its return value or longer-lived storage. If
+/// the host keeps both the call argument and a stored copy, it must incref the
+/// stored copy so each live reference has one ownership.
+///
 /// The first parameter is `*anyopaque` instead of `*RocOps` to break a type-level
 /// dependency loop (HostedFn -> *RocOps -> HostedFunctions -> [*]HostedFn).
 /// Callers should cast the opaque pointer to `*RocOps` as needed.

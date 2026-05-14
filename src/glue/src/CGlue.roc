@@ -331,6 +331,7 @@ generate_args_struct = |func| {
 			"Roc signature: ${func.type_str}",
 			"C function name: ${c_func_name}",
 			"Return type: ${ret_c_type}",
+			"Refcounted fields are owned by the hosted function.",
 		],
 	)
 	struct_def = "typedef struct {\n${$fields}\n} ${struct_name}Args;\n\n"
@@ -421,7 +422,7 @@ generate_example_impl = |func_name, struct_name, args, ret_c_type| {
 		"${struct_name}Args* args"
 	}
 
-	"/*\n * Example implementation:\n * void hosted_${c_func_name}(struct RocOps* ops, ${args_param}, void* ret) {\n${args_comment}\n${ret_comment}\n * }\n */\n\n"
+	"/*\n * Example implementation:\n * void hosted_${c_func_name}(struct RocOps* ops, void* ret, ${args_param}) {\n${args_comment}\n${ret_comment}\n * }\n */\n\n"
 }
 
 ## Generate the complete C header file
@@ -536,6 +537,11 @@ header_guard_top = {
 			"2. Implement each hosted function according to its signature",
 			"3. Register your implementations with the Roc runtime",
 			"",
+			"HOSTED ARGUMENT OWNERSHIP:",
+			"Roc transfers ownership of refcounted arguments to the hosted function.",
+			"The hosted function must decref owned refcounted arguments when done,",
+			"or retain/transfer ownership explicitly when storing or returning them.",
+			"",
 		],
 	)
 
@@ -623,12 +629,16 @@ hosted_fn_infrastructure = {
 			"",
 			"All hosted functions follow this signature:",
 			"  - ops: pointer to Roc runtime operations",
-			"  - args: pointer to function-specific arguments struct (or NULL if no args)",
 			"  - ret: pointer to return value storage (or NULL if void return)",
+			"  - args: pointer to function-specific arguments struct (or NULL if no args)",
+			"",
+			"Roc transfers ownership of refcounted arguments to hosted functions.",
+			"Hosted functions must decref owned refcounted arguments when done,",
+			"or retain/transfer ownership explicitly when storing or returning them.",
 		],
 	)
 	hosted_fn_typedef = 
-		"typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);\n\n"
+		"typedef void (*HostedFn)(struct RocOps* ops, void* ret, void* args);\n\n"
 
 	section(
 		"Hosted Function Infrastructure",

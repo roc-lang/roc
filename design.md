@@ -66,6 +66,36 @@ may exist only as control-flow implementation details; when a Roc value is
 stored, returned, boxed, passed, exported, or refcounted, Bool uses the ordinary
 tag-union representation selected by the layout pipeline.
 
+## Hosted Function Ownership
+
+Platform-hosted functions called through `RocOps.hosted_fns` receive ownership
+of every refcounted argument. LIR ARC insertion transfers that ownership at the
+hosted-call boundary the same way it transfers an unused argument to an ordinary
+Roc callee. Backends must not add their own ownership decisions; they only lower
+the explicit LIR `incref`, `decref`, and `free` statements.
+
+The host may read, store, return, or release an owned argument. It must account
+for that ownership explicitly:
+
+```text
+read and discard: decref the argument when done
+store past return: move the argument ownership into storage, or incref a stored
+                   copy and then decref the call argument
+return the same value: move the argument ownership into the return slot, or
+                       incref/decref so exactly one returned ownership remains
+```
+
+For example, `Stdout.line! : Str => {}` reads the string and then decrefs it.
+A host function that stores a `Box(...)` argument either moves the received
+ownership into storage, or increments the box for the stored reference and
+decrefs the argument ownership it received. A round-trip host function that
+returns one of its arguments must leave exactly one ownership for the returned
+Roc value.
+
+The compiler must not infer different ownership behavior from hosted function
+names, return types, or body absence. Hosted-argument ownership is an ABI fact,
+and generated glue must document it for platform authors.
+
 ## Reporting And Sentinel Values
 
 Implementation data must never use sentinel/default values that can be mistaken

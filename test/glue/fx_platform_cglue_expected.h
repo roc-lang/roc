@@ -9,6 +9,11 @@
  * 2. Implement each hosted function according to its signature
  * 3. Register your implementations with the Roc runtime
  *
+ * HOSTED ARGUMENT OWNERSHIP:
+ * Roc transfers ownership of refcounted arguments to the hosted function.
+ * The hosted function must decref owned refcounted arguments when done,
+ * or retain/transfer ownership explicitly when storing or returning them.
+ *
  */
 
 #ifndef ROC_PLATFORM_ABI_H
@@ -99,10 +104,14 @@ struct RocOps;
  *
  * All hosted functions follow this signature:
  *   - ops: pointer to Roc runtime operations
- *   - args: pointer to function-specific arguments struct (or NULL if no args)
  *   - ret: pointer to return value storage (or NULL if void return)
+ *   - args: pointer to function-specific arguments struct (or NULL if no args)
+ *
+ * Roc transfers ownership of refcounted arguments to hosted functions.
+ * Hosted functions must decref owned refcounted arguments when done,
+ * or retain/transfer ownership explicitly when storing or returning them.
  */
-typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);
+typedef void (*HostedFn)(struct RocOps* ops, void* ret, void* args);
 
 // =============================================================================
 // Hosted Function Count and Indices
@@ -143,6 +152,7 @@ typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);
  * Roc signature: Builder => {}
  * C function name: builder_print_value
  * Return type: void
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     void* arg0;  // Builder
@@ -153,7 +163,7 @@ _Static_assert(_Alignof(BuilderPrint_valueArgs) >= 1, "BuilderPrint_valueArgs mu
 
 /*
  * Example implementation:
- * void hosted_builder_print_value(struct RocOps* ops, BuilderPrint_valueArgs* args, void* ret) {
+ * void hosted_builder_print_value(struct RocOps* ops, void* ret, BuilderPrint_valueArgs* args) {
  *     // args->arg0 is void* (Builder)
  *     // No return value (void)
  * }
@@ -164,6 +174,7 @@ _Static_assert(_Alignof(BuilderPrint_valueArgs) >= 1, "BuilderPrint_valueArgs mu
  * Roc signature: I64 => Box(I64 -> I64)
  * C function name: host_boxed_add
  * Return type: RocErasedCallable
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     int64_t arg0;  // I64
@@ -174,7 +185,7 @@ _Static_assert(_Alignof(HostBoxed_addArgs) >= 1, "HostBoxed_addArgs must be alig
 
 /*
  * Example implementation:
- * void hosted_host_boxed_add(struct RocOps* ops, HostBoxed_addArgs* args, void* ret) {
+ * void hosted_host_boxed_add(struct RocOps* ops, void* ret, HostBoxed_addArgs* args) {
  *     // args->arg0 is int64_t (I64)
  *     // Set return value: *((RocErasedCallable*)ret) = result;
  * }
@@ -185,6 +196,7 @@ _Static_assert(_Alignof(HostBoxed_addArgs) >= 1, "HostBoxed_addArgs must be alig
  * Roc signature: Str => Box(I64 -> I64)
  * C function name: host_boxed_nested_record
  * Return type: RocErasedCallable
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     RocStr arg0;  // Str
@@ -195,7 +207,7 @@ _Static_assert(_Alignof(HostBoxed_nested_recordArgs) >= 1, "HostBoxed_nested_rec
 
 /*
  * Example implementation:
- * void hosted_host_boxed_nested_record(struct RocOps* ops, HostBoxed_nested_recordArgs* args, void* ret) {
+ * void hosted_host_boxed_nested_record(struct RocOps* ops, void* ret, HostBoxed_nested_recordArgs* args) {
  *     // args->arg0 is RocStr (Str)
  *     // Set return value: *((RocErasedCallable*)ret) = result;
  * }
@@ -206,6 +218,7 @@ _Static_assert(_Alignof(HostBoxed_nested_recordArgs) >= 1, "HostBoxed_nested_rec
  * Roc signature: Host.Tree => Box(I64 -> I64)
  * C function name: host_boxed_recursive_tree
  * Return type: RocErasedCallable
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     void* arg0;  // Host.Tree
@@ -216,7 +229,7 @@ _Static_assert(_Alignof(HostBoxed_recursive_treeArgs) >= 1, "HostBoxed_recursive
 
 /*
  * Example implementation:
- * void hosted_host_boxed_recursive_tree(struct RocOps* ops, HostBoxed_recursive_treeArgs* args, void* ret) {
+ * void hosted_host_boxed_recursive_tree(struct RocOps* ops, void* ret, HostBoxed_recursive_treeArgs* args) {
  *     // args->arg0 is void* (Host.Tree)
  *     // Set return value: *((RocErasedCallable*)ret) = result;
  * }
@@ -227,6 +240,7 @@ _Static_assert(_Alignof(HostBoxed_recursive_treeArgs) >= 1, "HostBoxed_recursive
  * Roc signature: Box(I64 -> I64), I64 => Box(I64 -> I64)
  * C function name: host_boxed_with_boxed_capture
  * Return type: RocErasedCallable
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     RocErasedCallable arg0;  // Box(I64 -> I64)
@@ -238,7 +252,7 @@ _Static_assert(_Alignof(HostBoxed_with_boxed_captureArgs) >= 1, "HostBoxed_with_
 
 /*
  * Example implementation:
- * void hosted_host_boxed_with_boxed_capture(struct RocOps* ops, HostBoxed_with_boxed_captureArgs* args, void* ret) {
+ * void hosted_host_boxed_with_boxed_capture(struct RocOps* ops, void* ret, HostBoxed_with_boxed_captureArgs* args) {
  *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
  *     // args->arg1 is int64_t (I64)
  *     // Set return value: *((RocErasedCallable*)ret) = result;
@@ -250,6 +264,7 @@ _Static_assert(_Alignof(HostBoxed_with_boxed_captureArgs) >= 1, "HostBoxed_with_
  * Roc signature: Box(I64 -> I64), I64 => I64
  * C function name: host_call_boxed
  * Return type: int64_t
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     RocErasedCallable arg0;  // Box(I64 -> I64)
@@ -261,7 +276,7 @@ _Static_assert(_Alignof(HostCall_boxedArgs) >= 1, "HostCall_boxedArgs must be al
 
 /*
  * Example implementation:
- * void hosted_host_call_boxed(struct RocOps* ops, HostCall_boxedArgs* args, void* ret) {
+ * void hosted_host_call_boxed(struct RocOps* ops, void* ret, HostCall_boxedArgs* args) {
  *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
  *     // args->arg1 is int64_t (I64)
  *     // Set return value: *((int64_t*)ret) = result;
@@ -273,6 +288,7 @@ _Static_assert(_Alignof(HostCall_boxedArgs) >= 1, "HostCall_boxedArgs must be al
  * Roc signature: Host => Str
  * C function name: host_get_greeting
  * Return type: RocStr
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     void* arg0;  // Host
@@ -283,7 +299,7 @@ _Static_assert(_Alignof(HostGet_greetingArgs) >= 1, "HostGet_greetingArgs must b
 
 /*
  * Example implementation:
- * void hosted_host_get_greeting(struct RocOps* ops, HostGet_greetingArgs* args, void* ret) {
+ * void hosted_host_get_greeting(struct RocOps* ops, void* ret, HostGet_greetingArgs* args) {
  *     // args->arg0 is void* (Host)
  *     // Set return value: *((RocStr*)ret) = result;
  * }
@@ -294,6 +310,7 @@ _Static_assert(_Alignof(HostGet_greetingArgs) >= 1, "HostGet_greetingArgs must b
  * Roc signature: Box(I64 -> I64) => Box(I64 -> I64)
  * C function name: host_roundtrip_boxed
  * Return type: RocErasedCallable
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     RocErasedCallable arg0;  // Box(I64 -> I64)
@@ -304,7 +321,7 @@ _Static_assert(_Alignof(HostRoundtrip_boxedArgs) >= 1, "HostRoundtrip_boxedArgs 
 
 /*
  * Example implementation:
- * void hosted_host_roundtrip_boxed(struct RocOps* ops, HostRoundtrip_boxedArgs* args, void* ret) {
+ * void hosted_host_roundtrip_boxed(struct RocOps* ops, void* ret, HostRoundtrip_boxedArgs* args) {
  *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
  *     // Set return value: *((RocErasedCallable*)ret) = result;
  * }
@@ -315,6 +332,7 @@ _Static_assert(_Alignof(HostRoundtrip_boxedArgs) >= 1, "HostRoundtrip_boxedArgs 
  * Roc signature: Box(I64 -> I64) => {}
  * C function name: host_store_boxed
  * Return type: void
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     RocErasedCallable arg0;  // Box(I64 -> I64)
@@ -325,7 +343,7 @@ _Static_assert(_Alignof(HostStore_boxedArgs) >= 1, "HostStore_boxedArgs must be 
 
 /*
  * Example implementation:
- * void hosted_host_store_boxed(struct RocOps* ops, HostStore_boxedArgs* args, void* ret) {
+ * void hosted_host_store_boxed(struct RocOps* ops, void* ret, HostStore_boxedArgs* args) {
  *     // args->arg0 is RocErasedCallable (Box(I64 -> I64))
  *     // No return value (void)
  * }
@@ -336,6 +354,7 @@ _Static_assert(_Alignof(HostStore_boxedArgs) >= 1, "HostStore_boxedArgs must be 
  * Roc signature: I64 => I64
  * C function name: host_stored_boxed_call
  * Return type: int64_t
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     int64_t arg0;  // I64
@@ -346,7 +365,7 @@ _Static_assert(_Alignof(HostStored_boxed_callArgs) >= 1, "HostStored_boxed_callA
 
 /*
  * Example implementation:
- * void hosted_host_stored_boxed_call(struct RocOps* ops, HostStored_boxed_callArgs* args, void* ret) {
+ * void hosted_host_stored_boxed_call(struct RocOps* ops, void* ret, HostStored_boxed_callArgs* args) {
  *     // args->arg0 is int64_t (I64)
  *     // Set return value: *((int64_t*)ret) = result;
  * }
@@ -357,6 +376,7 @@ _Static_assert(_Alignof(HostStored_boxed_callArgs) >= 1, "HostStored_boxed_callA
  * Roc signature: Str => {}
  * C function name: stderr_line
  * Return type: void
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     RocStr arg0;  // Str
@@ -367,7 +387,7 @@ _Static_assert(_Alignof(StderrLineArgs) >= 1, "StderrLineArgs must be aligned");
 
 /*
  * Example implementation:
- * void hosted_stderr_line(struct RocOps* ops, StderrLineArgs* args, void* ret) {
+ * void hosted_stderr_line(struct RocOps* ops, void* ret, StderrLineArgs* args) {
  *     // args->arg0 is RocStr (Str)
  *     // No return value (void)
  * }
@@ -378,6 +398,7 @@ _Static_assert(_Alignof(StderrLineArgs) >= 1, "StderrLineArgs must be aligned");
  * Roc signature: Str => {}
  * C function name: stdout_line
  * Return type: void
+ * Refcounted fields are owned by the hosted function.
  */
 typedef struct {
     RocStr arg0;  // Str
@@ -388,7 +409,7 @@ _Static_assert(_Alignof(StdoutLineArgs) >= 1, "StdoutLineArgs must be aligned");
 
 /*
  * Example implementation:
- * void hosted_stdout_line(struct RocOps* ops, StdoutLineArgs* args, void* ret) {
+ * void hosted_stdout_line(struct RocOps* ops, void* ret, StdoutLineArgs* args) {
  *     // args->arg0 is RocStr (Str)
  *     // No return value (void)
  * }

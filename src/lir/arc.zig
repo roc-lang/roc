@@ -1253,6 +1253,19 @@ const ArcTest = struct {
         });
     }
 
+    fn addHostedProc(self: *ArcTest, args: []const LIR.LocalId, ret_layout: layout_mod.Idx) !LIR.LirProcSpecId {
+        return try self.store.addProcSpec(.{
+            .name = self.store.freshSyntheticSymbol(),
+            .args = try self.span(args),
+            .body = null,
+            .ret_layout = ret_layout,
+            .hosted = .{
+                .external_symbol_name = @enumFromInt(1),
+                .dispatch_index = 0,
+            },
+        });
+    }
+
     fn ret(self: *ArcTest, value: LIR.LocalId) !LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .ret = .{ .value = value } });
     }
@@ -1330,6 +1343,15 @@ const ArcTest = struct {
         return try self.store.addCFStmt(.{ .assign_call = .{
             .target = target,
             .proc = try self.addBodylessProc(self.store.getLocal(target).layout_idx),
+            .args = try self.span(args),
+            .next = next,
+        } });
+    }
+
+    fn assignHostedCall(self: *ArcTest, target: LIR.LocalId, args: []const LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_call = .{
+            .target = target,
+            .proc = try self.addHostedProc(args, self.store.getLocal(target).layout_idx),
             .args = try self.span(args),
             .next = next,
         } });
@@ -1775,6 +1797,19 @@ test "RC proc_call caller: consumed list arg is not tail-decref'd by caller" {
     const ret = try f.ret(result);
     const call = try f.assignCall(result, &.{arg}, ret);
     const body = try f.assignList(arg, &.{}, call);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    try f.expectRc(arg, 0, 0, 0);
+}
+
+test "RC hosted call transfers unused refcounted arg to host" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const arg = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.assignHostedCall(result, &.{arg}, ret);
+    const body = try f.assignStr(arg, "transferred to host", call);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
     try f.expectRc(arg, 0, 0, 0);
