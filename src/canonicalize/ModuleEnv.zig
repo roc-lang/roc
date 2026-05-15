@@ -825,6 +825,24 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
 
+            if (std.mem.eql(u8, ident_name, "Num.to_str")) {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addAnnotated("Hint:", .emphasized);
+                try report.document.addReflowingText(" Instead of ");
+                try report.document.addInlineCode("Num.to_str(value)");
+                try report.document.addReflowingText(", use method syntax: ");
+                try report.document.addInlineCode("value.to_str()");
+            } else if (std.mem.eql(u8, ident_name, "Inspect.to_str")) {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addAnnotated("Hint:", .emphasized);
+                try report.document.addInlineCode(" Inspect.to_str");
+                try report.document.addReflowingText(" has been renamed to ");
+                try report.document.addInlineCode("Str.inspect");
+                try report.document.addReflowingText(".");
+            }
+
             break :blk report;
         },
         .exposed_but_not_implemented => |data| blk: {
