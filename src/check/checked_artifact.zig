@@ -19539,6 +19539,9 @@ test "artifact views are read-only projections" {
     var names = canonical.CanonicalNameStore.init(std.testing.allocator);
     const test_module = try names.internModuleName("Test");
 
+    var module_env = try ModuleEnv.init(std.testing.allocator, "");
+    defer module_env.deinit();
+
     var artifact = CheckedModuleArtifact{
         .key = .{},
         .canonical_names = names,
@@ -19550,7 +19553,7 @@ test "artifact views are read-only projections" {
             .kind = .package,
         },
         .checking_context_identity = .{},
-        .module_env = undefined,
+        .module_env = .{ .checked_source = &module_env },
         .exports = .{},
         .provides_requires = .{},
         .method_registry = .{},
