@@ -1177,7 +1177,7 @@ test "roc check reports comptime division by zero without panicking" {
 
     try util.checkFailure(result);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Division by zero") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
 }
 
@@ -1191,7 +1191,7 @@ test "roc check reports comptime modulo by zero without panicking" {
 
     try util.checkFailure(result);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Division by zero") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
 }
 
