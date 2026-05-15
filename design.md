@@ -3290,6 +3290,10 @@ const ArtifactConstReificationPlanRef = ArtifactConstGraphReificationPlanRef;
 const ArtifactPrivateCaptureNodeRef = ArtifactRef;
 const ArtifactPrivateCaptureRef = ArtifactPrivateCaptureNodeRef;
 
+const ArtifactModuleInterfaceCapabilitiesRef = struct {
+    artifact: CheckedModuleArtifactKey,
+};
+
 const ImportedModuleView = struct {
     artifact_key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
@@ -3308,7 +3312,7 @@ const ImportedModuleView = struct {
     method_registry: MethodRegistryView,
     hosted_entries: HostedProcTableView,
     platform_entries: PlatformRequirementTableView,
-    interface_capabilities: InterfaceCapabilityTableView,
+    interface_capabilities: *const ModuleInterfaceCapabilities,
     compile_time_values: CompileTimeValueStoreView,
     compile_time_plans: CompileTimePlanStoreView,
     const_instances: ConstInstantiationStoreView,
@@ -3409,7 +3413,7 @@ const ImportedTemplateClosureView = struct {
     resolved_value_refs: Span(ArtifactResolvedValueRefId),
     static_dispatch_plans: Span(ArtifactStaticDispatchPlanRef),
     method_entries: Span(ArtifactMethodEntryRef),
-    capabilities: Span(ArtifactInterfaceCapabilityRef),
+    interface_capabilities: Span(ArtifactModuleInterfaceCapabilitiesRef),
     callable_set_descriptors: Span(ArtifactCallableSetDescriptorRef),
     plan_closures: Span(ArtifactCompileTimePlanRef),
 };
@@ -3744,31 +3748,30 @@ artifact body.
 Interface capabilities are sealed checked-artifact data:
 
 ```zig
-const InterfaceCapabilityTable = struct {
-    boxed_payload_templates: Span(BoxedPayloadTemplateCapability),
-    opaque_atomic_proofs: Span(OpaqueAtomicProof),
-    hosted_representation_capabilities: Span(HostedRepresentationCapability),
-    platform_representation_capabilities: Span(PlatformRepresentationCapability),
+const ModuleInterfaceCapabilities = struct {
+    boxed_payload_templates: Span(BoxPayloadCapabilityEntry),
+    opaque_atomic_proofs: Span(OpaqueAtomicProofEntry),
+    hosted_representations: Span(HostedRepresentationCapability),
+    platform_representations: Span(PlatformRepresentationCapability),
     exported_nominal_representations: Span(ExportedNominalRepresentation),
 };
 
-const BoxedPayloadTemplateCapability = struct {
+const BoxPayloadCapabilityEntry = struct {
+    id: BoxPayloadCapabilityId,
     nominal: NominalTypeKey,
-    payload_template: CheckedTypePayloadRef,
-    permitted_use: BoxedPayloadUse,
+    source_ty: CanonicalTypeKey,
+    backing_ty: CheckedTypeId,
+    backing_ty_key: CanonicalTypeKey,
+    instantiated_args: Span(CanonicalTypeKey),
+    is_opaque: bool,
 };
 
-const OpaqueAtomicProof = struct {
+const OpaqueAtomicProofEntry = struct {
+    id: OpaqueAtomicProofId,
     nominal: NominalTypeKey,
-    proof_owner: ModuleIdentity,
-    backing_access: OpaqueBackingAccess,
-};
-
-const BoxPayloadCapabilityTemplate = struct {
-    nominal: NominalTypeKey,
-    params: Span(CheckedTypeParamId),
-    backing: NominalBackingRepresentationTemplate,
-    capability_key: BoxPayloadCapabilityKey,
+    source_ty: CanonicalTypeKey,
+    instantiated_args: Span(CanonicalTypeKey),
+    proof: NoReachableCallableSlotsProof,
 };
 
 const NominalPayloadRepresentation = union(enum) {
@@ -3799,7 +3802,7 @@ const NoReachableCallableSlotsProof = union(enum) {
 };
 ```
 
-The exact field names may differ, but the table records:
+The implementation-aligned record names above contain:
 
 - boxed payload templates that importers may instantiate inside explicit
   `Box(T)` boundaries
@@ -3808,7 +3811,7 @@ The exact field names may differ, but the table records:
 - exported nominal representations that are visible to importers
 
 The module that defines a transparent nominal owns the
-`BoxPayloadCapabilityTemplate` values for that nominal's exported boxed-payload
+`BoxPayloadCapabilityEntry` rows for that nominal's exported boxed-payload
 representation. Inside the defining module, the checked nominal declaration can
 publish `NominalPayloadRepresentation.transparent_backing` directly. Outside
 the defining module, traversal through a nominal inside erased `Box(T)` payload
