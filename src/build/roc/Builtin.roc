@@ -866,7 +866,7 @@ Builtin :: [].{
 			var $list = List.with_capacity(n)
 			var $count = 0
 			while $count < n {
-				$list = List.append($list, item)
+				$list = list_append_unsafe($list, item)
 				$count = $count + 1
 			}
 			$list

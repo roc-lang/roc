@@ -488,6 +488,11 @@ pub fn listReserve(
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
     const original_len = list.len();
+
+    if (element_width == 0) {
+        return list;
+    }
+
     const cap = @as(u64, @intCast(list.getCapacity()));
     const desired_cap = @as(u64, @intCast(original_len)) +| spare;
 
@@ -525,6 +530,11 @@ pub fn listReleaseExcessCapacity(
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
     const old_length = list.len();
+
+    if (element_width == 0) {
+        return list;
+    }
+
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if ((update_mode == .InPlace or list.isUnique(roc_ops)) and list.capacity_or_alloc_ptr == old_length) {
         return list;
@@ -1799,6 +1809,31 @@ test "listReserve functionality" {
     try std.testing.expectEqual(@as(u8, 1), elements[0]);
     try std.testing.expectEqual(@as(u8, 2), elements[1]);
     try std.testing.expectEqual(@as(u8, 3), elements[2]);
+}
+
+test "zero-width lists do not allocate capacity storage" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const reserved_empty = listWithCapacity(32, 1, 0, false, null, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(?[*]u8, null), reserved_empty.bytes);
+    try std.testing.expectEqual(@as(usize, 0), reserved_empty.len());
+    try std.testing.expectEqual(@as(usize, 0), reserved_empty.getCapacity());
+
+    const appended = listAppend(reserved_empty, 1, null, 0, false, null, rcNone, .Immutable, &copy_fallback, test_env.getOps());
+    try std.testing.expectEqual(@as(?[*]u8, null), appended.bytes);
+    try std.testing.expectEqual(@as(usize, 1), appended.len());
+    try std.testing.expectEqual(@as(usize, 0), appended.getCapacity());
+
+    const reserved_non_empty = listReserve(appended, 1, 100, 0, false, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    try std.testing.expectEqual(@as(?[*]u8, null), reserved_non_empty.bytes);
+    try std.testing.expectEqual(@as(usize, 1), reserved_non_empty.len());
+    try std.testing.expectEqual(@as(usize, 0), reserved_non_empty.getCapacity());
+
+    const released = listReleaseExcessCapacity(reserved_non_empty, 1, 0, false, null, rcNone, null, rcNone, utils.UpdateMode.Immutable, test_env.getOps());
+    try std.testing.expectEqual(@as(?[*]u8, null), released.bytes);
+    try std.testing.expectEqual(@as(usize, 1), released.len());
+    try std.testing.expectEqual(@as(usize, 0), released.getCapacity());
 }
 
 test "listCapacity function" {
