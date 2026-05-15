@@ -3596,10 +3596,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
-    std.fs.cwd().writeFile(.{
-        .sub_path = builtins_path,
-        .data = BuiltinsObjects.forTarget(target),
-    }) catch |err| {
+    backend.writeFileWindowsAvSafe(builtins_path, BuiltinsObjects.forTarget(target)) catch |err| {
         std.log.err("Failed to write builtins object file: {}", .{err});
         return error.BuiltinsExtractionFailed;
     };
