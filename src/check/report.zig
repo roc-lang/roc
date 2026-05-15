@@ -224,6 +224,8 @@ pub const ReportBuilder = struct {
     const ProblemRegion = union(enum) {
         simple: Region.Idx,
         focused: struct { outer: Region.Idx, highlight: Region.Idx },
+        /// A direct Region value, for when only a Region (not a Region.Idx) is available.
+        region: Region,
     };
 
     /// Region for source highlighting - can be either a Region.Idx or a direct Region
@@ -279,6 +281,7 @@ pub const ReportBuilder = struct {
             bytes: []const u8,
             link: []const u8,
             ident: Ident.Idx,
+            ident_call: Ident.Idx,
             num_ord: u32,
             num: u32,
         },
@@ -309,6 +312,15 @@ pub const ReportBuilder = struct {
         fn ident(b: Ident.Idx) Doc {
             return Doc{
                 .type_ = .{ .ident = b },
+                .preceding_space = true,
+                .annotation = null,
+            };
+        }
+
+        /// Create a Doc that renders as "name()" — for showing a method call suggestion.
+        fn identCall(b: Ident.Idx) Doc {
+            return Doc{
+                .type_ = .{ .ident_call = b },
                 .preceding_space = true,
                 .annotation = null,
             };
@@ -365,6 +377,16 @@ pub const ReportBuilder = struct {
                         try report.document.addAnnotated(ident_bytes, annotation);
                     } else {
                         try report.document.addReflowingText(ident_bytes);
+                    }
+                },
+                .ident_call => |i| {
+                    var buf: [512]u8 = undefined;
+                    const with_parens = try std.fmt.bufPrint(&buf, "{s}()", .{builder.can_ir.getIdent(i)});
+                    const owned = try report.addOwnedString(with_parens);
+                    if (doc.annotation) |annotation| {
+                        try report.document.addAnnotated(owned, annotation);
+                    } else {
+                        try report.document.addReflowingText(owned);
                     }
                 },
                 .num_ord => |ord| {
@@ -435,6 +457,7 @@ pub const ReportBuilder = struct {
             .focused => |ctx| {
                 try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight);
             },
+            .region => |r| try self.addSourceHighlightRegion(&report, r),
         }
         try report.document.addLineBreak();
 
@@ -498,6 +521,7 @@ pub const ReportBuilder = struct {
         switch (region) {
             .simple => |region_idx| try self.addSourceHighlight(&report, region_idx),
             .focused => |ctx| try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight),
+            .region => |r| try self.addSourceHighlightRegion(&report, r),
         }
         try report.document.addLineBreak();
 
@@ -541,6 +565,7 @@ pub const ReportBuilder = struct {
             .focused => |ctx| {
                 try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight);
             },
+            .region => |r| try self.addSourceHighlightRegion(&report, r),
         }
 
         // Print static hints
@@ -2236,6 +2261,22 @@ pub const ReportBuilder = struct {
         const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
         switch (record) {
             .not_a_record => {
+                if (ctx.is_method) {
+                    return try self.makeCustomReport(
+                        ProblemRegion{ .region = ctx.field_region },
+                        &.{
+                            D.ident(ctx.field_name).withAnnotation(.inline_code),
+                            D.bytes("is a method, not a record field. Did you forget the parentheses?"),
+                        },
+                        &.{
+                            &.{
+                                D.bytes("Method calls require parentheses even with no arguments. Use"),
+                                D.identCall(ctx.field_name).withAnnotation(.inline_code),
+                                D.bytes("instead."),
+                            },
+                        },
+                    );
+                }
                 return try self.makeBadTypeReport(
                     region,
                     &.{D.bytes("This is not a record, so it does not have any fields to access:")},
