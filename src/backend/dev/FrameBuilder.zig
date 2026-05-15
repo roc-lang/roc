@@ -201,8 +201,8 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // mov rbp, rsp (3 bytes: 48 89 E5)
             size += 3;
 
-            // sub rsp, imm (7 bytes for 32-bit imm: 48 81 EC xx xx xx xx)
-            // Only if stack_alloc > 0
+            // Stack allocation. On Windows we must probe the stack page-by-page
+            // for any frame ≥ one page; see emitPrologueX86_64 for details.
             // Use full AREA_SIZE (not just actual callee-saved bytes) because
             // stack_offset is initialized to -CALLEE_SAVED_AREA_SIZE, so locals
             // are allocated after the full reserved area.
@@ -210,7 +210,12 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             const total_needed = self.stack_size + callee_saved_space;
             const aligned_size = CC.alignStackSize(total_needed);
             if (aligned_size > 0) {
-                size += 7;
+                if (windowsNeedsStackProbe(aligned_size)) {
+                    size += windows_probe_loop_size;
+                } else {
+                    // sub rsp, imm (7 bytes for 32-bit imm: 48 81 EC xx xx xx xx)
+                    size += 7;
+                }
             }
 
             // mov [rbp-offset], reg for each callee-saved (4-8 bytes each)
@@ -227,6 +232,35 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
 
             return size;
+        }
+
+        /// Exact byte count of the inline stack-probe loop emitted by
+        /// `emitWindowsStackProbe`. Must stay in sync with that emitter —
+        /// `calculatePrologueSize` reports it to deferred-prologue patching.
+        const windows_probe_loop_size: u32 =
+            // mov rax, imm32 (always REX.W + C7 + ModRM + imm32 = 7 bytes)
+            7 +
+            // sub rsp, 0x1000 (REX.W + 81 + ModRM + imm32 = 7 bytes)
+            7 +
+            // mov [rsp], eax (89 + ModRM disp32 + SIB + disp32 = 7 bytes)
+            7 +
+            // sub eax, 0x1000 (RAX short form: 2D + imm32 = 5 bytes)
+            5 +
+            // cmp eax, 0x1000 (RAX short form: 3D + imm32 = 5 bytes)
+            5 +
+            // ja rel32 (0F 87 + rel32 = 6 bytes)
+            6 +
+            // sub rsp, rax (REX.W + 29 + ModRM = 3 bytes)
+            3 +
+            // mov [rsp], eax (final probe, 7 bytes)
+            7;
+
+        /// True when this frame must probe the stack page-by-page on Windows.
+        /// Direct `sub rsp, N` with N ≥ one page skips guard pages with the
+        /// default stack commit, causing STATUS_ACCESS_VIOLATION on later
+        /// accesses to pages below the original commit boundary.
+        fn windowsNeedsStackProbe(aligned_size: u32) bool {
+            return is_windows and aligned_size >= 0x1000;
         }
 
         fn emitPrologueX86_64(self: *Self, emit: *EmitType) !i32 {
@@ -246,7 +280,11 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             self.actual_stack_alloc = CC.alignStackSize(total_needed);
 
             if (self.actual_stack_alloc > 0) {
-                try emit.subRegImm32(.w64, .RSP, @intCast(self.actual_stack_alloc));
+                if (windowsNeedsStackProbe(self.actual_stack_alloc)) {
+                    try emitWindowsStackProbe(emit, self.actual_stack_alloc);
+                } else {
+                    try emit.subRegImm32(.w64, .RSP, @intCast(self.actual_stack_alloc));
+                }
             }
 
             // 4. Save callee-saved registers at fixed RBP offsets
@@ -255,6 +293,43 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // Return initial stack offset (0 for x86_64 since we use negative RBP offsets)
             // Callers use negative offsets from RBP for locals
             return 0;
+        }
+
+        /// Emit an inline stack-probe loop equivalent to calling MSVC's
+        /// `__chkstk`. Required on Windows for any frame ≥ one page so each
+        /// guard page is touched in order — a direct `sub rsp, N` skips
+        /// guard pages and yields a delayed STATUS_ACCESS_VIOLATION when the
+        /// uncommitted page is later accessed (test/fx record_builder_cli_parser
+        /// reproduced this on the default 4 KB stack commit).
+        ///
+        /// Layout (must remain byte-exact with `windows_probe_loop_size`):
+        ///   mov   rax, alloc_size       ; counter — caller-saved on Windows ABI
+        /// .loop:
+        ///   sub   rsp, 0x1000           ; lower one page
+        ///   mov   [rsp], eax            ; touch the new top to commit it
+        ///   sub   eax, 0x1000
+        ///   cmp   eax, 0x1000
+        ///   ja    .loop                 ; rel32 — sized in calculatePrologueSize
+        ///   sub   rsp, rax              ; allocate remaining bytes
+        ///   mov   [rsp], eax            ; probe the final page — MSVC's
+        ///                                ; __chkstk probes every page including
+        ///                                ; the partial one; without this probe
+        ///                                ; the remainder slips past the guard.
+        fn emitWindowsStackProbe(emit: *EmitType, alloc_size: u32) !void {
+            const buf_before_emit = emit.buf.items.len;
+            try emit.movRegImm32(.RAX, @intCast(alloc_size));
+            const loop_start = emit.buf.items.len;
+            try emit.subRegImm32(.w64, .RSP, 0x1000);
+            try emit.movMemReg(.w32, .RSP, 0, .RAX);
+            try emit.subRegImm32(.w32, .RAX, 0x1000);
+            try emit.cmpRegImm32(.w32, .RAX, 0x1000);
+            // ja loop_start: offset is from end-of-jcc to target.
+            const after_ja = emit.buf.items.len + 6; // jccRel32 emits 6 bytes
+            const rel: i32 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(after_ja)));
+            try emit.jccRel32(.above, rel);
+            try emit.subRegReg(.w64, .RSP, .RAX);
+            try emit.movMemReg(.w32, .RSP, 0, .RAX);
+            std.debug.assert(emit.buf.items.len - buf_before_emit == windows_probe_loop_size);
         }
 
         fn emitEpilogueX86_64(self: *Self, emit: *EmitType) !void {
