@@ -256,28 +256,29 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
 fn expectDevRuntimeDivisionByZero() !void {
     const allocator = testing.allocator;
 
-    const run_result = try runDevBackendHostSelfTest(
+    const run_result = try buildAndRunDevBackendApp(
         allocator,
-        "test/fx/hello_world.roc",
-        "--host-test-division-by-zero",
+        "test/fx/division_by_zero.roc",
+        "fx_dev_division_by_zero",
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
     switch (run_result.term) {
         .Exited => |code| {
-            if (code != 136) {
+            if (code != 1) {
                 std.debug.print("Unexpected dev exit code: {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "This Roc application divided by zero and crashed.") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Division by zero") != null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") == null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") == null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "panic:") == null);
         },
         .Signal => |sig| {
-            std.debug.print("Host self-test crashed with signal {}\n", .{sig});
+            std.debug.print("Dev runtime division by zero crashed with signal {}\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.DivisionByZeroNotHandled;
         },
@@ -1201,9 +1202,8 @@ test "fx platform runtime stack overflow" {
 }
 
 test "fx platform runtime division by zero" {
-    // Some architectures do not trap on integer divide by zero in generated code,
-    // so the dev-backend half uses the host self-test hook to exercise the host's
-    // arithmetic handler directly while still keeping the real interpreter sample.
+    // The divisor is mutable in the Roc app, so this covers runtime execution
+    // rather than compile-time finalization.
     try expectInterpreterRuntimeDivisionByZero();
     try expectDevRuntimeDivisionByZero();
 }

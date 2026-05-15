@@ -1,11 +1,11 @@
-//! Generic signal handlers for stack overflow, access violation, and arithmetic errors.
+//! Generic signal handlers for stack overflow and access violation.
 //!
-//! This module provides a mechanism to catch runtime errors like stack overflows,
-//! access violations, and division by zero, handling them with custom callbacks
-//! instead of crashing with a raw signal.
+//! This module provides a mechanism to catch runtime errors like stack overflows
+//! and access violations, handling them with custom callbacks instead of
+//! crashing with a raw signal.
 //!
 //! On POSIX systems (Linux, macOS), we use sigaltstack to set up an alternate
-//! signal stack and install handlers for SIGSEGV, SIGBUS, and SIGFPE.
+//! signal stack and install handlers for SIGSEGV and SIGBUS.
 //!
 //! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
 //!
@@ -25,8 +25,6 @@ const BOOL = i32;
 
 const EXCEPTION_STACK_OVERFLOW: DWORD = 0xC00000FD;
 const EXCEPTION_ACCESS_VIOLATION: DWORD = 0xC0000005;
-const EXCEPTION_INT_DIVIDE_BY_ZERO: DWORD = 0xC0000094;
-const EXCEPTION_INT_OVERFLOW: DWORD = 0xC0000095;
 const EXCEPTION_CONTINUE_SEARCH: LONG = 0;
 
 const EXCEPTION_RECORD = extern struct {
@@ -52,8 +50,6 @@ const LPTOP_LEVEL_EXCEPTION_FILTER = ?*const fn (*EXCEPTION_POINTERS) callconv(.
 
 // Windows API imports
 extern "kernel32" fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: LPTOP_LEVEL_EXCEPTION_FILTER) callconv(.winapi) LPTOP_LEVEL_EXCEPTION_FILTER;
-extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) BOOL;
 extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
 extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: c_uint) callconv(.winapi) BOOL;
 extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
@@ -73,13 +69,9 @@ pub const StackOverflowCallback = *const fn () noreturn;
 /// Callback function type for handling access violation/segfault
 pub const AccessViolationCallback = *const fn (fault_addr: usize) noreturn;
 
-/// Callback function type for handling division by zero (and other arithmetic errors)
-pub const ArithmeticErrorCallback = *const fn () noreturn;
-
 /// Stored callbacks (set during install)
 var stack_overflow_callback: ?StackOverflowCallback = null;
 var access_violation_callback: ?AccessViolationCallback = null;
-var arithmetic_error_callback: ?ArithmeticErrorCallback = null;
 
 /// Install signal handlers with custom callbacks.
 ///
@@ -87,19 +79,16 @@ var arithmetic_error_callback: ?ArithmeticErrorCallback = null;
 /// - on_stack_overflow: Called when a stack overflow is detected. Must not return.
 /// - on_access_violation: Called for other memory access violations (segfaults).
 ///   Receives the fault address. Must not return.
-/// - on_arithmetic_error: Called for arithmetic errors like division by zero. Must not return.
 ///
 /// Returns true if the handlers were installed successfully, false otherwise.
 pub fn install(
     on_stack_overflow: StackOverflowCallback,
     on_access_violation: AccessViolationCallback,
-    on_arithmetic_error: ArithmeticErrorCallback,
 ) bool {
     if (handler_installed) return true;
 
     stack_overflow_callback = on_stack_overflow;
     access_violation_callback = on_access_violation;
-    arithmetic_error_callback = on_arithmetic_error;
 
     if (comptime builtin.os.tag == .windows) {
         return installWindows();
@@ -137,15 +126,6 @@ fn installPosix() bool {
     // Also catch SIGBUS which can occur on some systems for stack overflow
     posix.sigaction(posix.SIG.BUS, &segv_action, null);
 
-    // Install the SIGFPE handler for division by zero and other arithmetic errors
-    const fpe_action = posix.Sigaction{
-        .handler = .{ .sigaction = handleFpeSignal },
-        .mask = posix.sigemptyset(),
-        .flags = posix.SA.SIGINFO | posix.SA.ONSTACK,
-    };
-
-    posix.sigaction(posix.SIG.FPE, &fpe_action, null);
-
     handler_installed = true;
     return true;
 }
@@ -163,11 +143,8 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
     // Check if this is a known exception type
     const is_stack_overflow = (exception_code == EXCEPTION_STACK_OVERFLOW);
     const is_access_violation = (exception_code == EXCEPTION_ACCESS_VIOLATION);
-    const is_divide_by_zero = (exception_code == EXCEPTION_INT_DIVIDE_BY_ZERO);
-    const is_int_overflow = (exception_code == EXCEPTION_INT_OVERFLOW);
-    const is_arithmetic_error = is_divide_by_zero or is_int_overflow;
 
-    if (!is_stack_overflow and !is_access_violation and !is_arithmetic_error) {
+    if (!is_stack_overflow and !is_access_violation) {
         // Let other handlers deal with this exception
         return EXCEPTION_CONTINUE_SEARCH;
     }
@@ -184,11 +161,6 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
         // Use @trap() instead of unreachable: unreachable is UB in ReleaseFast,
         // while @trap() always generates a defined trap instruction.
         @trap();
-    } else if (is_arithmetic_error) {
-        if (arithmetic_error_callback) |callback| {
-            callback();
-        }
-        ExitProcess(136); // 128 + 8 (SIGFPE)
     } else {
         if (access_violation_callback) |callback| {
             // Get fault address from ExceptionInformation[1] for access violations
@@ -230,16 +202,6 @@ fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callco
     } else {
         posix.exit(139); // 128 + 11 (SIGSEGV)
     }
-}
-
-/// The POSIX SIGFPE signal handler function (division by zero, etc.)
-fn handleFpeSignal(_: i32, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
-    if (arithmetic_error_callback) |callback| {
-        callback();
-    }
-
-    // If no callback was set, exit with SIGFPE code
-    posix.exit(136); // 128 + 8 (SIGFPE)
 }
 
 /// Get the fault address from siginfo_t (platform-specific)

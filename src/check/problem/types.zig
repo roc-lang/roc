@@ -49,6 +49,7 @@ pub const Problem = union(enum) {
     non_exhaustive_match: NonExhaustiveMatch,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    invalid_numeric_literal: InvalidNumericLiteral,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());

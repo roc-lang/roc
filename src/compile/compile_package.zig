@@ -304,6 +304,7 @@ pub const ArtifactPublicationInputs = struct {
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
+    problem_store: ?*check.problem.Store = null,
 };
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
@@ -1351,7 +1352,7 @@ pub const PackageEnv = struct {
             };
         }
 
-        var checked_artifact = try publishCheckedArtifactFromCheckedModule(
+        var checked_artifact = publishCheckedArtifactFromCheckedModule(
             gpa,
             env,
             imported_envs,
@@ -1361,8 +1362,15 @@ pub const PackageEnv = struct {
                 .platform_app_relation = null,
                 .explicit_roots = &.{},
                 .available_artifacts = available_artifacts,
+                .problem_store = &checker.problems,
             },
-        );
+        ) catch |err| switch (err) {
+            error.CompileTimeProblem => return .{
+                .checker = checker,
+                .checked_artifact = null,
+            },
+            else => |other| return other,
+        };
         errdefer checked_artifact.deinit(gpa);
 
         return .{
@@ -1433,6 +1441,7 @@ pub const PackageEnv = struct {
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
                 .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+                .problem_store = publication.problem_store,
             },
         );
     }

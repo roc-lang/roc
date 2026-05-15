@@ -417,8 +417,7 @@ pub const Interpreter = struct {
     }
 
     fn divisionByZero(self: *LirInterpreter) Error {
-        self.roc_env.runtime_error_message = division_by_zero_message;
-        return error.DivisionByZero;
+        return self.triggerCrash(division_by_zero_message);
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {

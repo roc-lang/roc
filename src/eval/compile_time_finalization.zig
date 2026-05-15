@@ -34,6 +34,7 @@ fn finalize(
     imports: []const checked_artifact.PublishImportArtifact,
     available_artifacts: []const checked_artifact.ImportedModuleView,
     relation_artifacts: []const checked_artifact.ImportedModuleView,
+    problem_store: ?*check.problem.Store,
 ) anyerror!void {
     const compile_time_roots = try compileTimeRootRequests(allocator, artifact.root_requests.requests);
     defer if (compile_time_roots.len > 0) allocator.free(compile_time_roots);
@@ -132,6 +133,7 @@ fn finalize(
                 allocator,
                 artifact,
                 &interpreter,
+                problem_store,
                 &lowered_request.lowered,
                 root,
                 lowered_request.lir_root,
@@ -144,6 +146,7 @@ fn finalize(
                 allocator,
                 artifact,
                 &interpreter,
+                problem_store,
                 &lowered_request.lowered,
                 root,
                 lowered_request.lir_root,
@@ -723,6 +726,7 @@ fn evaluateConstantRoot(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     interpreter: *Interpreter,
+    problem_store: ?*check.problem.Store,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     root: checked_artifact.CompileTimeRoot,
     lir_root: lir.LIR.LirProcSpecId,
@@ -742,7 +746,7 @@ fn evaluateConstantRoot(
         .requested_source_ty = requested_source_ty,
     };
 
-    const result = try evalCompileTimeRoot(interpreter, lir_root);
+    const result = try evalCompileTimeRoot(allocator, interpreter, problem_store, artifact, root, lir_root);
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 
@@ -796,6 +800,7 @@ fn evaluateCallableBindingRoot(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
     interpreter: *Interpreter,
+    problem_store: ?*check.problem.Store,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     root: checked_artifact.CompileTimeRoot,
     lir_root: lir.LIR.LirProcSpecId,
@@ -810,7 +815,7 @@ fn evaluateCallableBindingRoot(
         .const_ref => compileTimeFinalizationInvariant("callable root top-level value was a const"),
     };
 
-    const result = try evalCompileTimeRoot(interpreter, lir_root);
+    const result = try evalCompileTimeRoot(allocator, interpreter, problem_store, artifact, root, lir_root);
     const ret_layout = lowered.lir_result.store.getProcSpec(lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 
@@ -894,6 +899,44 @@ fn evaluateCallableBindingRoot(
 }
 
 fn evalCompileTimeRoot(
+    allocator: Allocator,
+    interpreter: *Interpreter,
+    problem_store: ?*check.problem.Store,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+    lir_root: lir.LIR.LirProcSpecId,
+) anyerror!Interpreter.EvalResult {
+    return interpreter.eval(.{
+        .proc_id = lir_root,
+        .arg_layouts = &.{},
+    }) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.RuntimeError => compileTimeFinalizationInvariant("compile-time root produced a runtime error"),
+        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, artifact, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
+        error.Crash => try reportCompileTimeCrash(allocator, problem_store, artifact, root, interpreter.getCrashMessage() orelse "Roc crashed"),
+    };
+}
+
+fn reportCompileTimeCrash(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    root: checked_artifact.CompileTimeRoot,
+    message: []const u8,
+) anyerror!Interpreter.EvalResult {
+    const problem_store = maybe_problem_store orelse {
+        compileTimeFinalizationInvariant("compile-time root crashed without a checking problem store");
+    };
+    const message_idx = try problem_store.putExtraString(message);
+    const region = artifact.checked_bodies.expr(root.expr).source_region;
+    _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
+        .message = message_idx,
+        .region = region,
+    } });
+    return error.CompileTimeProblem;
+}
+
+fn evalCompileTimeRootInvariant(
     interpreter: *Interpreter,
     lir_root: lir.LIR.LirProcSpecId,
 ) Allocator.Error!Interpreter.EvalResult {
@@ -1217,7 +1260,7 @@ fn ensureConstInstanceRequest(
                 else => compileTimeFinalizationInvariant("const instance lowering did not publish a const graph payload"),
             };
 
-            const result = try evalCompileTimeRoot(&interpreter, lowered_request.lir_root);
+            const result = try evalCompileTimeRootInvariant(&interpreter, lowered_request.lir_root);
             const ret_layout = lowered_request.lowered.lir_result.store.getProcSpec(lowered_request.lir_root).ret_layout;
             defer interpreter.dropValue(result.value, ret_layout);
 
@@ -1597,7 +1640,7 @@ fn ensureCallableBindingInstanceRequest(
         else => compileTimeFinalizationInvariant("callable binding instance lowering did not publish a callable-result payload"),
     };
 
-    const result = try evalCompileTimeRoot(&interpreter, lowered_request.lir_root);
+    const result = try evalCompileTimeRootInvariant(&interpreter, lowered_request.lir_root);
     const ret_layout = lowered_request.lowered.lir_result.store.getProcSpec(lowered_request.lir_root).ret_layout;
     defer interpreter.dropValue(result.value, ret_layout);
 

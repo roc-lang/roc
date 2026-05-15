@@ -36,7 +36,7 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(48, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -725,6 +725,9 @@ pub const NumeralInfo = struct {
     /// Whether the literal had a decimal point
     is_fractional: bool,
 
+    /// Representation requirements for fractional literals.
+    frac_requirements: ?Frac.Requirements = null,
+
     /// Source region for error reporting
     region: base.Region,
 
@@ -756,6 +759,18 @@ pub const NumeralInfo = struct {
             .is_u128 = true,
             .is_negative = false, // u128 values are never negative
             .is_fractional = is_fractional,
+            .region = region,
+        };
+    }
+
+    /// Create from an i128 value with exact fractional representation requirements.
+    pub fn fromFractionalI128(val: i128, requirements: Frac.Requirements, region: base.Region) NumeralInfo {
+        return .{
+            .bytes = @bitCast(val),
+            .is_u128 = false,
+            .is_negative = val < 0,
+            .is_fractional = true,
+            .frac_requirements = requirements,
             .region = region,
         };
     }
