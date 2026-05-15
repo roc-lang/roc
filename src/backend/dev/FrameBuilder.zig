@@ -409,15 +409,20 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
             // 1. Allocate frame and save FP/LR
             if (aligned_frame <= 504) {
-                // Small frame: stp pre-index (scaled offset fits in i7)
+                // Small frame: stp pre-index (scaled offset fits in i7).
+                // No probe needed — frame is smaller than one page.
                 const scaled_offset: i7 = @intCast(@divExact(-@as(i32, @intCast(aligned_frame)), 8));
                 try emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+            } else if (windowsNeedsStackProbe(aligned_frame)) {
+                // Windows: probe each guard page before committing.
+                try emitWindowsStackProbeAarch64(emit, aligned_frame);
+                try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
             } else if (aligned_frame <= 4095) {
-                // Medium frame: sub sp with imm12, then store FP/LR at [sp]
+                // Medium frame (non-Windows, or Windows < one page is impossible here).
                 try emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(aligned_frame));
                 try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
             } else {
-                // Large frame: load size into scratch register, sub from sp
+                // Large frame (non-Windows): load size into scratch register, sub from sp.
                 try emit.movRegImm64(.IP0, aligned_frame);
                 try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
                 try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
@@ -434,6 +439,50 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // Return initial stack offset (positive from FP for aarch64)
             // Locals start after FP/LR (16) + callee-saved area
             return 16 + @as(i32, @intCast(callee_saved_space));
+        }
+
+        /// Emit an inline stack-probe loop equivalent to MSVC's `__chkstk` for
+        /// AArch64. The x86_64 prologue grew the same logic in commit 8964805938
+        /// — without it, a direct `sub sp, N` for frames ≥ one page skips
+        /// guard pages and the program later faults with STATUS_ACCESS_VIOLATION
+        /// on the first access to an uncommitted page. On Windows ARM64 the
+        /// default stack commit is also 4 KB, so the same bug reproduces (CI:
+        /// test/fx/record_builder_cli_parser.roc [dev] on Windows 11 ARM).
+        ///
+        /// Counter in IP0 (x16), page-size constant in IP1 (x17). Both are
+        /// caller-saved scratch in every AArch64 ABI we target.
+        ///
+        ///   mov   x16, alloc_size       ; counter
+        ///   mov   x17, #0x1000          ; page size (movz, lsl #12 → single insn)
+        /// .loop:
+        ///   sub   sp, sp, x17           ; lower one page
+        ///   str   xzr, [sp]             ; touch the new top to commit it
+        ///   sub   x16, x16, x17
+        ///   cmp   x16, x17
+        ///   b.hi  .loop                 ; while remaining > one page
+        ///   sub   sp, sp, x16           ; allocate remainder (may be zero)
+        ///   str   xzr, [sp]             ; probe the final page
+        ///
+        /// The trailing `stp fp, lr, [sp]` from the caller overwrites the final
+        /// probe at [sp+0] — that's intentional; the probe was only there to
+        /// commit the page.
+        fn emitWindowsStackProbeAarch64(emit: *EmitType, alloc_size: u32) !void {
+            try emit.movRegImm64(.IP0, alloc_size);
+            try emit.movRegImm32(.w64, .IP1, 0x1000);
+
+            const loop_start = emit.buf.items.len;
+            try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP1);
+            try emit.strRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
+            try emit.subRegRegReg(.w64, .IP0, .IP0, .IP1);
+            try emit.cmpRegReg(.w64, .IP0, .IP1);
+
+            // b.hi loop_start — branch if counter > page size (still ≥ one page left)
+            const bcond_pos: i64 = @intCast(emit.buf.items.len);
+            const target_pos: i64 = @intCast(loop_start);
+            try emit.bcond(.hi, @intCast(target_pos - bcond_pos));
+
+            try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
+            try emit.strRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
         }
 
         fn emitEpilogueAarch64(self: *Self, emit: *EmitType) !void {
