@@ -1090,7 +1090,15 @@ const Formatter = struct {
         }
         switch (expr) {
             .apply => |a| {
+                const fn_expr = fmt.ast.store.getExpr(a.@"fn");
+                const needs_callee_parens = fn_expr == .lambda;
+                if (needs_callee_parens) {
+                    try fmt.push('(');
+                }
                 _ = try fmt.formatExpr(a.@"fn");
+                if (needs_callee_parens) {
+                    try fmt.push(')');
+                }
                 const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
                 try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
