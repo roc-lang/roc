@@ -292,6 +292,8 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: multiplication", .source = "4 * 5", .expected = .{ .inspect_str = "20.0" } },
     .{ .name = "inspect: integer division", .source = "10 // 2", .expected = .{ .inspect_str = "5.0" } },
     .{ .name = "inspect: modulo", .source = "7 % 3", .expected = .{ .inspect_str = "1.0" } },
+    .{ .name = "crash: runtime integer division by zero", .source = "(|d| 42 // d)(0.I64)", .expected = .{ .crash = {} } },
+    .{ .name = "crash: runtime modulo by zero", .source = "(|d| 42 % d)(0.I64)", .expected = .{ .crash = {} } },
     .{ .name = "inspect: if expression", .source = "if (1 == 1) 42 else 99", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "inspect: if false branch", .source = "if (1 == 2) 42 else 99", .expected = .{ .inspect_str = "99.0" } },
     .{ .name = "inspect: nested if inner true", .source = "if (1 == 1) (if (2 == 2) 100 else 200) else 300", .expected = .{ .inspect_str = "100.0" } },

@@ -5827,6 +5827,28 @@ pub fn canonicalizeExpr(
             const token_text = self.parse_ir.resolve(e.token);
             const parsed_num = types.parseNumeralWithSuffix(token_text);
 
+            if (parseScientificIntegerLiteral(self.env.gpa, token_text) catch |err| switch (err) {
+                error.InvalidNumeral => {
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
+                        .region = region,
+                    } });
+                    return CanonicalizedExpr{
+                        .idx = expr_idx,
+                        .free_vars = DataSpan.empty(),
+                    };
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+            }) |int_value| {
+                const expr_idx = try self.env.addExpr(
+                    CIR.Expr{ .e_num = .{
+                        .value = int_value,
+                        .kind = .num_unbound,
+                    } },
+                    region,
+                );
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            }
+
             // Old-style suffixes (e.g., 3.14f64) are deprecated - emit error but still process
             // Only treat as a suffix if it's a known type suffix; otherwise treat as no suffix
             // (e.g., "e4" in "2e4" is scientific notation, not a type suffix)
@@ -5859,9 +5881,12 @@ pub fn canonicalizeExpr(
                     } });
 
                     // Parse and create a valid typed expression
-                    const parsed = parseFracLiteral(parsed_num.num_text) catch {
-                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                    const parsed = parseFracLiteral(self.env.gpa, parsed_num.num_text) catch |err| switch (err) {
+                        error.InvalidNumeral => {
+                            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                        },
+                        error.OutOfMemory => return error.OutOfMemory,
                     };
 
                     const cir_expr: CIR.Expr = if (suffix_info.is_f32) blk: {
@@ -5899,7 +5924,7 @@ pub fn canonicalizeExpr(
                 // fall through and treat as no suffix
             }
 
-            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
+            const parsed = parseFracLiteral(self.env.gpa, token_text) catch |err| switch (err) {
                 error.InvalidNumeral => {
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
                         .region = region,
@@ -5909,6 +5934,7 @@ pub fn canonicalizeExpr(
                         .free_vars = DataSpan.empty(),
                     };
                 },
+                error.OutOfMemory => return error.OutOfMemory,
             };
 
             const cir_expr = switch (parsed) {
@@ -9473,6 +9499,23 @@ pub fn canonicalizePattern(
             const token_text = self.parse_ir.resolve(e.number_tok);
             const parsed_num = types.parseNumeralWithSuffix(token_text);
 
+            if (parseScientificIntegerLiteral(self.env.gpa, token_text) catch |err| switch (err) {
+                error.InvalidNumeral => {
+                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{
+                        .region = region,
+                    } });
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+            }) |int_value| {
+                return try self.env.addPattern(
+                    Pattern{ .num_literal = .{
+                        .value = int_value,
+                        .kind = .num_unbound,
+                    } },
+                    region,
+                );
+            }
+
             // Old-style suffixes (e.g., 3.14f64) are deprecated - emit error but still process
             // Only treat as a suffix if it's a known type suffix; otherwise treat as no suffix
             if (parsed_num.suffix) |suffix| {
@@ -9511,8 +9554,9 @@ pub fn canonicalizePattern(
                     }
 
                     // For dec suffix, parse and create a valid pattern
-                    const parsed = parseFracLiteral(parsed_num.num_text) catch {
-                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    const parsed = parseFracLiteral(self.env.gpa, parsed_num.num_text) catch |err| switch (err) {
+                        error.InvalidNumeral => return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
+                        error.OutOfMemory => return error.OutOfMemory,
                     };
 
                     const cir_pattern: Pattern = switch (parsed) {
@@ -9535,13 +9579,14 @@ pub fn canonicalizePattern(
                 // If suffix is not a known type suffix, fall through and treat as no suffix
             }
 
-            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
+            const parsed = parseFracLiteral(self.env.gpa, token_text) catch |err| switch (err) {
                 error.InvalidNumeral => {
                     const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
                     return malformed_idx;
                 },
+                error.OutOfMemory => return error.OutOfMemory,
             };
 
             // Check for f64 literals which are not allowed in patterns
@@ -10247,128 +10292,162 @@ fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_p
     return .{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = @as(u8, @intCast(after_decimal_len)) };
 }
 
-// Parse a fractional literal from text and return small, Dec, or F64 value
-fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
-    // First, always parse as f64 to get the numeric value
-    const f64_val = std.fmt.parseFloat(f64, token_text) catch {
-        // If it can't be parsed as F64, it's too big to fit in any of Roc's Frac types.
+fn hasScientificNotation(token_text: []const u8) bool {
+    for (token_text) |char| {
+        if (char == 'e' or char == 'E') return true;
+    }
+    return false;
+}
+
+fn expandScientificNotation(allocator: std.mem.Allocator, token_text: []const u8) ![]u8 {
+    const exponent_pos = std.mem.indexOfAny(u8, token_text, "eE") orelse return try allocator.dupe(u8, token_text);
+    const mantissa = token_text[0..exponent_pos];
+    const exponent_text = token_text[exponent_pos + 1 ..];
+    const exponent = std.fmt.parseInt(i32, exponent_text, 10) catch return error.InvalidNumeral;
+
+    const is_negative = mantissa.len > 0 and mantissa[0] == '-';
+    const mantissa_digits = mantissa[@intFromBool(is_negative)..];
+    const dot_pos = std.mem.indexOfScalar(u8, mantissa_digits, '.');
+    const integer_digits_len = dot_pos orelse mantissa_digits.len;
+    const digit_count = mantissa_digits.len - @intFromBool(dot_pos != null);
+
+    var digits = try allocator.alloc(u8, digit_count);
+    defer allocator.free(digits);
+
+    var digit_i: usize = 0;
+    for (mantissa_digits) |char| {
+        if (char == '.') continue;
+        if (char < '0' or char > '9') return error.InvalidNumeral;
+        digits[digit_i] = char;
+        digit_i += 1;
+    }
+    if (digit_i == 0) return error.InvalidNumeral;
+
+    const new_decimal_pos = @as(i64, @intCast(integer_digits_len)) + @as(i64, exponent);
+    const sign_len: usize = @intFromBool(is_negative);
+    const output_len: usize = if (new_decimal_pos <= 0)
+        sign_len + 2 + @as(usize, @intCast(-new_decimal_pos)) + digits.len
+    else if (new_decimal_pos >= @as(i64, @intCast(digits.len)))
+        sign_len + @as(usize, @intCast(new_decimal_pos))
+    else
+        sign_len + digits.len + 1;
+
+    var output = try allocator.alloc(u8, output_len);
+    var out_i: usize = 0;
+    if (is_negative) {
+        output[out_i] = '-';
+        out_i += 1;
+    }
+
+    if (new_decimal_pos <= 0) {
+        output[out_i] = '0';
+        out_i += 1;
+        output[out_i] = '.';
+        out_i += 1;
+        const leading_zeros: usize = @intCast(-new_decimal_pos);
+        @memset(output[out_i..][0..leading_zeros], '0');
+        out_i += leading_zeros;
+        @memcpy(output[out_i..][0..digits.len], digits);
+        out_i += digits.len;
+    } else if (new_decimal_pos >= @as(i64, @intCast(digits.len))) {
+        @memcpy(output[out_i..][0..digits.len], digits);
+        out_i += digits.len;
+        const trailing_zeros: usize = @intCast(new_decimal_pos - @as(i64, @intCast(digits.len)));
+        @memset(output[out_i..][0..trailing_zeros], '0');
+        out_i += trailing_zeros;
+    } else {
+        const before_len: usize = @intCast(new_decimal_pos);
+        @memcpy(output[out_i..][0..before_len], digits[0..before_len]);
+        out_i += before_len;
+        output[out_i] = '.';
+        out_i += 1;
+        const after_len = digits.len - before_len;
+        @memcpy(output[out_i..][0..after_len], digits[before_len..]);
+        out_i += after_len;
+    }
+
+    std.debug.assert(out_i == output.len);
+    return output;
+}
+
+fn smallFracLiteralResult(numerator: i16, denominator_power_of_ten: u8) FracLiteralResult {
+    const small_value = CIR.SmallDecValue{
+        .numerator = numerator,
+        .denominator_power_of_ten = denominator_power_of_ten,
+    };
+    const f64_val = small_value.toF64();
+    return .{ .small = .{
+        .numerator = numerator,
+        .denominator_power_of_ten = denominator_power_of_ten,
+        .requirements = types.Frac.Requirements{
+            .fits_in_f32 = CIR.fitsInF32(f64_val),
+            .fits_in_dec = true,
+        },
+    } };
+}
+
+fn isNegativeZeroDecimal(token_text: []const u8) bool {
+    if (token_text.len == 0 or token_text[0] != '-') return false;
+
+    var saw_digit = false;
+    for (token_text[1..]) |char| {
+        if (char == '.') continue;
+        if (char != '0') return false;
+        saw_digit = true;
+    }
+
+    return saw_digit;
+}
+
+fn parseScientificIntegerLiteral(allocator: std.mem.Allocator, token_text: []const u8) (std.mem.Allocator.Error || error{InvalidNumeral})!?CIR.IntValue {
+    const exponent_pos = std.mem.indexOfAny(u8, token_text, "eE") orelse return null;
+    const mantissa = token_text[0..exponent_pos];
+    if (std.mem.indexOfScalar(u8, mantissa, '.') != null) return null;
+
+    const exponent_text = token_text[exponent_pos + 1 ..];
+    const exponent = std.fmt.parseInt(i32, exponent_text, 10) catch return error.InvalidNumeral;
+    if (exponent < 0) return null;
+
+    const expanded = try expandScientificNotation(allocator, token_text);
+    defer allocator.free(expanded);
+
+    if (std.mem.indexOfScalar(u8, expanded, '.') != null) return null;
+    return parseIntText(expanded) orelse error.InvalidNumeral;
+}
+
+// Parse a fractional literal from text and return small, Dec, or F64 value.
+fn parseFracLiteral(allocator: std.mem.Allocator, token_text: []const u8) (std.mem.Allocator.Error || error{InvalidNumeral})!FracLiteralResult {
+    const expanded = if (hasScientificNotation(token_text))
+        try expandScientificNotation(allocator, token_text)
+    else
+        null;
+    defer if (expanded) |text| allocator.free(text);
+
+    const decimal_text = expanded orelse token_text;
+
+    if (parseSmallDec(decimal_text)) |small| {
+        return smallFracLiteralResult(small.numerator, small.denominator_power_of_ten);
+    }
+
+    if (isNegativeZeroDecimal(decimal_text)) {
+        return smallFracLiteralResult(0, 0);
+    }
+
+    if (RocDec.fromNonemptySlice(decimal_text)) |dec| {
+        const f64_val = dec.toF64();
+        return FracLiteralResult{ .dec = .{
+            .value = dec,
+            .requirements = types.Frac.Requirements{
+                .fits_in_f32 = CIR.fitsInF32(f64_val),
+                .fits_in_dec = true,
+            },
+        } };
+    }
+
+    const f64_val = std.fmt.parseFloat(f64, decimal_text) catch {
         return error.InvalidNumeral;
     };
 
-    // Check if it has scientific notation
-    const has_scientific_notation = blk: {
-        for (token_text) |char| {
-            if (char == 'e' or char == 'E') {
-                break :blk true;
-            }
-        }
-        break :blk false;
-    };
-
-    // For non-scientific notation, try the original parseSmallDec first to preserve behavior
-    if (!has_scientific_notation) {
-        if (parseSmallDec(token_text)) |small| {
-            // Convert to f64 to check requirements
-            const numerator_f64 = @as(f64, @floatFromInt(small.numerator));
-            var divisor: f64 = 1.0;
-            var i: u8 = 0;
-            while (i < small.denominator_power_of_ten) : (i += 1) {
-                divisor *= 10.0;
-            }
-            const small_f64_val = numerator_f64 / divisor;
-
-            return FracLiteralResult{
-                .small = .{
-                    .numerator = small.numerator,
-                    .denominator_power_of_ten = small.denominator_power_of_ten,
-                    .requirements = types.Frac.Requirements{
-                        .fits_in_f32 = CIR.fitsInF32(small_f64_val),
-                        .fits_in_dec = true,
-                    },
-                },
-            };
-        }
-    }
-
-    // For scientific notation or when parseSmallDec fails, check if it's a whole number
-    const rounded = @round(f64_val);
-    if (f64_val == rounded and rounded >= -32768 and rounded <= 32767) {
-        // It's a whole number in i16 range, can use small dec with denominator_power_of_ten = 0
-        return FracLiteralResult{
-            .small = .{
-                .numerator = @as(i16, @intFromFloat(rounded)),
-                .denominator_power_of_ten = 0,
-                .requirements = types.Frac.Requirements{
-                    .fits_in_f32 = CIR.fitsInF32(f64_val),
-                    .fits_in_dec = true,
-                },
-            },
-        };
-    }
-
-    // Check if the value can fit in RocDec (whether or not it uses scientific notation)
-    // RocDec uses i128 with 18 decimal places
-    // We need to check if the value is within RocDec's range
-    if (CIR.fitsInDec(f64_val)) {
-        // Convert f64 to RocDec by multiplying by 10^18
-        const dec_scale = std.math.pow(f64, 10, 18);
-        const scaled_val = f64_val * dec_scale;
-
-        // i128 max is 170141183460469231731687303715884105727
-        // i128 min is -170141183460469231731687303715884105728
-        // We need to be more conservative to avoid overflow during conversion
-        const i128_max_f64 = 170141183460469231731687303715884105727.0;
-        const i128_min_f64 = -170141183460469231731687303715884105728.0;
-
-        if (scaled_val >= i128_min_f64 and scaled_val <= i128_max_f64) {
-            // Safe to convert - but check for special cases
-            const rounded_val = @round(scaled_val);
-
-            // Extra safety check for boundary values
-            if (rounded_val < i128_min_f64 or rounded_val > i128_max_f64) {
-                // Would overflow, use f64 instead
-                return FracLiteralResult{
-                    .f64 = .{
-                        .value = f64_val,
-                        .requirements = types.Frac.Requirements{
-                            .fits_in_f32 = CIR.fitsInF32(f64_val),
-                            .fits_in_dec = false,
-                        },
-                    },
-                };
-            }
-
-            const dec_num = builtins.compiler_rt_128.f64_to_i128(rounded_val);
-
-            // Check if the value is too small (would round to 0 or near 0)
-            // This prevents loss of precision for very small numbers like 1e-40
-            const min_representable = 1e-18; // Smallest non-zero value Dec can represent
-            if (@abs(f64_val) > 0 and @abs(f64_val) < min_representable) {
-                // Too small for Dec precision, use f64
-                return FracLiteralResult{
-                    .f64 = .{
-                        .value = f64_val,
-                        .requirements = types.Frac.Requirements{
-                            .fits_in_f32 = CIR.fitsInF32(f64_val),
-                            .fits_in_dec = false,
-                        },
-                    },
-                };
-            }
-
-            return FracLiteralResult{
-                .dec = .{
-                    .value = RocDec{ .num = dec_num },
-                    .requirements = types.Frac.Requirements{
-                        .fits_in_f32 = CIR.fitsInF32(f64_val),
-                        .fits_in_dec = true,
-                    },
-                },
-            };
-        }
-    }
-
-    // If it doesn't fit in small dec or RocDec, use f64
     return FracLiteralResult{
         .f64 = .{
             .value = f64_val,

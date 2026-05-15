@@ -44,9 +44,8 @@ test "fractional literal - scientific notation small" {
 
     switch (expr) {
         .e_dec_small => |dec| {
-            // Very small numbers may round to zero when parsed as small decimal
-            // This is expected behavior when the value is too small for i16 representation
-            try testing.expectEqual(dec.value.numerator, 0);
+            try testing.expectEqual(dec.value.numerator, 123);
+            try testing.expectEqual(dec.value.denominator_power_of_ten, 12);
         },
         .e_dec => {
             // RocDec stores the value in a special format
@@ -62,7 +61,7 @@ test "fractional literal - scientific notation small" {
 }
 
 test "fractional literal - scientific notation large (near f64 max)" {
-    const source = "1e308";
+    const source = "1.0e308";
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
@@ -239,11 +238,12 @@ test "fractional literal - negative scientific notation" {
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     switch (expr) {
+        .e_dec_small => |frac| {
+            try testing.expectEqual(frac.value.numerator, -15);
+            try testing.expectEqual(frac.value.denominator_power_of_ten, 6);
+        },
         .e_dec => |frac| {
-            try testing.expect(true); // 1e-7 fits in Dec
-            // -1.5e-5 may not round-trip perfectly through f32
-            // Let's just check the value is correct
-            try testing.expectApproxEqAbs(builtins.compiler_rt_128.i128_to_f64(frac.value.num) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
+            try testing.expectApproxEqAbs(frac.value.toF64(), -1.5e-5, 1e-10);
         },
         else => {
             try testing.expect(false); // Should be frac_dec

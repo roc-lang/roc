@@ -647,7 +647,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         .published_roots_only => {},
     }
 
-    var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
+    var checked_artifact = check.CheckedArtifact.publishFromTypedModule(
         allocator,
         &typed_cir_modules,
         0,
@@ -656,8 +656,12 @@ fn parseAndCanonicalizeProgramWithRootMode(
             .imports = publish_imports,
             .explicit_roots = explicit_roots,
             .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+            .problem_store = &main_checked.checker.problems,
         },
-    );
+    ) catch |err| switch (err) {
+        error.CompileTimeProblem => return error.TypeCheckError,
+        else => |other| return other,
+    };
     errdefer checked_artifact.deinit(allocator);
     main_checked.published_owns_module_env = true;
     main_checked.owned_source = null;
@@ -920,7 +924,7 @@ fn publishImportArtifacts(
             const module_idx: u32 = @intCast(extra_i + 2);
             if (!directImportsArePublished(typed_cir_modules.module(module_idx), published_keys.items)) continue;
 
-            var artifact = try check.CheckedArtifact.publishFromTypedModule(
+            var artifact = check.CheckedArtifact.publishFromTypedModule(
                 allocator,
                 typed_cir_modules,
                 module_idx,
@@ -928,8 +932,12 @@ fn publishImportArtifacts(
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
                     .imports = published_keys.items,
                     .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+                    .problem_store = &extra_modules[extra_i].checker.problems,
                 },
-            );
+            ) catch |err| switch (err) {
+                error.CompileTimeProblem => return error.TypeCheckError,
+                else => |other| return other,
+            };
             extra_modules[extra_i].published_owns_module_env = true;
             extra_modules[extra_i].owned_source = null;
 
