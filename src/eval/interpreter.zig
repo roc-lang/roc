@@ -220,7 +220,6 @@ pub const Interpreter = struct {
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
-    const division_by_zero_message = "Division by zero";
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
     pub const ErasedCallableInterpreterContext = extern struct {
@@ -416,8 +415,43 @@ pub const Interpreter = struct {
         return error.RuntimeError;
     }
 
-    fn divisionByZero(self: *LirInterpreter) Error {
-        return self.triggerCrash(division_by_zero_message);
+    fn divisionByZeroMessageForLayout(self: *const LirInterpreter, layout_idx: layout_mod.Idx) []const u8 {
+        const layout = self.layout_store.getLayout(layout_idx);
+        if (layout.tag != .scalar) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: division by zero reported for non-scalar layout {d}",
+                .{@intFromEnum(layout_idx)},
+            );
+        }
+        return switch (layout.data.scalar.tag) {
+            .int => switch (layout.data.scalar.data.int) {
+                .u8 => "U8 division by zero",
+                .i8 => "I8 division by zero",
+                .u16 => "U16 division by zero",
+                .i16 => "I16 division by zero",
+                .u32 => "U32 division by zero",
+                .i32 => "I32 division by zero",
+                .u64 => "U64 division by zero",
+                .i64 => "I64 division by zero",
+                .u128 => "U128 division by zero",
+                .i128 => "I128 division by zero",
+            },
+            .frac => switch (layout.data.scalar.data.frac) {
+                .dec => "Dec division by zero",
+                .f32, .f64 => self.invariantFailed(
+                    "LIR/interpreter invariant violated: division by zero reported for non-crashing float layout {d}",
+                    .{@intFromEnum(layout_idx)},
+                ),
+            },
+            .str, .opaque_ptr => self.invariantFailed(
+                "LIR/interpreter invariant violated: division by zero reported for non-numeric scalar layout {d}",
+                .{@intFromEnum(layout_idx)},
+            ),
+        };
+    }
+
+    fn divisionByZero(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error {
+        return self.triggerCrash(self.divisionByZeroMessageForLayout(layout_idx));
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
@@ -4397,36 +4431,36 @@ pub const Interpreter = struct {
             switch (size) {
                 1 => {
                     if (isUnsigned(arg_layout)) {
-                        if (b.read(u8) == 0) return self.divisionByZero();
-                    } else if (b.read(i8) == 0) return self.divisionByZero();
+                        if (b.read(u8) == 0) return self.divisionByZero(arg_layout);
+                    } else if (b.read(i8) == 0) return self.divisionByZero(arg_layout);
                 },
                 2 => {
                     if (isUnsigned(arg_layout)) {
-                        if (b.read(u16) == 0) return self.divisionByZero();
-                    } else if (b.read(i16) == 0) return self.divisionByZero();
+                        if (b.read(u16) == 0) return self.divisionByZero(arg_layout);
+                    } else if (b.read(i16) == 0) return self.divisionByZero(arg_layout);
                 },
                 4 => {
                     const l = self.layout_store.getLayout(arg_layout);
                     if (!(l.tag == .scalar and l.data.scalar.tag == .frac)) {
                         if (isUnsigned(arg_layout)) {
-                            if (b.read(u32) == 0) return self.divisionByZero();
-                        } else if (b.read(i32) == 0) return self.divisionByZero();
+                            if (b.read(u32) == 0) return self.divisionByZero(arg_layout);
+                        } else if (b.read(i32) == 0) return self.divisionByZero(arg_layout);
                     }
                 },
                 8 => {
                     const l = self.layout_store.getLayout(arg_layout);
                     if (!(l.tag == .scalar and l.data.scalar.tag == .frac)) {
                         if (isUnsigned(arg_layout)) {
-                            if (b.read(u64) == 0) return self.divisionByZero();
-                        } else if (b.read(i64) == 0) return self.divisionByZero();
+                            if (b.read(u64) == 0) return self.divisionByZero(arg_layout);
+                        } else if (b.read(i64) == 0) return self.divisionByZero(arg_layout);
                     }
                 },
                 16 => {
                     if (isDec(arg_layout)) {
-                        if (b.read(i128) == 0) return self.divisionByZero();
+                        if (b.read(i128) == 0) return self.divisionByZero(arg_layout);
                     } else if (isUnsigned(arg_layout)) {
-                        if (b.read(u128) == 0) return self.divisionByZero();
-                    } else if (b.read(i128) == 0) return self.divisionByZero();
+                        if (b.read(u128) == 0) return self.divisionByZero(arg_layout);
+                    } else if (b.read(i128) == 0) return self.divisionByZero(arg_layout);
                 },
                 else => {},
             }

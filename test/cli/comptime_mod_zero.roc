@@ -1,3 +1,3 @@
 module [answer]
 
-answer = 1 % 0
+answer = 1.I64 % 0.I64

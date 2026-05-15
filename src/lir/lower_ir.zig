@@ -854,9 +854,21 @@ const Lowerer = struct {
         };
     }
 
-    fn isIntegerLayout(self: *const Lowerer, layout_idx: layout_mod.Idx) bool {
+    fn integerDivisionByZeroMessage(self: *const Lowerer, layout_idx: layout_mod.Idx) ?[]const u8 {
         const layout = self.layouts.getLayout(layout_idx);
-        return layout.tag == .scalar and layout.data.scalar.tag == .int;
+        if (layout.tag != .scalar or layout.data.scalar.tag != .int) return null;
+        return switch (layout.data.scalar.data.int) {
+            .u8 => "U8 division by zero",
+            .i8 => "I8 division by zero",
+            .u16 => "U16 division by zero",
+            .i16 => "I16 division by zero",
+            .u32 => "U32 division by zero",
+            .i32 => "I32 division by zero",
+            .u64 => "U64 division by zero",
+            .i64 => "I64 division by zero",
+            .u128 => "U128 division by zero",
+            .i128 => "I128 division by zero",
+        };
     }
 
     fn lowerIntegerZeroDenominatorCheckedLowLevelInto(
@@ -873,7 +885,7 @@ const Lowerer = struct {
         const lhs = try self.lowerVar(vars[0]);
         const rhs = try self.lowerVar(vars[1]);
         const rhs_layout = self.store.getLocal(rhs).layout_idx;
-        if (!self.isIntegerLayout(rhs_layout)) {
+        const crash_message = self.integerDivisionByZeroMessage(rhs_layout) orelse {
             const args = [_]LIR.LocalId{ lhs, rhs };
             return try self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
@@ -882,7 +894,7 @@ const Lowerer = struct {
                 .args = try self.store.addLocalSpan(&args),
                 .next = next,
             } });
-        }
+        };
 
         const zero = try self.store.addLocal(.{ .layout_idx = rhs_layout });
         const is_zero = try self.store.addLocal(.{ .layout_idx = .bool });
@@ -897,7 +909,7 @@ const Lowerer = struct {
         } });
 
         const crash_stmt = try self.store.addCFStmt(.{ .crash = .{
-            .msg = try self.store.insertString("Division by zero"),
+            .msg = try self.store.insertString(crash_message),
         } });
 
         const branches = [_]LIR.CFSwitchBranch{.{

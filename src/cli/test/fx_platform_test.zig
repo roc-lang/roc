@@ -242,7 +242,7 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
                 return error.UnexpectedExitCode;
             }
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Division by zero") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "I64 division by zero") != null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") == null);
         },
         else => {
@@ -273,7 +273,7 @@ fn expectDevRuntimeDivisionByZero() !void {
                 return error.UnexpectedExitCode;
             }
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Division by zero") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "I64 division by zero") != null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") == null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "panic:") == null);
         },
