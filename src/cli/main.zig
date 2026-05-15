@@ -327,11 +327,9 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// memory fragmentation. With a 25KB source file, type checking can use ~2GB
 /// of shared memory due to this fragmentation.
 ///
-/// On 64-bit Linux/Windows, we reserve 2TB of virtual address space. This is possible
-/// without consuming physical memory:
-/// - On Linux: memfd_create with lazy page allocation means untouched pages cost nothing.
-/// - On Windows: SEC_RESERVE reserves virtual address space without page file backing,
-///   and VirtualAlloc(MEM_COMMIT) commits pages on-demand as they're accessed.
+/// On 64-bit Linux, we reserve 2TB of virtual address space. This is possible
+/// without consuming physical memory because memfd_create with lazy page
+/// allocation means untouched pages cost nothing.
 ///
 /// On macOS, shm_open + ftruncate creates a Mach VM object with higher per-object
 /// kernel overhead than Linux's memfd_create. Using 2TB causes kernel resource pressure
@@ -339,13 +337,22 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// in a loop), leading to SIGKILL from the jetsam memory pressure system.
 /// We use 8GB on macOS which provides ample headroom while keeping kernel overhead low.
 ///
+/// On Windows, SEC_RESERVE on CreateFileMapping reserves address space without
+/// page file backing, but MapViewOfFile still appears to charge against the
+/// system commit limit. Under parallel test load (`zig build test` with several
+/// workers each spawning `roc.exe`), four concurrent 2 TB reservations trip
+/// ERROR_COMMITMENT_LIMIT on CI runners (7 GB RAM + limited page file). 8 GB
+/// matches the macOS bound and leaves plenty of headroom for real programs.
+///
 /// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
 else if (builtin.os.tag == .macos)
     8 * 1024 * 1024 * 1024 // 8GB for macOS (shm_open has higher kernel overhead)
+else if (builtin.os.tag == .windows)
+    8 * 1024 * 1024 * 1024 // 8GB for Windows (MapViewOfFile commit accounting)
 else
-    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux/Windows
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
 
 /// Create the shared-memory arena used for the parent-produced LIR runtime
 /// image. Allocation failure is reported directly; the compiler must not
@@ -1223,6 +1230,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = platform_files_dir,
+            .scratch_dir = temp_dir_path,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -3596,10 +3604,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     }
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
-    std.fs.cwd().writeFile(.{
-        .sub_path = builtins_path,
-        .data = BuiltinsObjects.forTarget(target),
-    }) catch |err| {
+    backend.writeFileWindowsAvSafe(builtins_path, BuiltinsObjects.forTarget(target)) catch |err| {
         std.log.err("Failed to write builtins object file: {}", .{err});
         return error.BuiltinsExtractionFailed;
     };
@@ -3622,6 +3627,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .can_exit_early = false,
         .disable_output = false,
         .platform_files_dir = platform_files_dir,
+        .scratch_dir = build_cache_dir,
     };
 
     if (args.z_dump_linker) {
@@ -3962,6 +3968,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .wasm_initial_memory = args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY,
         .wasm_stack_size = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE,
         .platform_files_dir = platform_files_dir,
+        .scratch_dir = build_cache_dir,
     };
 
     if (args.z_dump_linker) {

@@ -34,6 +34,7 @@ pub const StaticDataRelocation = dev.StaticDataRelocation;
 pub const procSymbolName = dev.procSymbolName;
 pub const ObjectFileCompiler = dev.ObjectFileCompiler;
 pub const CompilationResult = dev.CompilationResult;
+pub const writeFileWindowsAvSafe = dev.writeFileWindowsAvSafe;
 pub const resolveBuiltinFunction = dev.resolveBuiltinFunction;
 
 test "backend tests" {

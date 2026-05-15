@@ -676,6 +676,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// and generateEarlyReturn.
         ret_ptr_slot: ?i32 = null,
 
+        /// Per-proc shared stack slot for debug-assertion crash messages.
+        /// Debug asserts each emit a unique msg, but only one fires at runtime
+        /// (the program crashes after the first). Sharing one slot across all
+        /// debug crash sites in a proc keeps the frame from growing linearly
+        /// with the number of debug asserts. Lazily allocated on first use.
+        proc_debug_msg_slot: ?i32 = null,
+        proc_debug_args_slot: ?i32 = null,
+
         /// Counter for unique temporary local IDs.
         /// Starts at 0x8000_0000 to avoid collision with real local variables.
         /// Used by allocTempGeneral() for temporaries that don't correspond to real locals.
@@ -1058,6 +1066,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcSpecs
             self.local_locations.clearRetainingCapacity();
+            self.proc_debug_msg_slot = null;
+            self.proc_debug_args_slot = null;
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -4293,7 +4303,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             );
             defer self.allocator.free(msg);
-            try self.emitRocCrash(msg);
+            try self.emitRocCrashShared(msg);
             try self.emitTrap();
 
             const done = self.codegen.currentOffset();
@@ -4403,7 +4413,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             );
             defer self.allocator.free(msg);
-            try self.emitRocCrash(msg);
+            try self.emitRocCrashShared(msg);
             try self.emitTrap();
         }
 
@@ -9466,7 +9476,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .{ hosted.dispatch_index, if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64) },
                 );
                 defer self.allocator.free(msg);
-                try self.emitRocCrash(msg);
+                try self.emitRocCrashShared(msg);
                 try self.emitTrap();
                 self.codegen.patchJump(count_ok_patch, self.codegen.currentOffset());
             }
@@ -11426,6 +11436,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
+            const saved_proc_debug_msg_slot = self.proc_debug_msg_slot;
+            const saved_proc_debug_args_slot = self.proc_debug_args_slot;
             var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
             defer saved_local_locations.deinit();
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
@@ -11446,6 +11458,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear state for procedure's scope
             self.local_locations.clearRetainingCapacity();
             self.clearFunctionControlFlowState();
+            self.proc_debug_msg_slot = null;
+            self.proc_debug_args_slot = null;
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
             self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
@@ -11522,6 +11536,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
+                self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
+                self.proc_debug_args_slot = saved_proc_debug_args_slot;
                 self.local_locations.deinit();
                 self.local_locations = saved_local_locations.clone() catch unreachable;
                 self.join_points.deinit();
@@ -11712,6 +11728,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
+            self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
+            self.proc_debug_args_slot = saved_proc_debug_args_slot;
             self.local_locations.deinit();
             self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
             self.join_points.deinit();
@@ -13333,12 +13351,45 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_str = base_offset };
         }
 
+        /// Max size of any debug-assertion crash message (in bytes, aligned to 8).
+        /// Used to size the per-proc shared msg slot. Generous to cover any
+        /// future debug messages without re-tuning. Sharing this single slot
+        /// across all debug crashes in a proc keeps the proc's frame from
+        /// growing linearly with the number of debug asserts.
+        const debug_msg_slot_size: u32 = 256;
+
         fn emitRocStaticMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
+            return self.emitRocStaticMessageCallShared(field_offset, msg, false);
+        }
+
+        /// Like `emitRocStaticMessageCall`, but reuses a single per-proc stack
+        /// slot for the message and args. Safe because only one debug crash
+        /// can fire per program run — the program exits after the first.
+        fn emitRocStaticDebugMessageCall(self: *Self, field_offset: i32, msg: []const u8) Allocator.Error!void {
+            return self.emitRocStaticMessageCallShared(field_offset, msg, true);
+        }
+
+        fn emitRocStaticMessageCallShared(self: *Self, field_offset: i32, msg: []const u8, shared: bool) Allocator.Error!void {
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
             const msg_aligned_size: u32 = std.mem.alignForward(u32, @intCast(msg.len), 8);
-            const msg_slot = self.codegen.allocStackSlot(if (msg_aligned_size == 0) 8 else msg_aligned_size);
-            const args_slot = self.codegen.allocStackSlot(16);
+            const effective_size: u32 = if (msg_aligned_size == 0) 8 else msg_aligned_size;
+            // If the message is unexpectedly larger than the shared slot we
+            // fall back to a fresh per-call allocation. Keeps the safety
+            // invariant even if a future caller passes a long string.
+            const can_share = shared and effective_size <= debug_msg_slot_size;
+            const msg_slot = if (can_share) blk: {
+                if (self.proc_debug_msg_slot) |existing| break :blk existing;
+                const slot = self.codegen.allocStackSlot(debug_msg_slot_size);
+                self.proc_debug_msg_slot = slot;
+                break :blk slot;
+            } else self.codegen.allocStackSlot(effective_size);
+            const args_slot = if (can_share) blk: {
+                if (self.proc_debug_args_slot) |existing| break :blk existing;
+                const slot = self.codegen.allocStackSlot(16);
+                self.proc_debug_args_slot = slot;
+                break :blk slot;
+            } else self.codegen.allocStackSlot(16);
 
             const base_reg = frame_ptr;
             const tmp = try self.allocTempGeneral();
@@ -13399,6 +13450,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a roc_crashed call via RocOps with a static message.
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
             try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
+        }
+
+        /// Same as `emitRocCrash`, but reuses a per-proc shared msg/args slot.
+        /// Only safe from debug-assertion paths, where at most one fires per
+        /// run (the program exits immediately after).
+        fn emitRocCrashShared(self: *Self, msg: []const u8) Allocator.Error!void {
+            try self.emitRocStaticDebugMessageCall(@offsetOf(RocOps, "roc_crashed"), msg);
         }
 
         fn emitTrap(self: *Self) Allocator.Error!void {

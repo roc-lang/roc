@@ -111,16 +111,36 @@ pub const ObjectFileCompiler = struct {
         );
         defer result.deinit();
 
-        // Write to file
-        std.fs.cwd().writeFile(.{
-            .sub_path = output_path,
-            .data = result.object_bytes,
-        }) catch |err| {
+        writeFileWindowsAvSafe(output_path, result.object_bytes) catch |err| {
             std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };
     }
 };
+
+/// On Windows, filter drivers (Defender, EDR agents) can transiently hold a
+/// just-created file open and return AccessDenied on a follow-up write from a
+/// sibling process. Retry a few times with exponential backoff. Other OSes
+/// pass through to a single writeFile call.
+pub fn writeFileWindowsAvSafe(sub_path: []const u8, data: []const u8) !void {
+    if (comptime builtin.os.tag != .windows) {
+        return std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data });
+    }
+    var attempt: u32 = 0;
+    const max_attempts: u32 = 6;
+    while (true) : (attempt += 1) {
+        std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data }) catch |err| switch (err) {
+            error.AccessDenied => {
+                if (attempt + 1 >= max_attempts) return err;
+                const delay_ns: u64 = @as(u64, 10) * std.time.ns_per_ms * (@as(u64, 1) << @intCast(attempt));
+                std.Thread.sleep(delay_ns);
+                continue;
+            },
+            else => return err,
+        };
+        return;
+    }
+}
 
 /// Generic compilation function parameterized by code generator type.
 fn compileWithCodeGen(
