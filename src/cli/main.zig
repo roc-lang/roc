@@ -1223,6 +1223,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = platform_files_dir,
+            .scratch_dir = temp_dir_path,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -3619,6 +3620,7 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .can_exit_early = false,
         .disable_output = false,
         .platform_files_dir = platform_files_dir,
+        .scratch_dir = build_cache_dir,
     };
 
     if (args.z_dump_linker) {
@@ -3959,6 +3961,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .wasm_initial_memory = args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY,
         .wasm_stack_size = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE,
         .platform_files_dir = platform_files_dir,
+        .scratch_dir = build_cache_dir,
     };
 
     if (args.z_dump_linker) {
