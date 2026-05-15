@@ -49,13 +49,13 @@ const Table = extern struct {
 };
 
 const Branch = extern struct {
-    payload: [16]u8,
+    payload: [16]u8 align(8),
     discriminant: u8,
     padding: [7]u8,
 };
 
 const Tree = extern struct {
-    payload: [16]u8,
+    payload: [16]u8 align(8),
     discriminant: u8,
     padding: [7]u8,
 };
