@@ -807,17 +807,6 @@ pub const Interpreter = struct {
                         "list_of_zst value used ZST sentinel instead of RocList bytes",
                     );
                 }
-                const list = valueToRocList(value);
-                if (list.len() > 0 and list.capacity_or_alloc_ptr == 0) {
-                    self.debugValueShapePanicAt(
-                        proc_id,
-                        stmt_id,
-                        local_id,
-                        layout_idx,
-                        path_buf[0..path_len],
-                        "non-empty list_of_zst had zero capacity marker",
-                    );
-                }
             },
             .struct_ => {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
@@ -2726,27 +2715,10 @@ pub const Interpreter = struct {
         const elem_size = self.helper.sizeOf(elem_layout);
         const elem_locals = self.store.getLocalSpan(elems);
         if (elem_locals.len == 0) {
-            return self.rocListToValue(.{
-                .bytes = null,
-                .length = 0,
-                .capacity_or_alloc_ptr = 0,
-            }, list_layout);
+            return self.rocListToValue(canonicalZstList(0), list_layout);
         }
         if (elem_size == 0) {
-            var crash_boundary = self.enterCrashBoundary();
-            defer crash_boundary.deinit();
-            const sj = crash_boundary.set();
-            if (sj != 0) return error.Crash;
-            const sa = self.helper.sizeAlignOf(elem_layout);
-            const elems_rc = self.builtinInternalContainsRefcounted("interpreter.assign_list.zst_elem_rc", elem_layout);
-            const list = builtins.list.RocList.list_allocate(
-                @intCast(sa.alignment.toByteUnits()),
-                elem_locals.len,
-                elem_size,
-                elems_rc,
-                &self.roc_ops,
-            );
-            return self.rocListToValue(list, list_layout);
+            return self.rocListToValue(canonicalZstList(elem_locals.len), list_layout);
         }
 
         const total_elem_bytes = elem_size * elem_locals.len;
@@ -3315,6 +3287,22 @@ pub const Interpreter = struct {
         return .zst;
     }
 
+    fn canonicalZstList(len: usize) RocList {
+        return .{
+            .bytes = null,
+            .length = len,
+            .capacity_or_alloc_ptr = 0,
+        };
+    }
+
+    fn zstSublistLen(size: usize, start_u64: u64, len_u64: u64) usize {
+        if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) return 0;
+
+        const start: usize = @intCast(start_u64);
+        const size_minus_start = size - start;
+        return @as(usize, @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start)))));
+    }
+
     fn listElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
         if (element == null) return;
         const ctx_ptr = context orelse unreachable;
@@ -3648,6 +3636,9 @@ pub const Interpreter = struct {
             .list_append_unsafe => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + 1), ll.ret_layout);
+                }
                 const result = builtins.list.listAppendUnsafe(
                     list_val,
                     @ptrCast(args[1].ptr),
@@ -3663,12 +3654,7 @@ pub const Interpreter = struct {
                 const list_b = self.valueToRocListForLayout(args[1], arg_layout);
                 if (info.width == 0) {
                     const total_len = list_a.len() + list_b.len();
-                    const result = RocList{
-                        .bytes = null,
-                        .length = total_len,
-                        .capacity_or_alloc_ptr = total_len,
-                    };
-                    break :blk self.rocListToValue(result, ll.ret_layout);
+                    break :blk self.rocListToValue(canonicalZstList(total_len), ll.ret_layout);
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -3697,6 +3683,10 @@ pub const Interpreter = struct {
             .list_prepend => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + 1), ll.ret_layout);
+                }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3709,7 +3699,7 @@ pub const Interpreter = struct {
                     fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
                 }).f;
                 const result = builtins.list.listPrepend(
-                    self.valueToRocListForLayout(args[0], arg_layout),
+                    list_val,
                     info.alignment,
                     @ptrCast(args[1].ptr),
                     info.width,
@@ -3740,6 +3730,10 @@ pub const Interpreter = struct {
                 const start = args[1].offset(start_field_off).read(u64);
                 const len = args[1].offset(len_field_off).read(u64);
                 const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    const result_len = zstSublistLen(source_list.len(), start, len);
+                    break :blk self.rocListToValue(canonicalZstList(result_len), ll.ret_layout);
+                }
 
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -3765,6 +3759,13 @@ pub const Interpreter = struct {
             .list_drop_at => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
+                const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    const len = source_list.len();
+                    const drop_index = args[1].read(u64);
+                    const result_len = if (drop_index >= @as(u64, @intCast(len))) len else len -| 1;
+                    break :blk self.rocListToValue(canonicalZstList(result_len), ll.ret_layout);
+                }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3774,7 +3775,7 @@ pub const Interpreter = struct {
                     .elem_layout = self.listElemLayout(arg_layout),
                 };
                 const result = builtins.list.listDropAt(
-                    self.valueToRocListForLayout(args[0], arg_layout),
+                    source_list,
                     info.alignment,
                     info.width,
                     elems_rc,
@@ -3790,6 +3791,15 @@ pub const Interpreter = struct {
             .list_set => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
+                if (info.width == 0) {
+                    const val = try self.alloc(ll.ret_layout);
+                    const pair = self.resolveListElementPairStruct(ll.ret_layout);
+                    const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                    const result_value = try self.rocListToValue(canonicalZstList(source_list.len()), pair.list_layout);
+                    try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, result_value, pair.list_layout);
+                    try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, self.listElemLayout(arg_layout));
+                    break :blk val;
+                }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3828,6 +3838,9 @@ pub const Interpreter = struct {
             .list_with_capacity => blk: {
                 const elem_layout = self.listElemLayout(ll.ret_layout);
                 const sa = self.helper.sizeAlignOf(elem_layout);
+                if (sa.size == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(0), ll.ret_layout);
+                }
                 const elems_rc = self.builtinInternalContainsRefcounted("interpreter.list_with_capacity.elem_rc", elem_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -3848,6 +3861,9 @@ pub const Interpreter = struct {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+                }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3872,6 +3888,10 @@ pub const Interpreter = struct {
             .list_release_excess_capacity => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+                }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
@@ -3881,7 +3901,7 @@ pub const Interpreter = struct {
                     .elem_layout = self.listElemLayout(arg_layout),
                 };
                 const result = builtins.list.listReleaseExcessCapacity(
-                    self.valueToRocListForLayout(args[0], arg_layout),
+                    list_val,
                     info.alignment,
                     info.width,
                     elems_rc,
@@ -4957,7 +4977,9 @@ pub const Interpreter = struct {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
+        if (rl.len() > 0 and info.width == 0) {
+            self.helper.writeTagDiscriminant(val, ret_layout, 1); // Ok tag
+        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
             // Result tag union: payload at 0, discriminant after
             @memcpy(val.ptr[0..info.width], rl.bytes.?[0..info.width]);
             self.helper.writeTagDiscriminant(val, ret_layout, 1); // Ok tag
@@ -4971,7 +4993,9 @@ pub const Interpreter = struct {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
+        if (rl.len() > 0 and info.width == 0) {
+            self.helper.writeTagDiscriminant(val, ret_layout, 1);
+        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
             const last_offset = (rl.len() - 1) * info.width;
             @memcpy(val.ptr[0..info.width], rl.bytes.?[last_offset..][0..info.width]);
             self.helper.writeTagDiscriminant(val, ret_layout, 1);
@@ -4984,12 +5008,16 @@ pub const Interpreter = struct {
     fn evalListDropFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
+        if (info.width == 0) {
+            return self.rocListToValue(canonicalZstList(zstSublistLen(rl.len(), 1, std.math.maxInt(u64))), ret_layout);
+        }
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
-            self.valueToRocListForLayout(list_arg, list_layout),
+            rl,
             info.alignment,
             info.width,
             elems_rc,
@@ -5007,6 +5035,9 @@ pub const Interpreter = struct {
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
         const len = rl.len();
+        if (info.width == 0) {
+            return self.rocListToValue(canonicalZstList(if (len == 0) 0 else len - 1), ret_layout);
+        }
         if (len == 0) return self.rocListToValue(rl, ret_layout);
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
@@ -5029,12 +5060,16 @@ pub const Interpreter = struct {
     fn evalListTakeFirst(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
+        if (info.width == 0) {
+            return self.rocListToValue(canonicalZstList(zstSublistLen(rl.len(), 0, count_arg.read(u64))), ret_layout);
+        }
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
         const result = builtins.list.listSublist(
-            self.valueToRocListForLayout(list_arg, list_layout),
+            rl,
             info.alignment,
             info.width,
             elems_rc,
@@ -5054,6 +5089,9 @@ pub const Interpreter = struct {
         const len = rl.len();
         const take = count_arg.read(u64);
         const start = if (take >= len) 0 else len - @as(usize, @intCast(take));
+        if (info.width == 0) {
+            return self.rocListToValue(canonicalZstList(zstSublistLen(len, @intCast(start), take)), ret_layout);
+        }
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
@@ -5076,6 +5114,7 @@ pub const Interpreter = struct {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
         const elems_rc = self.builtinListElemRc(list_layout);
+        if (info.width == 0) return self.rocListToValue(canonicalZstList(rl.len()), ret_layout);
         if (rl.len() <= 1 or rl.bytes == null or info.width == 0)
             return self.rocListToValue(rl, ret_layout);
         // Clone and reverse in-place
@@ -5105,7 +5144,14 @@ pub const Interpreter = struct {
         const elems_rc = self.builtinListElemRc(list_layout);
         const elem_layout = self.listElemLayout(list_layout);
         const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
+        if (rl.len() > 0 and info.width == 0) {
+            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
+            const pair = self.resolveListElementPairStruct(payload_layout);
+            try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, elem_layout);
+            const rest_value = try self.rocListToValue(canonicalZstList(rl.len() - 1), pair.list_layout);
+            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
+            self.helper.writeTagDiscriminant(val, ret_layout, 1);
+        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
             const payload_layout = self.tagPayloadLayout(ret_layout, 1);
             const pair = self.resolveListElementPairStruct(payload_layout);
             const first_elem = Value{ .ptr = rl.bytes.? };
@@ -5150,7 +5196,14 @@ pub const Interpreter = struct {
         const elems_rc = self.builtinListElemRc(list_layout);
         const elem_layout = self.listElemLayout(list_layout);
         const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
+        if (rl.len() > 0 and info.width == 0) {
+            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
+            const pair = self.resolveListElementPairStruct(payload_layout);
+            try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, elem_layout);
+            const rest_value = try self.rocListToValue(canonicalZstList(rl.len() - 1), pair.list_layout);
+            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
+            self.helper.writeTagDiscriminant(val, ret_layout, 1);
+        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
             const payload_layout = self.tagPayloadLayout(ret_layout, 1);
             const pair = self.resolveListElementPairStruct(payload_layout);
             const last_offset = (rl.len() - 1) * info.width;
