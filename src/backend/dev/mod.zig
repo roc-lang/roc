@@ -54,6 +54,7 @@ pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
 pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
+pub const writeFileWindowsAvSafe = @import("ObjectFileCompiler.zig").writeFileWindowsAvSafe;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///
