@@ -4231,18 +4231,25 @@ const SnapshotReplDefinitionIdentity = struct {
 };
 
 const SnapshotReplParsedLine = struct {
-    module_env: ModuleEnv,
+    allocator: Allocator,
+    // Heap-allocated so its address stays stable: `ast.env` is a `*CommonEnv`
+    // that points into this `ModuleEnv`, and would dangle if the struct were
+    // copied by value out of a stack frame.
+    module_env: *ModuleEnv,
     ast: *AST,
     statement: AST.Statement.Idx,
 
     fn deinit(self: *@This()) void {
         self.ast.deinit();
         self.module_env.deinit();
+        self.allocator.destroy(self.module_env);
     }
 };
 
 fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?SnapshotReplParsedLine {
-    var module_env = try ModuleEnv.init(allocator, line);
+    const module_env = try allocator.create(ModuleEnv);
+    errdefer allocator.destroy(module_env);
+    module_env.* = try ModuleEnv.init(allocator, line);
     errdefer module_env.deinit();
     module_env.common.source = line;
 
@@ -4252,7 +4259,7 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?Snapsho
 
     const ast = single_module.parseSingleModule(
         &allocators,
-        &module_env,
+        module_env,
         .file,
         .{ .module_name = "repl" },
     ) catch return null;
@@ -4260,6 +4267,7 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?Snapsho
     if (ast.hasErrors()) {
         ast.deinit();
         module_env.deinit();
+        allocator.destroy(module_env);
         return null;
     }
 
@@ -4268,10 +4276,12 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?Snapsho
     if (statements.len != 1) {
         ast.deinit();
         module_env.deinit();
+        allocator.destroy(module_env);
         return null;
     }
 
     return .{
+        .allocator = allocator,
         .module_env = module_env,
         .ast = ast,
         .statement = statements[0],
