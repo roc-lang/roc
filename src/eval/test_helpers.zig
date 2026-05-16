@@ -5,6 +5,7 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const parse = @import("parse");
 const builtins = @import("builtins");
 const backend = @import("backend");
@@ -168,6 +169,8 @@ pub const ParsedResources = struct {
 // many workers without tripping system address-space accounting.
 const EVAL_SHARED_MEMORY_SIZE: usize = if (builtin.target.os.tag == .freestanding)
     8 * 1024 * 1024
+else if (build_options.has_shared_memory_size)
+    configuredSharedMemorySize()
 else if (@sizeOf(usize) < 8)
     256 * 1024 * 1024
 else if (builtin.os.tag == .macos)
@@ -176,6 +179,14 @@ else if (builtin.os.tag == .windows)
     256 * 1024 * 1024 // 256 MB on Windows — reservation cost matters for parallel workers
 else
     2 * 1024 * 1024 * 1024 * 1024;
+
+fn configuredSharedMemorySize() usize {
+    if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
+        @compileError("-Dshared-memory-size does not fit in usize for this target");
+    }
+
+    return @intCast(build_options.shared_memory_size);
+}
 
 /// Public `RuntimeImageProgram` declaration.
 pub const RuntimeImageProgram = struct {

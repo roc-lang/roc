@@ -346,10 +346,10 @@ const legalDetailsFileContent = @embedFile("legal_details");
 ///
 /// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
 ///
-/// Test builds may provide an explicit size with `-Dcli-shared-memory-size`.
+/// Test builds may provide an explicit size with `-Dshared-memory-size`.
 /// This keeps production Linux at 2TB while allowing Valgrind CI to use a
 /// smaller arena that Memcheck can map.
-const SHARED_MEMORY_SIZE: usize = if (build_options.has_cli_shared_memory_size)
+const SHARED_MEMORY_SIZE: usize = if (build_options.has_shared_memory_size)
     configuredSharedMemorySize()
 else if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
@@ -361,11 +361,11 @@ else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
 
 fn configuredSharedMemorySize() usize {
-    if (comptime build_options.cli_shared_memory_size > std.math.maxInt(usize)) {
-        @compileError("-Dcli-shared-memory-size does not fit in usize for this target");
+    if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
+        @compileError("-Dshared-memory-size does not fit in usize for this target");
     }
 
-    return @intCast(build_options.cli_shared_memory_size);
+    return @intCast(build_options.shared_memory_size);
 }
 
 /// Create the shared-memory arena used for the parent-produced LIR runtime
