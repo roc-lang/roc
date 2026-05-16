@@ -2448,6 +2448,13 @@ pub fn build(b: *std.Build) void {
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
     const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
+    const cli_shared_memory_size = b.option(u64, "cli-shared-memory-size", "Explicitly set the CLI shared-memory arena size in bytes");
+    if (cli_shared_memory_size) |size| {
+        if (size == 0) {
+            std.log.err("-Dcli-shared-memory-size must be greater than 0", .{});
+            std.process.exit(1);
+        }
+    }
 
     const parsed_args = parseBuildArgs(b);
     const run_args = parsed_args.run_args;
@@ -2483,6 +2490,8 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
+    build_options.addOption(bool, "has_cli_shared_memory_size", cli_shared_memory_size != null);
+    build_options.addOption(u64, "cli_shared_memory_size", cli_shared_memory_size orelse 0);
     const compiler_version = getCompilerVersion(b, optimize);
     build_options.addOption([]const u8, "compiler_version", compiler_version);
     build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version));

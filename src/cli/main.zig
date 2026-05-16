@@ -345,7 +345,13 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// matches the macOS bound and leaves plenty of headroom for real programs.
 ///
 /// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
-const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
+///
+/// Test builds may provide an explicit size with `-Dcli-shared-memory-size`.
+/// This keeps production Linux at 2TB while allowing Valgrind CI to use a
+/// smaller arena that Memcheck can map.
+const SHARED_MEMORY_SIZE: usize = if (build_options.has_cli_shared_memory_size)
+    configuredSharedMemorySize()
+else if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
 else if (builtin.os.tag == .macos)
     8 * 1024 * 1024 * 1024 // 8GB for macOS (shm_open has higher kernel overhead)
@@ -353,6 +359,14 @@ else if (builtin.os.tag == .windows)
     8 * 1024 * 1024 * 1024 // 8GB for Windows (MapViewOfFile commit accounting)
 else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
+
+fn configuredSharedMemorySize() usize {
+    if (comptime build_options.cli_shared_memory_size > std.math.maxInt(usize)) {
+        @compileError("-Dcli-shared-memory-size does not fit in usize for this target");
+    }
+
+    return @intCast(build_options.cli_shared_memory_size);
+}
 
 /// Create the shared-memory arena used for the parent-produced LIR runtime
 /// image. Allocation failure is reported directly; the compiler must not
