@@ -50,6 +50,10 @@ cir: *ModuleEnv,
 regions: Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
+/// Module envs whose public APIs are semantically visible through direct imports.
+/// These are not lexically importable, and CIR import indexes never refer to
+/// this set. It exists only for owner lookups on copied imported types.
+owner_module_envs: std.StringHashMap(*const ModuleEnv),
 /// Map of auto-imported type names (like "Str", "List", "Bool") to their defining modules.
 /// This is used to resolve type names that are automatically available without explicit imports.
 auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
@@ -236,6 +240,33 @@ pub fn init(
         types,
         mutable_cir,
         imported_modules,
+        imported_modules,
+        auto_imported_types,
+        regions,
+        builtin_ctx,
+    );
+}
+
+/// Init type solver with an explicit semantic owner set for imported public APIs.
+/// `imported_modules` remains the direct-import list used by CIR import indexes.
+pub fn initWithOwnerModules(
+    gpa: std.mem.Allocator,
+    types: *types_mod.Store,
+    cir: *const ModuleEnv,
+    imported_modules: []const *const ModuleEnv,
+    owner_modules: []const *const ModuleEnv,
+    auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+    regions: *const Region.List,
+    builtin_ctx: BuiltinContext,
+) std.mem.Allocator.Error!Self {
+    const mutable_cir = @constCast(cir);
+    try preflightForTypeChecking(mutable_cir);
+    return initAssumePrepared(
+        gpa,
+        types,
+        mutable_cir,
+        imported_modules,
+        owner_modules,
         auto_imported_types,
         regions,
         builtin_ctx,
@@ -267,10 +298,14 @@ fn initAssumePrepared(
     types: *types_mod.Store,
     cir: *ModuleEnv,
     imported_modules: []const *const ModuleEnv,
+    owner_modules: []const *const ModuleEnv,
     auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
     regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
+    var owner_module_envs = try buildOwnerModuleEnvMap(gpa, imported_modules, owner_modules, builtin_ctx);
+    errdefer owner_module_envs.deinit();
+
     var import_mapping = try createImportMapping(
         gpa,
         cir.getIdentStore(),
@@ -285,6 +320,7 @@ fn initAssumePrepared(
         .types = types,
         .cir = cir,
         .imported_modules = imported_modules,
+        .owner_module_envs = owner_module_envs,
         .auto_imported_types = auto_imported_types,
         .regions = blk: {
             var owned = Region.List{};
@@ -332,6 +368,44 @@ fn initAssumePrepared(
     return self;
 }
 
+fn buildOwnerModuleEnvMap(
+    gpa: std.mem.Allocator,
+    imported_modules: []const *const ModuleEnv,
+    owner_modules: []const *const ModuleEnv,
+    builtin_ctx: BuiltinContext,
+) std.mem.Allocator.Error!std.StringHashMap(*const ModuleEnv) {
+    var map = std.StringHashMap(*const ModuleEnv).init(gpa);
+    errdefer map.deinit();
+
+    if (builtin_ctx.builtin_module) |builtin_env| {
+        try putOwnerModuleEnvNames(&map, builtin_env);
+    }
+
+    for (imported_modules) |imported_env| {
+        try putOwnerModuleEnvNames(&map, imported_env);
+    }
+    for (owner_modules) |owner_env| {
+        try putOwnerModuleEnvNames(&map, owner_env);
+    }
+
+    return map;
+}
+
+fn putOwnerModuleEnvNames(
+    map: *std.StringHashMap(*const ModuleEnv),
+    module_env: *const ModuleEnv,
+) std.mem.Allocator.Error!void {
+    if (!module_env.qualified_module_ident.isNone()) {
+        try map.put(module_env.getIdent(module_env.qualified_module_ident), module_env);
+    }
+    if (!module_env.display_module_name_idx.isNone()) {
+        try map.put(module_env.getIdent(module_env.display_module_name_idx), module_env);
+    }
+    if (module_env.module_name.len > 0) {
+        try map.put(module_env.module_name, module_env);
+    }
+}
+
 /// Call this after Check has been stored at its final location to set up the import_mapping pointer.
 /// This is needed because returning Check by value invalidates the pointer set during init.
 pub fn fixupTypeWriter(self: *Self) void {
@@ -344,6 +418,7 @@ pub fn deinit(self: *Self) void {
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
     self.import_mapping.deinit();
+    self.owner_module_envs.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.seen_annos.deinit();
@@ -4985,21 +5060,23 @@ fn toInspectMethodVarForAlias(
 }
 
 fn methodOwnerEnv(self: *Self, origin_module: Ident.Idx) Allocator.Error!struct { *const ModuleEnv, bool } {
+    return self.ownerEnvForOriginModule(origin_module, "to_inspect");
+}
+
+fn ownerEnvForOriginModule(self: *Self, origin_module: Ident.Idx, context: []const u8) struct { *const ModuleEnv, bool } {
     if (origin_module.eql(self.builtin_ctx.module_name)) return .{ self.cir, true };
     if (origin_module.eql(self.cir.idents.builtin_module)) {
         return .{ self.builtin_ctx.builtin_module orelse self.cir, self.builtin_ctx.builtin_module == null };
     }
-    for (self.imported_modules) |imported_env| {
-        const imported_name = if (!imported_env.qualified_module_ident.isNone())
-            imported_env.getIdent(imported_env.qualified_module_ident)
-        else
-            imported_env.module_name;
-        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
-        if (imported_module_ident.eql(origin_module)) return .{ imported_env, false };
+    if (self.owner_module_envs.get(self.cir.getIdent(origin_module))) |owner_env| {
+        return .{ owner_env, false };
     }
 
     if (builtin.mode == .Debug) {
-        std.debug.panic("type checker invariant violated: unable to find module environment for to_inspect owner {s}", .{self.cir.getIdent(origin_module)});
+        std.debug.panic(
+            "type checker invariant violated: unable to find module environment for {s} owner from module {s}",
+            .{ context, self.cir.getIdent(origin_module) },
+        );
     }
     unreachable;
 }
@@ -6118,34 +6195,8 @@ fn reportMissingNominalMethodForBinopConstraint(
 }
 
 fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const ModuleEnv {
-    const original_module_ident = nominal_type.origin_module;
-
-    if (original_module_ident.eql(self.builtin_ctx.module_name)) return self.cir;
-
-    if (original_module_ident.eql(self.cir.idents.builtin_module)) {
-        if (self.builtin_ctx.builtin_module) |builtin_env| {
-            return builtin_env;
-        }
-        return self.cir;
-    }
-
-    for (self.imported_modules) |imported_env| {
-        const imported_name = if (!imported_env.qualified_module_ident.isNone())
-            imported_env.getIdent(imported_env.qualified_module_ident)
-        else
-            imported_env.module_name;
-        const imported_module_ident = @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name)) catch {
-            std.debug.panic("Unable to intern module name {s} for static dispatch lookup", .{imported_name});
-        };
-        if (imported_module_ident.eql(original_module_ident)) {
-            return imported_env;
-        }
-    }
-
-    std.debug.panic(
-        "Unable to find module environment for type {s} from module {s}",
-        .{ self.cir.getIdent(nominal_type.ident.ident_idx), self.cir.getIdent(original_module_ident) },
-    );
+    const original_env, _ = self.ownerEnvForOriginModule(nominal_type.origin_module, "nominal type");
+    return original_env;
 }
 
 // binop + unary op exprs //
@@ -7040,40 +7091,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const original_module_ident = nominal_type.origin_module;
 
                 // Check if the nominal type in question is defined in this module
-                const is_this_module = original_module_ident.eql(self.builtin_ctx.module_name);
-
-                // Get the list of exposed items to check
-                const original_env: *const ModuleEnv = blk: {
-                    if (is_this_module) {
-                        break :blk self.cir;
-                    } else if (original_module_ident.eql(self.cir.idents.builtin_module)) {
-                        // For builtin types, use the builtin module environment directly
-                        if (self.builtin_ctx.builtin_module) |builtin_env| {
-                            break :blk builtin_env;
-                        } else {
-                            // This happens when compiling the Builtin module itself
-                            break :blk self.cir;
-                        }
-                    } else {
-                        // For types from other modules (not this module, not builtin), find the
-                        // module environment from imported_modules by matching the qualified module name.
-                        // We use qualified_module_ident (package-qualified) for comparison since origin_module
-                        // is also package-qualified (e.g., "pf.Builder" rather than just "Builder").
-                        for (self.imported_modules) |imported_env| {
-                            const imported_name = if (!imported_env.qualified_module_ident.isNone())
-                                imported_env.getIdent(imported_env.qualified_module_ident)
-                            else
-                                imported_env.module_name;
-                            const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
-                            if (imported_module_ident.eql(original_module_ident)) {
-                                break :blk imported_env;
-                            }
-                        }
-
-                        // Could not find the module environment. This is an internal compiler error.
-                        std.debug.panic("Unable to find module environment for type {s} from module {s}", .{ self.cir.getIdent(nominal_type.ident.ident_idx), self.cir.getIdent(original_module_ident) });
-                    }
-                };
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(original_module_ident, "static dispatch nominal");
 
                 // Get some data about the nominal type
                 const region = self.getRegionAt(deferred_constraint.var_);
@@ -7268,35 +7286,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                 // Get the module ident that this alias type was defined in
                 const original_module_ident = alias.origin_module;
-                const is_this_module = original_module_ident.eql(self.builtin_ctx.module_name);
-
-                const original_env: *const ModuleEnv = blk: {
-                    if (is_this_module) {
-                        break :blk self.cir;
-                    } else if (original_module_ident.eql(self.cir.idents.builtin_module)) {
-                        if (self.builtin_ctx.builtin_module) |builtin_env| {
-                            break :blk builtin_env;
-                        } else {
-                            break :blk self.cir;
-                        }
-                    } else {
-                        for (self.imported_modules) |imported_env| {
-                            const imported_name = if (!imported_env.qualified_module_ident.isNone())
-                                imported_env.getIdent(imported_env.qualified_module_ident)
-                            else
-                                imported_env.module_name;
-                            const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_name));
-                            if (imported_module_ident.eql(original_module_ident)) {
-                                break :blk imported_env;
-                            }
-                        }
-
-                        std.debug.panic(
-                            "Unable to find module environment for type {s} from module {s}",
-                            .{ self.cir.getIdent(alias.ident.ident_idx), self.cir.getIdent(original_module_ident) },
-                        );
-                    }
-                };
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(original_module_ident, "static dispatch alias");
 
                 const region = self.getRegionAt(deferred_constraint.var_);
                 const constraints_range = deferred_constraint.constraints;
