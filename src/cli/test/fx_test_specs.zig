@@ -492,6 +492,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Cross-module recursive nominal types with pattern matching",
     },
     .{
+        .roc_file = "test/fx/transitive_import_nominal_equality/main.roc",
+        .io_spec = "1>True",
+        .description = "Regression test: transitive imports preserve nominal method owner environments for equality",
+    },
+    .{
         .roc_file = "test/fx/test_no_dbg.roc",
         .io_spec = "1>Text",
         .description = "Recursive nominal type with List and pattern matching",
