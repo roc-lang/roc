@@ -521,7 +521,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
 }
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{
-    .backing_allocator = std.heap.c_allocator,
+    .backing_allocator = std.heap.page_allocator,
 };
 
 /// cli entrypoint for snapshot tool

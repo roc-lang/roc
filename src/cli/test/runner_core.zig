@@ -354,8 +354,11 @@ pub fn runWithValgrind(
         roc_file,
     }, valgrind_max_output_bytes) catch |err| {
         std.debug.print("FAIL (valgrind runner error: {})\n", .{err});
-        if (err == error.StdoutStreamTooLong or err == error.StderrStreamTooLong) {
-            std.debug.print("       Valgrind output exceeded {d} bytes\n", .{valgrind_max_output_bytes});
+        switch (err) {
+            error.StdoutStreamTooLong, error.StderrStreamTooLong => {
+                std.debug.print("       Valgrind output exceeded {d} bytes\n", .{valgrind_max_output_bytes});
+            },
+            else => {},
         }
         return .failed;
     };

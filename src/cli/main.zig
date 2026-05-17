@@ -570,7 +570,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
 }
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{
-    .backing_allocator = std.heap.c_allocator,
+    .backing_allocator = std.heap.page_allocator,
 };
 
 fn renderValidationError(
@@ -604,7 +604,7 @@ pub fn main() !void {
         if (builtin.os.tag == .freestanding) break :gpa .{ std.heap.wasm_allocator, false };
         break :gpa switch (builtin.mode) {
             .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
-            .ReleaseFast, .ReleaseSmall => .{ std.heap.c_allocator, false },
+            .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
         };
     };
     defer restoreWindowsConsoleCodePage();
