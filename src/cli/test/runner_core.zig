@@ -37,7 +37,7 @@ pub const TestStats = struct {
     }
 };
 
-fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
+fn runRocChildWithOutputLimit(allocator: Allocator, argv: []const []const u8, max_output_bytes: usize) !std.process.Child.RunResult {
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
 
@@ -53,7 +53,12 @@ fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Chil
         .allocator = allocator,
         .argv = argv,
         .env_map = &env_map,
+        .max_output_bytes = max_output_bytes,
     });
+}
+
+fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
+    return runRocChildWithOutputLimit(allocator, argv, 50 * 1024);
 }
 
 /// Cross-compile a Roc app to a specific target.
@@ -334,19 +339,24 @@ pub fn runWithValgrind(
     roc_binary: []const u8,
     roc_file: []const u8,
 ) !TestResult {
+    const valgrind_max_output_bytes = 16 * 1024 * 1024;
+
     // Valgrind only works on Linux x86_64
     if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) {
         std.debug.print("SKIP (valgrind requires Linux x86_64)\n", .{});
         return .skipped;
     }
 
-    const result = runRocChild(allocator, &[_][]const u8{
+    const result = runRocChildWithOutputLimit(allocator, &[_][]const u8{
         "./ci/custom_valgrind.sh",
         roc_binary,
         "--no-cache",
         roc_file,
-    }) catch |err| {
-        std.debug.print("FAIL (spawn error: {})\n", .{err});
+    }, valgrind_max_output_bytes) catch |err| {
+        std.debug.print("FAIL (valgrind runner error: {})\n", .{err});
+        if (err == error.StdoutStreamTooLong or err == error.StderrStreamTooLong) {
+            std.debug.print("       Valgrind output exceeded {d} bytes\n", .{valgrind_max_output_bytes});
+        }
         return .failed;
     };
     defer allocator.free(result.stdout);
@@ -359,8 +369,11 @@ pub fn runWithValgrind(
                 return .passed;
             } else {
                 std.debug.print("FAIL (valgrind exit code {d})\n", .{code});
+                if (result.stdout.len > 0) {
+                    printTruncatedOutput(result.stdout, 20, "       ");
+                }
                 if (result.stderr.len > 0) {
-                    printTruncatedOutput(result.stderr, 5, "       ");
+                    printTruncatedOutput(result.stderr, 20, "       ");
                 }
                 return .failed;
             }
