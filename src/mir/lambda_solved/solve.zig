@@ -5074,26 +5074,36 @@ fn assignCallableEmissionPlans(
     artifact_views: ArtifactViews,
     mode: CallableEmissionAssignmentMode,
 ) Allocator.Error!void {
-    for (program.solve_sessions.items, 0..) |*session, raw_session| {
-        var assigner = CallableEmissionAssigner{
-            .allocator = program.allocator,
-            .program = program,
-            .records = records,
-            .artifact_views = artifact_views,
-            .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
-            .session = session,
-            .group_sets = .empty,
-            .group_set_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
-            .pending_proc_members = .empty,
-            .group_publish_states = std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState).init(program.allocator),
-            .erased_groups = .empty,
-            .erased_group_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
-            .function_roots = .empty,
-            .function_root_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
-            .mode = mode,
-        };
-        defer assigner.deinit();
-        try assigner.assign();
+    var pass: usize = 0;
+    while (true) : (pass += 1) {
+        if (pass > 128) {
+            lambdaInvariant("lambda-solved callable emission assignment did not converge");
+        }
+        var changed = false;
+        for (program.solve_sessions.items, 0..) |*session, raw_session| {
+            var assigner = CallableEmissionAssigner{
+                .allocator = program.allocator,
+                .program = program,
+                .records = records,
+                .artifact_views = artifact_views,
+                .session_id = @enumFromInt(@as(u32, @intCast(raw_session))),
+                .session = session,
+                .group_sets = .empty,
+                .group_set_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
+                .pending_proc_members = .empty,
+                .group_publish_states = std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState).init(program.allocator),
+                .erased_groups = .empty,
+                .erased_group_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
+                .function_roots = .empty,
+                .function_root_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
+                .mode = mode,
+            };
+            errdefer assigner.deinit();
+            try assigner.assign();
+            changed = changed or assigner.changed;
+            assigner.deinit();
+        }
+        if (!changed) break;
     }
 }
 
@@ -5149,6 +5159,7 @@ const CallableEmissionAssigner = struct {
     function_roots: std.ArrayList(FunctionRootForGroup),
     function_root_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
     mode: CallableEmissionAssignmentMode,
+    changed: bool = false,
 
     fn deinit(self: *CallableEmissionAssigner) void {
         self.function_root_index.deinit();
@@ -5622,6 +5633,7 @@ const CallableEmissionAssigner = struct {
                                 var canonical_callable = existing;
                                 canonical_callable.emission_plan = canonical_emission;
                                 value_info.callable = canonical_callable;
+                                self.changed = true;
                             }
                             continue;
                         },
@@ -5642,8 +5654,10 @@ const CallableEmissionAssigner = struct {
                             else
                                 try self.synthesizeAlreadyErasedCallableInfo(record, value_store, value_id, value_info.*, provenance);
                             value_info.callable = callable;
+                            self.changed = true;
                             if (self.representationStore().callableGroupEmission(group) == null) {
                                 try self.representationStore().publishCallableGroupEmission(group, callable.emission_plan);
+                                self.changed = true;
                             }
                             continue;
                         }
@@ -5699,7 +5713,12 @@ const CallableEmissionAssigner = struct {
                 const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
                 const provenance = self.erasedProvenance(group);
                 _ = try self.ensureCallableGroupEmission(group_set, group_key, provenance);
-                var callable = if (value_info.callable) |existing| existing else try self.synthesizeCallableInfo(value_info.*, group_key);
+                var synthesized_callable = false;
+                var callable = if (value_info.callable) |existing| existing else blk: {
+                    synthesized_callable = true;
+                    break :blk try self.synthesizeCallableInfo(value_info.*, group_key);
+                };
+                if (synthesized_callable) self.changed = true;
                 const current_emission = self.representationStore().callableEmissionPlan(callable.emission_plan);
                 switch (current_emission) {
                     .pending_proc_value => |construction_id| {
@@ -5720,9 +5739,7 @@ const CallableEmissionAssigner = struct {
 
                 switch (current_emission) {
                     .erase_finite_set => |erase| {
-                        if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key)) {
-                            lambdaInvariant("lambda-solved existing finite erased value emission has wrong callable-set key");
-                        }
+                        var replace_erase = !repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key);
                         if (provenance) |boundaries| {
                             if (!boxErasureProvenanceSetEql(erase.provenance, boundaries)) {
                                 const merged = try repr.mergeBoxErasureProvenanceSets(self.allocator, erase.provenance, boundaries);
@@ -5730,7 +5747,15 @@ const CallableEmissionAssigner = struct {
                                 const updated = try self.finiteSetErasePlan(group_set, group_key, merged);
                                 defer deinitExecutableSpecializationKeySlice(self.allocator, updated.member_targets);
                                 try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(callable.emission_plan, updated);
+                                self.changed = true;
+                                replace_erase = false;
                             }
+                        }
+                        if (replace_erase) {
+                            const updated = try self.finiteSetErasePlan(group_set, group_key, erase.provenance);
+                            defer deinitExecutableSpecializationKeySlice(self.allocator, updated.member_targets);
+                            try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(callable.emission_plan, updated);
+                            self.changed = true;
                         }
                         value_info.callable = callable;
                         continue;
@@ -5738,7 +5763,14 @@ const CallableEmissionAssigner = struct {
                     else => {},
                 }
 
-                self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
+                const already_finite = switch (current_emission) {
+                    .finite => |key| repr.callableSetKeyEql(key, group_key),
+                    else => false,
+                };
+                if (!already_finite) {
+                    self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
+                    self.changed = true;
+                }
 
                 if (provenance == null) {
                     value_info.callable = callable;
@@ -5747,6 +5779,7 @@ const CallableEmissionAssigner = struct {
 
                 callable.emission_plan = try self.erasedEmissionPlanForValue(record, value_id, callable, group_set, group_key, provenance.?);
                 value_info.callable = callable;
+                self.changed = true;
             }
         }
     }
@@ -5758,10 +5791,19 @@ const CallableEmissionAssigner = struct {
     ) Allocator.Error!repr.CallableValueEmissionPlanId {
         if (self.representationStore().callableGroupEmission(group)) |existing| {
             if (self.callableEmissionPlansEquivalent(existing, emission_plan)) {
+                const existing_plan = self.representationStore().callableEmissionPlan(existing);
                 const current_plan = self.representationStore().callableEmissionPlan(emission_plan);
-                switch (current_plan) {
-                    .already_erased => |erased| try self.representationStore().mergeCallableEmissionPlanProvenance(existing, erased.provenance),
-                    else => lambdaInvariant("lambda-solved already-erased group emission merge reached non-erased current plan"),
+                switch (existing_plan) {
+                    .already_erased => |existing_erased| switch (current_plan) {
+                        .already_erased => |erased| {
+                            if (!boxErasureProvenanceSliceContainsAll(existing_erased.provenance, erased.provenance)) {
+                                self.changed = true;
+                            }
+                            try self.representationStore().mergeCallableEmissionPlanProvenance(existing, erased.provenance);
+                        },
+                        else => lambdaInvariant("lambda-solved already-erased group emission merge reached non-erased current plan"),
+                    },
+                    else => lambdaInvariant("lambda-solved already-erased group emission merge reached non-erased existing plan"),
                 }
                 return existing;
             }
@@ -5780,6 +5822,7 @@ const CallableEmissionAssigner = struct {
             );
         }
         try self.representationStore().publishCallableGroupEmission(group, emission_plan);
+        self.changed = true;
         return emission_plan;
     }
 
@@ -5885,16 +5928,10 @@ const CallableEmissionAssigner = struct {
                         return existing;
                     },
                     .erase_finite_set => |erase| blk: {
-                        if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key)) {
-                            lambdaInvariant("lambda-solved erased finite callable group emission key changed while merging Box(T) provenance");
-                        }
                         const merged = try repr.mergeBoxErasureProvenanceSets(self.allocator, erase.provenance, boundaries);
                         break :blk merged;
                     },
-                    .finite => |key| blk: {
-                        if (!repr.callableSetKeyEql(key, group_key)) {
-                            lambdaInvariant("lambda-solved finite callable group emission key changed while adding Box(T) provenance");
-                        }
+                    .finite => blk: {
                         break :blk try repr.mergeBoxErasureProvenanceSets(self.allocator, &.{}, boundaries);
                     },
                     .pending_proc_value,
@@ -5905,19 +5942,27 @@ const CallableEmissionAssigner = struct {
                 const erase = try self.finiteSetErasePlan(group_set, group_key, erase_provenance);
                 defer deinitExecutableSpecializationKeySlice(self.allocator, erase.member_targets);
                 try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(existing, erase);
+                self.changed = true;
             } else {
                 switch (existing_plan) {
                     .finite => |key| if (!repr.callableSetKeyEql(key, group_key)) {
-                        lambdaInvariant("lambda-solved finite callable group emission key changed");
+                        self.representationStore().replaceCallableEmissionPlanWithFinite(existing, group_key);
+                        self.changed = true;
                     },
-                    .erase_finite_set,
-                    => return existing,
+                    .erase_finite_set => |erase| {
+                        if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key)) {
+                            const updated = try self.finiteSetErasePlan(group_set, group_key, erase.provenance);
+                            defer deinitExecutableSpecializationKeySlice(self.allocator, updated.member_targets);
+                            try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(existing, updated);
+                            self.changed = true;
+                        }
+                        return existing;
+                    },
                     .pending_proc_value,
                     .already_erased,
                     .erase_proc_value,
                     => lambdaInvariant("lambda-solved finite callable group emission merged with incompatible existing emission plan"),
                 }
-                self.representationStore().replaceCallableEmissionPlanWithFinite(existing, group_key);
             }
             return existing;
         }
@@ -5926,6 +5971,7 @@ const CallableEmissionAssigner = struct {
         else
             try self.representationStore().appendFiniteCallableEmissionPlan(group_key);
         try self.representationStore().publishCallableGroupEmission(group_set.group, emission);
+        self.changed = true;
         return emission;
     }
 
@@ -6903,6 +6949,16 @@ fn boxErasureProvenanceSetEql(
     if (a.len != b.len) return false;
     for (a) |item| {
         if (!boxErasureProvenanceSliceContains(b, item)) return false;
+    }
+    return true;
+}
+
+fn boxErasureProvenanceSliceContainsAll(
+    haystack: []const repr.BoxErasureProvenance,
+    needles: []const repr.BoxErasureProvenance,
+) bool {
+    for (needles) |needle| {
+        if (!boxErasureProvenanceSliceContains(haystack, needle)) return false;
     }
     return true;
 }
