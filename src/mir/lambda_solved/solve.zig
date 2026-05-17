@@ -5547,7 +5547,7 @@ const CallableEmissionAssigner = struct {
             lambdaInvariant("lambda-solved callable group set has no members");
         }
         for (set.members.items, 0..) |*member, raw_member| {
-            member.member = @enumFromInt(@as(u32, @intCast(raw_member)));
+            member.member = canonical.callableSetMemberForRuntimeIndex(raw_member);
         }
         const interned = try self.representationStore().internCallableSetDescriptor(set.members.items);
         set.key = interned.key;

@@ -1466,6 +1466,14 @@ wider than runtime storage, but materialization writes exactly the committed
 layout size. For example, an `i128_literal` carrier for `1.U32` writes exactly
 four bytes into a `U32` local.
 
+Layout ids describe runtime memory representation only. They do not encode
+call target identity, symbol lookup, method lookup, or "named function"
+sentinels. Direct/static calls carry explicit call targets such as procedure
+specs, hosted entries, or executable call plans. Erased calls carry callable
+value locals. If a lowering path needs to say that a direct call has no closure
+payload, it uses an explicit optional capture/layout field on the call or
+construction plan; it does not invent a fake layout id.
+
 ARC insertion consumes LIR before backends. Its input is RC-free except for
 shared continuations already rewritten during the same insertion pass. A
 finished LIR program contains explicit `incref`, `decref`, and `free`.
@@ -2830,6 +2838,16 @@ stored as the low-level operation's `source_constraint_ty`. Literal carrier
 width remains separate from storage: an `i128_literal` carrier for `1.U32`
 writes and participates in the operation as `U32`, not as a default wide integer
 that a later low-level op reconciles.
+
+`Num.abs_diff` is an explicit example of why result layout is not enough
+metadata for numeric backend lowering. Signed integer `abs_diff` operations
+return unsigned values, but the comparison that decides subtraction order must
+use the signedness of the operands. LIR therefore carries layouts for the
+argument locals, and backend lowering requires both argument layouts to agree.
+The dev backend passes that operand layout into `num_abs_diff` code generation
+and treats a layout mismatch as a compiler invariant violation. It must not
+guess signedness from the unsigned result layout, from literal negativity, or
+from the runtime value shape.
 
 ### Concrete Source Type Payloads
 
@@ -7992,6 +8010,25 @@ canonical lambda-solved callable-set member order, which is derived from stable
 `ProcOrderKey` values. It must not depend on raw symbols, display names,
 hash-map iteration order, allocation order, pointer identity, fresh-symbol
 suffixes, or incidental traversal order.
+
+Finite callable-set runtime encoding is explicit:
+
+```text
+runtime discriminant == dense CallableSetMemberId
+```
+
+The conversion lives behind `callableSetRuntimeDiscriminantForMember`,
+`callableSetRuntimeIndexForMember`, and the inverse helpers next to canonical
+callable-set identities. Lambda-solved member publication assigns member ids
+through that encoding. IR layout construction, callable-set value construction,
+callable-match switch construction, and capture-payload extraction all consume
+the helper instead of casting member ids directly. A runtime callable-set
+discriminant read carries the callable-set key as metadata, and compile-time
+finalization decodes the runtime value by indexing the published
+runtime-discriminant-ordered member plan and verifying that the planned member
+maps back to the observed discriminant. No stage may select a callable-set
+member by descriptor order, source procedure name, layout order, or a raw
+`@enumFromInt(discriminant)` cast.
 
 Capture payload field order is `CaptureSlot.index` order for every
 callable-set member and every erased capture record. Executable MIR consumes

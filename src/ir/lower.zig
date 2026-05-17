@@ -477,7 +477,7 @@ const IrBuilder = struct {
 
         const payload_bridge = if (payload != null) try self.output.store.addBridgePlan(.direct) else null;
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
-            .discriminant = @intCast(@intFromEnum(callable.member.member_index)),
+            .discriminant = repr.callableSetRuntimeDiscriminantForMember(callable.member.member_index),
             .payload = payload,
             .payload_bridge_plan = payload_bridge,
         } }, stmts);
@@ -643,9 +643,9 @@ const IrBuilder = struct {
             .{ .get_union_id = .{
                 .value = callee,
                 .source = if (branch_ids.len == 1)
-                    .{ .known_singleton = @intCast(@intFromEnum(branch_ids[0].member.member_index)) }
+                    .{ .known_singleton = repr.callableSetRuntimeDiscriminantForMember(branch_ids[0].member.member_index) }
                 else
-                    .runtime_callable_set,
+                    .{ .runtime_callable_set = callable_match.callable_set_key },
             } },
             stmts,
         );
@@ -659,7 +659,7 @@ const IrBuilder = struct {
                 irInvariant("IR lowering callable_match branch points at a different callable set");
             }
             branches[i] = .{
-                .value = @intCast(@intFromEnum(branch.member.member_index)),
+                .value = repr.callableSetRuntimeDiscriminantForMember(branch.member.member_index),
                 .block = try self.lowerCallableMatchBranchBlock(branch, callee),
             };
         }
@@ -698,7 +698,7 @@ const IrBuilder = struct {
                 .bind = payload,
                 .expr = try self.output.store.addExpr(.{ .get_union_struct = .{
                     .value = callee,
-                    .tag_discriminant = @intCast(@intFromEnum(branch.member.member_index)),
+                    .tag_discriminant = repr.callableSetRuntimeDiscriminantForMember(branch.member.member_index),
                 } }),
             } }));
             try self.pushValueBinding(payload_ref, payload, &saved);
@@ -2139,7 +2139,7 @@ const IrBuilder = struct {
         @memset(seen, false);
 
         for (callable_set.members) |member| {
-            const index: usize = @intCast(@intFromEnum(member.member));
+            const index = repr.callableSetRuntimeIndexForMember(member.member);
             if (index >= callable_set.members.len) irInvariant("IR lowering callable-set member index exceeded member count");
             if (seen[index]) irInvariant("IR lowering callable-set type saw duplicate member index");
             variants[index] = if (member.payload_ty) |payload_ty| try self.layoutForType(payload_ty) else .{ .canonical = .zst };

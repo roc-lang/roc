@@ -6,6 +6,7 @@ const mir = @import("mir");
 const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
 const row = mir.MonoRow;
+const repr = mir.LambdaSolved.Representation;
 
 /// Interned symbol identifiers referenced by lowered IR nodes.
 pub const Symbol = symbol_mod.Symbol;
@@ -86,7 +87,7 @@ pub const BridgePlan = union(enum) {
 /// Explicit logical source for a discriminant read.
 pub const DiscriminantSource = union(enum) {
     runtime_tag_union: row.TagUnionShapeId,
-    runtime_callable_set,
+    runtime_callable_set: repr.CanonicalCallableSetKey,
     known_singleton: u16,
 };
 

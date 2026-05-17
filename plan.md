@@ -16,6 +16,9 @@ the const/callable/capture problems below.
 
 Completed:
 
+- Problem 1: the dev backend now requires matching `Num.abs_diff` argument
+  layouts, passes the operand layout into code generation, and no longer falls
+  back to signedness guesses from literals or result layout.
 - Problem 2: const and callable instantiation records now preserve the checked
   payload ids from their requests, dependency summaries carry payload-bearing
   requests, and finalization consumes those requests instead of rediscovering
@@ -29,17 +32,28 @@ Completed:
   nodes carry `source_ty`, `source_ty_payload`, and `source_scheme`; serializable
   leaves use the enclosing node's payload; `PrivateCaptureRef` carries
   `source_ty_payload`; mono lowering uses that payload directly.
+- Problem 5: `layout.Idx.named_fn` has been removed. Static/direct call identity
+  stays in call IR; layouts describe runtime memory representation only.
+- Problem 6: callable-set runtime encoding is explicit. Member ids convert to
+  runtime discriminants through shared canonical helpers, IR carries the
+  callable-set key on runtime discriminant reads, and compile-time finalization
+  verifies decoded members against runtime-discriminant order.
 - `design.md` now describes this as the long-term model: canonical keys validate
-  payload identity, while checked payload ids are carried through the boundaries
-  that consume them. It also records the comparison with Cor's LSS experiment.
+  payload identity, checked payload ids are carried through the boundaries that
+  consume them, layouts do not encode call identity, numeric low-level lowering
+  consumes operand layouts, and callable-set runtime discriminants are centrally
+  encoded. It also records the comparison with Cor's LSS experiment.
 - The callable-in-data crash repros are covered by eval tests and pass through
   interpreter, dev, and wasm.
+- `Num.abs_diff` signedness coverage exercises signed `I8` operands whose result
+  layout is unsigned.
 
 Verification on the final code:
 
 ```sh
 zig build fmt
 zig build test-eval -- --filter "compile-time callable result reused" --filter "Bool constants inside heap containers" --threads 1 --verbose
+zig build test-eval -- --filter "I8.abs_diff uses signed operand layout" --threads 1 --verbose
 zig build minici
 ```
 
@@ -48,14 +62,9 @@ coverage is unsupported on this platform, but the `minici` command exits 0.
 
 Still left from this plan:
 
-- Problem 1: remove the dev backend `Num.abs_diff` signedness fallback and make
-  the operand layout mandatory.
-- Problem 5: delete the dead `layout.Idx.named_fn` sentinel from both layout
-  modules.
-- Problem 6: make callable-set runtime discriminant/member encoding explicit and
-  route lowering/finalization through the shared encoding helper or table.
 - Hardening: add semantic-audit checks for the completed payload-boundary rules
-  so these recovery patterns cannot silently return in future changes.
+  and runtime-encoding rules so these recovery patterns cannot silently return
+  in future changes.
 
 ## 1. Dev Backend `Num.abs_diff` Signedness Guess
 
