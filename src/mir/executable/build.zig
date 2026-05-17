@@ -16,6 +16,7 @@ const ids = @import("../ids.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const Layouts = @import("layouts.zig");
+const ConstructionBridge = @import("construction_bridge.zig");
 
 const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
@@ -60,166 +61,14 @@ fn constructionSlotBridgeForProgram(
     source_ty: Type.TypeId,
     target_ty: Type.TypeId,
 ) Allocator.Error!Ast.BridgeId {
-    if (source_ty == target_ty) {
-        return switch (program.types.getType(source_ty)) {
-            .placeholder => executableInvariant("executable construction bridge saw placeholder type"),
-            .link => executableInvariant("executable construction bridge saw unresolved link type"),
-            .primitive => try ast.addBridgePlan(.direct),
-            .nominal, .box, .callable_set, .erased_fn => try ast.addBridgePlan(.nominal_reinterpret),
-            .list => try ast.addBridgePlan(.list_reinterpret),
-            .tuple => |items| try ast.addBridgePlan(.{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, items, items) }),
-            .record => |record| try ast.addBridgePlan(.{ .struct_ = try constructionSlotRecordBridgeForProgram(allocator, program, ast, record, record) }),
-            .tag_union => |tag_union| try ast.addBridgePlan(.{ .tag_union = try constructionSlotTagUnionBridgeForProgram(allocator, program, ast, tag_union, tag_union) }),
-            .vacant_callable_slot => try ast.addBridgePlan(.zst),
-        };
-    }
-
-    const source = program.types.getType(source_ty);
-    const target = program.types.getType(target_ty);
-    return try ast.addBridgePlan(switch (source) {
-        .placeholder => executableInvariant("executable construction bridge saw placeholder source type"),
-        .link => executableInvariant("executable construction bridge saw unresolved source link"),
-        .primitive => |source_prim| switch (target) {
-            .primitive => |target_prim| blk: {
-                if (source_prim != target_prim) executableInvariant("executable construction bridge crossed primitive types");
-                break :blk .direct;
-            },
-            else => executableInvariant("executable construction bridge crossed primitive/non-primitive types"),
-        },
-        .nominal => |source_nominal| switch (target) {
-            .nominal => |target_nominal| blk: {
-                if (source_nominal.nominal.module_name == target_nominal.nominal.module_name and
-                    source_nominal.nominal.type_name == target_nominal.nominal.type_name)
-                {
-                    break :blk .nominal_reinterpret;
-                }
-                executableInvariant("executable construction bridge crossed distinct nominal types");
-            },
-            else => .nominal_reinterpret,
-        },
-        .list => switch (target) {
-            .list => .list_reinterpret,
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed list/non-list types"),
-        },
-        .box => switch (target) {
-            .box, .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed box/non-box types"),
-        },
-        .tuple => |source_items| switch (target) {
-            .tuple => |target_items| .{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, source_items, target_items) },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed tuple/non-tuple types"),
-        },
-        .record => |source_record| switch (target) {
-            .record => |target_record| .{ .struct_ = try constructionSlotRecordBridgeForProgram(allocator, program, ast, source_record, target_record) },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed record/non-record types"),
-        },
-        .tag_union => |source_union| switch (target) {
-            .tag_union => |target_union| .{ .tag_union = try constructionSlotTagUnionBridgeForProgram(allocator, program, ast, source_union, target_union) },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed tag-union/non-tag-union types"),
-        },
-        .callable_set => |source_callable| switch (target) {
-            .callable_set => |target_callable| blk: {
-                if (!repr.callableSetKeyEql(source_callable.key, target_callable.key)) {
-                    executableInvariant("executable construction bridge crossed callable-set keys");
-                }
-                break :blk .nominal_reinterpret;
-            },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed callable-set/non-callable-set types"),
-        },
-        .erased_fn => switch (target) {
-            .erased_fn => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed erased-fn/non-erased-fn types"),
-        },
-        .vacant_callable_slot => switch (target) {
-            .vacant_callable_slot => .zst,
-            else => executableInvariant("executable construction bridge crossed vacant/non-vacant callable-slot types"),
-        },
-    });
-}
-
-fn constructionSlotStructBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source_items: []const Type.TypeId,
-    target_items: []const Type.TypeId,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    if (source_items.len != target_items.len) executableInvariant("executable construction struct bridge arity mismatch");
-    if (source_items.len == 0) return Ast.Span(Ast.BridgeId).empty();
-    const children = try allocator.alloc(Ast.BridgeId, source_items.len);
-    defer allocator.free(children);
-    for (source_items, target_items, 0..) |source, target, i| {
-        children[i] = try constructionSlotBridgeForProgram(allocator, program, ast, source, target);
-    }
-    return try ast.addBridgePlanSpan(children);
-}
-
-fn constructionSlotRecordBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source: Type.RecordType,
-    target: Type.RecordType,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    if (source.fields.len != target.fields.len) executableInvariant("executable construction record bridge arity mismatch");
-    if (source.fields.len == 0) return Ast.Span(Ast.BridgeId).empty();
-    const children = try allocator.alloc(Ast.BridgeId, source.fields.len);
-    defer allocator.free(children);
-    for (target.fields, 0..) |target_field, i| {
-        const target_label = program.row_shapes.recordField(target_field.field).label;
-        const source_field = recordFieldForLabel(program, source, target_label);
-        children[i] = try constructionSlotBridgeForProgram(allocator, program, ast, source_field.ty, target_field.ty);
-    }
-    return try ast.addBridgePlanSpan(children);
-}
-
-fn constructionSlotTagUnionBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source: Type.TagUnionType,
-    target: Type.TagUnionType,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    if (source.tags.len != target.tags.len) executableInvariant("executable construction tag-union bridge arity mismatch");
-    if (source.tags.len == 0) return Ast.Span(Ast.BridgeId).empty();
-    const children = try allocator.alloc(Ast.BridgeId, target.tags.len);
-    defer allocator.free(children);
-    for (target.tags, 0..) |target_tag, i| {
-        const target_label = program.row_shapes.tag(target_tag.tag).label;
-        const source_tag = tagTypeForLabel(program, source, target_label);
-        children[i] = try constructionSlotTagPayloadBridgeForProgram(allocator, program, ast, source_tag, target_tag);
-    }
-    return try ast.addBridgePlanSpan(children);
-}
-
-fn constructionSlotTagPayloadBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source: Type.TagType,
-    target: Type.TagType,
-) Allocator.Error!Ast.BridgeId {
-    if (source.payloads.len != target.payloads.len) executableInvariant("executable construction tag payload bridge arity mismatch");
-    if (source.payloads.len == 0) return try ast.addBridgePlan(.zst);
-    if (source.payloads.len == 1) {
-        return try constructionSlotBridgeForProgram(allocator, program, ast, source.payloads[0].ty, target.payloads[0].ty);
-    }
-    const source_payloads = try allocator.alloc(Type.TypeId, source.payloads.len);
-    defer allocator.free(source_payloads);
-    const target_payloads = try allocator.alloc(Type.TypeId, target.payloads.len);
-    defer allocator.free(target_payloads);
-    for (source.payloads) |payload| {
-        source_payloads[@intCast(program.row_shapes.tagPayload(payload.payload).logical_index)] = payload.ty;
-    }
-    for (target.payloads) |payload| {
-        target_payloads[@intCast(program.row_shapes.tagPayload(payload.payload).logical_index)] = payload.ty;
-    }
-    return try ast.addBridgePlan(.{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, source_payloads, target_payloads) });
+    return try ConstructionBridge.executableBridge(
+        allocator,
+        &program.types,
+        &program.row_shapes,
+        ast,
+        source_ty,
+        target_ty,
+    );
 }
 
 fn addTupleItemExprSpanForConstruction(
@@ -8539,7 +8388,7 @@ const BodyBuilder = struct {
         source_ty: Type.TypeId,
         target_ty: Type.TypeId,
     ) Allocator.Error!Ast.BridgeId {
-        return try self.valueBridge(source_ty, target_ty, .pattern_binding);
+        return try self.valueBridge(source_ty, target_ty);
     }
 
     fn constructionSlotBridge(
@@ -8547,19 +8396,20 @@ const BodyBuilder = struct {
         source_ty: Type.TypeId,
         target_ty: Type.TypeId,
     ) Allocator.Error!Ast.BridgeId {
-        return try self.valueBridge(source_ty, target_ty, .construction_slot);
+        return try ConstructionBridge.executableBridge(
+            self.allocator,
+            &self.program.types,
+            &self.program.row_shapes,
+            self.output,
+            source_ty,
+            target_ty,
+        );
     }
-
-    const ValueBridgeMode = enum {
-        pattern_binding,
-        construction_slot,
-    };
 
     fn valueBridge(
         self: *BodyBuilder,
         source_ty: Type.TypeId,
         target_ty: Type.TypeId,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.BridgeId {
         const source = self.program.types.getType(source_ty);
         const target = self.program.types.getType(target_ty);
@@ -8594,17 +8444,17 @@ const BodyBuilder = struct {
                 else => executableInvariant("executable value bridge crossed box/non-box types"),
             },
             .tuple => |source_items| switch (target) {
-                .tuple => |target_items| .{ .struct_ = try self.valueStructBridge(source_items, target_items, mode) },
+                .tuple => |target_items| .{ .struct_ = try self.valueStructBridge(source_items, target_items) },
                 .nominal => .nominal_reinterpret,
                 else => executableInvariant("executable value bridge crossed tuple/non-tuple types"),
             },
             .record => |source_record| switch (target) {
-                .record => |target_record| .{ .struct_ = try self.valueRecordBridge(source_record, target_record, mode) },
+                .record => |target_record| .{ .struct_ = try self.valueRecordBridge(source_record, target_record) },
                 .nominal => .nominal_reinterpret,
                 else => executableInvariant("executable value bridge crossed record/non-record types"),
             },
             .tag_union => |source_union| switch (target) {
-                .tag_union => |target_union| .{ .tag_union = try self.valueTagUnionBridge(source_union, target_union, mode) },
+                .tag_union => |target_union| .{ .tag_union = try self.valueTagUnionBridge(source_union, target_union) },
                 .nominal => .nominal_reinterpret,
                 else => executableInvariant("executable value bridge crossed tag-union/non-tag-union types"),
             },
@@ -8634,7 +8484,6 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source_items: []const Type.TypeId,
         target_items: []const Type.TypeId,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
         if (source_items.len != target_items.len) {
             executableInvariant("executable value struct bridge arity mismatch");
@@ -8643,7 +8492,7 @@ const BodyBuilder = struct {
         const children = try self.allocator.alloc(Ast.BridgeId, source_items.len);
         defer self.allocator.free(children);
         for (source_items, target_items, 0..) |source, target, i| {
-            children[i] = try self.valueBridge(source, target, mode);
+            children[i] = try self.valueBridge(source, target);
         }
         return try self.output.addBridgePlanSpan(children);
     }
@@ -8652,7 +8501,6 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source: Type.RecordType,
         target: Type.RecordType,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
         if (source.fields.len != target.fields.len) {
             executableInvariant("executable value record bridge arity mismatch");
@@ -8662,7 +8510,7 @@ const BodyBuilder = struct {
         defer self.allocator.free(children);
         for (target.fields, 0..) |target_field, i| {
             const source_field = self.recordFieldTypeByLabel(source, target_field.field);
-            children[i] = try self.valueBridge(source_field.ty, target_field.ty, mode);
+            children[i] = try self.valueBridge(source_field.ty, target_field.ty);
         }
         return try self.output.addBridgePlanSpan(children);
     }
@@ -8684,7 +8532,6 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source: Type.TagUnionType,
         target: Type.TagUnionType,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
         if (source.tags.len != target.tags.len) {
             executableInvariant("executable value tag-union bridge arity mismatch");
@@ -8694,7 +8541,7 @@ const BodyBuilder = struct {
         defer self.allocator.free(children);
         for (target.tags, 0..) |target_tag, i| {
             const source_tag = self.tagTypeByLabel(source, target_tag.tag);
-            children[i] = try self.valueTagPayloadBridge(source_tag, target_tag, mode);
+            children[i] = try self.valueTagPayloadBridge(source_tag, target_tag);
         }
         return try self.output.addBridgePlanSpan(children);
     }
@@ -8716,14 +8563,13 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source: Type.TagType,
         target: Type.TagType,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.BridgeId {
         if (source.payloads.len != target.payloads.len) {
             executableInvariant("executable value tag payload bridge arity mismatch");
         }
         if (source.payloads.len == 0) return try self.output.addBridgePlan(.zst);
         if (source.payloads.len == 1) {
-            return try self.valueBridge(source.payloads[0].ty, target.payloads[0].ty, mode);
+            return try self.valueBridge(source.payloads[0].ty, target.payloads[0].ty);
         }
 
         const source_payloads = try self.allocator.alloc(Type.TypeId, source.payloads.len);
@@ -8754,7 +8600,7 @@ const BodyBuilder = struct {
         }
         verifyAllSeen(seen_source, "executable value source payload bridge omitted payload");
         verifyAllSeen(seen_target, "executable value target payload bridge omitted payload");
-        return try self.output.addBridgePlan(.{ .struct_ = try self.valueStructBridge(source_payloads, target_payloads, mode) });
+        return try self.output.addBridgePlan(.{ .struct_ = try self.valueStructBridge(source_payloads, target_payloads) });
     }
 
     const SavedBinding = struct {

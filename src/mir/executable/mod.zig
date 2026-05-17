@@ -6,6 +6,7 @@ pub const Type = @import("type.zig");
 pub const Ast = @import("ast.zig");
 pub const Layouts = @import("layouts.zig");
 pub const Build = @import("build.zig");
+pub const ConstructionBridge = @import("construction_bridge.zig");
 
 test "executable tests" {
     std.testing.refAllDecls(@This());
@@ -13,4 +14,5 @@ test "executable tests" {
     std.testing.refAllDecls(Ast);
     std.testing.refAllDecls(Layouts);
     std.testing.refAllDecls(Build);
+    std.testing.refAllDecls(ConstructionBridge);
 }
