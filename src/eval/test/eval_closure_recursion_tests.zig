@@ -1232,4 +1232,141 @@ pub const tests = [_]TestCase{
         .source = "match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }",
         .expected = .{ .inspect_str = "1.0" },
     },
+    .{
+        .name = "inspect: iterator-like map uses transformed tag payload",
+        .source_kind = .module,
+        .source =
+        \\Iter(elem) :: {
+        \\    next : {} -> [One({ elem : elem, rest : Iter(elem) }), Done],
+        \\}.{
+        \\    range : I64, I64 -> Iter(I64)
+        \\    range = |start, end| {
+        \\        next: |{}|
+        \\            if start == end {
+        \\                Done
+        \\            } else {
+        \\                One({ elem: start, rest: Iter.range(start + 1.I64, end) })
+        \\            },
+        \\    }
+        \\
+        \\    map : Iter(a), (a -> b) -> Iter(b)
+        \\    map = |iter, transform| {
+        \\        next: |{}|
+        \\            match (iter.next)({}) {
+        \\                One({ elem, rest }) => One({ elem: transform(elem), rest: Iter.map(rest, transform) })
+        \\                Done => Done
+        \\            },
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    mapped = Iter.map(Iter.range(1.I64, 3.I64), |n| n * 2.I64)
+        \\    match (mapped.next)({}) {
+        \\        One({ elem: first, rest }) =>
+        \\            match (rest.next)({}) {
+        \\                One({ elem: second, rest: _ }) => first * 10.I64 + second
+        \\                Done => -2.I64
+        \\            }
+        \\        Done => -1.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "24" },
+    },
+    .{
+        .name = "inspect: returned closure calls captured function argument",
+        .source =
+        \\{
+        \\    wrap : (I64 -> I64) -> { next : {} -> I64 }
+        \\    wrap = |transform| { next: |{}| transform(1.I64) }
+        \\    wrapped = wrap(|_| 9.I64)
+        \\    (wrapped.next)({})
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9" },
+    },
+    .{
+        .name = "inspect: iterator-like keep_if skips rejected tag payloads",
+        .source_kind = .module,
+        .source =
+        \\Iter(elem) :: {
+        \\    next : {} -> [One({ elem : elem, rest : Iter(elem) }), Done],
+        \\}.{
+        \\    range : I64, I64 -> Iter(I64)
+        \\    range = |start, end| {
+        \\        next: |{}|
+        \\            if start == end {
+        \\                Done
+        \\            } else {
+        \\                One({ elem: start, rest: Iter.range(start + 1.I64, end) })
+        \\            },
+        \\    }
+        \\
+        \\    keep_if : Iter(a), (a -> Bool) -> Iter(a)
+        \\    keep_if = |iter, pred| {
+        \\        next: |{}|
+        \\            match (iter.next)({}) {
+        \\                One({ elem, rest }) =>
+        \\                    if pred(elem) {
+        \\                        One({ elem, rest: Iter.keep_if(rest, pred) })
+        \\                    } else {
+        \\                        (Iter.keep_if(rest, pred).next)({})
+        \\                    }
+        \\                Done => Done
+        \\            },
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    kept = Iter.keep_if(Iter.range(1.I64, 4.I64), |elem| elem == 2.I64)
+        \\    match (kept.next)({}) {
+        \\        One({ elem }) => elem
+        \\        Done => -1.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "inspect: iterator-like drop_if stops at first kept tag payload",
+        .source_kind = .module,
+        .source =
+        \\Iter(elem) :: {
+        \\    next : {} -> [One({ elem : elem, rest : Iter(elem) }), Done],
+        \\}.{
+        \\    range : I64, I64 -> Iter(I64)
+        \\    range = |start, end| {
+        \\        next: |{}|
+        \\            if start == end {
+        \\                Done
+        \\            } else {
+        \\                One({ elem: start, rest: Iter.range(start + 1.I64, end) })
+        \\            },
+        \\    }
+        \\
+        \\    drop_if : Iter(a), (a -> Bool) -> Iter(a)
+        \\    drop_if = |iter, pred| {
+        \\        next: |{}|
+        \\            match (iter.next)({}) {
+        \\                One({ elem, rest }) =>
+        \\                    if pred(elem) {
+        \\                        (Iter.drop_if(rest, pred).next)({})
+        \\                    } else {
+        \\                        One({ elem, rest: Iter.drop_if(rest, pred) })
+        \\                    }
+        \\                Done => Done
+        \\            },
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    dropped = Iter.drop_if(Iter.range(1.I64, 4.I64), |elem| elem == 1.I64)
+        \\    match (dropped.next)({}) {
+        \\        One({ elem }) => elem
+        \\        Done => -1.I64
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
 };

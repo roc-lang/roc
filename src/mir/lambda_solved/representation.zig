@@ -4710,7 +4710,11 @@ const SessionExecutableTypePayloadBuilder = struct {
         }
 
         if (info.callable == null and info.boxed == null and info.aggregate == null and self.valueHasFunctionType(info.logical_ty)) {
-            return try self.endpointForCallableGroup(info.solved_group orelse representationInvariant("session executable function value has no solved group"));
+            const group = info.solved_group orelse representationInvariant("session executable function value has no solved group");
+            if (self.representation_store.callableGroupEmission(group)) |emission_plan| {
+                return try self.endpointForCallableEmissionPlan(emission_plan);
+            }
+            return try self.endpointForVacantCallableSlot(key);
         }
 
         const id = try self.payload_store.reserve(self.allocator, key);

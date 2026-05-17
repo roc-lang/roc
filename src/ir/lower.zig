@@ -265,14 +265,13 @@ const IrBuilder = struct {
             .access => |access| blk: {
                 const record = try self.lowerExpr(access.record, stmts);
                 const field = self.input.row_shapes.recordField(access.field);
-                const direct = try self.output.store.addBridgePlan(.direct);
                 break :blk try self.bindExpr(
                     expr.value,
                     try self.layoutForType(expr.ty),
                     .{ .get_struct_field = .{
                         .record = record,
                         .field_index = @intCast(field.logical_index),
-                        .field_bridge_plan = direct,
+                        .field_bridge_plan = try self.constructionSlotBridge(expr.ty, expr.ty),
                     } },
                     stmts,
                 );
@@ -299,11 +298,10 @@ const IrBuilder = struct {
             },
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple, stmts);
-                const direct = try self.output.store.addBridgePlan(.direct);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_struct_field = .{
                     .record = tuple,
                     .field_index = @intCast(access.elem_index),
-                    .field_bridge_plan = direct,
+                    .field_bridge_plan = try self.constructionSlotBridge(expr.ty, expr.ty),
                 } }, stmts);
             },
             .tag_payload => |payload| try self.lowerTagPayload(expr, payload, stmts),
@@ -1178,7 +1176,7 @@ const IrBuilder = struct {
                 break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
                     .record = parent,
                     .field_index = @intCast(self.input.row_shapes.tagPayload(payload.payload).logical_index),
-                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                    .field_bridge_plan = try self.constructionSlotBridge(plan.ty, plan.ty),
                 } }, stmts);
             },
             .record_field => |field| blk: {
@@ -1186,7 +1184,7 @@ const IrBuilder = struct {
                 break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
                     .record = parent,
                     .field_index = @intCast(self.input.row_shapes.recordField(field.field).logical_index),
-                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                    .field_bridge_plan = try self.constructionSlotBridge(plan.ty, plan.ty),
                 } }, stmts);
             },
             .record_rest => |projection| try self.materializeRecordRestPatternPath(plan.ty, projection, scrutinee_values, path_values, stmts),
@@ -1195,7 +1193,7 @@ const IrBuilder = struct {
                 break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
                     .record = parent,
                     .field_index = @intCast(field.field),
-                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                    .field_bridge_plan = try self.constructionSlotBridge(plan.ty, plan.ty),
                 } }, stmts);
             },
             .list_element => |element| try self.materializeListElementPatternPath(plan.ty, element, scrutinee_values, path_values, stmts),
@@ -1240,7 +1238,7 @@ const IrBuilder = struct {
             fields[index] = try self.bindAnonymous(try self.layoutForType(field.ty), .{ .get_struct_field = .{
                 .record = parent,
                 .field_index = @intCast(self.input.row_shapes.recordField(field.source_field).logical_index),
-                .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                .field_bridge_plan = try self.constructionSlotBridge(field.ty, field.ty),
             } }, stmts);
             seen[index] = true;
         }
@@ -1461,14 +1459,13 @@ const IrBuilder = struct {
                 const child_pats = self.input.ast.pat_ids.items[items.start..][0..items.len];
                 for (child_pats, 0..) |child_pat_id, i| {
                     const child_pat = self.input.ast.pats.items[@intFromEnum(child_pat_id)];
-                    const direct = try self.output.store.addBridgePlan(.direct);
                     const child_value = try self.bindExpr(
                         self.freshInternalValueRef(),
                         try self.layoutForType(child_pat.ty),
                         .{ .get_struct_field = .{
                             .record = value,
                             .field_index = @intCast(i),
-                            .field_bridge_plan = direct,
+                            .field_bridge_plan = try self.constructionSlotBridge(child_pat.ty, child_pat.ty),
                         } },
                         stmts,
                     );
@@ -1481,14 +1478,13 @@ const IrBuilder = struct {
                 for (field_patterns) |field_pattern| {
                     const child_pat = self.input.ast.pats.items[@intFromEnum(field_pattern.pattern)];
                     const field = self.input.row_shapes.recordField(field_pattern.field);
-                    const direct = try self.output.store.addBridgePlan(.direct);
                     const child_value = try self.bindExpr(
                         self.freshInternalValueRef(),
                         try self.layoutForType(child_pat.ty),
                         .{ .get_struct_field = .{
                             .record = value,
                             .field_index = @intCast(field.logical_index),
-                            .field_bridge_plan = direct,
+                            .field_bridge_plan = try self.constructionSlotBridge(child_pat.ty, child_pat.ty),
                         } },
                         stmts,
                     );
@@ -1522,7 +1518,7 @@ const IrBuilder = struct {
                             .{ .get_struct_field = .{
                                 .record = payload_record,
                                 .field_index = @intCast(payload.logical_index),
-                                .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                                .field_bridge_plan = try self.constructionSlotBridge(child_pat.ty, child_pat.ty),
                             } },
                             stmts,
                         );
@@ -1810,11 +1806,10 @@ const IrBuilder = struct {
             .value = tag_union,
             .tag_discriminant = @intCast(tag_info.logical_index),
         } }, stmts);
-        const direct = try self.output.store.addBridgePlan(.direct);
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_struct_field = .{
             .record = payload_struct,
             .field_index = @intCast(payload_info.logical_index),
-            .field_bridge_plan = direct,
+            .field_bridge_plan = try self.constructionSlotBridge(expr.ty, expr.ty),
         } }, stmts);
     }
 
@@ -1895,6 +1890,214 @@ const IrBuilder = struct {
             lowered[i] = try self.lowerBridgePlan(bridge_id);
         }
         return try self.output.store.addBridgePlanSpan(lowered);
+    }
+
+    fn constructionSlotBridge(
+        self: *IrBuilder,
+        source_ty: Exec.Type.TypeId,
+        target_ty: Exec.Type.TypeId,
+    ) LowerResourceError!Ast.BridgePlanId {
+        if (source_ty == target_ty) {
+            return switch (self.input.types.getType(source_ty)) {
+                .placeholder => irInvariant("IR construction bridge saw placeholder type"),
+                .link => irInvariant("IR construction bridge saw unresolved link type"),
+                .primitive => try self.output.store.addBridgePlan(.direct),
+                .nominal, .box, .callable_set, .erased_fn => try self.output.store.addBridgePlan(.nominal_reinterpret),
+                .list => try self.output.store.addBridgePlan(.list_reinterpret),
+                .tuple => |items| try self.output.store.addBridgePlan(.{ .struct_ = try self.constructionSlotStructBridge(items, items) }),
+                .record => |record| try self.output.store.addBridgePlan(.{ .struct_ = try self.constructionSlotRecordBridge(record, record) }),
+                .tag_union => |tag_union| try self.output.store.addBridgePlan(.{ .tag_union = try self.constructionSlotTagUnionBridge(tag_union, tag_union) }),
+                .vacant_callable_slot => try self.output.store.addBridgePlan(.zst),
+            };
+        }
+
+        const source = self.input.types.getType(source_ty);
+        const target = self.input.types.getType(target_ty);
+        const plan: Ast.BridgePlan = switch (source) {
+            .placeholder => irInvariant("IR construction bridge saw placeholder source type"),
+            .link => irInvariant("IR construction bridge saw unresolved source link"),
+            .primitive => |source_prim| switch (target) {
+                .primitive => |target_prim| blk: {
+                    if (source_prim != target_prim) irInvariant("IR construction bridge crossed primitive types");
+                    break :blk .direct;
+                },
+                else => irInvariant("IR construction bridge crossed primitive/non-primitive types"),
+            },
+            .nominal => |source_nominal| switch (target) {
+                .nominal => |target_nominal| blk: {
+                    if (source_nominal.nominal.module_name == target_nominal.nominal.module_name and
+                        source_nominal.nominal.type_name == target_nominal.nominal.type_name)
+                    {
+                        break :blk .nominal_reinterpret;
+                    }
+                    irInvariant("IR construction bridge crossed distinct nominal types");
+                },
+                else => .nominal_reinterpret,
+            },
+            .list => switch (target) {
+                .list => .list_reinterpret,
+                .nominal => .nominal_reinterpret,
+                else => irInvariant("IR construction bridge crossed list/non-list types"),
+            },
+            .box => switch (target) {
+                .box, .nominal => .nominal_reinterpret,
+                else => irInvariant("IR construction bridge crossed box/non-box types"),
+            },
+            .tuple => |source_items| switch (target) {
+                .tuple => |target_items| .{ .struct_ = try self.constructionSlotStructBridge(source_items, target_items) },
+                .nominal => .nominal_reinterpret,
+                else => irInvariant("IR construction bridge crossed tuple/non-tuple types"),
+            },
+            .record => |source_record| switch (target) {
+                .record => |target_record| .{ .struct_ = try self.constructionSlotRecordBridge(source_record, target_record) },
+                .nominal => .nominal_reinterpret,
+                else => irInvariant("IR construction bridge crossed record/non-record types"),
+            },
+            .tag_union => |source_union| switch (target) {
+                .tag_union => |target_union| .{ .tag_union = try self.constructionSlotTagUnionBridge(source_union, target_union) },
+                .nominal => .nominal_reinterpret,
+                else => irInvariant("IR construction bridge crossed tag-union/non-tag-union types"),
+            },
+            .callable_set => |source_callable| switch (target) {
+                .callable_set => |target_callable| blk: {
+                    if (!repr.callableSetKeyEql(source_callable.key, target_callable.key)) {
+                        irInvariant("IR construction bridge crossed callable-set keys");
+                    }
+                    break :blk .nominal_reinterpret;
+                },
+                .nominal => .nominal_reinterpret,
+                else => irInvariant("IR construction bridge crossed callable-set/non-callable-set types"),
+            },
+            .erased_fn => switch (target) {
+                .erased_fn => .nominal_reinterpret,
+                else => irInvariant("IR construction bridge crossed erased-fn/non-erased-fn types"),
+            },
+            .vacant_callable_slot => switch (target) {
+                .vacant_callable_slot => .zst,
+                else => irInvariant("IR construction bridge crossed vacant/non-vacant callable-slot types"),
+            },
+        };
+        return try self.output.store.addBridgePlan(plan);
+    }
+
+    fn constructionSlotStructBridge(
+        self: *IrBuilder,
+        source_items: []const Exec.Type.TypeId,
+        target_items: []const Exec.Type.TypeId,
+    ) LowerResourceError!Ast.Span(Ast.BridgePlanId) {
+        if (source_items.len != target_items.len) irInvariant("IR construction struct bridge arity mismatch");
+        if (source_items.len == 0) return Ast.Span(Ast.BridgePlanId).empty();
+
+        const children = try self.allocator.alloc(Ast.BridgePlanId, source_items.len);
+        defer self.allocator.free(children);
+        for (source_items, target_items, 0..) |source, target, i| {
+            children[i] = try self.constructionSlotBridge(source, target);
+        }
+        return try self.output.store.addBridgePlanSpan(children);
+    }
+
+    fn constructionSlotRecordBridge(
+        self: *IrBuilder,
+        source: Exec.Type.RecordType,
+        target: Exec.Type.RecordType,
+    ) LowerResourceError!Ast.Span(Ast.BridgePlanId) {
+        if (source.fields.len != target.fields.len) irInvariant("IR construction record bridge arity mismatch");
+        if (source.fields.len == 0) return Ast.Span(Ast.BridgePlanId).empty();
+
+        const children = try self.allocator.alloc(Ast.BridgePlanId, source.fields.len);
+        defer self.allocator.free(children);
+        for (target.fields, 0..) |target_field, i| {
+            const target_label = self.input.row_shapes.recordField(target_field.field).label;
+            const source_field = self.recordFieldForLabel(source, target_label);
+            children[i] = try self.constructionSlotBridge(source_field.ty, target_field.ty);
+        }
+        return try self.output.store.addBridgePlanSpan(children);
+    }
+
+    fn constructionSlotTagUnionBridge(
+        self: *IrBuilder,
+        source: Exec.Type.TagUnionType,
+        target: Exec.Type.TagUnionType,
+    ) LowerResourceError!Ast.Span(Ast.BridgePlanId) {
+        if (source.tags.len != target.tags.len) irInvariant("IR construction tag-union bridge arity mismatch");
+        if (source.tags.len == 0) return Ast.Span(Ast.BridgePlanId).empty();
+
+        const children = try self.allocator.alloc(Ast.BridgePlanId, target.tags.len);
+        defer self.allocator.free(children);
+        for (target.tags, 0..) |target_tag, i| {
+            const target_label = self.input.row_shapes.tag(target_tag.tag).label;
+            const source_tag = self.tagTypeForLabel(source, target_label);
+            children[i] = try self.constructionSlotTagPayloadBridge(source_tag, target_tag);
+        }
+        return try self.output.store.addBridgePlanSpan(children);
+    }
+
+    fn constructionSlotTagPayloadBridge(
+        self: *IrBuilder,
+        source: Exec.Type.TagType,
+        target: Exec.Type.TagType,
+    ) LowerResourceError!Ast.BridgePlanId {
+        if (source.payloads.len != target.payloads.len) irInvariant("IR construction tag payload bridge arity mismatch");
+        if (source.payloads.len == 0) return try self.output.store.addBridgePlan(.zst);
+        if (source.payloads.len == 1) {
+            return try self.constructionSlotBridge(source.payloads[0].ty, target.payloads[0].ty);
+        }
+
+        const source_payloads = try self.allocator.alloc(Exec.Type.TypeId, source.payloads.len);
+        defer self.allocator.free(source_payloads);
+        const target_payloads = try self.allocator.alloc(Exec.Type.TypeId, target.payloads.len);
+        defer self.allocator.free(target_payloads);
+        var source_seen = try self.allocator.alloc(bool, source.payloads.len);
+        defer self.allocator.free(source_seen);
+        var target_seen = try self.allocator.alloc(bool, target.payloads.len);
+        defer self.allocator.free(target_seen);
+        @memset(source_seen, false);
+        @memset(target_seen, false);
+
+        for (source.payloads) |payload| {
+            const index: usize = @intCast(self.input.row_shapes.tagPayload(payload.payload).logical_index);
+            if (index >= source_payloads.len) irInvariant("IR construction tag payload source index exceeded payload arity");
+            if (source_seen[index]) irInvariant("IR construction tag payload bridge saw duplicate source payload");
+            source_payloads[index] = payload.ty;
+            source_seen[index] = true;
+        }
+        for (target.payloads) |payload| {
+            const index: usize = @intCast(self.input.row_shapes.tagPayload(payload.payload).logical_index);
+            if (index >= target_payloads.len) irInvariant("IR construction tag payload target index exceeded payload arity");
+            if (target_seen[index]) irInvariant("IR construction tag payload bridge saw duplicate target payload");
+            target_payloads[index] = payload.ty;
+            target_seen[index] = true;
+        }
+        for (source_seen) |was_seen| {
+            if (!was_seen) irInvariant("IR construction tag payload bridge omitted source payload");
+        }
+        for (target_seen) |was_seen| {
+            if (!was_seen) irInvariant("IR construction tag payload bridge omitted target payload");
+        }
+
+        return try self.output.store.addBridgePlan(.{ .struct_ = try self.constructionSlotStructBridge(source_payloads, target_payloads) });
+    }
+
+    fn recordFieldForLabel(
+        self: *IrBuilder,
+        record: Exec.Type.RecordType,
+        label: anytype,
+    ) Exec.Type.RecordFieldType {
+        for (record.fields) |field| {
+            if (self.input.row_shapes.recordField(field.field).label == label) return field;
+        }
+        irInvariant("IR construction record bridge source field label is absent from source type");
+    }
+
+    fn tagTypeForLabel(
+        self: *IrBuilder,
+        tag_union: Exec.Type.TagUnionType,
+        label: anytype,
+    ) Exec.Type.TagType {
+        for (tag_union.tags) |tag| {
+            if (self.input.row_shapes.tag(tag.tag).label == label) return tag;
+        }
+        irInvariant("IR construction tag-union bridge source tag label is absent from source type");
     }
 
     fn bindExpr(
