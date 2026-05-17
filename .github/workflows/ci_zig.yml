@@ -271,7 +271,7 @@ jobs:
         run: |
           # clean build
           git clean -fdx
-          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }} -Dstrip=false -Dshared-memory-size=8589934592
+          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }} -Dstrip=false -Dshared-memory-size=1073741824
           # Install libc6-dbg which is required for Valgrind's function redirections
           sudo apt-get update && sudo apt-get install -y libc6-dbg
           sudo snap install valgrind --classic
