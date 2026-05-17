@@ -173,8 +173,8 @@ pub const Expr = struct {
         bool_lit: bool,
         unit,
         const_instance: check.CheckedArtifact.ConstInstanceRef,
-        const_ref: check.CheckedArtifact.ConstInstantiationKey,
-        pending_callable_instance: check.CheckedArtifact.CallableBindingInstantiationKey,
+        const_ref: check.CheckedArtifact.ConstInstantiationRequest,
+        pending_callable_instance: check.CheckedArtifact.CallableBindingInstantiationRequest,
         pending_local_root: check.CheckedArtifact.ComptimeRootId,
         tag: struct {
             union_shape: row.TagUnionShapeId,
