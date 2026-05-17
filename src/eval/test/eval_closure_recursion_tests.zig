@@ -1236,8 +1236,8 @@ pub const tests = [_]TestCase{
         .name = "inspect: iterator-like map uses transformed tag payload",
         .source_kind = .module,
         .source =
-        \\Iter(elem) :: {
-        \\    next : {} -> [One({ elem : elem, rest : Iter(elem) }), Done],
+        \\Iter(item) :: {
+        \\    next : {} -> [One({ item : item, rest : Iter(item) }), Done],
         \\}.{
         \\    range : I64, I64 -> Iter(I64)
         \\    range = |start, end| {
@@ -1245,7 +1245,7 @@ pub const tests = [_]TestCase{
         \\            if start == end {
         \\                Done
         \\            } else {
-        \\                One({ elem: start, rest: Iter.range(start + 1.I64, end) })
+        \\                One({ item: start, rest: Iter.range(start + 1.I64, end) })
         \\            },
         \\    }
         \\
@@ -1253,7 +1253,7 @@ pub const tests = [_]TestCase{
         \\    map = |iter, transform| {
         \\        next: |{}|
         \\            match (iter.next)({}) {
-        \\                One({ elem, rest }) => One({ elem: transform(elem), rest: Iter.map(rest, transform) })
+        \\                One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
         \\                Done => Done
         \\            },
         \\    }
@@ -1262,9 +1262,9 @@ pub const tests = [_]TestCase{
         \\main = {
         \\    mapped = Iter.map(Iter.range(1.I64, 3.I64), |n| n * 2.I64)
         \\    match (mapped.next)({}) {
-        \\        One({ elem: first, rest }) =>
+        \\        One({ item: first, rest }) =>
         \\            match (rest.next)({}) {
-        \\                One({ elem: second, rest: _ }) => first * 10.I64 + second
+        \\                One({ item: second, rest: _ }) => first * 10.I64 + second
         \\                Done => -2.I64
         \\            }
         \\        Done => -1.I64
@@ -1289,8 +1289,8 @@ pub const tests = [_]TestCase{
         .name = "inspect: iterator-like keep_if skips rejected tag payloads",
         .source_kind = .module,
         .source =
-        \\Iter(elem) :: {
-        \\    next : {} -> [One({ elem : elem, rest : Iter(elem) }), Done],
+        \\Iter(item) :: {
+        \\    next : {} -> [One({ item : item, rest : Iter(item) }), Done],
         \\}.{
         \\    range : I64, I64 -> Iter(I64)
         \\    range = |start, end| {
@@ -1298,7 +1298,7 @@ pub const tests = [_]TestCase{
         \\            if start == end {
         \\                Done
         \\            } else {
-        \\                One({ elem: start, rest: Iter.range(start + 1.I64, end) })
+        \\                One({ item: start, rest: Iter.range(start + 1.I64, end) })
         \\            },
         \\    }
         \\
@@ -1306,9 +1306,9 @@ pub const tests = [_]TestCase{
         \\    keep_if = |iter, pred| {
         \\        next: |{}|
         \\            match (iter.next)({}) {
-        \\                One({ elem, rest }) =>
-        \\                    if pred(elem) {
-        \\                        One({ elem, rest: Iter.keep_if(rest, pred) })
+        \\                One({ item, rest }) =>
+        \\                    if pred(item) {
+        \\                        One({ item, rest: Iter.keep_if(rest, pred) })
         \\                    } else {
         \\                        (Iter.keep_if(rest, pred).next)({})
         \\                    }
@@ -1318,9 +1318,9 @@ pub const tests = [_]TestCase{
         \\}
         \\
         \\main = {
-        \\    kept = Iter.keep_if(Iter.range(1.I64, 4.I64), |elem| elem == 2.I64)
+        \\    kept = Iter.keep_if(Iter.range(1.I64, 4.I64), |item| item == 2.I64)
         \\    match (kept.next)({}) {
-        \\        One({ elem }) => elem
+        \\        One({ item }) => item
         \\        Done => -1.I64
         \\    }
         \\}
@@ -1331,8 +1331,8 @@ pub const tests = [_]TestCase{
         .name = "inspect: iterator-like drop_if stops at first kept tag payload",
         .source_kind = .module,
         .source =
-        \\Iter(elem) :: {
-        \\    next : {} -> [One({ elem : elem, rest : Iter(elem) }), Done],
+        \\Iter(item) :: {
+        \\    next : {} -> [One({ item : item, rest : Iter(item) }), Done],
         \\}.{
         \\    range : I64, I64 -> Iter(I64)
         \\    range = |start, end| {
@@ -1340,7 +1340,7 @@ pub const tests = [_]TestCase{
         \\            if start == end {
         \\                Done
         \\            } else {
-        \\                One({ elem: start, rest: Iter.range(start + 1.I64, end) })
+        \\                One({ item: start, rest: Iter.range(start + 1.I64, end) })
         \\            },
         \\    }
         \\
@@ -1348,11 +1348,11 @@ pub const tests = [_]TestCase{
         \\    drop_if = |iter, pred| {
         \\        next: |{}|
         \\            match (iter.next)({}) {
-        \\                One({ elem, rest }) =>
-        \\                    if pred(elem) {
+        \\                One({ item, rest }) =>
+        \\                    if pred(item) {
         \\                        (Iter.drop_if(rest, pred).next)({})
         \\                    } else {
-        \\                        One({ elem, rest: Iter.drop_if(rest, pred) })
+        \\                        One({ item, rest: Iter.drop_if(rest, pred) })
         \\                    }
         \\                Done => Done
         \\            },
@@ -1360,9 +1360,9 @@ pub const tests = [_]TestCase{
         \\}
         \\
         \\main = {
-        \\    dropped = Iter.drop_if(Iter.range(1.I64, 4.I64), |elem| elem == 1.I64)
+        \\    dropped = Iter.drop_if(Iter.range(1.I64, 4.I64), |item| item == 1.I64)
         \\    match (dropped.next)({}) {
-        \\        One({ elem }) => elem
+        \\        One({ item }) => item
         \\        Done => -1.I64
         \\    }
         \\}

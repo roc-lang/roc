@@ -370,6 +370,99 @@ Builtin :: [].{
 		}
 	}
 
+	Iter(item) :: {
+		# The sequence being iterated, or e.g. a range, is captured in the next thunk.
+		len_if_known : [Known(U64), Unknown],
+		next : {} -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done],
+	}.{
+		custom : source, [Known(U64), Unknown], (source -> Try((item, Iter(item)), [NoMore])) -> Iter(item)
+		custom = |source, len_if_known, next| {
+			len_if_known,
+			next: |{}|
+				match next(source) {
+					Ok((item, iter)) => One({ item, rest: iter })
+					Err(NoMore) => Done
+				},
+		}
+
+		range : I64, I64 -> Iter(I64)
+		range = |start, end| {
+			len_if_known: Unknown,
+			next: |{}|
+				if start == end {
+					Done
+				} else {
+					step = if start < end 1.I64 else -1.I64
+
+					One({ item: start, rest: Iter.range(start + step, end) })
+				},
+		}
+
+		map : Iter(a), (a -> b) -> Iter(b)
+		map = |iter, transform|
+			match iter {
+				{ len_if_known, next } => {
+					len_if_known,
+					next: |{}|
+						match next({}) {
+							Done => Done
+							Skip(n) => Skip(n)
+							One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
+						},
+				}
+			}
+
+		keep_if : Iter(a), (a -> Bool) -> Iter(a)
+		keep_if = |iter, predicate|
+			match iter {
+				{ next, .. } => {
+					len_if_known: Unknown,
+					next: |{}| {
+						match next({}) {
+							Done => Done
+							Skip(n) => Skip(n)
+							One({ item, rest }) =>
+								if predicate(item) {
+									One({ item, rest: Iter.keep_if(rest, predicate) })
+								} else {
+									kept_rest = Iter.keep_if(rest, predicate)
+									(kept_rest.next)({})
+								}
+							}
+					},
+				}
+			}
+
+		drop_if : Iter(a), (a -> Bool) -> Iter(a)
+		drop_if = |iter, predicate|
+			match iter {
+				{ next, .. } => {
+					len_if_known: Unknown,
+					next: |{}| {
+						match next({}) {
+							Done => Done
+							Skip(n) => Skip(n)
+							One({ item, rest }) =>
+								if predicate(item) {
+									dropped_rest = Iter.drop_if(rest, predicate)
+									(dropped_rest.next)({})
+								} else {
+									One({ item, rest: Iter.drop_if(rest, predicate) })
+								}
+							}
+					},
+				}
+			}
+
+		fold : Iter(a), acc, (acc, a -> acc) -> acc
+		fold = |iter, acc, step|
+			match (iter.next)({}) {
+				Done => acc
+				Skip(_) => acc
+				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
+			}
+	}
+
 	List(_item) :: [ProvidedByCompiler].{
 
 		## Returns the length of the list, which is equal to the number of elements it contains.
@@ -386,6 +479,26 @@ Builtin :: [].{
 		## ```
 		is_empty : List(_item) -> Bool
 		is_empty = |list| List.len(list) == 0
+
+		## Iterate over the list from first to last.
+		iter : List(item) -> Iter(item)
+		iter = |list| {
+			make = |index| {
+				len = List.len(list)
+
+				{
+					len_if_known: Known(len - index),
+					next: |{}|
+						if index == len {
+							Done
+						} else {
+							One({ item: list_get_unsafe(list, index), rest: make(index + 1) })
+						},
+				}
+			}
+
+			make(0)
+		}
 
 		## Put two lists together.
 		## ```roc

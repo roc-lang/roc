@@ -1031,21 +1031,32 @@ It does not:
 - emit source/executable duplicate records
 - decide executable direct-call signatures from syntax
 
-Every imported function type occurrence receives a fresh callable variable:
+Every function type occurrence receives a fresh whole-function representation
+root. The whole-function root owns child roots for its argument slots, return
+slot, and callable slot:
 
 ```zig
-const CallableVarId = enum(u32) { _ };
-
-const LambdaSolvedFnType = struct {
+const FunctionRepShape = struct {
     fixed_arity: u32,
-    args: Span(TypeId),
-    ret: TypeId,
-    callable: CallableVarId,
+    args: Span(RepRootId),
+    ret: RepRootId,
+    callable: RepRootId,
+};
+
+const CallableRepShape = union(enum) {
+    unknown,
+    finite_group,
+    erased: ErasedFnSigKey,
+    vacant,
 };
 ```
 
 Freshness is per occurrence. Two equal source function types do not share
-callable representation unless explicit value flow connects them.
+callable representation merely because their source types are equal. They share
+callable representation only when explicit value flow unifies their
+whole-function roots, which then unifies the argument, return, and callable child
+roots pointwise. Lambda-solved MIR therefore owns lambda-set unification without
+making lambda sets part of checked/source types.
 
 Lambda-solved MIR builds representation roots for expression results, binders,
 pattern binders, mutable versions, joins, loop phis, parameters, returns,
@@ -1074,12 +1085,19 @@ For `proc_value`, lambda-solved MIR:
 Finite callable sets are canonical maps of exact callable member instances:
 
 ```text
-(ProcedureCallableRef, ProcRepresentationInstanceId) -> capture slots
+(MirProcedureRef, ProcedureCallableRef, ProcRepresentationInstanceId)
+    -> capture schema
 ```
 
-Unification unions different members, unifies matching member capture slots
-pointwise, and converts to erased representation only through explicit erasure
-requirements.
+The left-hand side is identity. The right-hand side is descriptor payload.
+Capture slots, capture shapes, and executable payload keys are not identity
+material, because recursive callable captures can mention the callable set being
+defined. Unification unions different member identities in the same callable
+child group, refreshes matching member capture schemas from the target procedure
+instance, and converts to erased representation only through explicit erasure
+requirements. Callable-set descriptor identity is published from the solved
+callable child group, not from source function type equality and not from an
+occurrence-local executable payload.
 
 `Box(T)` is the only source of erased callable representation. Non-boxed
 records, tuples, tags, lists, functions, and nominals do not introduce erased
@@ -1175,7 +1193,9 @@ Captured non-erased callables are callable-set values with capture payloads.
 Capture presence alone never causes erased packing.
 
 Finite callable-set construction consumes the occurrence-local
-`CallableSetConstructionPlan`:
+`CallableSetConstructionPlan`. The construction plan says how to build one
+selected member value at one source occurrence. It does not own callable-set
+identity; callable-set identity is owned by the solved callable child group:
 
 ```zig
 const CallableSetValue = struct {
@@ -1206,7 +1226,8 @@ validates the lambda-solved construction consistency unit:
 ```text
 value_info(v).callable.construction_plan == construction_id
 construction.result == v
-value_info(v).callable.emission_plan
+group(value_info(v).callable.callable_root) == construction.callable_group
+callable_group_emission(construction.callable_group)
     == finite_callable_set(construction.callable_set_key)
 descriptor(construction.callable_set_key)
     contains construction.selected_member
@@ -2906,6 +2927,159 @@ stages must not recover a payload from `TypeWriter`, `MonoTypeId`, expression
 syntax, `ModuleEnv`, raw checker variables, source names, or compatible row
 shapes.
 
+### Payload-Published Callable And Const Boundaries
+
+Every boundary that can be lowered, finalized, materialized, specialized, or
+used as a dependency must publish the checked payload it depends on at the time
+the boundary is created. A canonical type key is an identity check, not a recipe
+for rebuilding that payload. If a later stage needs the checked root, request
+root, scheme, capture graph, or executable source payload, that data must be
+stored in the boundary record that crosses the stage boundary.
+
+This rule is deliberately stricter than "the key should be enough for closed
+types." Closed keys can sometimes identify a unique shape, but relying on that
+fact creates a second, implicit payload channel. The long-term model is one
+payload channel:
+
+- checking, canonicalization, lambda solving, and mono defaulting publish
+  semantic payloads
+- finalization, mono lowering, executable lowering, and backends consume those
+  payloads
+- keys validate that the payload is the one the producer claimed
+- no later stage scans checked stores by key, display name, raw syntax, layout,
+  runtime bytes, or compatible aggregate shape to recreate missing information
+
+Const and callable instantiation stores retain the full request that reserved
+the instance:
+
+```zig
+const ConstInstantiationRecord = struct {
+    id: ConstInstanceId,
+    key: ConstInstantiationKey,
+    requested_source_ty_payload: CheckedTypeId,
+    state: ConstInstantiationState,
+};
+
+const CallableBindingInstantiationRecord = struct {
+    id: CallableBindingInstanceId,
+    key: CallableBindingInstantiationKey,
+    requested_source_fn_ty_payload: CheckedTypeId,
+    state: CallableBindingInstantiationState,
+};
+```
+
+Dependency summaries use the same request records, not only the stable key:
+
+```zig
+const ComptimeConcreteValueUse = union(enum) {
+    procedure_callable: ProcedureCallableRef,
+    const_instance: ConstInstantiationRequest,
+    callable_binding_instance: CallableBindingInstantiationRequest,
+};
+```
+
+This makes dependency finalization a pure publication step. It registers the
+request payload supplied by the producer and verifies that the payload key agrees
+with the request key. It does not call `rootForKey(requested_source_ty)` or
+`rootForKey(requested_source_fn_ty)` to rediscover a checked root in whichever
+artifact happens to be active.
+
+Capture-slot reification plans are payload-bearing graph nodes. The source type
+payload belongs to the node, not to a leaf hidden under the node, because every
+node describes the reification of one source-level value occurrence:
+
+```zig
+const CaptureSlotReificationPlan = union(enum) {
+    pending,
+    sealed: CaptureSlotReificationNode,
+};
+
+const CaptureSlotReificationNode = struct {
+    source_ty: CanonicalTypeKey,
+    source_ty_payload: CheckedTypeId,
+    source_scheme: CanonicalTypeSchemeKey,
+    kind: CaptureSlotReificationKind,
+};
+
+const CaptureSlotReificationKind = union(enum) {
+    serializable_leaf: SerializableCaptureLeafPlan,
+    callable_leaf: CallableResultPlanId,
+    callable_schema: CanonicalTypeKey,
+    record: Span(CaptureRecordFieldPlan),
+    tuple: Span(CaptureTupleElemPlan),
+    tag_union: Span(CaptureTagVariantPlan),
+    list: CaptureSlotReificationPlanRef,
+    box: CaptureSlotReificationPlanRef,
+    nominal: struct {
+        nominal: NominalTypeKey,
+        backing: CaptureSlotReificationPlanRef,
+    },
+    recursive_ref: CaptureSlotReificationPlanRef,
+};
+
+const SerializableCaptureLeafPlan = struct {
+    schema: ComptimeSchemaId,
+    reification_plan: ConstGraphReificationPlanId,
+};
+```
+
+The enclosing capture node provides `source_ty`, `source_ty_payload`, and
+`source_scheme` when finalization needs to promote a serializable leaf, create a
+private capture, or materialize a const leaf. `SerializableCaptureLeafPlan`
+therefore contains only the const-materialization details. Storing a second
+source key on the serializable leaf is not the source of truth; at most it would
+be a debug assertion copied from the enclosing node.
+
+Private capture references also carry the checked payload directly:
+
+```zig
+const PrivateCaptureRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    owner: PromotedCaptureId,
+    node: PrivateCaptureNodeId,
+    source_ty_payload: CheckedTypeId,
+};
+```
+
+Mono lowering and executable lowering instantiate a private capture from
+`source_ty_payload`. They must not recover a root by looking up
+`source_scheme`, `source_ty`, or the promoted-capture template. The scheme may
+still be useful while creating compiler-owned const templates, but it is not a
+lowering-time payload lookup key.
+
+Cor's LSS experiment reaches the same invariant through a different data model.
+There, lambda sets live inside the solved type graph:
+
+```ocaml
+and captures = tvar SymbolMap.t
+and lambda_set = captures SymbolMap.t
+...
+| LSet of lambda_set
+```
+
+`lambdamono/lower_type.ml` lowers that lambda-set type directly into a tag
+union whose member payload is the lowered capture record, and
+`lambdamono/lower.ml` constructs function values and call dispatch from that
+same solved lambda-set payload. There is no later recovery step because the
+capture payload is already in the type being lowered.
+
+Roc keeps source types, callable-set identity, and executable specialization
+identity separate so that static dispatch, source-type diagnostics, and runtime
+representation can remain independently controlled. That separation is fine,
+but it means callable and capture payloads must be published explicitly in value
+flow. The Roc equivalent of Cor's "lambda set carries captures in the type" is:
+
+- callable-result plans carry source function payloads and member payloads
+- capture-slot nodes carry the checked payload for the source value they reify
+- private-capture refs carry the checked payload for the closed capture graph
+- const/callable dependency summaries carry the checked payload for each
+  concrete request
+
+The design mistake to avoid is a split model where value flow publishes only a
+key and a later stage reconstructs the rest from a type store. That duplicates
+the type solver's facts in an unchecked way and breaks whenever two compatible
+keys are not enough to identify the same checked payload.
+
 ### Program Literal Pool
 
 String and crash payload lifetimes are separated:
@@ -4571,6 +4745,7 @@ pub const LoweredProgram = struct {
     arc_inserted_lir: LirProgram,
     runtime_image: ?LirRuntimeImage,
     callable_set_descriptors: []const RuntimeCallableSetDescriptor,
+    callable_set_member_payloads: []const RuntimeCallableSetMemberPayloads,
 };
 
 pub const RuntimeCallableSetDescriptor = struct {
@@ -4586,6 +4761,13 @@ pub const RuntimeCallableSetMember = struct {
     published_source_proc: ?MirProcedureRef,
     capture_slots: []const CallableSetCaptureSlot,
     capture_shape_key: CaptureShapeKey,
+};
+
+pub const RuntimeCallableSetMemberPayloads = struct {
+    callable_set_key: CanonicalCallableSetKey,
+    member: CallableSetMemberId,
+    member_proc_source_fn_ty_payload: CheckedTypePayloadRef,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypePayloadRef,
 };
 
 pub const CompileTimeLoweringMetadata = struct {
@@ -4629,6 +4811,20 @@ lowering-run-only identities, and a checked-artifact persisted descriptor is
 not a substitute for the runtime descriptor table while interpreting the
 current lowered program.
 
+During checking finalization, `LoweredProgram.callable_set_member_payloads`
+is the finalization-ready companion to the runtime descriptor table. It maps
+each current-run descriptor member to the checked payload roots that were
+projected while the lambda-solved `ConcreteSourceType` store was still alive:
+the member procedure source function payload, and for lifted member procedures
+the owner specialization source function payload. Compile-time finalization
+must consume these payload ids when it publishes callable result plans from a
+runtime descriptor. It must not recover them by searching
+`CheckedTypeStore.rootForKey`, by inspecting procedure templates, by reading
+source syntax, or by rebuilding concrete source payloads after lowering has
+dropped the solved MIR program. If a runtime descriptor member lacks its
+finalization payload record, the producer is incomplete and finalization must
+report a compiler invariant violation.
+
 When `metadata_sink` is present, lowering records prepared work and dependency
 summaries so later runtime emission can reuse exact-key outputs. The sink
 records prepared work only; it does not mark procedures or constants as final
@@ -4644,6 +4840,26 @@ symbol. Static data emission and erased callable result decoding consume only
 validated entries from this map. They must not recover erased callable code by
 source name, descriptor order, callable-set search, runtime pointer value, or
 wrapper body inspection.
+
+Const-backed executable lowering walks two structures in lockstep: the sealed
+compile-time value/schema from the checked artifact, and the current
+lambda-solved value metadata for the expression being materialized. The stored
+compile-time value says which scalar, aggregate, nominal backing, box payload,
+or callable leaf was published. The current lambda-solved value metadata says
+which executable representation that value has in this lowering run.
+
+For callable leaves, executable lowering must consume the value's solved
+callable emission plan. A finite stored callable leaf may lower to a finite
+callable-set value or to a packed erased function depending on the current
+value flow and `Box(T)` requirements. It must not decide from the stored
+`CallableLeafInstance` alone, from the expected source function type, or from a
+descriptor search after the value metadata has been discarded. Aggregate
+const-backed lowering passes the corresponding child `ValueInfoId` to each
+field, tuple element, tag payload, list element, box payload, and nominal
+backing when lambda-solved published that child metadata, so nested callable
+slots use their own solved emission plans. If a callable leaf reaches an erased
+or otherwise representation-specific endpoint without solved callable metadata,
+that is a producer invariant violation.
 
 ### Canonical Identity And Procedure Refs
 
@@ -5398,8 +5614,8 @@ const CallableMemberInstanceId = enum(u32) { _ };
 
 const ArtifactCallableSetMember = struct {
     member: CallableSetMemberId,
-    proc_value: ProcedureCallableRef,
-    source_proc: MirProcedureRef,
+    published_proc_value: ProcedureCallableRef,
+    published_source_proc: MirProcedureRef,
     capture_slots: Span<CallableSetCaptureSlot>,
     capture_shape_key: CaptureShapeKey,
 };
@@ -5415,13 +5631,21 @@ const LambdaSolvedCallableSetMember = struct {
 };
 
 const ArtifactCallableDescriptorKey = struct {
-    source_fn_ty: ConcreteSourceTypeRef,
     member_keys: Span<ArtifactCallableMemberKey>,
-    capture_shape: CaptureShapeKey,
+};
+
+const ArtifactCallableMemberKey = struct {
+    member: CallableSetMemberId,
+    publication: CallableSetMemberPublicationIdentity,
+};
+
+const LambdaSolvedCallableDescriptorKey = struct {
+    member_keys: Span<CallableSetMemberIdentity>,
 };
 
 const LambdaSolvedCallableDescriptor = struct {
     artifact_key: ArtifactCallableDescriptorKey,
+    lambda_solved_key: LambdaSolvedCallableDescriptorKey,
     representation_instance: ProcRepresentationInstanceId,
     artifact_members: Span<ArtifactCallableSetMember>,
     members: Span<LambdaSolvedCallableSetMember>,
@@ -5429,9 +5653,12 @@ const LambdaSolvedCallableDescriptor = struct {
 ```
 
 Artifact callable descriptors are target-free and contain no session-local
-representation ids. `ArtifactCallableSetMember` can persist procedure value,
-source procedure, capture-slot schema, and capture-shape data, but it does not
-pretend to know the `ProcRepresentationInstanceId` for a later lowering run.
+representation ids. `ArtifactCallableSetMember` persists publication identity,
+capture-slot schema, and capture-shape data, but it does not pretend to know the
+`ProcRepresentationInstanceId` for a later lowering run.
+Artifact descriptor keys are based on publication member identity, not capture
+schema. Capture schema is payload that must be validated against the current
+lowering target when an artifact descriptor is re-entered.
 `CallableMemberInstanceId` is comparable only inside one specialization or solve
 session. Lambda-solved descriptors are session-local and carry exact
 `target_instance` ids in every `LambdaSolvedCallableSetMember`.
@@ -5909,7 +6136,7 @@ const RepresentationStore = struct {
     edges: Store(RepresentationEdge),
     requirements: Store(RepresentationRequirement),
     groups: Store(SolvedRepresentationGroup),
-    solved_structural_child_roots: Map(SolvedStructuralChildKey, RepRootId),
+    solved_child_roots: Map(SolvedChildKey, RepRootId),
     group_erasure_provenance:
         Map(RepresentationGroupId, NonEmptySpan(BoxErasureProvenance)),
 };
@@ -5929,6 +6156,7 @@ const RepRootId = union(enum) {
 };
 
 const FunctionRepShape = struct {
+    fixed_arity: u32,
     args: Span<RepRootId>,
     ret: RepRootId,
     callable: RepRootId,
@@ -5956,6 +6184,16 @@ const RepresentationEdge = struct {
 const RepresentationEdgeKind = union(enum) {
     value_alias,
     value_move,
+    branch_join,
+    loop_phi,
+    mutable_version,
+    call_arg: u32,
+    call_result,
+    capture_value,
+    child: RepresentationChildKind,
+};
+
+const RepresentationChildKind = union(enum) {
     function_arg: u32,
     function_return,
     function_callable,
@@ -5965,23 +6203,11 @@ const RepresentationEdgeKind = union(enum) {
     list_elem,
     box_payload,
     nominal_backing: NominalTypeKey,
-    branch_join,
-    loop_phi,
-    mutable_version,
 };
 
-const StructuralChildKind = union(enum) {
-    record_field: RecordFieldId,
-    tuple_elem: u32,
-    tag_payload: TagPayloadId,
-    list_elem,
-    box_payload,
-    nominal_backing: NominalTypeKey,
-};
-
-const SolvedStructuralChildKey = struct {
+const SolvedChildKey = struct {
     parent_group: RepresentationGroupId,
-    kind: StructuralChildKind,
+    kind: RepresentationChildKind,
 };
 
 const RepresentationRequirement = union(enum) {
@@ -5998,12 +6224,13 @@ const BoxErasureRequirement = struct {
 Every expression result, binder, pattern binder, procedure parameter,
 procedure return, capture slot, callable requested-function occurrence,
 mutable variable version, and loop phi gets its own `RepRootId` before
-requirements are solved. Structural children also receive explicit
-representation variables through `RepresentationEdgeKind`: record fields,
-tuple elements, tag payloads, list elements, boxed payloads, nominal backings,
-function arguments, function returns, branch joins, loop phis, and mutable
-versions. Box erasure is a representation requirement on a payload root, not an
-executable conversion and not layout data.
+requirements are solved. Representation children also receive explicit
+representation variables through `RepresentationEdgeKind`: function arguments,
+function returns, callable slots, record fields, tuple elements, tag payloads,
+list elements, boxed payloads, and nominal backings. Branch joins, loop phis,
+mutable versions, aliases, moves, call args/results, and capture operands are
+value-flow edges, not child edges. Box erasure is a representation requirement
+on a payload root, not an executable conversion and not layout data.
 
 `CallableEmissionAssigner` walks explicit `require_box_erased` requirements and
 propagates their non-empty `BoxErasureProvenance` through solved representation
@@ -6025,12 +6252,12 @@ separate adapter identities.
 Function-typed roots have one whole-function shape: `FunctionRepShape`. A
 `call_value`, `call_proc`, or `proc_value` creates or references the requested
 function root with argument roots, return root, and callable root linked
-together. Helper APIs publish arg, return, and callable edges as one operation
-so a function cannot have a callable representation without the matching
-argument/return representation roots. Executable runtime function values
-contain only the solved callable representation; argument and return roots are
-boundary metadata used to solve and validate calls, adapters, and erased ABI
-records.
+together. Helper APIs publish arg, return, and callable child edges as one
+operation so a function cannot have a callable representation without the
+matching argument/return representation roots. Executable runtime function
+values contain only the solved callable representation; argument and return
+roots are boundary metadata used to solve and validate calls, adapters, and
+erased ABI records.
 
 Every solved representation group has exactly one `RepresentationShape`.
 `unknown` adopts the other shape. Primitives must match exactly. Records merge
@@ -6049,17 +6276,17 @@ with stable backrefs. Merge rules never inspect source expression syntax,
 singleton constructor syntax, display names, physical layout order, procedure
 bodies, or generated symbols.
 
-The solved structural-child index is published at the same boundary as the
-solved root-group table. It is release-path compiler data, not a debug cache.
-The solver builds `solved_structural_child_roots` by iterating structural
-representation edges, mapping parent and child roots to solved groups, and
-inserting `(parent_group, StructuralChildKind) -> child_root` with a
-deterministic canonical child root when multiple roots are in the same child
-group. Seeing the same key with a different child group is a compiler bug.
-Executable type publication, projection planning, aggregate construction,
-boxed-payload transforms, and value-transform planning consume this solved
-index. They do not rescan raw representation edges, source type ids, row/name
-lookups, or physical layout ids to rediscover structural children.
+The solved child index is published at the same boundary as the solved
+root-group table. It is release-path compiler data, not a debug cache. The
+solver builds `solved_child_roots` by iterating child representation edges,
+mapping parent and child roots to solved groups, and inserting
+`(parent_group, RepresentationChildKind) -> child_root` with a deterministic
+canonical child root when multiple roots are in the same child group. Seeing the
+same key with a different child group is a compiler bug. Executable type
+publication, projection planning, aggregate construction, boxed-payload
+transforms, callable emission publication, and value-transform planning consume
+this solved index. They do not rescan raw representation edges, source type ids,
+row/name lookups, or physical layout ids to rediscover children.
 
 Cross-procedure value flow uses public roots and explicit capability records.
 A `call_proc` connects caller argument roots to callee public parameter roots
@@ -6515,10 +6742,10 @@ procedure template artifacts, or display names.
 callable-set descriptors. `slot` is the `CaptureSlot.index` selected by the
 target procedure, `source_ty` is the canonical source type key of that slot, and
 `exec_value_ty` is the canonical executable value type key for the lowered
-slot. `callable_set_key + member` derives the member procedure, capture shape,
-and capture slot types. Current-run executable targets and persisted adapter
-member targets remain explicit target data; they are not derived from descriptor
-order alone.
+slot. `callable_set_key + member` selects a descriptor member identity; the
+member payload carries the capture shape and capture slot types. Current-run
+executable targets and persisted adapter member targets remain explicit target
+data; they are not derived from descriptor order alone.
 
 `CallableSetMemberPublicationIdentity` is the artifact-owned identity for the
 same selected procedure value. Persisted checked artifacts, callable result
@@ -6534,11 +6761,15 @@ const CallableSetDescriptorStore = struct {
     descriptors: Span<CanonicalCallableSetDescriptor>,
 };
 
-const SingletonCallableSetKeyInput = struct {
+const LambdaSolvedSingletonCallableSetKeyInput = struct {
     source_proc: MirProcedureRef,
     proc_value: ProcedureCallableRef,
-    capture_shape_key: CaptureShapeKey,
-    capture_slots: Span<CallableSetCaptureSlot>,
+    target_instance: ProcRepresentationInstanceId,
+};
+
+const ArtifactSingletonCallableSetKeyInput = struct {
+    published_source_proc: MirProcedureRef,
+    published_proc_value: ProcedureCallableRef,
 };
 ```
 
@@ -6546,29 +6777,37 @@ Publication is append-only and idempotent during checking finalization.
 Dependency-summary lowering, concrete compile-time root lowering,
 const/callable instantiation, callable promotion, private capture
 construction, erased adapter creation, and runtime lowering may all discover
-descriptors before the artifact seals. A duplicate key must have byte-for-byte
-identical semantic contents; a duplicate key with different members, procedure
-refs, source function type, capture shape, or capture-slot schema is a compiler
-bug.
+descriptors before the artifact seals. A duplicate published key must have
+byte-for-byte identical member identities. During a solve session, a duplicate
+lambda-solved key with the same member identities, source function type payloads,
+publication payloads, and lifted-owner payloads but a newer capture schema
+replaces the transient descriptor payload in place before sealing. A duplicate
+key with different member identities, procedure refs, source function type
+payloads, publication payloads, or lifted-owner payloads is a compiler bug.
 
 Every descriptor reachable from a callable result plan, callable value emission
 plan, callable-set construction plan, erased adapter key, erased callable code
 ref, executable callable-set payload, materialized finite callable value,
 promoted wrapper, compile-time constant, private capture, or imported template
 closure is copied into the owning checked artifact before publication. A
-singleton callable-set key hashes complete semantic member identity, including
-source procedure, procedure callable ref, capture shape, and capture slots. It
-must not hash session-local `ProcRepresentationInstanceId`, `ExecutableProcId`,
-array index, body index, lowering-run ordinal, pointer identity, or allocation
-order. Runtime descriptor hash tables are performance-only indexes over
+lambda-solved singleton callable-set key hashes the exact session member
+identity: source procedure, procedure callable ref, and
+`ProcRepresentationInstanceId`. It does not hash capture shape, capture slots,
+executable payload keys, `ExecutableProcId`, array index, body index,
+lowering-run ordinal, pointer identity, or allocation order. Persisted artifact
+keys use publication identities instead of `ProcRepresentationInstanceId`.
+Runtime descriptor hash tables are performance-only indexes over
 already-published data; they are not semantic inputs.
 
 During a solve session, descriptor candidates can be transient. If later
 erasure requirements, promoted wrapper payloads, or capture-slot transforms
-change the descriptor key for a representation group, the group emission slot
-is replaced in place before the artifact store is sealed. Executable payload
-publication consumes only live final descriptor refs: current group emissions,
-current `CallableValueInfo.emission_plan` records, current
+change the capture schema for a representation group, the descriptor payload for
+the same member-identity key is replaced in place before the artifact store is
+sealed. Existing descriptor contributions are treated as member identities and
+their capture schemas are refreshed from the selected target instance before
+they are unioned into another callable group. Executable payload publication
+consumes only live final descriptor refs: current group emissions, current
+`CallableValueInfo.emission_plan` records, current
 `CallableSetConstructionPlan` records, and current finite-erased adapter
 demands. Stale interned descriptors must not be copied into checked artifacts,
 runtime descriptor tables, callable result plans, or executable payloads.
@@ -6608,6 +6847,19 @@ ABI key. Capture type, capture shape, wrapper code, layouts, runtime pointers,
 interpreter ids, and object symbols are materialized-value data. They live in
 boxed-erased callable value records, capture materialization plans, lowered code
 maps, or backend images, not in the erased call signature key.
+
+Because the erased call signature is not a hidden-capture layout key, executable
+payload publication must not recover hidden captures by looking up the erased
+callable executable key and accepting whatever payload was published first. A
+session may already contain a type-only erased callable payload for the same
+source function and erased ABI with no capture payload. Direct proc-value
+erasure therefore derives its hidden capture tuple from the selected target
+procedure's capture slots, publishes that tuple under its own executable capture
+key, and stores that capture key on the proc-value erasure plan. Finite-set
+erasure derives its hidden capture payload from the callable-set descriptor key.
+Already-erased pass-through/retype uses the sealed capture plan it was given.
+No stage may repack, infer, or discard a hidden capture by treating
+`ErasedCallSigKey` as a complete erased callable layout identity.
 
 Lambda-solved MIR attaches metadata to values, not to expression ids:
 
@@ -7268,6 +7520,14 @@ const SessionExecutableValueTransformPlan = struct {
     op: SessionExecutableValueTransformOp,
 };
 ```
+
+There is intentionally no finite-callable-set to finite-callable-set transform
+in either transform-plan store. For non-erased callable values, differing finite
+callable-set keys on a value flow are a lambda-solved invariant failure:
+explicit value flow should already have unified the callable child groups before
+executable MIR is built. Runtime repacking of finite callable values would
+duplicate lambda-set solving in the wrong stage and hide missing representation
+edges.
 
 Finite-set erased adapter branches use distinct raw endpoint owners.
 `erased_finite_adapter_arg` and `erased_finite_adapter_result` name the erased
@@ -9840,11 +10100,23 @@ const ErasedCaptureReificationPlan = union(enum) {
 };
 
 const CaptureSlotReificationPlan = union(enum) {
-    serializable_leaf: ConstMaterializationNodeRef,
-    callable_leaf: CallableLeafInstanceRef,
+    pending,
+    sealed: CaptureSlotReificationNode,
+};
+
+const CaptureSlotReificationNode = struct {
+    source_ty: CanonicalTypeKey,
+    source_ty_payload: CheckedTypePayloadRef,
+    source_scheme: CanonicalTypeSchemeKey,
+    kind: CaptureSlotReificationKind,
+};
+
+const CaptureSlotReificationKind = union(enum) {
+    serializable_leaf: SerializableCaptureLeafPlan,
+    callable_leaf: CallableResultPlanId,
     callable_schema: CanonicalTypeKey,
-    record: Span(CaptureSlotReificationPlanRef),
-    tuple: Span(CaptureSlotReificationPlanRef),
+    record: Span(CaptureRecordFieldPlan),
+    tuple: Span(CaptureTupleElemPlan),
     tag_union: Span(CaptureTagReificationPlan),
     list: CaptureSlotReificationPlanRef,
     box: CaptureSlotReificationPlanRef,
@@ -9853,6 +10125,11 @@ const CaptureSlotReificationPlan = union(enum) {
         backing: CaptureSlotReificationPlanRef,
     },
     recursive_ref: CaptureSlotReificationPlanRef,
+};
+
+const SerializableCaptureLeafPlan = struct {
+    schema: ComptimeSchemaId,
+    reification_plan: ConstGraphReificationPlanId,
 };
 ```
 
@@ -9869,8 +10146,10 @@ cannot be derived later from an interpreted function pointer.
 trees. Recursive callable captures, captures that mention the callable result
 being reified, and nested aggregate captures reserve node ids before descending
 into children. `recursive_ref` points to a reserved node in the same graph. A
-plan is sealed only after every member, aggregate child, nominal backing, and
-boxed payload edge has been filled.
+plan is sealed only after every member, aggregate child, nominal backing, boxed
+payload edge, and source payload has been filled. A sealed capture node always
+names the exact checked source payload it reifies; finalization must consume
+that payload instead of recovering one from `source_ty` or `source_scheme`.
 
 Callable result plans are produced before interpretation from
 lambda-solved/executable representation data. They carry the exact checked
@@ -9923,13 +10202,10 @@ Private captures are graphs:
 
 ```zig
 const PrivateCaptureRef = struct {
-    owner: CheckedModuleArtifactKey,
-    key: PrivateCaptureInstantiationKey,
-};
-
-const PrivateCaptureInstantiationKey = struct {
-    template: PrivateCaptureTemplateRef,
-    requested_payload: ConcreteSourceTypePayloadKey,
+    artifact: CheckedModuleArtifactKey,
+    owner: PromotedCaptureId,
+    node: PrivateCaptureNodeId,
+    source_ty_payload: CheckedTypePayloadRef,
 };
 
 const PrivateCaptureNode = union(enum) {
@@ -11248,8 +11524,8 @@ Structural tests cover every type-state boundary:
   `ProcRepresentationBuildState`, the distinction from solve-session state,
   sealed export boundaries, and verifier failures for unsealed procedure,
   value-store, or solve-session state entering executable MIR
-- solved structural-child index tests for every `StructuralChildKind`,
-  `SolvedStructuralChildKey`, deterministic duplicate handling, conflict
+- solved child index tests for every `RepresentationChildKind`,
+  `SolvedChildKey`, deterministic duplicate handling, conflict
   detection for different child groups, and transform/executable planning that
   consumes solved child roots instead of raw edges, source ids, row names, or
   layouts
@@ -11948,8 +12224,8 @@ Structural tests cover every type-state boundary:
   label verifier failures, unresolved row/tag-tail verifier failures, open tails
   absent from exported row operation keys, and no later field/tag name lookup
 - lifted capture slots, capture args, capture refs, and direct-call metadata
-- lambda-solved callable representation, Box-only erasure, solve sessions, and
-  finite callable sets
+- lambda-solved callable representation as whole-function roots with callable
+  child roots, Box-only erasure, solve sessions, and finite callable sets
 - stack-safe lambda-solved lowering for deep low-level expression spines,
   generated string concatenation, and glue chains while preserving operation
   order and value-flow records
@@ -11969,6 +12245,10 @@ Structural tests cover every type-state boundary:
 - lambda-solved fixed-point loop ordering: solve sessions, callable emissions,
   value-transform adapter demands, erasure requirements, finite adapter member
   reservation, executable demands, cross-procedure edges, then repeat
+- callable child-group unification tests proving aliases, projections, joins,
+  records, tuples, tags, lists, nominals, `call_value`, `call_proc`, and
+  `proc_value` all publish one solved callable group for explicit non-erased
+  value flow, with no finite-callable-set repacking transform
 - `FiniteErasedAdapterDemand` coverage for nested transforms in records,
   tuples, tags, lists, boxes, captures, returns, call args/results, and erased
   adapter member captures

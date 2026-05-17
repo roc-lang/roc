@@ -1,14 +1,14 @@
-Iter(elem) :: {
+Iter(item) :: {
 	# The sequence being iterated, or e.g. a range, is captured in the next thunk.
 	len_if_known : [Known(U64), Unknown],
-	next : {} -> [One({ elem : elem, rest : Iter(elem) }), Skip(U64), Done],
+	next : {} -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done],
 }.{
-	custom : source, [Known(U64), Unknown], (source -> Try((elem, Iter(elem)), [NoMore])) -> Iter(elem)
+	custom : source, [Known(U64), Unknown], (source -> Try((item, Iter(item)), [NoMore])) -> Iter(item)
 	custom = |source, len_if_known, next| {
 		len_if_known,
 		next: |{}|
 			match next(source) {
-				Ok((elem, iter)) => One({ elem, rest: iter })
+				Ok((item, iter)) => One({ item, rest: iter })
 				Err(NoMore) => Done
 			},
 	}
@@ -22,7 +22,7 @@ Iter(elem) :: {
 			} else {
 				step = if start < end 1.I64 else -1.I64
 
-				One({ elem: start, rest: Iter.range(start + step, end) })
+				One({ item: start, rest: Iter.range(start + step, end) })
 			},
 	}
 
@@ -35,7 +35,7 @@ Iter(elem) :: {
 					match next({}) {
 						Done => Done
 						Skip(n) => Skip(n)
-						One({ elem, rest }) => One({ elem: transform(elem), rest: Iter.map(rest, transform) })
+						One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
 					},
 			}
 		}
@@ -49,9 +49,9 @@ Iter(elem) :: {
 					match next({}) {
 						Done => Done
 						Skip(n) => Skip(n)
-						One({ elem, rest }) =>
-							if predicate(elem) {
-								One({ elem, rest: Iter.keep_if(rest, predicate) })
+						One({ item, rest }) =>
+							if predicate(item) {
+								One({ item, rest: Iter.keep_if(rest, predicate) })
 							} else {
 								kept_rest = Iter.keep_if(rest, predicate)
 								(kept_rest.next)({})
@@ -70,12 +70,12 @@ Iter(elem) :: {
 					match next({}) {
 						Done => Done
 						Skip(n) => Skip(n)
-						One({ elem, rest }) =>
-							if predicate(elem) {
+						One({ item, rest }) =>
+							if predicate(item) {
 								dropped_rest = Iter.drop_if(rest, predicate)
 								(dropped_rest.next)({})
 							} else {
-								One({ elem, rest: Iter.drop_if(rest, predicate) })
+								One({ item, rest: Iter.drop_if(rest, predicate) })
 							}
 						}
 				},
@@ -83,39 +83,23 @@ Iter(elem) :: {
 		}
 
 	fold : Iter(a), acc, (acc, a -> acc) -> acc
-	fold = |iter, initial, step| {
-		var current = iter
-		var acc = initial
-		var done = Bool.False
-
-		while !done {
-			match (current.next)({}) {
-				Done => {
-					done = Bool.True
-				}
-				Skip(_) => {
-					done = Bool.True
-				}
-				One({ elem, rest }) => {
-					acc = step(acc, elem)
-					current = rest
-				}
-			}
+	fold = |iter, acc, step|
+		match (iter.next)({}) {
+			Done => acc
+			Skip(_) => acc
+			One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 		}
-
-		acc
-	}
 }
 
 expect {
 	iter = Iter.range(1.I64, 4.I64)
 
 	match (iter.next)({}) {
-		One({ elem: first, rest: rest1 }) =>
+		One({ item: first, rest: rest1 }) =>
 			match (rest1.next)({}) {
-				One({ elem: second, rest: rest2 }) =>
+				One({ item: second, rest: rest2 }) =>
 					match (rest2.next)({}) {
-						One({ elem: third }) => first == 1.I64 and second == 2.I64 and third == 3.I64
+						One({ item: third }) => first == 1.I64 and second == 2.I64 and third == 3.I64
 						_ => Bool.False
 					}
 				_ => Bool.False
@@ -128,9 +112,9 @@ expect {
 	iter = Iter.range(3.I64, 0.I64)
 
 	match (iter.next)({}) {
-		One({ elem: first, rest: rest1 }) =>
+		One({ item: first, rest: rest1 }) =>
 			match (rest1.next)({}) {
-				One({ elem: second }) => first == 3.I64 and second == 2.I64
+				One({ item: second }) => first == 3.I64 and second == 2.I64
 				_ => Bool.False
 			}
 		_ => Bool.False
@@ -150,9 +134,9 @@ expect {
 	iter = Iter.map(Iter.range(1.I64, 4.I64), |n| n * 2.I64)
 
 	match (iter.next)({}) {
-		One({ elem: first, rest: rest1 }) =>
+		One({ item: first, rest: rest1 }) =>
 			match (rest1.next)({}) {
-				One({ elem: second }) => first == 2.I64 and second == 4.I64
+				One({ item: second }) => first == 2.I64 and second == 4.I64
 				_ => Bool.False
 			}
 		_ => Bool.False
@@ -163,9 +147,9 @@ expect {
 	iter = Iter.keep_if(Iter.range(1.I64, 6.I64), |n| I64.rem_by(n, 2.I64) == 0.I64)
 
 	match (iter.next)({}) {
-		One({ elem: first, rest: rest1 }) =>
+		One({ item: first, rest: rest1 }) =>
 			match (rest1.next)({}) {
-				One({ elem: second }) => first == 2.I64 and second == 4.I64
+				One({ item: second }) => first == 2.I64 and second == 4.I64
 				_ => Bool.False
 			}
 		_ => Bool.False
@@ -176,9 +160,9 @@ expect {
 	iter = Iter.drop_if(Iter.range(1.I64, 6.I64), |n| I64.rem_by(n, 2.I64) == 0.I64)
 
 	match (iter.next)({}) {
-		One({ elem: first, rest: rest1 }) =>
+		One({ item: first, rest: rest1 }) =>
 			match (rest1.next)({}) {
-				One({ elem: second }) => first == 1.I64 and second == 3.I64
+				One({ item: second }) => first == 1.I64 and second == 3.I64
 				_ => Bool.False
 			}
 		_ => Bool.False

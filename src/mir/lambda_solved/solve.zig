@@ -1955,6 +1955,7 @@ const SessionExecutablePayloadPublisher = struct {
 
     fn publish(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
         try self.publishFiniteAdapterHiddenCaptures();
+        try self.publishProcValueEraseHiddenCaptures();
         try self.publishCallableSetMemberCaptures();
         try self.publishLocalValues();
     }
@@ -1978,6 +1979,32 @@ const SessionExecutablePayloadPublisher = struct {
             );
             if (!repr.canonicalExecValueTypeKeyEql(endpoint.key, capture_key)) {
                 lambdaInvariant("lambda-solved finite adapter hidden capture payload key differs from adapter signature");
+            }
+        }
+    }
+
+    fn publishProcValueEraseHiddenCaptures(self: *SessionExecutablePayloadPublisher) Allocator.Error!void {
+        for (self.representationStore().callable_emission_plans) |plan| {
+            const erase = switch (plan) {
+                .erase_proc_value => |erase| erase,
+                else => continue,
+            };
+            if (erase.capture_slots.len == 0) continue;
+            const capture_key = erase.erased_fn_sig_key.capture_ty orelse {
+                lambdaInvariant("lambda-solved proc-value erased payload had captures but no hidden capture key");
+            };
+            const endpoint = try repr.sessionExecutableTypeEndpointForCaptureSlotsIntoStore(
+                self.program.allocator,
+                &self.program.canonical_names,
+                &self.program.row_shapes,
+                &self.program.types,
+                self.representationStore(),
+                &self.representationStore().session_executable_type_payloads,
+                erase.capture_slots,
+                capture_key,
+            );
+            if (!repr.canonicalExecValueTypeKeyEql(endpoint.key, capture_key)) {
+                lambdaInvariant("lambda-solved proc-value hidden capture payload key differs from erase plan");
             }
         }
     }
@@ -2012,12 +2039,26 @@ const SessionExecutablePayloadPublisher = struct {
                     if (!repr.canonicalExecValueTypeKeyEql(endpoint.key, slot.exec_value_ty)) {
                         const payload = self.representationStoreFor(target_instance).session_executable_type_payloads.get(endpoint.ty.payload);
                         lambdaInvariantFmt(
-                            "lambda-solved callable-set member capture payload key differs from member schema: slot={d} member={d} target_instance={d} endpoint_payload={s} descriptor_live={} construction_live={} emission_live={} demand_live={}",
+                            "lambda-solved callable-set member capture payload key differs from member schema: session={d} target_session={d} descriptor_key={x:0>2}{x:0>2}{x:0>2}{x:0>2} slot={d} member={d} target_instance={d} endpoint_payload={s} endpoint_key={x:0>2}{x:0>2}{x:0>2}{x:0>2} slot_key={x:0>2}{x:0>2}{x:0>2}{x:0>2} descriptor_live={} construction_live={} emission_live={} demand_live={}",
                             .{
+                                @intFromEnum(self.session_id),
+                                @intFromEnum(target_instance.solve_session),
+                                descriptor.key.bytes[0],
+                                descriptor.key.bytes[1],
+                                descriptor.key.bytes[2],
+                                descriptor.key.bytes[3],
                                 slot.slot,
                                 @intFromEnum(member.member),
                                 @intFromEnum(member.target_instance),
                                 @tagName(payload),
+                                endpoint.key.bytes[0],
+                                endpoint.key.bytes[1],
+                                endpoint.key.bytes[2],
+                                endpoint.key.bytes[3],
+                                slot.exec_value_ty.bytes[0],
+                                slot.exec_value_ty.bytes[1],
+                                slot.exec_value_ty.bytes[2],
+                                slot.exec_value_ty.bytes[3],
                                 self.callableSetDescriptorIsLive(descriptor.key),
                                 self.callableSetDescriptorReferencedByConstruction(descriptor.key),
                                 self.callableSetDescriptorReferencedByEmission(descriptor.key),
@@ -3333,7 +3374,15 @@ fn procValueOwnerErasureRequirementPlan(
         .finite,
         .pending_proc_value,
         => null,
-        .already_erased => lambdaInvariant("lambda-solved proc-value erasure requirement reached already-erased callable emission"),
+        .already_erased => |erased| blk: {
+            if (erased.provenance.len == 0) {
+                lambdaInvariant("lambda-solved already-erased proc-value requirement has no Box(T) provenance");
+            }
+            break :blk .{
+                .key = try alreadyErasedProcValueExecutableSpecializationKey(program, store, record, erased),
+                .provenance = erased.provenance,
+            };
+        },
         .erase_proc_value => |erase| blk: {
             if (erase.target_instance != record.representation_instance) {
                 lambdaInvariant("lambda-solved proc-value erased requirement target differs from owner instance");
@@ -3375,6 +3424,39 @@ fn procValueOwnerErasureRequirementPlan(
             }
             lambdaInvariant("lambda-solved finite proc-value erased requirement selected member is missing from descriptor");
         },
+    };
+}
+
+fn alreadyErasedProcValueExecutableSpecializationKey(
+    program: *Program,
+    store: *const repr.RepresentationStore,
+    record: ProcBuildRecord,
+    erased: repr.AlreadyErasedCallablePlan,
+) Allocator.Error!repr.ExecutableSpecializationKey {
+    if (!record.has_public_roots) {
+        lambdaInvariant("lambda-solved already-erased proc-value target has no public roots");
+    }
+    if (!repr.canonicalTypeKeyEql(record.proc.callable.source_fn_ty, erased.sig_key.source_fn_ty)) {
+        lambdaInvariant("lambda-solved already-erased proc-value source type differs from target procedure");
+    }
+    const abi = store.erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
+        lambdaInvariant("lambda-solved already-erased proc-value referenced missing ABI");
+    };
+    return .{
+        .base = record.proc.proc.proc_base,
+        .requested_fn_ty = erased.sig_key.source_fn_ty,
+        .exec_arg_tys = abi.arg_exec_keys,
+        .exec_ret_ty = abi.ret_exec_key,
+        .callable_repr_mode = .direct,
+        .capture_shape_key = try repr.captureShapeKeyForValues(
+            program.allocator,
+            &program.canonical_names,
+            &program.row_shapes,
+            &program.types,
+            store,
+            &program.value_stores.items[@intFromEnum(record.value_store)],
+            record.public_roots.captures,
+        ),
     };
 }
 
@@ -3605,6 +3687,7 @@ fn sealProcRepresentationInstances(
         };
         var boundary_provenance = try cloneBoundaryProvenanceForSealedInstance(
             program,
+            records,
             record,
             executable_synthetic_procs,
             sealed_erased_adapter_members,
@@ -3638,6 +3721,7 @@ fn sealProcRepresentationInstances(
 
 fn cloneBoundaryProvenanceForSealedInstance(
     program: *Program,
+    records: []const ProcBuildRecord,
     record: ProcBuildRecord,
     executable_synthetic_procs: []const ids.ExecutableSyntheticProc,
     sealed_erased_adapter_members: []const SealedErasedAdapterMemberReservation,
@@ -3663,9 +3747,19 @@ fn cloneBoundaryProvenanceForSealedInstance(
                 break :blk try program.allocator.dupe(repr.BoxErasureProvenance, provenance);
             },
             .proc_value => |owner| blk: {
-                const target = owner.forced_target orelse break :blk &.{};
-                const wrapper = target.promoted_wrapper orelse break :blk &.{};
-                break :blk try cloneSingleBoundaryProvenance(program.allocator, .{ .promoted_wrapper = wrapper });
+                if (owner.forced_target) |target| {
+                    const wrapper = target.promoted_wrapper orelse break :blk &.{};
+                    break :blk try cloneSingleBoundaryProvenance(program.allocator, .{ .promoted_wrapper = wrapper });
+                }
+                const plan = try procValueOwnerErasureRequirementPlan(
+                    program,
+                    records,
+                    record,
+                    owner.owner,
+                    owner.value,
+                ) orelse break :blk &.{};
+                if (plan.provenance.len == 0) break :blk &.{};
+                break :blk try program.allocator.dupe(repr.BoxErasureProvenance, plan.provenance);
             },
             .finite_erased_adapter_member => |member| blk: {
                 const store = &program.solve_sessions.items[@intFromEnum(record.solve_session)].representation_store;
@@ -3752,7 +3846,13 @@ fn executableSpecializationKeyForProcValueOwner(
     return switch (store.callableEmissionPlan(callable.emission_plan)) {
         .finite => null,
         .pending_proc_value => lambdaInvariant("lambda-solved proc-value owner reached sealing with pending callable emission"),
-        .already_erased => lambdaInvariant("lambda-solved proc-value owner reached sealing with already-erased callable emission"),
+        .already_erased => |erased| blk: {
+            if (erased.provenance.len == 0) {
+                lambdaInvariant("lambda-solved already-erased proc-value owner has no Box(T) provenance");
+            }
+            const key = try alreadyErasedProcValueExecutableSpecializationKey(program, store, record, erased);
+            break :blk try repr.cloneExecutableSpecializationKey(program.allocator, key);
+        },
         .erase_proc_value => |erase| blk: {
             if (erase.target_instance != record.representation_instance) {
                 lambdaInvariant("lambda-solved proc-value erasure plan target differs from proc-value owner instance");
@@ -3861,7 +3961,7 @@ const CrossProcedureRepresentationLinker = struct {
             _ = try self.representation_store.appendRepresentationEdge(.{
                 .from = .{ .local = self.valueRoot(arg) },
                 .to = .{ .procedure_public = self.publicRootRef(target_id, target, param) },
-                .kind = .{ .function_arg = @intCast(i) },
+                .kind = .{ .call_arg = @intCast(i) },
             });
         }
         _ = try self.representation_store.appendRepresentationEdge(.{
@@ -3872,7 +3972,7 @@ const CrossProcedureRepresentationLinker = struct {
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
             .to = .{ .local = self.valueRoot(call_site.result) },
-            .kind = .function_return,
+            .kind = .call_result,
         });
     }
 
@@ -3953,26 +4053,56 @@ const CrossProcedureRepresentationLinker = struct {
             }
             const target_params = self.valueStoreFor(target).sliceValueSpan(target.public_roots.params);
             for (target_params, 0..) |target_param, i| {
+                const arg_root = self.structuralChildRoot(callable.whole_function_root, .{ .function_arg = @intCast(i) });
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .procedure_public = self.publicRootRef(target_id, target, target_param) },
-                    .to = .{ .local = callable.whole_function_root },
-                    .kind = .{ .function_arg = @intCast(i) },
+                    .to = .{ .local = arg_root },
+                    .kind = .{ .call_arg = @intCast(i) },
                 });
             }
+            const return_root = self.structuralChildRoot(callable.whole_function_root, .function_return);
             _ = try self.representation_store.appendRepresentationEdge(.{
-                .from = .{ .local = callable.whole_function_root },
+                .from = .{ .local = return_root },
                 .to = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
-                .kind = .function_return,
+                .kind = .call_result,
             });
             for (source_captures, target_captures, 0..) |source_capture, target_capture, raw_slot| {
                 try self.publishProcedureCaptureSource(target_id, @intCast(raw_slot), source_capture);
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(source_capture) },
                     .to = .{ .procedure_public = self.publicRootRef(target_id, target, target_capture) },
-                    .kind = .value_move,
+                    .kind = .capture_value,
                 });
             }
         }
+    }
+
+    fn structuralChildRoot(
+        self: *CrossProcedureRepresentationLinker,
+        parent: repr.RepRootId,
+        kind: repr.RepresentationChildKind,
+    ) repr.RepRootId {
+        for (self.representation_store.representation_edges.items) |edge| {
+            const from = switch (edge.from) {
+                .local => |local| local,
+                .procedure_public,
+                .procedure_function_root,
+                => continue,
+            };
+            if (from != parent) continue;
+            const child_kind = switch (edge.kind) {
+                .child => |child| child,
+                else => continue,
+            };
+            if (!representationChildKindMatches(child_kind, kind)) continue;
+            return switch (edge.to) {
+                .local => |local| local,
+                .procedure_public,
+                .procedure_function_root,
+                => lambdaInvariant("lambda-solved structural child edge targets procedure-public root"),
+            };
+        }
+        lambdaInvariant("lambda-solved cross-procedure structural child root is missing");
     }
 
     fn publishProcedureCaptureSource(
@@ -4103,6 +4233,9 @@ const RepresentationGroupSolver = struct {
 
     const StructuralProjectionKind = struct {
         tag: enum {
+            function_arg,
+            function_return,
+            function_callable,
             record_field,
             tuple_elem,
             tag_payload,
@@ -4152,6 +4285,27 @@ const RepresentationGroupSolver = struct {
         kind: repr.RepresentationEdgeKind,
     ) ?StructuralProjectionKind {
         return switch (kind) {
+            .child => |child| structuralProjectionKindFromChild(child),
+            .value_alias,
+            .value_move,
+            .branch_join,
+            .loop_phi,
+            .mutable_version,
+            .call_arg,
+            .call_result,
+            .capture_value,
+            => null,
+        };
+    }
+
+    fn structuralProjectionKindFromChild(kind: repr.RepresentationChildKind) StructuralProjectionKind {
+        return switch (kind) {
+            .function_arg => |index| .{
+                .tag = .function_arg,
+                .a = index,
+            },
+            .function_return => .{ .tag = .function_return },
+            .function_callable => .{ .tag = .function_callable },
             .record_field => |field| .{
                 .tag = .record_field,
                 .a = @intFromEnum(field),
@@ -4171,15 +4325,6 @@ const RepresentationGroupSolver = struct {
                 .a = @intFromEnum(nominal.module_name),
                 .b = @intFromEnum(nominal.type_name),
             },
-            .value_alias,
-            .value_move,
-            .function_arg,
-            .function_return,
-            .function_callable,
-            .branch_join,
-            .loop_phi,
-            .mutable_version,
-            => null,
         };
     }
 
@@ -4195,41 +4340,18 @@ const RepresentationGroupSolver = struct {
         @memset(self.ranks, 0);
     }
 
-    fn edgeUnionsValueFlow(self: *RepresentationGroupSolver, edge: repr.RepresentationEdge) bool {
+    fn edgeUnionsValueFlow(_: *RepresentationGroupSolver, edge: repr.RepresentationEdge) bool {
         return switch (edge.kind) {
             .value_alias,
             .value_move,
             .branch_join,
             .loop_phi,
             .mutable_version,
+            .call_arg,
+            .call_result,
+            .capture_value,
             => true,
-            .function_arg,
-            .function_return,
-            => !self.edgeTouchesFunctionShapeRoot(edge),
-            .function_callable,
-            .record_field,
-            .tuple_elem,
-            .tag_payload,
-            .list_elem,
-            .box_payload,
-            .nominal_backing,
-            => false,
-        };
-    }
-
-    fn edgeTouchesFunctionShapeRoot(self: *RepresentationGroupSolver, edge: repr.RepresentationEdge) bool {
-        if (self.endpointIsFunctionShapeRoot(edge.from)) return true;
-        return self.endpointIsFunctionShapeRoot(edge.to);
-    }
-
-    fn endpointIsFunctionShapeRoot(self: *RepresentationGroupSolver, endpoint: repr.RepresentationEndpoint) bool {
-        const root = self.endpointRootInSession(endpoint) orelse return false;
-        return switch (self.session.representation_store.rootKind(root)) {
-            .call_value_requested_fn,
-            .call_proc_requested_fn,
-            .proc_value_fn,
-            => true,
-            else => false,
+            .child => false,
         };
     }
 
@@ -4500,48 +4622,20 @@ const PendingComptimeDependencyPropagator = struct {
     }
 
     fn edgePropagatesPendingComptimeDependency(
-        self: *PendingComptimeDependencyPropagator,
+        _: *PendingComptimeDependencyPropagator,
         edge: repr.RepresentationEdge,
     ) bool {
         return switch (edge.kind) {
             .value_alias,
             .value_move,
-            .record_field,
-            .tuple_elem,
-            .tag_payload,
-            .list_elem,
-            .box_payload,
-            .nominal_backing,
             .branch_join,
             .loop_phi,
             .mutable_version,
+            .call_arg,
+            .call_result,
+            .capture_value,
             => true,
-            .function_arg,
-            .function_return,
-            => !self.edgeTouchesFunctionShapeRoot(edge),
-            .function_callable => false,
-        };
-    }
-
-    fn edgeTouchesFunctionShapeRoot(
-        self: *PendingComptimeDependencyPropagator,
-        edge: repr.RepresentationEdge,
-    ) bool {
-        if (self.endpointIsFunctionShapeRoot(edge.from)) return true;
-        return self.endpointIsFunctionShapeRoot(edge.to);
-    }
-
-    fn endpointIsFunctionShapeRoot(
-        self: *PendingComptimeDependencyPropagator,
-        endpoint: repr.RepresentationEndpoint,
-    ) bool {
-        const root = self.endpointRootInSession(endpoint) orelse return false;
-        return switch (self.session.representation_store.rootKind(root)) {
-            .call_value_requested_fn,
-            .call_proc_requested_fn,
-            .proc_value_fn,
-            => true,
-            else => false,
+            .child => true,
         };
     }
 
@@ -5195,7 +5289,7 @@ const CallableEmissionAssigner = struct {
             const root: repr.RepRootId = @enumFromInt(raw_root);
             const info = self.representationStore().rootTypeInfo(root) orelse continue;
             if (!self.valueHasFunctionType(info.logical_ty)) continue;
-            const group = self.representationStore().groupForRoot(root);
+            const group = self.callableGroupForFunctionRoot(root) orelse continue;
             if (self.function_root_index.get(group)) |existing_index| {
                 const existing = self.representationStore().rootTypeInfo(self.function_roots.items[existing_index].root) orelse {
                     lambdaInvariant("lambda-solved function root metadata referenced root without type info");
@@ -5226,7 +5320,8 @@ const CallableEmissionAssigner = struct {
             for (value_store.values.items) |value_info| {
                 if (!value_store.valueSourceMatchBranchReachable(value_info)) continue;
                 const callable = value_info.callable orelse continue;
-                const group = value_info.solved_group orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation group");
+                const group = self.callableGroupForValueInfo(value_info, callable) orelse
+                    lambdaInvariant("lambda-solved callable value reached emission assignment without a solved callable group");
                 switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
                     .finite => |key| {
                         switch (callable.source) {
@@ -5321,8 +5416,40 @@ const CallableEmissionAssigner = struct {
             lambdaInvariant("lambda-solved callable emission referenced a missing callable-set descriptor");
         };
         for (descriptor.members) |member| {
-            try self.addGroupCallableMember(group, member);
+            if (!try self.ensureTargetCaptureGroupsPublished(member.target_instance)) continue;
+            const refreshed = try self.refreshCallableSetMemberSchema(member);
+            defer if (refreshed.capture_slots.len > 0) self.allocator.free(refreshed.capture_slots);
+            try self.addGroupCallableMember(group, refreshed);
         }
+    }
+
+    fn refreshCallableSetMemberSchema(
+        self: *CallableEmissionAssigner,
+        member: repr.CanonicalCallableSetMember,
+    ) Allocator.Error!repr.CanonicalCallableSetMember {
+        const target_record = self.recordForInstance(member.target_instance);
+        if (!mirProcedureBodyIdentityEql(target_record.proc, member.source_proc)) {
+            lambdaInvariant("lambda-solved callable-set descriptor member target instance has a different source procedure");
+        }
+        const target_value_store = self.valueStoreFor(target_record);
+        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
+        if (target_captures.len != member.capture_slots.len) {
+            lambdaInvariant("lambda-solved callable-set descriptor member capture arity differs from target captures");
+        }
+        const capture_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
+        errdefer if (capture_slots.len > 0) self.allocator.free(capture_slots);
+        return .{
+            .member = member.member,
+            .proc_value = member.proc_value,
+            .source_fn_ty_payload = member.source_fn_ty_payload,
+            .source_proc = member.source_proc,
+            .published_proc_value = member.published_proc_value,
+            .published_source_proc = member.published_source_proc,
+            .lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload,
+            .target_instance = member.target_instance,
+            .capture_slots = capture_slots,
+            .capture_shape_key = repr.captureShapeKeyForSlots(capture_slots),
+        };
     }
 
     fn addGroupCallableMember(
@@ -5422,7 +5549,9 @@ const CallableEmissionAssigner = struct {
         for (set.members.items, 0..) |*member, raw_member| {
             member.member = @enumFromInt(@as(u32, @intCast(raw_member)));
         }
-        set.key = try self.representationStore().internCallableSetDescriptor(set.members.items);
+        const interned = try self.representationStore().internCallableSetDescriptor(set.members.items);
+        set.key = interned.key;
+        if (interned.replaced_existing) self.changed = true;
         const group_key = set.key orelse lambdaInvariant("lambda-solved callable group set key was not published");
         if (self.representationStore().callableGroupEmission(group) == null) {
             _ = try self.ensureCallableGroupEmission(set, group_key, self.erasedProvenance(group));
@@ -5456,12 +5585,23 @@ const CallableEmissionAssigner = struct {
         if (source.captures.len != target_captures.len) {
             lambdaInvariant("lambda-solved proc-value callable capture arity differs from target captures");
         }
+        return try self.ensureTargetCaptureGroupsPublished(source.target_instance);
+    }
+
+    fn ensureTargetCaptureGroupsPublished(
+        self: *CallableEmissionAssigner,
+        target_instance: repr.ProcRepresentationInstanceId,
+    ) Allocator.Error!bool {
+        const target_record = self.recordForInstance(target_instance);
+        const target_value_store = self.valueStoreFor(target_record);
+        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
         for (target_captures) |target_capture| {
             const target_value = target_value_store.values.items[@intFromEnum(target_capture)];
             if (!self.valueHasFunctionType(target_value.logical_ty)) continue;
-            const capture_group = target_value.solved_group orelse {
-                lambdaInvariant("lambda-solved function-typed target capture has no solved representation group");
-            };
+            const capture_group = self.callableGroupForValueInfo(target_value, target_value.callable) orelse
+                lambdaInvariant("lambda-solved function-typed target capture has no solved callable group");
+            if (self.representationStore().callableGroupEmission(capture_group) != null) continue;
+            if (self.callableGroupSet(capture_group) == null) return false;
             if (!try self.ensureGroupSetPublished(capture_group)) return false;
         }
         return true;
@@ -5472,7 +5612,9 @@ const CallableEmissionAssigner = struct {
             switch (requirement) {
                 .require_box_erased => |erasure| {
                     switch (erasure.provenance) {
-                        .local_box_boundary => |boundary_id| _ = self.boxBoundary(boundary_id),
+                        .local_box_boundary => |boundary_id| {
+                            _ = self.boxBoundary(boundary_id);
+                        },
                         .const_graph_box => {},
                         .promoted_wrapper => {},
                     }
@@ -5498,9 +5640,8 @@ const CallableEmissionAssigner = struct {
                 const callable = value_info.callable orelse continue;
                 switch (self.representationStore().callableEmissionPlan(callable.emission_plan)) {
                     .already_erased => {
-                        const group = value_info.solved_group orelse {
-                            lambdaInvariant("lambda-solved already-erased callable seed reached value without a solved representation group");
-                        };
+                        const group = self.callableGroupForValueInfo(value_info, callable) orelse
+                            lambdaInvariant("lambda-solved already-erased callable seed reached value without a solved callable group");
                         _ = try self.publishAlreadyErasedCallableGroupEmission(group, callable.emission_plan);
                     },
                     .pending_proc_value,
@@ -5537,12 +5678,17 @@ const CallableEmissionAssigner = struct {
                 const from = self.groupForRoot(from_root) orelse continue;
                 const to = self.groupForRoot(to_root) orelse continue;
                 switch (edge.kind) {
-                    .function_arg => {
-                        if (to == current) try stack.append(self.allocator, from);
-                    },
-                    .box_payload => {
-                        if (from == current) try stack.append(self.allocator, to);
-                        if (to == current) try stack.append(self.allocator, from);
+                    .child => |child| switch (child) {
+                        .function_arg => {
+                            if (to == current) try stack.append(self.allocator, from);
+                        },
+                        .box_payload => {
+                            if (from == current) try stack.append(self.allocator, to);
+                            if (to == current) try stack.append(self.allocator, from);
+                        },
+                        else => {
+                            if (from == current) try stack.append(self.allocator, to);
+                        },
                     },
                     else => {
                         if (from == current) try stack.append(self.allocator, to);
@@ -5551,7 +5697,6 @@ const CallableEmissionAssigner = struct {
             }
         }
     }
-
     fn ensureTypeOnlyErasedFunctionGroupEmission(
         self: *CallableEmissionAssigner,
         group: repr.RepresentationGroupId,
@@ -5618,9 +5763,8 @@ const CallableEmissionAssigner = struct {
                 if (value_info.callable) |existing| {
                     switch (self.representationStore().callableEmissionPlan(existing.emission_plan)) {
                         .already_erased => {
-                            const group = value_info.solved_group orelse {
-                                lambdaInvariant("lambda-solved already-erased callable value reached emission assignment without a solved representation group");
-                            };
+                            const group = self.callableGroupForValueInfo(value_info.*, existing) orelse
+                                lambdaInvariant("lambda-solved already-erased callable value reached emission assignment without a solved callable group");
                             const canonical_emission = try self.publishAlreadyErasedCallableGroupEmission(group, existing.emission_plan);
                             const already_erased = switch (self.representationStore().callableEmissionPlan(canonical_emission)) {
                                 .already_erased => |erased| erased,
@@ -5629,8 +5773,30 @@ const CallableEmissionAssigner = struct {
                             if (already_erased.provenance.len > 0) {
                                 try self.representationStore().publishGroupErasureProvenance(group, already_erased.provenance);
                             }
+                            var canonical_callable = existing;
+                            switch (existing.source) {
+                                .proc_value => |source| {
+                                    const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
+                                    const erase = try self.procValueErasePlanForAlreadyErasedSource(value_id, .{
+                                        .proc = source.proc,
+                                        .published_proc = source.published_proc,
+                                        .target_instance = source.target_instance,
+                                        .captures = source.captures,
+                                        .fn_ty = source.fn_ty,
+                                        .source_fn_ty_payload = source.source_fn_ty_payload,
+                                    }, already_erased);
+                                    defer if (erase.capture_slots.len > 0) self.allocator.free(erase.capture_slots);
+                                    canonical_callable.emission_plan = try self.representationStore().appendProcValueEraseEmissionPlan(erase);
+                                    value_info.callable = canonical_callable;
+                                    self.changed = true;
+                                    continue;
+                                },
+                                .finite_set,
+                                .already_erased,
+                                .erased_adapter,
+                                => {},
+                            }
                             if (canonical_emission != existing.emission_plan) {
-                                var canonical_callable = existing;
                                 canonical_callable.emission_plan = canonical_emission;
                                 value_info.callable = canonical_callable;
                                 self.changed = true;
@@ -5644,7 +5810,9 @@ const CallableEmissionAssigner = struct {
                         => {},
                     }
                 }
-                const group = value_info.solved_group orelse lambdaInvariant("lambda-solved callable value reached emission assignment without a solved representation group");
+                if (value_info.callable == null and !self.valueHasFunctionType(value_info.logical_ty)) continue;
+                const group = self.callableGroupForValueInfo(value_info.*, value_info.callable) orelse
+                    lambdaInvariant("lambda-solved callable value reached emission assignment without a solved callable group");
                 const group_set = self.callableGroupSet(group) orelse {
                     if (value_info.callable == null and self.valueHasFunctionType(value_info.logical_ty)) {
                         if (self.erasedProvenance(group)) |provenance| {
@@ -5662,7 +5830,6 @@ const CallableEmissionAssigner = struct {
                             continue;
                         }
                     }
-                    if (value_info.callable == null and !self.valueHasFunctionType(value_info.logical_ty)) continue;
                     if (value_info.pending_comptime_dependency_origin) continue;
                     if (self.mode == .allow_pending_call_values and value_info.callable == null) continue;
                     if (value_info.projection_info) |projection_id| {
@@ -5712,7 +5879,7 @@ const CallableEmissionAssigner = struct {
                 };
                 const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
                 const provenance = self.erasedProvenance(group);
-                _ = try self.ensureCallableGroupEmission(group_set, group_key, provenance);
+                const group_emission = try self.ensureCallableGroupEmission(group_set, group_key, provenance);
                 var synthesized_callable = false;
                 var callable = if (value_info.callable) |existing| existing else blk: {
                     synthesized_callable = true;
@@ -5736,52 +5903,78 @@ const CallableEmissionAssigner = struct {
                     .erase_finite_set => {},
                 }
                 try self.rewriteCallableConstructionPlan(&callable, value_id, group_set, group_key);
-
                 switch (current_emission) {
-                    .erase_finite_set => |erase| {
-                        var replace_erase = !repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key);
-                        if (provenance) |boundaries| {
-                            if (!boxErasureProvenanceSetEql(erase.provenance, boundaries)) {
-                                const merged = try repr.mergeBoxErasureProvenanceSets(self.allocator, erase.provenance, boundaries);
-                                defer if (merged.len > 0) self.allocator.free(merged);
-                                const updated = try self.finiteSetErasePlan(group_set, group_key, merged);
-                                defer deinitExecutableSpecializationKeySlice(self.allocator, updated.member_targets);
-                                try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(callable.emission_plan, updated);
-                                self.changed = true;
-                                replace_erase = false;
-                            }
-                        }
-                        if (replace_erase) {
-                            const updated = try self.finiteSetErasePlan(group_set, group_key, erase.provenance);
-                            defer deinitExecutableSpecializationKeySlice(self.allocator, updated.member_targets);
-                            try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(callable.emission_plan, updated);
-                            self.changed = true;
-                        }
-                        value_info.callable = callable;
-                        continue;
+                    .pending_proc_value => {
+                        self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
+                        self.changed = true;
                     },
-                    else => {},
+                    .finite => |key| if (!repr.callableSetKeyEql(key, group_key)) {
+                        self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
+                        self.changed = true;
+                    },
+                    .erase_finite_set => {},
+                    .already_erased,
+                    .erase_proc_value,
+                    => unreachable,
                 }
-
-                const already_finite = switch (current_emission) {
-                    .finite => |key| repr.callableSetKeyEql(key, group_key),
-                    else => false,
-                };
-                if (!already_finite) {
-                    self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
+                if (callable.emission_plan != group_emission) {
+                    callable.emission_plan = group_emission;
                     self.changed = true;
                 }
-
-                if (provenance == null) {
-                    value_info.callable = callable;
-                    continue;
-                }
-
-                callable.emission_plan = try self.erasedEmissionPlanForValue(record, value_id, callable, group_set, group_key, provenance.?);
                 value_info.callable = callable;
-                self.changed = true;
             }
         }
+    }
+
+    fn procValueErasePlanForAlreadyErasedSource(
+        self: *CallableEmissionAssigner,
+        value_id: repr.ValueInfoId,
+        source: ProcValueCallableSource,
+        erased: repr.AlreadyErasedCallablePlan,
+    ) Allocator.Error!repr.ProcValueErasePlan {
+        if (erased.provenance.len == 0) {
+            lambdaInvariant("lambda-solved direct proc-value erased emission has no Box(T) provenance");
+        }
+        if (!repr.canonicalTypeKeyEql(source.fn_ty, erased.sig_key.source_fn_ty)) {
+            lambdaInvariant("lambda-solved direct proc-value erased emission source type differs from erased signature");
+        }
+        const target_record = self.recordForInstance(source.target_instance);
+        if (!mirProcedureBodyIdentityEql(target_record.proc, source.proc)) {
+            lambdaInvariant("lambda-solved direct proc-value erased emission target instance has a different procedure body identity");
+        }
+        const target_value_store = self.valueStoreFor(target_record);
+        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
+        if (source.captures.len != target_captures.len) {
+            lambdaInvariant("lambda-solved direct proc-value erased emission capture arity differs from target captures");
+        }
+        const capture_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
+        errdefer if (capture_slots.len > 0) self.allocator.free(capture_slots);
+        const capture_shape_key = repr.captureShapeKeyForSlots(capture_slots);
+        var erased_fn_sig_key = erased.sig_key;
+        if (capture_slots.len != 0) {
+            erased_fn_sig_key.capture_ty = repr.captureTupleExecKeyForSlots(capture_slots);
+        }
+        const abi = self.representationStore().erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
+            lambdaInvariant("lambda-solved direct proc-value erased emission referenced missing ABI");
+        };
+
+        return .{
+            .source_value = value_id,
+            .proc_value = source.proc.callable,
+            .target_instance = source.target_instance,
+            .erased_fn_sig_key = erased_fn_sig_key,
+            .executable_specialization_key = .{
+                .base = source.proc.proc.proc_base,
+                .requested_fn_ty = erased_fn_sig_key.source_fn_ty,
+                .exec_arg_tys = abi.arg_exec_keys,
+                .exec_ret_ty = abi.ret_exec_key,
+                .callable_repr_mode = .direct,
+                .capture_shape_key = capture_shape_key,
+            },
+            .capture_shape_key = capture_shape_key,
+            .capture_slots = capture_slots,
+            .provenance = erased.provenance,
+        };
     }
 
     fn publishAlreadyErasedCallableGroupEmission(
@@ -5834,9 +6027,10 @@ const CallableEmissionAssigner = struct {
         if (!self.valueHasFunctionType(value_info.logical_ty)) {
             lambdaInvariant("lambda-solved attempted to synthesize callable metadata for a non-function value");
         }
+        const callable_root = self.callableRootForFunctionRoot(value_info.root);
         return .{
             .whole_function_root = value_info.root,
-            .callable_root = value_info.root,
+            .callable_root = callable_root,
             .source = .{ .finite_set = group_key },
             .emission_plan = try self.representationStore().appendFiniteCallableEmissionPlan(group_key),
             .construction_plan = null,
@@ -5855,9 +6049,10 @@ const CallableEmissionAssigner = struct {
         if (!self.valueHasFunctionType(value_info.logical_ty)) {
             lambdaInvariant("lambda-solved erased group emission was attached to a non-function value");
         }
+        const callable_root = self.callableRootForFunctionRoot(value_info.root);
         return .{
             .whole_function_root = value_info.root,
-            .callable_root = value_info.root,
+            .callable_root = callable_root,
             .source = .{ .already_erased = .{
                 .sig_key = erased.sig_key,
                 .capture_shape_key = erased.capture_shape_key,
@@ -5893,9 +6088,10 @@ const CallableEmissionAssigner = struct {
             .provenance = provenance,
         };
         const emission = try self.representationStore().appendAlreadyErasedCallableEmissionPlan(plan);
+        const callable_root = self.callableRootForFunctionRoot(value_info.root);
         return .{
             .whole_function_root = value_info.root,
-            .callable_root = value_info.root,
+            .callable_root = callable_root,
             .source = .{ .already_erased = .{
                 .sig_key = erased.sig_key,
                 .capture_shape_key = erased.capture_shape_key,
@@ -6123,19 +6319,6 @@ const CallableEmissionAssigner = struct {
         lambdaInvariant("lambda-solved callable construction selected member missing from solved group callable set");
     }
 
-    fn erasedEmissionPlanForValue(
-        self: *CallableEmissionAssigner,
-        _: *const ProcBuildRecord,
-        _: repr.ValueInfoId,
-        _: repr.CallableValueInfo,
-        group_set: *const CallableGroupSet,
-        group_key: repr.CanonicalCallableSetKey,
-        provenance: []const repr.BoxErasureProvenance,
-    ) Allocator.Error!repr.CallableValueEmissionPlanId {
-        if (provenance.len == 0) lambdaInvariant("lambda-solved erased callable emission has empty Box(T) provenance");
-        return try self.appendFiniteSetErasePlan(group_set, group_key, provenance);
-    }
-
     fn memberForProcValueSource(
         self: *CallableEmissionAssigner,
         source: anytype,
@@ -6156,15 +6339,7 @@ const CallableEmissionAssigner = struct {
         }
         const capture_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
         errdefer if (capture_slots.len > 0) self.allocator.free(capture_slots);
-        const capture_shape_key = try repr.captureShapeKeyForValueSlice(
-            self.allocator,
-            &self.program.canonical_names,
-            &self.program.row_shapes,
-            &self.program.types,
-            self.representationStoreFor(target_record),
-            target_value_store,
-            target_captures,
-        );
+        const capture_shape_key = repr.captureShapeKeyForSlots(capture_slots);
 
         return .{
             .member = canonical.onlyCallableSetMemberId(),
@@ -6417,18 +6592,33 @@ const CallableEmissionAssigner = struct {
         target_record: *const ProcBuildRecord,
         values: []const repr.ValueInfoId,
     ) Allocator.Error![]const repr.CallableSetCaptureSlot {
-        const target_store = self.representationStoreFor(target_record);
         const target_value_store = self.valueStoreFor(target_record);
-        for (values) |value| {
-            _ = try self.publishTargetExecutableEndpoint(target_record, target_value_store, value);
+        if (values.len == 0) return &.{};
+
+        const slots = try self.allocator.alloc(repr.CallableSetCaptureSlot, values.len);
+        errdefer self.allocator.free(slots);
+
+        for (values, 0..) |value, i| {
+            const endpoint = try self.publishTargetExecutableEndpoint(target_record, target_value_store, value);
+            const value_info = &target_value_store.values.items[@intFromEnum(value)];
+            if (isEmptyCanonicalTypeKey(value_info.source_ty)) {
+                lambdaInvariant("lambda-solved capture slot reached callable-set construction without an explicit source type key");
+            }
+            if (value_info.exec_ty) |existing| {
+                if (!repr.canonicalExecValueTypeKeyEql(existing.key, endpoint.key)) {
+                    value_info.exec_ty = endpoint;
+                    self.changed = true;
+                }
+            } else {
+                value_info.exec_ty = endpoint;
+            }
+            slots[i] = .{
+                .slot = @intCast(i),
+                .source_ty = value_info.source_ty,
+                .exec_value_ty = endpoint.key,
+            };
         }
-        return try target_store.captureSlotsForValues(
-            &self.program.canonical_names,
-            &self.program.row_shapes,
-            &self.program.types,
-            target_value_store,
-            values,
-        );
+        return slots;
     }
 
     fn callableGroupSet(
@@ -6445,6 +6635,31 @@ const CallableEmissionAssigner = struct {
     ) ?[]const repr.BoxErasureProvenance {
         const index = self.erased_group_index.get(group) orelse return null;
         return self.erased_groups.items[index].provenance.items;
+    }
+
+    fn callableGroupForValueInfo(
+        self: *CallableEmissionAssigner,
+        value_info: repr.ValueInfo,
+        callable: ?repr.CallableValueInfo,
+    ) ?repr.RepresentationGroupId {
+        if (callable) |info| return self.groupForRoot(info.callable_root);
+        if (!self.valueHasFunctionType(value_info.logical_ty)) return value_info.solved_group;
+        return self.callableGroupForFunctionRoot(value_info.root);
+    }
+
+    fn callableGroupForFunctionRoot(
+        self: *CallableEmissionAssigner,
+        root: repr.RepRootId,
+    ) ?repr.RepresentationGroupId {
+        const callable_root = self.representationStore().solvedStructuralChildRoot(root, .function_callable) orelse root;
+        return self.groupForRoot(callable_root);
+    }
+
+    fn callableRootForFunctionRoot(
+        self: *CallableEmissionAssigner,
+        root: repr.RepRootId,
+    ) repr.RepRootId {
+        return self.representationStore().solvedStructuralChildRoot(root, .function_callable) orelse root;
     }
 
     fn groupForRoot(self: *CallableEmissionAssigner, root: repr.RepRootId) ?repr.RepresentationGroupId {
@@ -6880,22 +7095,60 @@ const BoxPayloadPlanFinalizer = struct {
 
 fn edgePropagatesBoxErasure(kind: repr.RepresentationEdgeKind) bool {
     return switch (kind) {
-        .record_field,
-        .tuple_elem,
-        .tag_payload,
-        .list_elem,
-        .box_payload,
-        .nominal_backing,
-        .function_arg,
-        .function_return,
-        => true,
         .value_alias,
         .value_move,
         .branch_join,
         .loop_phi,
         .mutable_version,
-        .function_callable,
+        .call_arg,
+        .call_result,
+        .capture_value,
         => false,
+        .child => true,
+    };
+}
+
+fn representationChildKindMatches(
+    left: repr.RepresentationChildKind,
+    right: repr.RepresentationChildKind,
+) bool {
+    return switch (left) {
+        .function_arg => |a| switch (right) {
+            .function_arg => |b| a == b,
+            else => false,
+        },
+        .function_return => switch (right) {
+            .function_return => true,
+            else => false,
+        },
+        .function_callable => switch (right) {
+            .function_callable => true,
+            else => false,
+        },
+        .record_field => |a| switch (right) {
+            .record_field => |b| a == b,
+            else => false,
+        },
+        .tuple_elem => |a| switch (right) {
+            .tuple_elem => |b| a == b,
+            else => false,
+        },
+        .tag_payload => |a| switch (right) {
+            .tag_payload => |b| a == b,
+            else => false,
+        },
+        .list_elem => switch (right) {
+            .list_elem => true,
+            else => false,
+        },
+        .box_payload => switch (right) {
+            .box_payload => true,
+            else => false,
+        },
+        .nominal_backing => |a| switch (right) {
+            .nominal_backing => |b| a.module_name == b.module_name and a.type_name == b.type_name,
+            else => false,
+        },
     };
 }
 
@@ -9913,7 +10166,7 @@ const ValueTransformFinalizer = struct {
         }
         const projection = self.valueStore().projections.items[raw_projection];
         const source_info = self.valueStore().values.items[@intFromEnum(projection.source)];
-        const edge_kind: repr.RepresentationEdgeKind = switch (projection.endpoint_kind orelse projection.kind) {
+        const edge_kind: repr.RepresentationChildKind = switch (projection.endpoint_kind orelse projection.kind) {
             .record_field => |field| .{ .record_field = field },
             .tuple_elem => |index| .{ .tuple_elem = index },
             .tag_payload => |payload| .{ .tag_payload = payload },
@@ -11647,7 +11900,7 @@ const BodySolver = struct {
         }
         value_info.callable = .{
             .whole_function_root = value_info.root,
-            .callable_root = value_info.root,
+            .callable_root = self.structuralChildRoot(value_info.root, .function_callable),
             .source = .{ .already_erased = .{
                 .sig_key = erased.sig_key,
                 .capture_shape_key = erased.capture_shape_key,
@@ -12078,7 +12331,7 @@ const BodySolver = struct {
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(value) },
             .to = .{ .local = self.valueRoot(public_ret) },
-            .kind = .function_return,
+            .kind = .value_move,
         });
         try self.propagatePendingComptimeDependencyOrigin(value, public_ret);
         return try self.value_store.addReturn(.{
@@ -12235,9 +12488,17 @@ const BodySolver = struct {
             .var_ => |symbol| {
                 const binding_info = self.env.get(symbol) orelse {
                     const entry = self.symbols.get(symbol);
+                    const record = self.registry.procRecord(self.instance);
                     lambdaInvariantFmt(
-                        "lambda-solved variable occurrence has no published binding info for symbol {d} ({s})",
-                        .{ @intFromEnum(symbol), @tagName(entry.origin) },
+                        "lambda-solved variable occurrence has no published binding info for symbol {d} ({s}) in instance {d} owner {s} proc_base={d} callable={s}",
+                        .{
+                            @intFromEnum(symbol),
+                            @tagName(entry.origin),
+                            @intFromEnum(self.instance),
+                            @tagName(record.owner),
+                            @intFromEnum(record.proc.proc.proc_base),
+                            @tagName(record.proc.callable.template),
+                        },
                     );
                 };
                 const binding = self.value_store.bindings.items[@intFromEnum(binding_info)];
@@ -12522,6 +12783,8 @@ const BodySolver = struct {
                         lowered_args.values,
                         value,
                         requested_fn_root,
+                        requested_fn_ty,
+                        call.requested_source_fn_ty,
                     );
                 }
                 break :blk .{ .call_value = .{
@@ -12553,6 +12816,8 @@ const BodySolver = struct {
                     lowered_args.values,
                     value,
                     requested_fn_root,
+                    requested_fn_ty,
+                    call.requested_source_fn_ty,
                 );
                 break :blk .{ .call_proc = .{
                     .proc = call.proc,
@@ -12564,6 +12829,7 @@ const BodySolver = struct {
             },
             .proc_value => |proc_value| blk: {
                 const captures = try self.lowerCaptureArgSpanWithValues(proc_value.captures);
+                const fn_ty = try self.type_importer.importType(proc_value.fn_ty);
                 const whole_function_root = self.representation_store.reserveRoot();
                 const target_instance = try self.registry.reserveProcValue(self.instance, value, proc_value.proc, proc_value.forced_target);
                 self.refreshValueStore();
@@ -12571,6 +12837,7 @@ const BodySolver = struct {
                     .instance = self.instance,
                     .value = value,
                 } });
+                try self.publishFunctionRootShape(whole_function_root, fn_ty, proc_value.proc.callable.source_fn_ty);
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(value) },
                     .to = .{ .local = whole_function_root },
@@ -12592,7 +12859,7 @@ const BodySolver = struct {
                     .proc = proc_value.proc,
                     .published_proc = proc_value.published_proc,
                     .captures = captures.args,
-                    .fn_ty = try self.type_importer.importType(proc_value.fn_ty),
+                    .fn_ty = fn_ty,
                     .forced_target = try ids.cloneProcValueExecutableTargetOptional(self.allocator, proc_value.forced_target),
                 } };
             },
@@ -12998,11 +13265,14 @@ const BodySolver = struct {
         args: repr.Span(repr.ValueInfoId),
         result: repr.ValueInfoId,
         requested_fn_root: repr.RepRootId,
+        requested_fn_ty: Type.TypeVarId,
+        requested_source_fn_ty: canonical.CanonicalTypeKey,
     ) Allocator.Error!void {
         try self.representation_store.publishRootKind(requested_fn_root, .{ .call_value_requested_fn = .{
             .instance = self.instance,
             .call_site = call_site,
         } });
+        try self.publishFunctionRootShape(requested_fn_root, requested_fn_ty, requested_source_fn_ty);
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(callee_value) },
             .to = .{ .local = requested_fn_root },
@@ -13017,11 +13287,14 @@ const BodySolver = struct {
         args: repr.Span(repr.ValueInfoId),
         result: repr.ValueInfoId,
         requested_fn_root: repr.RepRootId,
+        requested_fn_ty: Type.TypeVarId,
+        requested_source_fn_ty: canonical.CanonicalTypeKey,
     ) Allocator.Error!void {
         try self.representation_store.publishRootKind(requested_fn_root, .{ .call_proc_requested_fn = .{
             .instance = self.instance,
             .call_site = call_site,
         } });
+        try self.publishFunctionRootShape(requested_fn_root, requested_fn_ty, requested_source_fn_ty);
         try self.publishRequestedFunctionArgAndReturnEdges(args, result, requested_fn_root);
     }
 
@@ -13032,16 +13305,18 @@ const BodySolver = struct {
         requested_fn_root: repr.RepRootId,
     ) Allocator.Error!void {
         for (self.value_store.sliceValueSpan(args), 0..) |arg, i| {
+            const arg_root = self.structuralChildRoot(requested_fn_root, .{ .function_arg = @intCast(i) });
             _ = try self.representation_store.appendRepresentationEdge(.{
                 .from = .{ .local = self.valueRoot(arg) },
-                .to = .{ .local = requested_fn_root },
-                .kind = .{ .function_arg = @intCast(i) },
+                .to = .{ .local = arg_root },
+                .kind = .{ .call_arg = @intCast(i) },
             });
         }
+        const return_root = self.structuralChildRoot(requested_fn_root, .function_return);
         _ = try self.representation_store.appendRepresentationEdge(.{
-            .from = .{ .local = requested_fn_root },
+            .from = .{ .local = return_root },
             .to = .{ .local = self.valueRoot(result) },
-            .kind = .function_return,
+            .kind = .call_result,
         });
     }
 
@@ -13176,7 +13451,7 @@ const BodySolver = struct {
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = result_root },
                     .to = .{ .local = payload_root },
-                    .kind = .box_payload,
+                    .kind = .{ .child = .box_payload },
                 });
                 try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
                     .arg = 0,
@@ -13215,7 +13490,7 @@ const BodySolver = struct {
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(boxed_value) },
                     .to = .{ .local = self.valueRoot(result_value) },
-                    .kind = .box_payload,
+                    .kind = .{ .child = .box_payload },
                 });
                 if (self.value_store.values.items[@intFromEnum(boxed_value)].boxed == null) {
                     self.value_store.values.items[@intFromEnum(boxed_value)].boxed = .{
@@ -13236,7 +13511,7 @@ const BodySolver = struct {
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(arg_values[0]) },
                     .to = .{ .local = self.valueRoot(result_value) },
-                    .kind = .list_elem,
+                    .kind = .{ .child = .list_elem },
                 });
                 try value_flow_edges.append(self.allocator, .{ .arg_to_result = .{
                     .arg = 0,
@@ -13252,7 +13527,7 @@ const BodySolver = struct {
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(arg_values[0]) },
                     .to = .{ .local = ok_payload_root },
-                    .kind = .list_elem,
+                    .kind = .{ .child = .list_elem },
                 });
                 try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
                     .arg = 0,
@@ -13271,7 +13546,7 @@ const BodySolver = struct {
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(result_value) },
                     .to = .{ .local = self.valueRoot(arg_values[elem_arg_index]) },
-                    .kind = .list_elem,
+                    .kind = .{ .child = .list_elem },
                 });
                 try value_flow_edges.append(self.allocator, .{ .arg_to_result_projection = .{
                     .arg = 0,
@@ -14081,7 +14356,7 @@ const BodySolver = struct {
         }
         value_info.callable = .{
             .whole_function_root = value_info.root,
-            .callable_root = value_info.root,
+            .callable_root = self.structuralChildRoot(value_info.root, .function_callable),
             .source = .{ .already_erased = .{
                 .sig_key = boundary.sig_key,
                 .capture_shape_key = plan.capture_shape_key,
@@ -14168,12 +14443,17 @@ const BodySolver = struct {
             );
         };
         const whole_function_root = self.representation_store.reserveRoot();
+        const source_fn_ty_payload = self.sourcePayloadForKey(proc.callable.source_fn_ty) orelse {
+            lambdaInvariant("lambda-solved const-backed callable source function type has no concrete payload");
+        };
+        const fn_ty = try self.type_importer.importConcreteRef(source_fn_ty_payload);
         const target_instance = try self.registry.reserveProcValue(self.instance, value, proc, null);
         self.refreshValueStore();
         try self.representation_store.publishRootKind(whole_function_root, .{ .proc_value_fn = .{
             .instance = self.instance,
             .value = value,
         } });
+        try self.publishFunctionRootShape(whole_function_root, fn_ty, proc.callable.source_fn_ty);
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(value) },
             .to = .{ .local = whole_function_root },
@@ -14186,9 +14466,7 @@ const BodySolver = struct {
             null,
             target_instance,
             &.{},
-            self.sourcePayloadForKey(proc.callable.source_fn_ty) orelse {
-                lambdaInvariant("lambda-solved const-backed callable source function type has no concrete payload");
-            },
+            source_fn_ty_payload,
         );
         self.value_store.values.items[@intFromEnum(value)].callable = callable_info;
     }
@@ -14319,7 +14597,7 @@ const BodySolver = struct {
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = box_root },
             .to = .{ .local = payload_root },
-            .kind = .box_payload,
+            .kind = .{ .child = .box_payload },
         });
         self.value_store.values.items[@intFromEnum(value)].boxed = .{
             .box_root = box_root,
@@ -14915,7 +15193,7 @@ const BodySolver = struct {
                     _ = try self.representation_store.appendRepresentationEdge(.{
                         .from = .{ .local = root },
                         .to = .{ .local = self.valueRoot(field.value) },
-                        .kind = .{ .record_field = field.field },
+                        .kind = .{ .child = .{ .record_field = field.field } },
                     });
                 }
             },
@@ -14924,7 +15202,7 @@ const BodySolver = struct {
                     _ = try self.representation_store.appendRepresentationEdge(.{
                         .from = .{ .local = root },
                         .to = .{ .local = self.valueRoot(elem.value) },
-                        .kind = .{ .tuple_elem = elem.index },
+                        .kind = .{ .child = .{ .tuple_elem = elem.index } },
                     });
                 }
             },
@@ -14933,14 +15211,14 @@ const BodySolver = struct {
                     _ = try self.representation_store.appendRepresentationEdge(.{
                         .from = .{ .local = root },
                         .to = .{ .local = payload.root },
-                        .kind = .{ .tag_payload = payload.payload },
+                        .kind = .{ .child = .{ .tag_payload = payload.payload } },
                     });
                 }
                 for (tag.payloads) |payload| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
                         .from = .{ .local = root },
                         .to = .{ .local = self.valueRoot(payload.value) },
-                        .kind = .{ .tag_payload = payload.payload },
+                        .kind = .{ .child = .{ .tag_payload = payload.payload } },
                     });
                 }
             },
@@ -14948,13 +15226,13 @@ const BodySolver = struct {
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = root },
                     .to = .{ .local = list.elem_root },
-                    .kind = .list_elem,
+                    .kind = .{ .child = .list_elem },
                 });
                 for (list.elems) |elem| {
                     _ = try self.representation_store.appendRepresentationEdge(.{
                         .from = .{ .local = root },
                         .to = .{ .local = self.valueRoot(elem.value) },
-                        .kind = .list_elem,
+                        .kind = .{ .child = .list_elem },
                     });
                 }
             },
@@ -15002,8 +15280,11 @@ const BodySolver = struct {
             };
             if (from != parent) continue;
             switch (edge.kind) {
-                .nominal_backing => |backing| {
-                    if (backing.module_name != nominal.module_name or backing.type_name != nominal.type_name) continue;
+                .child => |child| switch (child) {
+                    .nominal_backing => |backing| {
+                        if (backing.module_name != nominal.module_name or backing.type_name != nominal.type_name) continue;
+                    },
+                    else => continue,
                 },
                 else => continue,
             }
@@ -15032,7 +15313,7 @@ const BodySolver = struct {
     fn structuralChildRoot(
         self: *BodySolver,
         parent: repr.RepRootId,
-        kind: repr.RepresentationEdgeKind,
+        kind: repr.RepresentationChildKind,
     ) repr.RepRootId {
         for (self.representation_store.representation_edges.items) |edge| {
             const from = switch (edge.from) {
@@ -15042,7 +15323,11 @@ const BodySolver = struct {
                 => continue,
             };
             if (from != parent) continue;
-            if (!self.representationEdgeKindMatches(edge.kind, kind)) continue;
+            const child_kind = switch (edge.kind) {
+                .child => |child| child,
+                else => continue,
+            };
+            if (!representationChildKindMatches(child_kind, kind)) continue;
             return switch (edge.to) {
                 .local => |local| local,
                 .procedure_public,
@@ -15051,71 +15336,6 @@ const BodySolver = struct {
             };
         }
         lambdaInvariant("lambda-solved structural child root is missing");
-    }
-
-    fn representationEdgeKindMatches(
-        _: *BodySolver,
-        left: repr.RepresentationEdgeKind,
-        right: repr.RepresentationEdgeKind,
-    ) bool {
-        return switch (left) {
-            .value_alias => switch (right) {
-                .value_alias => true,
-                else => false,
-            },
-            .value_move => switch (right) {
-                .value_move => true,
-                else => false,
-            },
-            .function_arg => |a| switch (right) {
-                .function_arg => |b| a == b,
-                else => false,
-            },
-            .function_return => switch (right) {
-                .function_return => true,
-                else => false,
-            },
-            .function_callable => switch (right) {
-                .function_callable => true,
-                else => false,
-            },
-            .record_field => |a| switch (right) {
-                .record_field => |b| a == b,
-                else => false,
-            },
-            .tuple_elem => |a| switch (right) {
-                .tuple_elem => |b| a == b,
-                else => false,
-            },
-            .tag_payload => |a| switch (right) {
-                .tag_payload => |b| a == b,
-                else => false,
-            },
-            .list_elem => switch (right) {
-                .list_elem => true,
-                else => false,
-            },
-            .box_payload => switch (right) {
-                .box_payload => true,
-                else => false,
-            },
-            .nominal_backing => |a| switch (right) {
-                .nominal_backing => |b| a.module_name == b.module_name and a.type_name == b.type_name,
-                else => false,
-            },
-            .branch_join => switch (right) {
-                .branch_join => true,
-                else => false,
-            },
-            .loop_phi => switch (right) {
-                .loop_phi => true,
-                else => false,
-            },
-            .mutable_version => switch (right) {
-                .mutable_version => true,
-                else => false,
-            },
-        };
     }
 
     fn publishRootAlias(
@@ -15164,7 +15384,7 @@ const BodySolver = struct {
         result: repr.ValueInfoId,
         kind: repr.ProjectionKind,
     ) Allocator.Error!void {
-        const edge_kind: repr.RepresentationEdgeKind = switch (kind) {
+        const edge_kind: repr.RepresentationChildKind = switch (kind) {
             .record_field => |field| .{ .record_field = field },
             .tuple_elem => |index| .{ .tuple_elem = index },
             .tag_payload => |payload| .{ .tag_payload = payload },
@@ -15173,7 +15393,7 @@ const BodySolver = struct {
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = source_root },
             .to = .{ .local = self.valueRoot(result) },
-            .kind = edge_kind,
+            .kind = .{ .child = edge_kind },
         });
     }
 
@@ -15222,7 +15442,7 @@ const BodySolver = struct {
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(nominal_value) },
             .to = .{ .local = self.valueRoot(backing_value) },
-            .kind = .{ .nominal_backing = nominal },
+            .kind = .{ .child = .{ .nominal_backing = nominal } },
         });
     }
 
@@ -15304,6 +15524,16 @@ const BodySolver = struct {
         });
     }
 
+    fn publishFunctionRootShape(
+        self: *BodySolver,
+        root: repr.RepRootId,
+        ty: Type.TypeVarId,
+        source_ty: canonical.CanonicalTypeKey,
+    ) Allocator.Error!void {
+        const source_ty_payload = self.sourcePayloadForKey(source_ty);
+        try self.publishStructuralRootEdges(root, ty, source_ty, self.sourceRootForPayload(source_ty_payload));
+    }
+
     fn publishStructuralRootEdges(
         self: *BodySolver,
         root: repr.RepRootId,
@@ -15346,9 +15576,27 @@ const BodySolver = struct {
                 );
             },
             .content => |content| switch (content) {
-                .primitive,
-                .func,
-                => {},
+                .primitive => {},
+                .func => |func| {
+                    const args = self.type_importer.output.sliceTypeVarSpan(func.args);
+                    for (args, 0..) |arg, i| {
+                        _ = try self.publishStructuralChildRoot(
+                            rep_root,
+                            .{ .function_arg = @intCast(i) },
+                            arg,
+                            try self.sourceChildRoot(source_root, .{ .function_arg = @intCast(i) }),
+                            active,
+                        );
+                    }
+                    _ = try self.publishStructuralChildRoot(
+                        rep_root,
+                        .function_return,
+                        func.ret,
+                        try self.sourceChildRoot(source_root, .function_return),
+                        active,
+                    );
+                    _ = try self.publishFunctionCallableChildRoot(rep_root);
+                },
                 .list => |elem| {
                     _ = try self.publishStructuralChildRoot(rep_root, .list_elem, elem, try self.sourceChildRoot(source_root, .list_elem), active);
                 },
@@ -15415,10 +15663,23 @@ const BodySolver = struct {
         }
     }
 
+    fn publishFunctionCallableChildRoot(
+        self: *BodySolver,
+        parent: repr.RepRootId,
+    ) Allocator.Error!repr.RepRootId {
+        const child_root = self.representation_store.reserveRoot();
+        _ = try self.representation_store.appendRepresentationEdge(.{
+            .from = .{ .local = parent },
+            .to = .{ .local = child_root },
+            .kind = .{ .child = .function_callable },
+        });
+        return child_root;
+    }
+
     fn publishStructuralChildRoot(
         self: *BodySolver,
         parent: repr.RepRootId,
-        kind: repr.RepresentationEdgeKind,
+        kind: repr.RepresentationChildKind,
         child_ty: Type.TypeVarId,
         child_source_root: ?ConcreteSourceType.ConcreteSourceTypeRoot,
         active: *std.AutoHashMap(Type.TypeVarId, repr.RepRootId),
@@ -15432,7 +15693,7 @@ const BodySolver = struct {
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = parent },
             .to = .{ .local = child_root },
-            .kind = kind,
+            .kind = .{ .child = kind },
         });
 
         if (active.get(child_root_ty) == null) {
@@ -15595,7 +15856,7 @@ const BodySolver = struct {
     fn sourceChildRoot(
         self: *const BodySolver,
         parent: ?ConcreteSourceType.ConcreteSourceTypeRoot,
-        kind: repr.RepresentationEdgeKind,
+        kind: repr.RepresentationChildKind,
     ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRoot {
         const parent_root = parent orelse return null;
         const source = self.sourceViewForRoot(parent_root);
@@ -15610,14 +15871,9 @@ const BodySolver = struct {
                 const tag = self.row_shapes.tag(payload.tag);
                 break :blk self.sourceTagPayload(source, tag.label, payload.logical_index) orelse return null;
             },
-            .value_alias,
-            .value_move,
-            .function_arg,
-            .function_return,
+            .function_arg => |index| self.sourceFunctionArg(source, index) orelse return null,
+            .function_return => self.sourceFunctionReturn(source) orelse return null,
             .function_callable,
-            .branch_join,
-            .loop_phi,
-            .mutable_version,
             => return null,
         };
         return .{
@@ -15759,6 +16015,30 @@ const BodySolver = struct {
                 else => return null,
             }
         }
+    }
+
+    fn sourceFunctionArg(
+        self: *const BodySolver,
+        source: ConcreteSourceTypeView,
+        index: u32,
+    ) ?checked_artifact.CheckedTypeId {
+        const resolved = self.resolvedSourcePayload(source) orelse return null;
+        const raw_index: usize = @intCast(index);
+        return switch (checkedTypePayload(resolved.view, resolved.root)) {
+            .function => |function| if (raw_index < function.args.len) function.args[raw_index] else null,
+            else => null,
+        };
+    }
+
+    fn sourceFunctionReturn(
+        self: *const BodySolver,
+        source: ConcreteSourceTypeView,
+    ) ?checked_artifact.CheckedTypeId {
+        const resolved = self.resolvedSourcePayload(source) orelse return null;
+        return switch (checkedTypePayload(resolved.view, resolved.root)) {
+            .function => |function| function.ret,
+            else => null,
+        };
     }
 
     fn sourceRecordFieldMatches(
