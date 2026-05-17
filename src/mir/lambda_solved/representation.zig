@@ -82,7 +82,18 @@ pub const ProcRepresentationInstanceId = enum(u32) { _ };
 pub const RepresentationSolveSessionId = enum(u32) { _ };
 /// Public `ValueInfoStoreId` declaration.
 pub const ValueInfoStoreId = enum(u32) { _ };
+/// Public `CallableSetMemberId` alias.
 pub const CallableSetMemberId = canonical.CallableSetMemberId;
+/// Public `CallableSetRuntimeDiscriminant` alias.
+pub const CallableSetRuntimeDiscriminant = canonical.CallableSetRuntimeDiscriminant;
+/// Public `callableSetRuntimeDiscriminantForMember` alias.
+pub const callableSetRuntimeDiscriminantForMember = canonical.callableSetRuntimeDiscriminantForMember;
+/// Public `callableSetRuntimeIndexForMember` alias.
+pub const callableSetRuntimeIndexForMember = canonical.callableSetRuntimeIndexForMember;
+/// Public `callableSetMemberForRuntimeDiscriminant` alias.
+pub const callableSetMemberForRuntimeDiscriminant = canonical.callableSetMemberForRuntimeDiscriminant;
+/// Public `callableSetMemberForRuntimeIndex` alias.
+pub const callableSetMemberForRuntimeIndex = canonical.callableSetMemberForRuntimeIndex;
 /// Public `ErasedAdapterId` declaration.
 pub const ErasedAdapterId = enum(u32) { _ };
 pub const Symbol = symbol_mod.Symbol;

@@ -5810,12 +5810,20 @@ fn selectFiniteCallableSetMember(
 ) SelectedFiniteCallableSetMember {
     if (layout.tag == .tag_union) {
         const info = layouts.getTagUnionInfo(layout);
-        const discriminant = info.data.readDiscriminant(value.ptr);
-        if (discriminant >= members.len) {
+        const raw_discriminant = info.data.readDiscriminant(value.ptr);
+        if (raw_discriminant >= members.len) {
             compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded member count");
         }
+        if (raw_discriminant > std.math.maxInt(canonical.CallableSetRuntimeDiscriminant)) {
+            compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded runtime encoding range");
+        }
+        const discriminant: canonical.CallableSetRuntimeDiscriminant = @intCast(raw_discriminant);
+        const planned_member = members[@intCast(raw_discriminant)];
+        if (canonical.callableSetRuntimeDiscriminantForMember(planned_member.member) != discriminant) {
+            compileTimeFinalizationInvariant("finite compile-time callable result members were not in runtime-discriminant order");
+        }
         return .{
-            .member = @enumFromInt(discriminant),
+            .member = planned_member.member,
             .payload_layout = info.variants.get(@intCast(discriminant)).payload_layout,
         };
     }

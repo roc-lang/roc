@@ -1342,6 +1342,20 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"-42\"" },
     },
     .{
+        .name = "low_level - I8.abs_diff uses signed operand layout",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 120.I8
+        \\b : I8
+        \\b = -120.I8
+        \\x = I8.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "240" },
+    },
+    .{
         .name = "low_level - U16.to_str",
         .source =
         \\{

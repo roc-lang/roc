@@ -2979,10 +2979,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .num_abs_diff => {
                     // |a - b|: compare and subtract in the correct order to avoid wrap/overflow
-                    const arg_layout = self.valueLayout(args[0]);
+                    if (args.len != 2) unreachable;
+                    const lhs_layout = self.valueLayout(args[0]);
+                    const rhs_layout = self.valueLayout(args[1]);
+                    if (lhs_layout != rhs_layout) {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: num_abs_diff argument layouts differ: lhs={s} rhs={s}",
+                                .{ @tagName(lhs_layout), @tagName(rhs_layout) },
+                            );
+                        }
+                        unreachable;
+                    }
                     const a_loc = try self.emitValueLocal(args[0]);
                     const b_loc = try self.emitValueLocal(args[1]);
-                    return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
+                    return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, lhs_layout);
                 },
 
                 // Numeric arithmetic and comparison ops — route to existing binop helpers
@@ -7003,7 +7014,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// For floats, uses float sub + float abs.
         /// For integers: compares a and b, then subtracts the smaller from the larger.
         /// This avoids wrapping/overflow issues that abs(a - b) would cause.
-        fn generateAbsDiff(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) Allocator.Error!ValueLocation {
+        fn generateAbsDiff(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, operand_layout: layout.Idx) Allocator.Error!ValueLocation {
             // Float: subtract then take float absolute value
             if (ret_layout == .f32 or ret_layout == .f64) {
                 const a_reg = try self.ensureInFloatReg(a_loc);
@@ -7016,17 +7027,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .float_reg = result_reg };
             }
 
-            const input_layout = self.inferAbsDiffInputLayout(a_loc, b_loc, ret_layout, arg_layout);
-
             // 128-bit (I128, U128, Dec)
             if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                return try self.generateAbsDiff128(a_loc, b_loc, input_layout);
+                return try self.generateAbsDiff128(a_loc, b_loc, operand_layout);
             }
 
             // 64-bit or smaller integers: CMP, compute both a-b and b-a, CSEL/CMOV
-            // Use arg_layout for signedness since abs_diff returns unsigned (e.g.
+            // Use operand layout for signedness since abs_diff returns unsigned (e.g.
             // I8.abs_diff returns U8), but the comparison must be signed.
-            const is_signed = switch (input_layout) {
+            const is_signed = switch (operand_layout) {
                 .i8, .i16, .i32, .i64 => true,
                 .u8, .u16, .u32, .u64 => false,
                 else => false,
@@ -7040,7 +7049,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // E.g. I8 value -5 is stored as 0xFB (251); without sign extension,
             // a 64-bit signed compare treats it as 251 > 10 instead of -5 < 10.
             if (is_signed) {
-                const shift_amount: u6 = switch (input_layout) {
+                const shift_amount: u6 = switch (operand_layout) {
                     .i8 => 56,
                     .i16 => 48,
                     .i32 => 32,
@@ -7083,37 +7092,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(b_reg);
             self.codegen.freeGeneral(neg_reg);
             return .{ .general_reg = diff_reg };
-        }
-
-        fn immediateIsNegative(loc: ValueLocation) bool {
-            return switch (loc) {
-                .immediate_i64 => |v| v < 0,
-                .immediate_i128 => |v| v < 0,
-                else => false,
-            };
-        }
-
-        fn signedCounterpartLayout(l: layout.Idx) ?layout.Idx {
-            return switch (l) {
-                .u8 => .i8,
-                .u16 => .i16,
-                .u32 => .i32,
-                .u64 => .i64,
-                .u128 => .i128,
-                else => null,
-            };
-        }
-
-        fn inferAbsDiffInputLayout(_: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) layout.Idx {
-            if (arg_layout) |al| return al;
-
-            if (immediateIsNegative(a_loc) or immediateIsNegative(b_loc)) {
-                if (signedCounterpartLayout(ret_layout)) |signed_layout| {
-                    return signed_layout;
-                }
-            }
-
-            return ret_layout;
         }
 
         /// Generate 128-bit |a - b| using SUBS/SBCS for comparison flags.
