@@ -4664,7 +4664,7 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = std.fs.cwd().readFileAlloc(
+    const builtin_source = b.build_root.handle.readFileAlloc(
         b.allocator,
         "src/build/roc/Builtin.roc",
         32 * 1024 * 1024,
