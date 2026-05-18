@@ -115,7 +115,7 @@ pub const StringLiteralStoreImage = extern struct {
 
     fn view(self: StringLiteralStoreImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!base.StringLiteral.Store {
         return .{
-            .buffer = safeListFromRef(u8, base_ptr, image_size, self.buffer),
+            .buffer = stringLiteralBufferFromRef(base_ptr, image_size, self.buffer),
         };
     }
 };
@@ -275,6 +275,14 @@ fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize
             .capacity = @intCast(ref.capacity),
         },
     };
+}
+
+fn stringLiteralBufferFromRef(base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) base.StringLiteral.Store.Buffer {
+    if (ref.capacity == 0) return .{};
+    debugCheckByteRef(image_size, ref, @as(usize, @intCast(ref.len)));
+
+    const ptr: [*]align(base.StringLiteral.Store.static_refcount_alignment) u8 = @ptrCast(@alignCast(base_ptr + @as(usize, @intCast(ref.offset))));
+    return base.StringLiteral.Store.Buffer.fromMappedSlice(ptr[0..@intCast(ref.len)], @intCast(ref.capacity));
 }
 
 fn safeMultiListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) collections.SafeMultiList(T) {

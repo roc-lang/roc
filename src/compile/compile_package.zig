@@ -337,6 +337,77 @@ fn importedArtifactsCoverImportedEnvs(
     return true;
 }
 
+fn buildCheckOwnerEnvs(
+    allocator: Allocator,
+    imported_envs: []const *ModuleEnv,
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+) Allocator.Error![]const *const ModuleEnv {
+    var owner_envs = std.ArrayList(*const ModuleEnv).empty;
+    errdefer owner_envs.deinit(allocator);
+
+    for (imported_envs) |env| {
+        try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, env);
+    }
+
+    for (imported_artifacts) |imported_artifact| {
+        for (imported_artifact.view.public_api_dependencies.artifacts) |dependency_key| {
+            const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
+                std.debug.panic("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
+            };
+            try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, dependency.module_env);
+        }
+    }
+
+    return try owner_envs.toOwnedSlice(allocator);
+}
+
+fn appendCheckOwnerEnvIfMissing(
+    allocator: Allocator,
+    owner_envs: *std.ArrayList(*const ModuleEnv),
+    module_env: *const ModuleEnv,
+) Allocator.Error!void {
+    for (owner_envs.items) |existing| {
+        if (moduleEnvNamesMatch(existing, module_env)) return;
+    }
+    try owner_envs.append(allocator, module_env);
+}
+
+fn moduleEnvNamesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
+    if (@intFromPtr(a) == @intFromPtr(b)) return true;
+    if (!a.qualified_module_ident.isNone() and !b.qualified_module_ident.isNone()) {
+        return std.mem.eql(u8, a.getIdent(a.qualified_module_ident), b.getIdent(b.qualified_module_ident));
+    }
+    if (!a.display_module_name_idx.isNone() and !b.display_module_name_idx.isNone()) {
+        return std.mem.eql(u8, a.getIdent(a.display_module_name_idx), b.getIdent(b.display_module_name_idx));
+    }
+    if (a.qualified_module_ident.isNone() or b.qualified_module_ident.isNone()) {
+        if (std.mem.eql(u8, a.module_name, b.module_name)) return true;
+    }
+    return false;
+}
+
+fn availableArtifactByKey(
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    key: CheckedArtifact.CheckedModuleArtifactKey,
+) ?CheckedArtifact.ImportedModuleView {
+    for (available_artifacts) |artifact| {
+        if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
+    }
+    return null;
+}
+
+fn appendAvailableArtifactViewIfMissing(
+    allocator: Allocator,
+    views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
+    view: CheckedArtifact.ImportedModuleView,
+) Allocator.Error!void {
+    for (views.items) |existing| {
+        if (std.mem.eql(u8, &existing.key.bytes, &view.key.bytes)) return;
+    }
+    try views.append(allocator, view);
+}
+
 /// Per-package module build orchestrator
 pub const PackageEnv = struct {
     gpa: Allocator,
@@ -1326,11 +1397,15 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         errdefer module_envs_map.deinit();
 
-        var checker = try Check.init(
+        const owner_envs = try buildCheckOwnerEnvs(gpa, imported_envs, imported_artifacts, available_artifacts);
+        defer gpa.free(owner_envs);
+
+        var checker = try Check.initWithOwnerModules(
             gpa,
             &env.types,
             env,
             imported_envs,
+            owner_envs,
             &module_envs_map,
             &env.store.regions,
             module_builtin_ctx,
@@ -1502,11 +1577,23 @@ pub const PackageEnv = struct {
             }
         }
 
-        const available_artifacts = try self.gpa.alloc(CheckedArtifact.ImportedModuleView, imported_artifacts.items.len);
-        defer self.gpa.free(available_artifacts);
-        for (imported_artifacts.items, 0..) |imported, i| {
-            available_artifacts[i] = imported.view;
+        var available_artifact_views = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        errdefer available_artifact_views.deinit(self.gpa);
+        try appendAvailableArtifactViewIfMissing(
+            self.gpa,
+            &available_artifact_views,
+            CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
+        );
+        for (self.modules.items) |*module_state| {
+            if (module_state.checkedArtifact()) |artifact| {
+                try appendAvailableArtifactViewIfMissing(self.gpa, &available_artifact_views, CheckedArtifact.importedView(artifact));
+            }
         }
+        for (imported_artifacts.items) |imported| {
+            try appendAvailableArtifactViewIfMissing(self.gpa, &available_artifact_views, imported.view);
+        }
+        const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
+        defer self.gpa.free(available_artifacts);
 
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         var typecheck_output = try typeCheckModule(
