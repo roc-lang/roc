@@ -2790,6 +2790,7 @@ pub fn build(b: *std.Build) void {
     });
     llvm_codegen_module.addImport("layout", roc_modules.layout);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
+    llvm_codegen_module.addImport("builtins", roc_modules.builtins);
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -3293,7 +3294,23 @@ pub fn build(b: *std.Build) void {
         });
         roc_modules.addAll(cli_test);
         cli_test.linkLibrary(zstd.artifact("zstd"));
-        add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
+        try addLlvmSupportToStep(
+            b,
+            cli_test,
+            target,
+            use_system_llvm,
+            user_llvm_path,
+            roc_modules,
+            llvm_codegen_module,
+            &copy_builtins_bc.step,
+            zstd,
+        );
+        if (cli_test.root_module.resolved_target.?.result.os.tag != .windows or
+            cli_test.root_module.resolved_target.?.result.abi != .msvc)
+        {
+            cli_test.root_module.link_libcpp = true;
+        }
+        add_tracy(b, roc_modules.build_options, cli_test, target, true, flag_enable_tracy);
         cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cli_test.step.dependOn(&write_compiled_builtins.step);
 

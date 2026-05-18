@@ -5411,7 +5411,7 @@ pub const WipFunction = struct {
                 .weights = weights,
             }),
         });
-        self.extra.addManyAsSliceAssumeCapacity(cases_len * 2);
+        _ = self.extra.addManyAsSliceAssumeCapacity(cases_len * 2);
         default.ptr(self).branches += 1;
         return .{ .index = 0, .instruction = instruction };
     }
@@ -5664,7 +5664,7 @@ pub const WipFunction = struct {
         name: []const u8,
     ) Allocator.Error!Value {
         assert(len == .none or len.typeOfWip(self).isInteger(self.builder));
-        try self.builder.ptrType(addr_space);
+        _ = try self.builder.ptrType(addr_space);
         try self.ensureUnusedExtraCapacity(1, Instruction.Alloca, 0);
         const instruction = try self.addInst(name, .{
             .tag = switch (kind) {
@@ -6850,7 +6850,7 @@ pub const WipFunction = struct {
             => assert(lhs.typeOfWip(self) == rhs.typeOfWip(self)),
             else => unreachable,
         }
-        try lhs.typeOfWip(self).changeScalar(.i1, self.builder);
+        _ = try lhs.typeOfWip(self).changeScalar(.i1, self.builder);
         try self.ensureUnusedExtraCapacity(1, Instruction.Binary, 0);
         const instruction = try self.addInst(name, .{
             .tag = tag,
@@ -9054,7 +9054,7 @@ pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Erro
             0],
     )));
 
-    self.function_attributes_set.getOrPutAssumeCapacity(function_attributes);
+    _ = self.function_attributes_set.getOrPutAssumeCapacity(function_attributes);
     return function_attributes;
 }
 
@@ -9068,7 +9068,7 @@ pub fn addGlobal(self: *Builder, name: StrtabString, global: Global) Allocator.E
 
 /// Adds a global value assuming capacity has been pre-allocated.
 pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Global) Global.Index {
-    self.ptrTypeAssumeCapacity(global.addr_space);
+    _ = self.ptrTypeAssumeCapacity(global.addr_space);
     var id = name;
     if (name == .empty) {
         id = self.next_unnamed_global;

@@ -282,7 +282,8 @@ fn cleanupOutputArtifacts(allocator: Allocator, output_name: []const u8) void {
     deleteOutputArtifacts(allocator, output_name) catch {};
 }
 
-fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
+fn runSingleTest(allocator: Allocator, spec: CliTestSpec, timeout_ms: u64) TestResult {
+    _ = timeout_ms;
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
     const cache_dirs = util.createIsolatedTestCacheDirs(allocator) catch
@@ -638,7 +639,7 @@ pub fn main() !void {
         if (idx >= tests.len) std.process.exit(2);
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        const result = runSingleTest(arena.allocator(), tests[idx]);
+        const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
         serializeResult(std.fs.File.stdout().handle, result);
         return;
     }
@@ -670,7 +671,7 @@ pub fn main() !void {
             if (idx >= tests.len) continue;
 
             _ = arena.reset(.retain_capacity);
-            const result = runSingleTest(arena.allocator(), tests[idx]);
+            const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
             serializeResultStreamed(stdout_handle, result);
         }
         return;

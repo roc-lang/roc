@@ -15,6 +15,8 @@ const bindings = @import("bindings.zig");
 
 const Allocator = std.mem.Allocator;
 
+var temp_path_counter = std.atomic.Value(usize).init(0);
+
 // Platform-specific i128 ABI Handling
 //
 // When calling into separately compiled Zig builtins (e.g., Dec operations),
@@ -428,18 +430,17 @@ fn linkSharedLibraryMacos(
 
 /// Create a unique temporary file path for an artifact output.
 fn createTempPath(allocator: Allocator, extension: []const u8) ![:0]const u8 {
-    // Generate a unique filename using timestamp
-    const timestamp = std.time.nanoTimestamp();
-    const timestamp_low: u64 = @truncate(@as(u128, @bitCast(timestamp)));
-    const random_suffix: u32 = @truncate(timestamp_low);
+    const counter = temp_path_counter.fetchAdd(1, .monotonic);
+    const random_hi = std.crypto.random.int(u64);
+    const random_lo = std.crypto.random.int(u64);
 
     // Use appropriate temp directory for each platform
     const tmp_prefix = if (builtin.os.tag == .windows) "C:\\Windows\\Temp\\roc_llvm_" else "/tmp/roc_llvm_";
 
     const str = try std.fmt.allocPrint(
         allocator,
-        "{s}{x}_{x}{s}",
-        .{ tmp_prefix, timestamp_low, random_suffix, extension },
+        "{s}{x}_{x}_{x}{s}",
+        .{ tmp_prefix, random_hi, random_lo, counter, extension },
     );
     // Convert to null-terminated by reallocating with extra byte
     const result = try allocator.allocSentinel(u8, str.len, 0);
