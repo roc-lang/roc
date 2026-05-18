@@ -15,7 +15,7 @@ const bindings = @import("bindings.zig");
 
 const Allocator = std.mem.Allocator;
 
-var temp_path_counter = std.atomic.Value(u64).init(0);
+var temp_path_counter = std.atomic.Value(usize).init(0);
 
 // Platform-specific i128 ABI Handling
 //
