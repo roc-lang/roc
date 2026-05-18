@@ -1790,12 +1790,12 @@ fn renderCoordinatorReports(ctx: *CliContext, coord: *Coordinator, roc_file_path
         if (rep.severity == .fatal or rep.severity == .runtime_error) {
             counts.errors += 1;
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(@constCast(rep), ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
             }
         } else if (rep.severity == .warning) {
             counts.warnings += 1;
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(@constCast(rep), ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
             }
         }
     }

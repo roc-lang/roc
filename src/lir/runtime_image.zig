@@ -210,8 +210,15 @@ pub fn fillHeaderInSharedMemory(
     return fillHeaderInBuffer(header, base_ptr, image_size, lowered, target_usize, platform_entrypoints);
 }
 
-/// View an ARC-inserted LIR program in place from mapped shared memory.
-pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_size: usize) ImageError!ProgramView {
+/// View an ARC-inserted LIR program in place from a mapped buffer.
+///
+/// The buffer is treated as read-only by the view — `LirStore` and
+/// `layout_mod.Store` are constructed with slices that the interpreter
+/// reads but never mutates. Accepting `const` here lets embedders that
+/// hold the buffer behind a `const` pointer (e.g. a `FixedBufferAllocator`
+/// backed by `gpa.alignedAlloc` whose owning slice is `const`) pass it
+/// directly without a manual `@constCast`.
+pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, mapped_size: usize) ImageError!ProgramView {
     if (mapped_size < @sizeOf(Header)) return error.InvalidRuntimeImage;
 
     if (header.magic != MAGIC) return error.InvalidRuntimeImage;
@@ -224,11 +231,16 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_s
         else => return error.InvalidRuntimeImage,
     };
 
+    // The view path constructs mutable container types (LirStore, Store)
+    // whose slice fields are not const, even though the interpreter only
+    // reads them. Cast once at the boundary so callers don't have to.
+    const mutable_base: [*]align(1) u8 = @constCast(base_ptr);
+
     return .{
-        .store = try header.store.view(base_ptr, @intCast(header.image_size)),
-        .layouts = try header.layouts.view(base_ptr, @intCast(header.image_size), target_usize),
-        .root_procs = sliceFromRef(LIR.LirProcSpecId, base_ptr, @intCast(header.image_size), header.root_procs),
-        .platform_entrypoints = sliceFromRef(PlatformEntrypoint, base_ptr, @intCast(header.image_size), header.platform_entrypoints),
+        .store = try header.store.view(mutable_base, @intCast(header.image_size)),
+        .layouts = try header.layouts.view(mutable_base, @intCast(header.image_size), target_usize),
+        .root_procs = sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.root_procs),
+        .platform_entrypoints = sliceFromRef(PlatformEntrypoint, mutable_base, @intCast(header.image_size), header.platform_entrypoints),
         .target_usize = target_usize,
     };
 }
