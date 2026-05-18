@@ -72,6 +72,7 @@ pub const Paths = struct {
     extras_prefix: []const u8 = "/app/",
 };
 
+/// Inputs to `runEcho`. See field doc comments for the contract on each.
 pub const RunOptions = struct {
     /// Single contiguous arena used for the entire pipeline (BuildEnv,
     /// lowering, runtime image, interpreter). Must own a flat virtual

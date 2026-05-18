@@ -72,14 +72,12 @@ pub fn hostedFn(func: anytype) HostedFn {
 
 /// Array of hosted function pointers provided by the platform.
 ///
-/// The interpreter looks up hosted functions positionally as `fns[dispatch_index]`.
-/// The index is assigned deterministically: within each checked artifact,
-/// hosted functions are sorted alphabetically by their fully-qualified name
-/// `Module.fn_name` (with trailing `!` stripped, so `Echo.line!` sorts as
-/// `Echo.line`), tiebroken by definition order. The global catalog
-/// concatenates artifacts as root → imports[i] → relations[i]. For a
-/// single-module platform this collapses to plain alphabetical order.
-/// See `src/compile/README.md` ("Host functions") for full detail.
+/// Dispatch is positional: the interpreter calls `fns[i]`. For a
+/// typical platform — hosted functions in a single module — `i` is the
+/// function's alphabetical index by `Module.fn_name` (trailing `!`
+/// stripped). When hosted functions span multiple modules the ordering
+/// rule is more involved; see `src/compile/README.md` ("Host functions").
+/// Wrong order is silent: the wrong function gets called.
 pub const HostedFunctions = extern struct {
     count: u32,
     fns: [*]HostedFn,
