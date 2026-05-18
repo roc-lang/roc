@@ -168,7 +168,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "user")))
-			(e-dot-access (field "name")
+			(e-field-access (field "name")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "user"))))))
@@ -184,14 +184,14 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-assign (ident "user"))
-					(e-call
+					(e-call (constraint-fn-var 230)
 						(e-lookup-local
 							(p-assign (ident "create_user")))
 						(e-num (value "123"))
 						(e-string
 							(e-literal (string "Alice")))
 						(e-num (value "25"))))
-				(e-call
+				(e-call (constraint-fn-var 291)
 					(e-lookup-local
 						(p-assign (ident "get_user_name")))
 					(e-lookup-local

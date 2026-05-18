@@ -302,30 +302,7 @@ x = {
 				(p-assign (ident "value2")))))
 	(d-let
 		(p-assign (ident "value5"))
-		(e-record
-			(fields
-				(field (name "a")
-					(e-string
-						(e-literal (string "Multiline"))))
-				(field (name "b")
-					(e-tuple
-						(elems
-							(e-string
-								(e-literal (string "Multiline")))
-							(e-string
-								(e-literal (string "Multiline"))))))
-				(field (name "c")
-					(e-list
-						(elems
-							(e-string
-								(e-literal (string "multiline"))))))
-				(field (name "d")
-					(e-binop (op "sub")
-						(e-num (value "0"))
-						(e-string)))
-				(field (name "e")
-					(e-unary-not
-						(e-string))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block

@@ -223,13 +223,13 @@ main = |_| {
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "int_doubled"))
-		(e-call
+		(e-call (constraint-fn-var 160)
 			(e-lookup-local
 				(p-assign (ident "double")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "float_doubled"))
-		(e-call
+		(e-call (constraint-fn-var 178)
 			(e-lookup-local
 				(p-assign (ident "double")))
 			(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
@@ -257,7 +257,7 @@ main = |_| {
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "a -> a where [a.times : a, Dec -> a]"))
+		(patt (type "a -> a where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "_arg -> Dec")))
@@ -270,7 +270,7 @@ main = |_| {
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "a -> a where [a.times : a, Dec -> a]"))
+		(expr (type "a -> a where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "_arg -> Dec"))))

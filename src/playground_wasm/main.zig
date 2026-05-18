@@ -15,13 +15,13 @@
 //! allowing the compiler to continue through all stages.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
-const builtins = @import("builtins");
 const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const repl = @import("repl");
 const eval = @import("eval");
+const lir = @import("lir");
 const types = @import("types");
 const can = @import("can");
 const check = @import("check");
@@ -35,22 +35,31 @@ const layout = @import("layout");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
-const CrashContext = eval.CrashContext;
-
 const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
-const Repl = repl.Repl;
-const RocOps = builtins.host_abi.RocOps;
-const TestRunner = eval.TestRunner;
 
-// A fixed-size buffer to act as the heap inside the WASM linear memory.
-var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined; // 64MB heap
-var fba: std.heap.FixedBufferAllocator = undefined;
-var allocator: Allocator = undefined;
+var allocator: Allocator = std.heap.wasm_allocator;
+
+/// Playground-specific std options, including a freestanding-safe log sink.
+pub const std_options: std.Options = .{
+    .log_level = .warn,
+    .logFn = logFn,
+};
+
+const logFn = if (builtin.target.os.tag == .freestanding)
+    struct {
+        fn log(comptime _: std.log.Level, comptime _: @TypeOf(.enum_literal), comptime _: []const u8, _: anytype) void {}
+    }.log
+else
+    struct {
+        fn log(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
+            std.log.defaultLog(level, scope, format, args);
+        }
+    }.log;
 
 const State = enum {
     START,
@@ -135,6 +144,8 @@ const CompilerStageData = struct {
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
     builtin_module: ?BuiltinModule = null,
+    imported_modules: ?[]const *const ModuleEnv = null,
+    auto_imported_types: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null,
 
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
@@ -157,6 +168,58 @@ const CompilerStageData = struct {
             self.gpa.free(self.buffer);
             self.gpa.destroy(self.env);
         }
+
+        fn loadCompiled(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
+            const CompactWriter = collections.CompactWriter;
+            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+            @memcpy(buffer, bin_data);
+
+            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
+
+            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
+                serialized_ptr.all_statements.span.start,
+                serialized_ptr.all_statements.span.len,
+            });
+
+            const module_env_ptr = try gpa.create(ModuleEnv);
+            errdefer gpa.destroy(module_env_ptr);
+
+            const base_ptr = @intFromPtr(buffer.ptr);
+
+            logDebug("loadCompiledModule: About to deserialize common\n", .{});
+            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
+
+            logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
+            module_env_ptr.* = ModuleEnv{
+                .gpa = gpa,
+                .common = common,
+                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
+                .module_kind = serialized_ptr.module_kind.decode(),
+                .all_defs = serialized_ptr.all_defs,
+                .all_statements = serialized_ptr.all_statements,
+                .exports = serialized_ptr.exports,
+                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
+                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
+                .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
+                .builtin_statements = serialized_ptr.builtin_statements,
+                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
+                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
+                .module_name = module_name_param,
+                .display_module_name_idx = base.Ident.Idx.NONE,
+                .qualified_module_ident = base.Ident.Idx.NONE,
+                .diagnostics = serialized_ptr.diagnostics,
+                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
+                .evaluation_order = null,
+                .idents = ModuleEnv.CommonIdents.find(&common),
+                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
+                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+            };
+            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
+            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
+        }
     };
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
@@ -173,6 +236,15 @@ const CompilerStageData = struct {
         // Deinit solver first, as it may hold references to other data
         if (self.solver) |*s| {
             s.deinit();
+        }
+
+        if (self.auto_imported_types) |map| {
+            map.deinit();
+            allocator.destroy(map);
+        }
+
+        if (self.imported_modules) |modules| {
+            allocator.free(modules);
         }
 
         // Free pre-generated HTML
@@ -220,12 +292,82 @@ const CompilerStageData = struct {
 /// Global state machine
 var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
+var cached_builtin_module: ?CompilerStageData.BuiltinModule = null;
 
 /// REPL state management
+const ReplDefinitionKind = enum {
+    value,
+    type_annotation,
+    type_declaration,
+    import,
+    file_import,
+};
+
+const ReplDefinition = struct {
+    kind: ReplDefinitionKind,
+    name: []u8,
+    source: []u8,
+
+    fn deinit(self: *ReplDefinition, alloc: Allocator) void {
+        alloc.free(self.name);
+        alloc.free(self.source);
+    }
+};
+
 const ReplSession = struct {
-    repl: *Repl,
-    crash_ctx: *CrashContext,
-    roc_ops: *RocOps,
+    definitions: std.ArrayList(ReplDefinition) = .empty,
+
+    fn deinit(self: *ReplSession, alloc: Allocator) void {
+        for (self.definitions.items) |*definition| {
+            definition.deinit(alloc);
+        }
+        self.definitions.deinit(alloc);
+    }
+
+    fn clear(self: *ReplSession, alloc: Allocator) void {
+        for (self.definitions.items) |*definition| {
+            definition.deinit(alloc);
+        }
+        self.definitions.clearRetainingCapacity();
+    }
+
+    fn hasDefinition(self: *const ReplSession, kind: ReplDefinitionKind, name: []const u8) bool {
+        for (self.definitions.items) |definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) return true;
+        }
+        return false;
+    }
+
+    fn upsertDefinition(
+        self: *ReplSession,
+        alloc: Allocator,
+        kind: ReplDefinitionKind,
+        name: []const u8,
+        source: []const u8,
+    ) Allocator.Error!void {
+        const owned_name = try alloc.dupe(u8, name);
+        errdefer alloc.free(owned_name);
+        const owned_source = try alloc.dupe(u8, source);
+        errdefer alloc.free(owned_source);
+
+        for (self.definitions.items) |*definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
+                definition.deinit(alloc);
+                definition.* = .{
+                    .kind = kind,
+                    .name = owned_name,
+                    .source = owned_source,
+                };
+                return;
+            }
+        }
+
+        try self.definitions.append(alloc, .{
+            .kind = kind,
+            .name = owned_name,
+            .source = owned_source,
+        });
+    }
 };
 
 var repl_session: ?ReplSession = null;
@@ -275,33 +417,24 @@ var host_message_buffer: ?[]u8 = null;
 var host_response_buffer: ?[]u8 = null;
 var last_error: ?[:0]const u8 = null;
 
-/// Flag to defer FBA reset until next processAndRespond call.
-/// This avoids resetting the allocator while there are in-flight allocations.
-var pending_fba_reset: bool = false;
-
 /// In-memory debug log buffer for WASM
 var debug_log_buffer: [4096]u8 = undefined;
 var debug_log_pos: usize = 0;
 var debug_log_oom: bool = false;
 
-/// Reset all global state and schedule allocator reset.
-/// The actual FBA reset is deferred to the start of the next processAndRespond call
-/// to avoid invalidating in-flight allocations.
 fn resetGlobalState() void {
-    // Make sure everything is null
-    compiler_data = null;
+    if (compiler_data) |*data| {
+        data.deinit();
+        compiler_data = null;
+    }
     cleanupReplState();
-    host_message_buffer = null;
-    host_response_buffer = null;
-
-    // Schedule allocator reset for next processAndRespond call
-    pending_fba_reset = true;
-}
-
-fn performPendingAllocatorReset() void {
-    if (pending_fba_reset) {
-        fba.reset();
-        pending_fba_reset = false;
+    if (host_message_buffer) |buf| {
+        allocator.free(buf);
+        host_message_buffer = null;
+    }
+    if (host_response_buffer) |buf| {
+        allocator.free(buf);
+        host_response_buffer = null;
     }
 }
 
@@ -372,6 +505,23 @@ export fn clearDebugLog() void {
     debug_log_oom = false;
 }
 
+fn getCachedBuiltinModule() !*CompilerStageData.BuiltinModule {
+    if (cached_builtin_module == null) {
+        logDebug("compileSource: Loading Builtin module\n", .{});
+        cached_builtin_module = try CompilerStageData.BuiltinModule.loadCompiled(
+            allocator,
+            compiled_builtins.builtin_bin,
+            "Builtin",
+            compiled_builtins.builtin_source,
+        );
+        logDebug("compileSource: Builtin module loaded\n", .{});
+    } else {
+        logDebug("compileSource: Reusing cached Builtin module\n", .{});
+    }
+
+    return &cached_builtin_module.?;
+}
+
 /// Error codes returned to host
 pub const WasmError = enum(u8) {
     success = 0,
@@ -389,104 +539,15 @@ const ResponseWriteError = error{
     WriteFailed,
 };
 
-/// Clean up REPL state and free associated memory.
-/// This function safely deallocates the REPL instance and RocOps, then sets them to null.
-/// It's called during RESET operations and module initialization.
 fn cleanupReplState() void {
-    if (repl_session) |session| {
-        session.repl.deinit();
-        allocator.destroy(session.repl);
-        allocator.destroy(session.roc_ops);
-        session.crash_ctx.deinit();
-        allocator.destroy(session.crash_ctx);
-        repl_session = null;
+    if (repl_session) |*session| {
+        session.deinit(allocator);
     }
-}
-
-/// Create WASM-compatible RocOps for REPL initialization.
-/// This function allocates and initializes a RocOps structure with WASM-specific
-/// memory management functions. The returned pointer must be freed by the caller.
-/// Returns an error if allocation fails.
-fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
-    const roc_ops = try allocator.create(RocOps);
-    roc_ops.* = RocOps{
-        .env = @as(*anyopaque, @ptrCast(crash_ctx)),
-        .roc_alloc = wasmRocAlloc,
-        .roc_dealloc = wasmRocDealloc,
-        .roc_realloc = wasmRocRealloc,
-        .roc_dbg = wasmRocDbg,
-        .roc_expect_failed = wasmRocExpectFailed,
-        .roc_crashed = wasmRocCrashed,
-        .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in playground
-    };
-    return roc_ops;
-}
-
-fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    const result = allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
-    if (result) |ptr| {
-        alloc_args.answer = ptr;
-    } else {
-        // In WASM, we can't use null pointers, so we'll just crash
-        // This is a limitation of the WASM target
-        unreachable;
-    }
-}
-
-fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
-    // For WASM, we need to handle this carefully since we can't create slices from raw pointers
-    // We'll use a dummy slice for now - this is a limitation of the WASM target
-    const dummy_slice = @as([*]u8, @ptrCast(dealloc_args.ptr))[0..0];
-    allocator.rawFree(dummy_slice, align_enum, @returnAddress());
-}
-
-fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
-    // For WASM, we'll just allocate new memory for now
-    // A proper implementation would need to handle reallocation carefully
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
-    const result = allocator.rawAlloc(realloc_args.new_length, align_enum, @returnAddress());
-    if (result) |ptr| {
-        realloc_args.answer = ptr;
-    } else {
-        // In WASM, we can't use null pointers, so we'll just crash
-        // This is a limitation of the WASM target
-        unreachable;
-    }
-}
-
-fn wasmRocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
-    // No-op in WASM playground
-}
-
-fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    const ctx: *CrashContext = @ptrCast(@alignCast(env));
-    const source_bytes = expect_failed_args.utf8_bytes[0..expect_failed_args.len];
-    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
-    // Format and record the message
-    const formatted = std.fmt.allocPrint(allocator, "Expect failed: {s}", .{trimmed}) catch {
-        std.debug.panic("failed to allocate wasm expect failure message", .{});
-    };
-    ctx.recordCrash(formatted) catch |err| {
-        allocator.free(formatted);
-        std.debug.panic("failed to record wasm expect failure: {}", .{err});
-    };
-}
-
-fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
-    const ctx: *CrashContext = @ptrCast(@alignCast(env));
-    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
-        std.debug.panic("failed to record crash in wasm playground: {}", .{err});
-    };
+    repl_session = null;
 }
 
 /// Initialize the WASM module in START state
 export fn init() void {
-    // For the very first initialization, we can reset the allocator
-    fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-    allocator = fba.allocator();
-
     if (compiler_data) |*data| {
         data.deinit();
         compiler_data = null;
@@ -504,7 +565,6 @@ export fn init() void {
 /// Allocate a buffer for incoming messages from the host.
 /// Returns null on allocation failure.
 export fn allocateMessageBuffer(size: usize) ?[*]u8 {
-    performPendingAllocatorReset();
     if (host_message_buffer) |buf| {
         allocator.free(buf);
         host_message_buffer = null;
@@ -516,7 +576,6 @@ export fn allocateMessageBuffer(size: usize) ?[*]u8 {
 /// Allocate a buffer for responses to the host.
 /// Returns null on allocation failure.
 export fn allocateResponseBuffer(size: usize) ?[*]u8 {
-    performPendingAllocatorReset();
     if (host_response_buffer) |buf| {
         allocator.free(buf);
         host_response_buffer = null;
@@ -655,42 +714,13 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             try writeLoadedResponse(response_buffer, result);
         },
         .INIT_REPL => {
-            // Clean up any existing REPL state
+            if (compiler_data) |*data| {
+                data.deinit();
+                compiler_data = null;
+            }
             cleanupReplState();
-
-            const crash_ctx = allocator.create(CrashContext) catch |err| {
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-            crash_ctx.* = CrashContext.init(allocator);
-
-            const roc_ops = createWasmRocOps(crash_ctx) catch |err| {
-                allocator.destroy(crash_ctx);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-
-            const repl_ptr = allocator.create(Repl) catch |err| {
-                allocator.destroy(roc_ops);
-                crash_ctx.deinit();
-                allocator.destroy(crash_ctx);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-
-            repl_ptr.* = Repl.init(allocator, roc_ops, crash_ctx) catch |err| {
-                allocator.destroy(roc_ops);
-                crash_ctx.deinit();
-                allocator.destroy(crash_ctx);
-                allocator.destroy(repl_ptr);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-
-            repl_session = .{ .repl = repl_ptr, .crash_ctx = crash_ctx, .roc_ops = roc_ops };
+            repl_session = .{};
             current_state = .REPL_ACTIVE;
-
-            // Return success with REPL info
             try writeReplInitResponse(response_buffer);
         },
         .RESET => {
@@ -756,12 +786,10 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 /// The REPL instance must be initialized before calling this function.
 /// Returns an error if the response buffer is too small or if internal errors occur.
 fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
-    const session = repl_session orelse {
+    const session = if (repl_session) |*session| session else {
         try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");
         return;
     };
-    const repl_ptr = session.repl;
-    const crash_ctx = session.crash_ctx;
 
     switch (message_type) {
         .REPL_STEP => {
@@ -769,51 +797,15 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing input for REPL_STEP");
                 return;
             };
-            const input = input_value.string;
 
-            const structured_result = repl_ptr.stepStructured(input) catch |err| {
-                // Handle hard errors (like OOM) that aren't caught by the REPL
-                // Create a static error message to avoid allocation issues
-                const error_msg = @errorName(err);
-                const step_result = ReplStepResult{
-                    .output = error_msg,
-                    .try_type = .@"error",
-                    .error_stage = .runtime,
-                    .error_details = error_msg,
-                };
-                try writeReplStepResultJson(response_buffer, step_result);
-                return;
-            };
-            defer structured_result.deinit(allocator);
-
-            if (crash_ctx.state == .crashed) {
-                const crash_details = crash_ctx.crashMessage();
-                crash_ctx.reset();
-
-                const output = structured_result.getMessage() orelse "";
-                const step_result = ReplStepResult{
-                    .output = output,
-                    .try_type = .@"error",
-                    .error_stage = .evaluation,
-                    .error_details = crash_details,
-                };
-                try writeReplStepResultJson(response_buffer, step_result);
-                return;
-            }
-
-            // Convert StepResult to ReplStepResult
-            const step_result = convertStepResult(structured_result);
-            try writeReplStepResultJson(response_buffer, step_result);
+            try runReplStep(session, input_value.string, response_buffer);
         },
         .CLEAR_REPL => {
-            // Clear REPL definitions but keep REPL active
-            // Clear all definitions from the hashmap
-            var iterator = repl_ptr.definitions.iterator();
-            while (iterator.next()) |kv| {
-                repl_ptr.allocator.free(kv.key_ptr.*);
-                repl_ptr.allocator.free(kv.value_ptr.*);
+            session.clear(allocator);
+            if (compiler_data) |*data| {
+                data.deinit();
+                compiler_data = null;
             }
-            repl_ptr.definitions.clearRetainingCapacity();
             try writeReplClearResponse(response_buffer);
         },
         .RESET => {
@@ -825,22 +817,354 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .QUERY_CIR => {
-            // For REPL mode, we need to generate CIR from the REPL's last module env
-            const module_env = repl_ptr.getLastModuleEnv() orelse {
+            const data = compiler_data orelse {
                 try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
                 return;
             };
-
-            // Write CIR response directly using the REPL's module env
-            try writeReplCanCirResponse(response_buffer, module_env);
+            try writeCanCirResponse(response_buffer, data);
         },
-        .QUERY_TYPES, .QUERY_FORMATTED, .GET_HOVER_INFO => {
-            // These queries need parse/type information which isn't readily available in REPL mode
-            try writeErrorResponse(response_buffer, .ERROR, "Parse/type queries not available in REPL mode");
+        .QUERY_TYPES => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeTypesResponse(response_buffer, data);
+        },
+        .GET_HOVER_INFO => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeHoverInfoResponse(response_buffer, data, root);
+        },
+        .QUERY_TOKENS => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeTokensResponse(response_buffer, data);
+        },
+        .QUERY_AST => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeParseAstResponse(response_buffer, data);
+        },
+        .QUERY_FORMATTED => {
+            const data = compiler_data orelse {
+                try writeErrorResponse(response_buffer, .ERROR, "No REPL evaluation has occurred yet");
+                return;
+            };
+            try writeFormattedResponse(response_buffer, data);
         },
         else => {
-            try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
+            try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
+    }
+}
+
+const ReplInputKind = enum {
+    definition,
+    expression,
+};
+
+const ReplDefinitionIdentity = struct {
+    kind: ReplDefinitionKind,
+    name: []const u8,
+};
+
+fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return switch (statement) {
+        .expr => .expression,
+        .decl,
+        .@"var",
+        .import,
+        .file_import,
+        .type_decl,
+        .type_anno,
+        => .definition,
+        .malformed => null,
+        .crash,
+        .dbg,
+        .expect,
+        .@"for",
+        .@"while",
+        .@"return",
+        .@"break",
+        => .expression,
+    };
+}
+
+fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    var allocators: base.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return switch (statement) {
+        .decl => |decl| blk: {
+            const pattern = ast.store.getPattern(decl.pattern);
+            break :blk switch (pattern) {
+                .ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                .var_ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                else => null,
+            };
+        },
+        .@"var" => |var_decl| .{ .kind = .value, .name = ast.resolve(var_decl.name) },
+        .type_anno => |anno| .{ .kind = .type_annotation, .name = ast.resolve(anno.name) },
+        .type_decl => |decl| blk: {
+            const header = ast.store.getTypeHeader(decl.header) catch break :blk null;
+            break :blk .{ .kind = .type_declaration, .name = ast.resolve(header.name) };
+        },
+        .import => |import| .{
+            .kind = .import,
+            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+        },
+        .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
+        else => null,
+    };
+}
+
+fn writeDefinitionsWithReplacement(
+    writer: *std.Io.Writer,
+    session: *const ReplSession,
+    replacement: ?ReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+) !void {
+    var replaced = false;
+    for (session.definitions.items) |definition| {
+        if (replacement) |identity| {
+            if (definition.kind == identity.kind and std.mem.eql(u8, definition.name, identity.name)) {
+                try writer.writeAll(replacement_source.?);
+                try writer.writeAll("\n");
+                replaced = true;
+                continue;
+            }
+        }
+
+        try writer.writeAll(definition.source);
+        try writer.writeAll("\n");
+    }
+
+    if (!replaced) {
+        if (replacement_source) |source| {
+            try writer.writeAll(source);
+            try writer.writeAll("\n");
+        }
+    }
+}
+
+fn buildReplModuleSource(
+    session: *const ReplSession,
+    replacement: ?ReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+    main_expr: ?[]const u8,
+) ![]u8 {
+    var source_writer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer source_writer.deinit();
+
+    // REPL snippets are evaluated as an internal module. Without an explicit
+    // header, production validation treats the synthetic source as a type
+    // module/default-app candidate and rejects ordinary REPL definitions like
+    // `x = 42`.
+    try source_writer.writer.writeAll("module []\n\n");
+    try writeDefinitionsWithReplacement(&source_writer.writer, session, replacement, replacement_source);
+    if (main_expr) |expr| {
+        try source_writer.writer.print("main = {s}\n", .{expr});
+    }
+    try source_writer.writer.flush();
+
+    return source_writer.toOwnedSlice();
+}
+
+fn compileReplInspectedModule(source: []const u8) !eval.test_helpers.CompiledTargetProgram {
+    return eval.test_helpers.compileProgramForTarget(allocator, .module, source, &.{}, .u32);
+}
+
+fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
+    for (reports.items) |report| {
+        switch (report.severity) {
+            .runtime_error, .fatal => return true,
+            .info, .warning => {},
+        }
+    }
+    return false;
+}
+
+fn compileCheckedReplModuleSource(source: []const u8) !CompilerStageData {
+    var data = try compileSource(source, "main");
+    errdefer data.deinit();
+
+    if (hasBlockingReports(data.tokenize_reports) or
+        hasBlockingReports(data.parse_reports) or
+        hasBlockingReports(data.can_reports) or
+        hasBlockingReports(data.type_reports))
+    {
+        return error.TypeCheckError;
+    }
+
+    return data;
+}
+
+fn replaceCompilerData(new_data: CompilerStageData) void {
+    if (compiler_data) |*existing| {
+        existing.deinit();
+        compiler_data = null;
+    }
+
+    compiler_data = new_data;
+}
+
+fn replaceCompilerDataFromReplSource(source: []const u8) !void {
+    replaceCompilerData(try compileSource(source, "main"));
+}
+
+fn writeReplStaticError(response_buffer: []u8, message: []const u8, stage: ReplErrorStage) ResponseWriteError!void {
+    try writeReplStepResultJson(response_buffer, .{
+        .output = message,
+        .try_type = .@"error",
+        .error_stage = stage,
+        .error_details = message,
+    });
+}
+
+fn runReplDefinition(
+    session: *ReplSession,
+    input: []const u8,
+    response_buffer: []u8,
+) ResponseWriteError!void {
+    const identity = replDefinitionIdentity(input) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    } orelse {
+        try writeReplStaticError(response_buffer, "REPL definitions must bind a top-level identifier", .canonicalize);
+        return;
+    };
+
+    const defines_main = identity.kind == .value and std.mem.eql(u8, identity.name, "main");
+    const validation_main_expr: ?[]const u8 = if (defines_main or session.hasDefinition(.value, "main")) null else "\"\"";
+    const validation_source = buildReplModuleSource(session, identity, input, validation_main_expr) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(validation_source);
+
+    var checked_module = compileCheckedReplModuleSource(validation_source) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .typecheck);
+        return;
+    };
+    var module_committed = false;
+    defer if (!module_committed) checked_module.deinit();
+
+    session.upsertDefinition(allocator, identity.kind, identity.name, input) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+
+    const output = std.fmt.allocPrint(allocator, "assigned `{s}`", .{identity.name}) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(output);
+
+    replaceCompilerData(checked_module);
+    module_committed = true;
+
+    try writeReplStepResultJson(response_buffer, .{
+        .output = output,
+        .try_type = .definition,
+        .compiler_available = true,
+    });
+}
+
+fn runReplExpression(
+    session: *ReplSession,
+    input: []const u8,
+    response_buffer: []u8,
+) ResponseWriteError!void {
+    const main_source = std.fmt.allocPrint(allocator, "main = || Str.inspect(({s}))", .{input}) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(main_source);
+
+    const source = buildReplModuleSource(
+        session,
+        .{ .kind = .value, .name = "main" },
+        main_source,
+        null,
+    ) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    };
+    defer allocator.free(source);
+
+    var compiled = compileReplInspectedModule(source) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .typecheck);
+        return;
+    };
+    defer compiled.deinit(allocator);
+
+    const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
+        return;
+    };
+    defer allocator.free(output);
+
+    const compiler_available = if (replaceCompilerDataFromReplSource(source)) true else |err| blk: {
+        logDebug("REPL expression display compile failed: {}\n", .{err});
+        break :blk false;
+    };
+
+    try writeReplStepResultJson(response_buffer, .{
+        .output = output,
+        .try_type = .expression,
+        .compiler_available = compiler_available,
+    });
+}
+
+fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) ResponseWriteError!void {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    if (trimmed.len == 0) {
+        try writeReplStaticError(response_buffer, "UNEXPECTED TOKEN", .parse);
+        return;
+    }
+
+    const input_kind = resolveReplInputKind(trimmed) catch |err| {
+        try writeReplStaticError(response_buffer, @errorName(err), .runtime);
+        return;
+    } orelse {
+        try writeReplStaticError(response_buffer, "UNEXPECTED TOKEN", .parse);
+        return;
+    };
+
+    switch (input_kind) {
+        .definition => try runReplDefinition(session, trimmed, response_buffer),
+        .expression => try runReplExpression(session, trimmed, response_buffer),
     }
 }
 
@@ -976,75 +1300,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     const env = result.module_env;
     try env.initCIRFields(module_name);
 
-    // Load builtin modules and inject Bool and Result type declarations
-    // (following the pattern from eval.zig and TestEnv.zig)
-    const LoadedModule = struct {
-        env: *ModuleEnv,
-        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-        gpa: Allocator,
-
-        fn deinit(self: *@This()) void {
-            self.env.imports.map.deinit(self.gpa);
-            self.gpa.free(self.buffer);
-            self.gpa.destroy(self.env);
-        }
-
-        fn loadCompiledModule(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
-            const CompactWriter = collections.CompactWriter;
-            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-            @memcpy(buffer, bin_data);
-
-            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
-
-            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-
-            // Log the raw all_statements value to see what we're reading
-            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
-                serialized_ptr.all_statements.span.start,
-                serialized_ptr.all_statements.span.len,
-            });
-
-            const module_env_ptr = try gpa.create(ModuleEnv);
-            errdefer gpa.destroy(module_env_ptr);
-
-            const base_ptr = @intFromPtr(buffer.ptr);
-
-            logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
-
-            logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
-            module_env_ptr.* = ModuleEnv{
-                .gpa = gpa,
-                .common = common,
-                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
-                .module_kind = serialized_ptr.module_kind.decode(),
-                .all_defs = serialized_ptr.all_defs,
-                .all_statements = serialized_ptr.all_statements,
-                .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
-                .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
-                .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
-                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
-                .module_name = module_name_param,
-                .display_module_name_idx = base.Ident.Idx.NONE, // Not used for deserialized modules
-                .qualified_module_ident = base.Ident.Idx.NONE, // Not used for deserialized modules
-                .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
-                .evaluation_order = null,
-                .idents = ModuleEnv.CommonIdents.find(&common),
-                .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
-                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-                .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
-            };
-            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
-            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
-        }
-    };
+    // Builtin is immutable for the lifetime of the WASM instance, so every
+    // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
     const builtin_indices = blk: {
@@ -1056,16 +1313,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     };
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
-    logDebug("compileSource: Loading Builtin module\n", .{});
-    const builtin_source = compiled_builtins.builtin_source;
-    const builtin_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    // Store in result instead of deferring deinit - we need it for test evaluation
-    result.builtin_module = .{
-        .env = builtin_module.env,
-        .buffer = builtin_module.buffer,
-        .gpa = builtin_module.gpa,
-    };
-    logDebug("compileSource: Builtin module loaded\n", .{});
+    const builtin_module = try getCachedBuiltinModule();
 
     // Get builtin statement indices from the builtin module
     // Use builtin_indices directly - these are the correct statement indices
@@ -1135,13 +1383,36 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     logDebug("compileSource: Starting type checking\n", .{});
     {
         const type_can_ir = result.module_env;
-        const imported_envs: []const *ModuleEnv = &.{};
+        var imported_envs_builder = std.array_list.Managed(*const ModuleEnv).init(allocator);
+        errdefer imported_envs_builder.deinit();
+
+        const import_count = type_can_ir.imports.imports.items.items.len;
+        for (type_can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
+            const import_name = type_can_ir.getString(str_idx);
+            if (std.mem.eql(u8, import_name, "Builtin")) {
+                try imported_envs_builder.append(builtin_module.env);
+            }
+        }
+
+        const imported_envs = try imported_envs_builder.toOwnedSlice();
+        errdefer allocator.free(imported_envs);
+        result.imported_modules = imported_envs;
+
+        const auto_imported_types = try allocator.create(std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType));
+        errdefer allocator.destroy(auto_imported_types);
+        auto_imported_types.* = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+        errdefer auto_imported_types.deinit();
+
+        try Can.populateModuleEnvs(auto_imported_types, type_can_ir, builtin_module.env, builtin_indices);
+        result.auto_imported_types = auto_imported_types;
 
         // Resolve imports - map each import to its index in imported_envs
-        type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
+        type_can_ir.imports.clearResolvedModules();
+        type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
+        type_can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, null, &type_can_ir.store.regions, module_builtin_ctx);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {
@@ -1162,7 +1433,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             &solver.snapshots,
             &solver.problems,
             "main.roc",
-            &.{}, // other_modules - empty for playground
+            imported_envs,
             &solver.import_mapping,
             &solver.regions,
         ) catch |err| {
@@ -1360,65 +1631,6 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-/// Convert REPL StepResult to playground's ReplStepResult
-fn convertStepResult(result: repl.Repl.StepResult) ReplStepResult {
-    return switch (result) {
-        .expression => |output| ReplStepResult{
-            .output = output,
-            .try_type = .expression,
-        },
-        .definition => |output| ReplStepResult{
-            .output = output,
-            .try_type = .definition,
-        },
-        .help => |output| ReplStepResult{
-            .output = output,
-            .try_type = .expression, // Treat help as expression output
-        },
-        .quit => ReplStepResult{
-            .output = "Goodbye!",
-            .try_type = .expression,
-        },
-        .empty => ReplStepResult{
-            .output = "",
-            .try_type = .expression,
-        },
-        .parse_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .parse,
-            .error_details = extractErrorDetails(output),
-        },
-        .canonicalize_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .canonicalize,
-            .error_details = extractErrorDetails(output),
-        },
-        .type_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .typecheck,
-            .error_details = extractErrorDetails(output),
-        },
-        .eval_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .evaluation,
-            .error_details = extractErrorDetails(output),
-        },
-    };
-}
-
-/// Extract error details from an error message (part after ": ")
-fn extractErrorDetails(message: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, message, ": ")) |idx| {
-        return message[idx + 2 ..];
-    }
-    return null;
-}
-
-/// Write REPL step result as JSON
 fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
@@ -1522,41 +1734,6 @@ fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) Respon
     try resp_writer.finalize();
 }
 
-/// Write canonicalized CIR response for REPL mode using ModuleEnv directly
-fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
-    resp_writer.pos = @sizeOf(u32);
-    const w = &resp_writer.interface;
-
-    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
-
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
-    defer local_arena.deinit();
-    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
-    var tree = SExprTree.init(local_arena.allocator());
-    defer tree.deinit();
-
-    const defs_count = module_env.store.sliceDefs(module_env.all_defs).len;
-    const stmts_count = module_env.store.sliceStatements(module_env.all_statements).len;
-
-    if (defs_count == 0 and stmts_count == 0) {
-        const debug_begin = tree.beginNode();
-        tree.pushStaticAtom("empty-cir-debug") catch {};
-        tree.pushStaticAtom("no-defs-or-statements") catch {};
-        const debug_attrs = tree.beginNode();
-        tree.endNode(debug_begin, debug_attrs) catch {};
-    }
-
-    const mutable_cir = @constCast(module_env);
-    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
-
-    try writeJsonString(w, sexpr_writer_allocating.written());
-    try w.writeAll("\"}");
-    try resp_writer.finalize();
-}
-
 /// Write canonicalized CIR response in S-expression format
 fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
     var resp_writer = ResponseWriter.init(response_buffer);
@@ -1594,55 +1771,149 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     try resp_writer.finalize();
 }
 
+fn collectPlaygroundTestRootRequests(
+    alloc: Allocator,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) ![]check.CheckedArtifact.RootRequest {
+    var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    errdefer roots.deinit(alloc);
+
+    for (artifact.root_requests.requests) |root| {
+        if (root.kind != .test_expect) continue;
+        try roots.append(alloc, root);
+    }
+
+    return try roots.toOwnedSlice(alloc);
+}
+
+fn argLayoutsForProc(
+    alloc: Allocator,
+    store: *const lir.LirStore,
+    proc_id: lir.LirProcSpecId,
+) Allocator.Error![]layout.Idx {
+    const proc = store.getProcSpec(proc_id);
+    const arg_ids = store.getLocalSpan(proc.args);
+    const arg_layouts = try alloc.alloc(layout.Idx, arg_ids.len);
+    errdefer alloc.free(arg_layouts);
+
+    for (arg_ids, 0..) |local_id, i| {
+        arg_layouts[i] = store.getLocal(local_id).layout_idx;
+    }
+
+    return arg_layouts;
+}
+
+fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
+    var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
+        allocator,
+        .module,
+        data.module_env.common.source,
+        &.{},
+    );
+    defer eval.test_helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const test_roots = try collectPlaygroundTestRootRequests(allocator, &resources.checked_artifact);
+    defer allocator.free(test_roots);
+
+    var html_writer_allocating: std.Io.Writer.Allocating = .init(allocator);
+    errdefer html_writer_allocating.deinit();
+    const html_writer = &html_writer_allocating.writer;
+
+    try html_writer.writeAll("<div class=\"test-results\">");
+    if (test_roots.len == 0) {
+        try html_writer.writeAll("<p>No tests found</p></div>");
+        try html_writer.flush();
+        return html_writer_allocating.toOwnedSlice();
+    }
+
+    var import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
+    defer allocator.free(import_views);
+    for (resources.import_artifacts, 0..) |*artifact, i| {
+        import_views[i] = check.CheckedArtifact.importedView(artifact);
+    }
+
+    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = test_roots },
+        .{
+            .target_usize = .u32,
+        },
+    );
+    defer lowered.deinit();
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    var interpreter = try eval.LirInterpreter.init(
+        allocator,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+    );
+    defer interpreter.deinit();
+
+    var passed: u32 = 0;
+    var failed: u32 = 0;
+    try html_writer.writeAll("<ul>");
+    for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
+        if (metadata.kind != .test_expect) continue;
+
+        const proc = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_layouts = try argLayoutsForProc(allocator, &lowered.lir_result.store, root_proc);
+        defer allocator.free(arg_layouts);
+
+        const eval_result = interpreter.eval(.{
+            .proc_id = root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+        }) catch |err| {
+            failed += 1;
+            try html_writer.print("<li class=\"failed\">FAILED: {s}</li>", .{@errorName(err)});
+            continue;
+        };
+
+        const ok = switch (eval_result) {
+            .value => |value| blk: {
+                const result = value.read(u8) != 0;
+                interpreter.dropValue(value, proc.ret_layout);
+                break :blk result;
+            },
+        };
+
+        if (ok) {
+            passed += 1;
+            try html_writer.writeAll("<li class=\"passed\">PASSED</li>");
+        } else {
+            failed += 1;
+            try html_writer.writeAll("<li class=\"failed\">FAILED</li>");
+        }
+    }
+    try html_writer.writeAll("</ul>");
+    try html_writer.print("<p>{} passed, {} failed</p></div>", .{ passed, failed });
+    try html_writer.flush();
+
+    return html_writer_allocating.toOwnedSlice();
+}
+
 fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-
-    // use arena for test evaluation
-    const env = data.module_env;
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
-    defer local_arena.deinit();
-
-    // Check if builtin_types is available
-    const builtin_types_for_tests = data.builtin_types orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Builtin types not available for test evaluation.");
+    const html = buildEvaluateTestsHtml(data) catch |err| {
+        try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
         return;
     };
-
-    // Create interpreter infrastructure for test evaluation
-    const empty_modules: []const *const ModuleEnv = &.{};
-    const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
-    const solver = data.solver orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Type checker not available for test evaluation.");
-        return;
-    };
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env, &solver.import_mapping) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
-        return;
-    };
-    defer test_runner.deinit();
-
-    _ = test_runner.eval_all() catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to evaluate tests.");
-        return;
-    };
-
-    var html_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
-
-    test_runner.write_html_report(&html_writer_allocating.writer) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to generate test report.");
-        return;
-    };
+    defer allocator.free(html);
 
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
-
-    try writeJsonString(w, html_writer_allocating.written());
-
+    try writeJsonString(w, html);
     try w.writeAll("\"}");
     try resp_writer.finalize();
-    return;
 }
 
 const HoverInfo = struct {
@@ -1775,13 +2046,17 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                     const ident_text = cir.getIdent(assign.ident);
                     if (std.mem.eql(u8, ident_text, identifier)) {
                         // 1. Get type string
-                        var type_writer = try data.module_env.initTypeWriter();
-                        defer type_writer.deinit();
+                        const owned_type_str = if (def.annotation) |annotation_idx| blk: {
+                            const annotation = cir.store.getAnnotation(annotation_idx);
+                            const anno_region = cir.store.getTypeAnnoRegion(annotation.anno);
+                            break :blk try local_allocator.dupe(u8, cir.getSource(anno_region));
+                        } else blk: {
+                            var type_writer = try data.module_env.initTypeWriter();
+                            defer type_writer.deinit();
 
-                        const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
-                        try type_writer.write(def_var, .wrap);
-                        const type_str_from_writer = type_writer.get();
-                        const owned_type_str = try local_allocator.dupe(u8, type_str_from_writer);
+                            try type_writer.write(ModuleEnv.varFrom(def.pattern), .wrap);
+                            break :blk try local_allocator.dupe(u8, type_writer.get());
+                        };
 
                         // 2. Get definition region
                         const def_region_loc = cir.store.getPatternRegion(def.pattern);
@@ -1920,10 +2195,6 @@ fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
 /// length prefix, so the host must use the custom `freeWasmString` function.
 /// Returns null on failure.
 export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]u8 {
-    // Perform deferred FBA reset if one was scheduled and not already handled
-    // by buffer allocation.
-    performPendingAllocatorReset();
-
     // Allocate a temporary buffer on the heap to avoid a stack overflow.
     var temp_response_buffer = allocator.alloc(u8, 131072) catch {
         return createSimpleErrorJson("Failed to allocate temporary response buffer");

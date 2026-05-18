@@ -10,47 +10,9 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
-DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
-DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**pattern_destructure_with_rest.md:1:7:1:13:**
-```roc
-match person {
-```
-      ^^^^^^
-
-
-**DOES NOT EXIST**
-`Str.len` does not exist.
-
-`Str` is in scope, but it has no associated `len`.
-
-It's referenced here:
-**pattern_destructure_with_rest.md:2:33:2:40:**
-```roc
-    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-```
-                                ^^^^^^^
-
-
-**DOES NOT EXIST**
-`Str.len` does not exist.
-
-`Str` is in scope, but it has no associated `len`.
-
-It's referenced here:
-**pattern_destructure_with_rest.md:2:55:2:62:**
-```roc
-    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-```
-                                                      ^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -109,7 +71,7 @@ match person {
 								(p-assign (ident "first_name"))))
 						(e-call
 							(e-runtime-error (tag "nested_value_not_found"))
-							(e-dot-access (field "last_name")
+							(e-field-access (field "last_name")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "others"))))))))))))

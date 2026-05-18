@@ -23,8 +23,6 @@ const Idx = layout.Idx;
 /// Errors that can occur during layout conversion
 pub const Error = error{
     OutOfMemory,
-    UnsupportedLayout,
-    InvalidLayoutIndex,
 };
 
 /// Converts a Roc Layout to an LLVM Builder.Type
@@ -180,19 +178,24 @@ fn tagUnionToLlvmType(
 }
 
 /// Get the discriminant type for a tag union.
-/// Returns an error for unsupported discriminant sizes.
+/// Unsupported discriminant sizes indicate a compiler layout bug.
 pub fn getDiscriminantTypeChecked(discriminant_size: u8) Error!Builder.Type {
     return switch (discriminant_size) {
         1 => .i8,
         2 => .i16,
         4 => .i32,
         8 => .i64,
-        else => error.UnsupportedLayout, // Unsupported discriminant size
+        else => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("LLVM layout invariant violated: unsupported discriminant size {d}", .{discriminant_size});
+            }
+            unreachable;
+        },
     };
 }
 
 /// Get the discriminant type for a tag union.
-/// Panics on unsupported discriminant sizes (use getDiscriminantTypeChecked for error handling).
+/// Unsupported discriminant sizes indicate a compiler layout bug.
 pub fn getDiscriminantType(discriminant_size: u8) Builder.Type {
     return getDiscriminantTypeChecked(discriminant_size) catch unreachable;
 }

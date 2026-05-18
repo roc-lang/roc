@@ -97,7 +97,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-dot-access (field "x")
+			(e-field-access (field "x")
 				(receiver
 					(e-record
 						(fields
@@ -117,7 +117,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call
+			(e-call (constraint-fn-var 82)
 				(e-lookup-local
 					(p-assign (ident "add")))
 				(e-lookup-local
@@ -130,7 +130,7 @@ NO CHANGE
 				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call
+		(e-call (constraint-fn-var 103)
 			(e-lookup-local
 				(p-assign (ident "add")))
 			(e-num (value "1"))

@@ -139,6 +139,14 @@ pub fn Emit(comptime target: RocTarget) type {
             }
         }
 
+        fn emitRexForByteMem(self: *Self, reg: GeneralReg, rm: GeneralReg) !void {
+            const r: u1 = reg.rexR();
+            const b: u1 = rm.rexB();
+            if (r == 1 or b == 1 or reg.requiresRexForByteOp()) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+        }
+
         // ModR/M byte helpers
 
         /// Build a ModR/M byte
@@ -667,8 +675,13 @@ pub fn Emit(comptime target: RocTarget) type {
             if (width.requiresSizeOverride()) {
                 try self.buf.append(self.allocator, 0x66);
             }
-            try self.emitRex(width, dst, base);
-            try self.buf.append(self.allocator, 0x8B); // MOV r, r/m
+            if (width == .w8) {
+                try self.emitRexForByteMem(dst, base);
+                try self.buf.append(self.allocator, 0x8A); // MOV r8, r/m8
+            } else {
+                try self.emitRex(width, dst, base);
+                try self.buf.append(self.allocator, 0x8B); // MOV r, r/m
+            }
 
             // Handle special cases for RSP/R12 (need SIB byte) and RBP/R13 (need disp)
             const base_enc = base.enc();
@@ -687,8 +700,13 @@ pub fn Emit(comptime target: RocTarget) type {
             if (width.requiresSizeOverride()) {
                 try self.buf.append(self.allocator, 0x66);
             }
-            try self.emitRex(width, src, base);
-            try self.buf.append(self.allocator, 0x89); // MOV r/m, r
+            if (width == .w8) {
+                try self.emitRexForByteMem(src, base);
+                try self.buf.append(self.allocator, 0x88); // MOV r/m8, r8
+            } else {
+                try self.emitRex(width, src, base);
+                try self.buf.append(self.allocator, 0x89); // MOV r/m, r
+            }
 
             const base_enc = base.enc();
             if (base_enc == 4) {
@@ -1743,6 +1761,24 @@ test "movMemReg 32-bit width" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x89, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
 }
 
+test "movMemReg 8-bit width" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov [rbp-16], al
+    try emit.movMemReg(.w8, .RBP, -16, .RAX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x88, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "movMemReg 8-bit width requires REX for sil" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov [rbp-16], sil
+    try emit.movMemReg(.w8, .RBP, -16, .RSI);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x88, 0xB5, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
 test "movRegMem 32-bit width" {
     var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
@@ -1750,6 +1786,15 @@ test "movRegMem 32-bit width" {
     // mov eax, [rbp-16] (32-bit load, no REX.W)
     try emit.movRegMem(.w32, .RAX, .RBP, -16);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x8B, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
+test "movRegMem 8-bit width requires REX for sil" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // mov sil, [rbp-16]
+    try emit.movRegMem(.w8, .RSI, .RBP, -16);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x8A, 0xB5, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
 }
 
 test "jmpRel32 encoding" {

@@ -189,13 +189,18 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_019.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
+DECLARATION HAS NO VALUE - fuzz_crash_019.md:22:1:23:2
+DECLARATION HAS NO VALUE - fuzz_crash_019.md:37:1:37:9
 MISSING METHOD - fuzz_crash_019.md:39:2:39:3
 TYPE MISMATCH - fuzz_crash_019.md:52:2:52:2
+DECLARATION HAS NO VALUE - fuzz_crash_019.md:74:1:74:22
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
 TYPE MISMATCH - fuzz_crash_019.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_019.md:77:11:77:14
 TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
+DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
+DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
 TYPE MISMATCH - fuzz_crash_019.md:119:2:119:10
 # PROBLEMS
 **PARSE ERROR**
@@ -889,6 +894,28 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_019.md:22:1:23:2:**
+```roc
+line : ( # Cm
+) # Co
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_019.md:37:1:37:9:**
+```roc
+one : U6
+```
+^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
 **fuzz_crash_019.md:39:2:39:3:**
@@ -935,6 +962,17 @@ But the expression between the `match` parenthesis has the type:
     [Blue, ..]
 
 These can never match! Either the pattern or expression has a problem.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_019.md:74:1:74:22:**
+```roc
+main! : Listlt({}, _)
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TOO FEW ARGS**
 The `me` function expects 2 arguments, but it got 1 instead:
@@ -1023,6 +1061,28 @@ It has the type:
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_019.md:113:1:113:7:**
+```roc
+y : {}
+```
+^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_019.md:116:1:116:13:**
+```roc
+t : V((a,c))
+```
+^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
@@ -1451,17 +1511,17 @@ EndOfFile,
 						(e-question-suffix
 							(e-field-access
 								(e-question-suffix
-									(e-field-access
-										(e-question-suffix
-											(e-field-access
-												(e-question-suffix
-													(e-apply
-														(e-ident (raw "e_fn"))
-														(e-ident (raw "arg1"))))
-												(e-apply
-													(e-ident (raw "od")))))
-										(e-apply
-											(e-ident (raw "ned")))))
+									(e-method-call (method ".ned")
+										(receiver
+											(e-question-suffix
+												(e-method-call (method ".od")
+													(receiver
+														(e-question-suffix
+															(e-apply
+																(e-ident (raw "e_fn"))
+																(e-ident (raw "arg1")))))
+													(args))))
+										(args)))
 								(e-ident (raw "recd"))))
 						(e-apply
 							(e-tag (raw "Stdo!"))
@@ -1823,7 +1883,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 792)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1964,17 +2024,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "recd")
+								(e-field-access (field "recd")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "ned")
+													(e-dispatch-call (method "ned") (constraint-fn-var 1194)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "od")
+																		(e-dispatch-call (method "od") (constraint-fn-var 1161)
 																			(receiver
 																				(e-match
 																					(match
@@ -2167,7 +2227,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> Dec"))
+		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue, ..], [Tb] -> Error"))
@@ -2204,7 +2264,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> Dec"))
+		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue, ..], [Tb] -> Error"))

@@ -30,19 +30,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_with_comments.md:3:4:3:8
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `item` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_with_comments.md:3:4:3:8:**
-```roc
-	..item,
-```
-	  ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,

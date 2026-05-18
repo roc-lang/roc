@@ -588,7 +588,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
 
     // 4. Stdout contains success message
     try testing.expect(result.stdout.len > 5);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build creates executable from test/int/app.roc (dev)" {
@@ -794,8 +794,7 @@ test "roc test caches passing results (interpreter)" {
     try testCachesPassingResults("--opt=interpreter");
 }
 test "roc test caches passing results (dev)" {
-    // TODO: dev backend compilation fails for test/cli/AllPassTests.roc
-    return error.SkipZigTest;
+    try testCachesPassingResults("--opt=dev");
 }
 
 fn testCachesFailingResults(opt: []const u8) !void {
@@ -819,8 +818,7 @@ test "roc test caches failing results (interpreter)" {
     try testCachesFailingResults("--opt=interpreter");
 }
 test "roc test caches failing results (dev)" {
-    // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
-    return error.SkipZigTest;
+    try testCachesFailingResults("--opt=dev");
 }
 
 test "roc test cache invalidated by source change (interpreter)" {
@@ -886,8 +884,37 @@ test "roc test cache invalidated by source change (interpreter)" {
 }
 
 test "roc test cache invalidated by source change (dev)" {
-    // TODO: dev backend compilation fails for CacheTest.roc
-    return error.SkipZigTest;
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const source_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(1, 2) == 3 }\n";
+    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = source_content });
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const file_path = try std.fs.path.join(gpa, &.{ tmp_path, "CacheTest.roc" });
+    defer gpa.free(file_path);
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+
+    const updated_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(2, 3) == 5 }\n";
+    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = updated_content });
+
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+
+    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") == null);
 }
 
 fn testVerboseWorksFromCache(opt: []const u8) !void {
@@ -938,8 +965,7 @@ test "roc test --verbose caches failure reports (interpreter)" {
     try testVerboseCachesFailureReports("--opt=interpreter");
 }
 test "roc test --verbose caches failure reports (dev)" {
-    // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
-    return error.SkipZigTest;
+    try testVerboseCachesFailureReports("--opt=dev");
 }
 
 fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
@@ -966,8 +992,7 @@ test "roc test non-verbose run caches verbose failure reports for later verbose 
     try testNonVerboseCachesVerboseReports("--opt=interpreter");
 }
 test "roc test non-verbose run caches verbose failure reports for later verbose run (dev)" {
-    // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
-    return error.SkipZigTest;
+    try testNonVerboseCachesVerboseReports("--opt=dev");
 }
 
 test "roc test with nested list chunks does not panic on layout upgrade (interpreter)" {
@@ -1010,19 +1035,17 @@ fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
 
     try testing.expect(result.term == .Exited and result.term.Exited == 1);
 
-    // Output should contain line-numbered source lines with │ prefix
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null); // │
-
-    // Output should contain the failing source expression
+    // Output should contain line-numbered source lines with the gutter prefix.
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
 }
 
 test "roc test failure output contains source snippet (interpreter)" {
     try testFailureOutputContainsSourceSnippet("--opt=interpreter");
 }
+
 test "roc test failure output contains source snippet (dev)" {
-    // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
-    return error.SkipZigTest;
+    try testFailureOutputContainsSourceSnippet("--opt=dev");
 }
 
 fn testFailureOutputContainsDocComment(opt: []const u8) !void {
@@ -1035,10 +1058,7 @@ fn testFailureOutputContainsDocComment(opt: []const u8) !void {
 
     try testing.expect(result.term == .Exited and result.term.Exited == 1);
 
-    // Output should contain the doc comment text
     try testing.expect(std.mem.indexOf(u8, result.stderr, "## This test should fail") != null);
-
-    // Output should still contain the source snippet with line numbers
     try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null);
 }
@@ -1046,9 +1066,9 @@ fn testFailureOutputContainsDocComment(opt: []const u8) !void {
 test "roc test failure output contains doc comment (interpreter)" {
     try testFailureOutputContainsDocComment("--opt=interpreter");
 }
+
 test "roc test failure output contains doc comment (dev)" {
-    // TODO: dev backend compilation fails for test/cli/FailWithDocComment.roc
-    return error.SkipZigTest;
+    try testFailureOutputContainsDocComment("--opt=dev");
 }
 
 fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
@@ -1071,7 +1091,6 @@ fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
     try testing.expect(non_verbose.term == .Exited and non_verbose.term.Exited == 1);
     try testing.expect(verbose.term == .Exited and verbose.term.Exited == 1);
 
-    // Both modes should contain the same formatting elements for failures
     for ([_][]const u8{ "\u{2502}", "add(1, 1) == 3" }) |needle| {
         try testing.expect(std.mem.indexOf(u8, non_verbose.stderr, needle) != null);
         try testing.expect(std.mem.indexOf(u8, verbose.stderr, needle) != null);
@@ -1081,9 +1100,9 @@ fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
 test "roc test verbose and non-verbose failure format match (interpreter)" {
     try testVerboseAndNonVerboseFailureFormatMatch("--opt=interpreter");
 }
+
 test "roc test verbose and non-verbose failure format match (dev)" {
-    // TODO: dev backend compilation fails for test/cli/SomeFailTests.roc
-    return error.SkipZigTest;
+    try testVerboseAndNonVerboseFailureFormatMatch("--opt=dev");
 }
 
 // Exit code tests for warnings
@@ -1248,7 +1267,7 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     try testing.expect(stat.size > 0);
 
     // 4. Success message was printed
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build returns exit code 2 for warnings (dev)" {
@@ -1449,6 +1468,45 @@ test "roc test polymorphic list reverse within same module" {
     try testing.expect(has_passed);
 }
 
+test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/Issue9388SortWithTopLevelExpect.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "overflowed its stack") == null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Segmentation fault") == null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "passed") != null);
+}
+
+fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) !void {
+    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, expected_pass_count) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "failed") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "FAIL:") == null);
+}
+
+test "roc test issue 9392 numeric utility expects are deterministic with no cache" {
+    const gpa = std.testing.allocator;
+    var env_map = try createPerTestCacheEnv(gpa);
+    defer env_map.deinit();
+
+    const path = "test/cli/Issue9392NumUtilsDeterministic.roc";
+
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    defer gpa.free(result1.stdout);
+    defer gpa.free(result1.stderr);
+    try expectRocTestAllPassed(result1, "All (11) tests passed");
+
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    defer gpa.free(result2.stdout);
+    defer gpa.free(result2.stderr);
+    try expectRocTestAllPassed(result2, "All (11) tests passed");
+}
+
 // --- Echo platform (headerless app) tests ---
 // These test the echo platform path (rocRunDefaultApp) with both backends.
 
@@ -1588,18 +1646,6 @@ const all_syntax_common_suffix =
 
 const all_syntax_expected_stdout =
     all_syntax_common_prefix ++
-    "(5, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5, 5.0, 5.0, 5.0)\n" ++
-    "<opaque>\n" ++
-    all_syntax_common_suffix;
-
-// TODO: dev backend displays module-level records with field names (record
-// format) while the interpreter displays them as tuples. This is because
-// module-level records are stored as e_tuple in the CIR, and the interpreter
-// falls back to tuple format at runtime while the dev backend uses the
-// monotype which preserves field names. Once this format difference is
-// resolved, use all_syntax_expected_stdout.
-const all_syntax_dev_expected_stdout =
-    all_syntax_common_prefix ++
     "{ binary: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5.0, octal: 5.0, usage_based: 5.0 }\n" ++
     "<opaque>\n" ++
     all_syntax_common_suffix;
@@ -1628,7 +1674,7 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
 
     try util.checkSuccess(run_result);
 
-    try std.testing.expectEqualStrings(all_syntax_dev_expected_stdout, run_result.stdout);
+    try std.testing.expectEqualStrings(all_syntax_expected_stdout, run_result.stdout);
     try std.testing.expectEqualStrings(all_syntax_expected_stderr, run_result.stderr);
 }
 

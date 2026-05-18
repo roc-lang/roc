@@ -124,10 +124,12 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "product")))
-			(e-num (value "180")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "product"))))
+			(rhs
+				(e-num (value "180"))))))
 ~~~
 # TYPES
 ~~~clojure

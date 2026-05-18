@@ -1,3 +1,5 @@
+module []
+
 chunks = |arr, n| {
 	var $res = []
 	var $chunk = []

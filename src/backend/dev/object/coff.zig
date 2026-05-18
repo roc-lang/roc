@@ -35,11 +35,13 @@ const COFF = struct {
     const IMAGE_SYM_UNDEFINED = 0;
 
     // x86_64 relocation types
+    const IMAGE_REL_AMD64_ADDR64 = 0x0001;
     const IMAGE_REL_AMD64_REL32 = 0x0004;
     const IMAGE_REL_AMD64_ADDR32NB = 0x0003; // 32-bit address w/o base (RVA)
 
     // ARM64 relocation types
     const IMAGE_REL_ARM64_BRANCH26 = 0x0003;
+    const IMAGE_REL_ARM64_ADDR64 = 0x000E;
 
     // x64 Unwind operation codes
     const UWOP_PUSH_NONVOL = 0; // Push a nonvolatile register
@@ -135,6 +137,13 @@ pub const Architecture = enum {
             .aarch64 => COFF.IMAGE_REL_ARM64_BRANCH26,
         };
     }
+
+    fn absolutePointerRelocType(self: Architecture) u16 {
+        return switch (self) {
+            .x86_64 => COFF.IMAGE_REL_AMD64_ADDR64,
+            .aarch64 => COFF.IMAGE_REL_ARM64_ADDR64,
+        };
+    }
 };
 
 /// Symbol definition for the object file
@@ -183,6 +192,7 @@ pub const CoffWriter = struct {
 
     // Relocations for .text section
     text_relocs: std.ArrayList(TextReloc),
+    rdata_relocs: std.ArrayList(TextReloc),
 
     // String table (for long symbol names)
     strtab: std.ArrayList(u8),
@@ -205,6 +215,7 @@ pub const CoffWriter = struct {
             .rdata = .{},
             .symbols = .{},
             .text_relocs = .{},
+            .rdata_relocs = .{},
             .strtab = .{},
             .functions = .{},
         };
@@ -222,6 +233,7 @@ pub const CoffWriter = struct {
         self.rdata.deinit(self.allocator);
         self.symbols.deinit(self.allocator);
         self.text_relocs.deinit(self.allocator);
+        self.rdata_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
         self.functions.deinit(self.allocator);
     }
@@ -230,6 +242,12 @@ pub const CoffWriter = struct {
     pub fn setCode(self: *Self, code: []const u8) !void {
         self.text.clearRetainingCapacity();
         try self.text.appendSlice(self.allocator, code);
+    }
+
+    /// Set read-only data section contents.
+    pub fn setRodata(self: *Self, rodata: []const u8) !void {
+        self.rdata.clearRetainingCapacity();
+        try self.rdata.appendSlice(self.allocator, rodata);
     }
 
     /// Add a symbol to the object file
@@ -256,6 +274,17 @@ pub const CoffWriter = struct {
             .offset = offset,
             .symbol_idx = symbol_idx,
             .reloc_type = self.arch.branchRelocType(),
+        });
+    }
+
+    /// Add an absolute pointer relocation to the read-only data section.
+    pub fn addRdataRelocation(self: *Self, offset: u32, symbol_idx: u32, addend: i64) !void {
+        if (offset + 8 > self.rdata.items.len) unreachable;
+        std.mem.writeInt(i64, self.rdata.items[offset..][0..8], addend, .little);
+        try self.rdata_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .reloc_type = self.arch.absolutePointerRelocType(),
         });
     }
 
@@ -287,16 +316,18 @@ pub const CoffWriter = struct {
     pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
         // Section indices (1-based in COFF)
         const SECT_TEXT: i16 = 1;
+        const has_rdata = self.rdata.items.len > 0;
+        const SECT_RDATA: i16 = if (has_rdata) 2 else 0;
 
         // Check if we need unwind sections (Windows x64 only with functions defined)
         const need_unwind = self.arch == .x86_64 and self.functions.items.len > 0;
-        // Section indices: 1=.text, 2=.pdata, 3=.xdata
-        const SECT_XDATA: i16 = if (need_unwind) 3 else 0;
+        const SECT_PDATA: i16 = if (need_unwind) (if (has_rdata) 3 else 2) else 0;
+        const SECT_XDATA: i16 = if (need_unwind) SECT_PDATA + 1 else 0;
 
         // Calculate layout
         const header_size: u32 = @sizeOf(CoffHeader);
         const section_header_size: u32 = @sizeOf(SectionHeader);
-        const num_sections: u16 = if (need_unwind) 3 else 1; // .text, .pdata, .xdata
+        const num_sections: u16 = 1 + @as(u16, if (has_rdata) 1 else 0) + @as(u16, if (need_unwind) 2 else 0);
 
         // Calculate .pdata and .xdata sizes
         // .pdata: 12 bytes per RUNTIME_FUNCTION (BeginAddress, EndAddress, UnwindData)
@@ -333,8 +364,11 @@ pub const CoffWriter = struct {
         const text_offset: u32 = section_headers_offset + section_header_size * num_sections;
         const text_size: u32 = @intCast(self.text.items.len);
 
-        // .pdata follows .text
-        const pdata_offset: u32 = text_offset + text_size;
+        const rdata_offset: u32 = text_offset + text_size;
+        const rdata_size: u32 = @intCast(self.rdata.items.len);
+
+        // .pdata follows .text and .rdata
+        const pdata_offset: u32 = rdata_offset + rdata_size;
         // .xdata follows .pdata
         const xdata_offset: u32 = pdata_offset + pdata_size;
 
@@ -344,8 +378,11 @@ pub const CoffWriter = struct {
         const text_reloc_offset: u32 = xdata_offset + xdata_size;
         const text_reloc_size: u32 = @as(u32, @intCast(self.text_relocs.items.len)) * reloc_entry_size;
 
+        const rdata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
+        const rdata_reloc_size: u32 = @as(u32, @intCast(self.rdata_relocs.items.len)) * reloc_entry_size;
+
         // .pdata relocations (3 per RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData)
-        const pdata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
+        const pdata_reloc_offset: u32 = rdata_reloc_offset + rdata_reloc_size;
         const pdata_reloc_count: u32 = if (need_unwind) @intCast(self.functions.items.len * 3) else 0;
         const pdata_reloc_size: u32 = pdata_reloc_count * reloc_entry_size;
 
@@ -396,7 +433,7 @@ pub const CoffWriter = struct {
                 break :blk switch (sym.section) {
                     .text => SECT_TEXT,
                     .data => 0, // Would be section 2 if we had .data
-                    .rdata => if (need_unwind) SECT_XDATA else 0,
+                    .rdata => SECT_RDATA,
                     .bss => 0,
                     .undef => COFF.IMAGE_SYM_UNDEFINED,
                 };
@@ -459,6 +496,27 @@ pub const CoffWriter = struct {
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&text_header));
 
+        if (has_rdata) {
+            var rdata_name: [8]u8 = std.mem.zeroes([8]u8);
+            @memcpy(rdata_name[0..6], ".rdata");
+
+            const rdata_header = SectionHeader{
+                .name = rdata_name,
+                .virtual_size = 0,
+                .virtual_address = 0,
+                .size_of_raw_data = rdata_size,
+                .pointer_to_raw_data = rdata_offset,
+                .pointer_to_relocations = if (self.rdata_relocs.items.len > 0) rdata_reloc_offset else 0,
+                .pointer_to_line_numbers = 0,
+                .number_of_relocations = @intCast(self.rdata_relocs.items.len),
+                .number_of_line_numbers = 0,
+                .characteristics = COFF.IMAGE_SCN_CNT_INITIALIZED_DATA |
+                    COFF.IMAGE_SCN_MEM_READ |
+                    COFF.IMAGE_SCN_ALIGN_16BYTES,
+            };
+            try output.appendSlice(self.allocator, std.mem.asBytes(&rdata_header));
+        }
+
         // Write .pdata section header (if needed)
         if (need_unwind) {
             var pdata_name: [8]u8 = std.mem.zeroes([8]u8);
@@ -503,6 +561,10 @@ pub const CoffWriter = struct {
 
         // Write .text section content
         try output.appendSlice(self.allocator, self.text.items);
+
+        if (has_rdata) {
+            try output.appendSlice(self.allocator, self.rdata.items);
+        }
 
         // Write .pdata section content (RUNTIME_FUNCTION entries)
         if (need_unwind) {
@@ -608,6 +670,10 @@ pub const CoffWriter = struct {
 
         // Write .text relocations (10 bytes each: u32 offset, u32 symbol_idx, u16 type)
         for (self.text_relocs.items) |rel| {
+            try self.writeRelocation(output, rel.offset, rel.symbol_idx, rel.reloc_type);
+        }
+
+        for (self.rdata_relocs.items) |rel| {
             try self.writeRelocation(output, rel.offset, rel.symbol_idx, rel.reloc_type);
         }
 

@@ -37,6 +37,12 @@ pub const RocCall = fn (
 /// Function pointer type for hosted functions provided by the platform.
 /// All hosted functions follow the RocCall ABI: (ops, ret_ptr, args_ptr).
 ///
+/// Roc transfers ownership of refcounted arguments to hosted functions. A host
+/// function must decref each owned refcounted argument when it is done with it,
+/// or transfer that ownership into its return value or longer-lived storage. If
+/// the host keeps both the call argument and a stored copy, it must incref the
+/// stored copy so each live reference has one ownership.
+///
 /// The first parameter is `*anyopaque` instead of `*RocOps` to break a type-level
 /// dependency loop (HostedFn -> *RocOps -> HostedFunctions -> [*]HostedFn).
 /// Callers should cast the opaque pointer to `*RocOps` as needed.
@@ -70,6 +76,18 @@ pub const HostedFunctions = extern struct {
     count: u32,
     fns: [*]HostedFn,
 };
+
+const empty_hosted_fns = struct {
+    fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+
+    var fns: [1]HostedFn = .{hostedFn(&dummyHostedFn)};
+};
+
+/// Return a valid empty hosted function table for callers that don't expose any
+/// platform functions but still need an initialized `RocOps.hosted_fns`.
+pub fn emptyHostedFunctions() HostedFunctions {
+    return .{ .count = 0, .fns = &empty_hosted_fns.fns };
+}
 
 /// Operations that the host provides to Roc code, including memory management,
 /// panic handling, and platform-specific effects.
@@ -118,6 +136,18 @@ pub const RocOps = extern struct {
             .len = msg.len,
         };
         self.roc_dbg(&roc_dbg_args, self.env);
+    }
+
+    /// Helper function to report a failed `expect` to the host.
+    pub fn expectFailed(self: *RocOps, msg: []const u8) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        const roc_expect_failed_args = RocExpectFailed{
+            .utf8_bytes = @constCast(msg.ptr),
+            .len = msg.len,
+        };
+        self.roc_expect_failed(&roc_expect_failed_args, self.env);
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {

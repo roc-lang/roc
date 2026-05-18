@@ -13,6 +13,7 @@ r : [
 ~~~
 # EXPECTED
 MALFORMED TYPE - open_tag_union_stability.md:2:2:2:3
+DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 # PROBLEMS
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
@@ -23,6 +24,20 @@ This type annotation is malformed or contains invalid syntax.
 ```
 	^
 
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**open_tag_union_stability.md:1:1:5:2:**
+```roc
+r : [
+	a,
+
+	..,
+]
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

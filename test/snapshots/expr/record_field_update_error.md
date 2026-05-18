@@ -10,10 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
-UNDEFINED VARIABLE - record_field_update_error.md:1:3:1:9
-UNRECOGNIZED SYNTAX - record_field_update_error.md:1:10:1:11
-MALFORMED TYPE - record_field_update_error.md:1:17:1:19
-UNUSED VARIABLE - record_field_update_error.md:1:12:1:19
+DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.
@@ -37,49 +34,16 @@ Type annotations should contain types like _Str_, _Num a_, or _List U64_.
                 ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_field_update_error.md:1:3:1:9:**
-```roc
-{ person & age: 31 }
-```
-  ^^^^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_field_update_error.md:1:10:1:11:**
-```roc
-{ person & age: 31 }
-```
-         ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**record_field_update_error.md:1:17:1:19:**
-```roc
-{ person & age: 31 }
-```
-                ^^
-
-
-**UNUSED VARIABLE**
-Variable `age` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
 **record_field_update_error.md:1:12:1:19:**
 ```roc
 { person & age: 31 }
 ```
            ^^^^^^^
 
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

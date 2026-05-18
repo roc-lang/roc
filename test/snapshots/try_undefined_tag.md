@@ -2,6 +2,7 @@
 ~~~ini
 description=Try operator on undefined tag identifier
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc

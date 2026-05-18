@@ -29,10 +29,10 @@ functions can only be called by other effectful functions; pure functions and to
 constants can only call pure functions.
 
 A common example of a performance optimization where Roc's compiler makes use of this
-distinction: all top-level values are evaluated at compile time. Pure functions always return 
+distinction: all top-level values are evaluated at compile time. Pure functions always return
 the same answers when given the same inputs, and top-level values all have inputs that are
 fixed at compile time. That means running the pure functions at compile time can't possibly
-give different answers than if they were run at runtime. 
+give different answers than if they were run at runtime.
 
 Pure functions also have no side effects. That said, pure functions in Roc can run things
 that can reasonably be considered side effects:
@@ -43,7 +43,7 @@ that can reasonably be considered side effects:
 
 ## Function Type Annotations
 
-Here's a type annotation for a pure function, and then right below it, 
+Here's a type annotation for a pure function, and then right below it,
 an annotation for an effectful function:
 
 ```roc
@@ -65,38 +65,38 @@ way you can tell a pure function annotation apart from an effectful one.
 
 ### `!` suffix in function names
 
-By convention, all effectful functions—and _only_ effectful functions—have names that end 
+By convention, all effectful functions—and _only_ effectful functions—have names that end
 in  `!`. This design has two purposes:
 
-* It makes it easy to see at a glance exactly which parts of your code are potentially performing effects. 
+* It makes it easy to see at a glance exactly which parts of your code are potentially performing effects.
 * It makes it easy to distinguish between higher-order functions like `List.keep_if` and `List.keep_if!` which differ only in the effectfulness of the functions they accept.
 
 Roc's compiler reports a warning if this naming convention is not followed.
 
 ## Purity inference
 
-Roc infers which functions are pure and which are effectful. You can choose to annotate 
+Roc infers which functions are pure and which are effectful. You can choose to annotate
 functions as pure or effectful, and the compiler will warn you if the annotation is incorrect.
 
 For example, suppose you wrote a function which called an effectful function, and annotated
 it as if it were a pure function. You'd get a warning saying this is an effectful function
-that's been incorrectly annotated as a pure function, but you could still run the program. 
+that's been incorrectly annotated as a pure function, but you could still run the program.
 
 This is a useful feature, as it means you can do things like take a function that has been
-historically pure and add some debugging that involves doing I/O in the middle of the function. 
+historically pure and add some debugging that involves doing I/O in the middle of the function.
 You'll get a warning (and potentially miss out on some optimizations) but you won't have to do the chore of going around changing a bunch of annotations just to be able to run the program.
 
 Note that this still doesn't make it possible to call effectful functions at compile time.
 The rule still applies that effectful functions can only be called from within other
 effectful functions; if you annotate a function as pure, and the compiler warns you that
-the annotation is mistaken, that's because the compiler knows the function _is_ 
+the annotation is mistaken, that's because the compiler knows the function _is_
 effectful—and so can't be run at compile time.
 
 > One reason for this rule is that all effectful functions originate in the platform,
-> which provides their implementations using low-level code that has been compiled for a 
+> which provides their implementations using low-level code that has been compiled for a
 > specific target system. Roc's compiler does not run platform-provided low-level code
 > during compilation, which means that when you run `roc check` or `roc build`, none of
-> your dependencies—including platforms—are permitted to perform arbitrary I/O operations 
+> your dependencies—including platforms—are permitted to perform arbitrary I/O operations
 > on your system. You have to actually run the compiled Roc program for that.
 
 ## Recursive Functions
@@ -124,7 +124,7 @@ contains = |list, item| match list.split_first() {
 ```
 
 By default, recursive functions have an increased risk of stack overflowing compared to
-non-recursive functions, although [tail-call optimization](#tail-call-optimization) 
+non-recursive functions, although [tail-call optimization](#tail-call-optimization)
 can eliminate that risk for some recursive functions. (In doing so, the optimization does
 mean a function that recurses forever will loop forever instead of overflowing the stack.)
 

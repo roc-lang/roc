@@ -18,25 +18,19 @@ test "nested lambda with higher-rank variables does not panic during generalizat
     // 3. Recursive calls that can cause variable redirects across ranks
     const source =
         \\{
-        \\    Maybe(t) : [
+        \\    Maybe(t) := [
         \\        Some(t),
         \\        None,
         \\    ]
         \\
-        \\    TokenContents : [
+        \\    TokenContents := [
         \\        NewlineToken,
         \\        SymbolsToken(Str),
         \\        SnakeCaseIdentToken(Str),
         \\        EndOfFileToken,
         \\    ]
         \\
-        \\    TokenizerResult : (
-        \\        Try(TokenContents, Str),
-        \\        U64,
-        \\        U64,
-        \\    )
-        \\
-        \\    get_next_token : List(U8), U64 -> TokenizerResult
+        \\    get_next_token : List(U8), U64 -> (Try(TokenContents, Str), U64, U64)
         \\    get_next_token = |file, index| {
         \\        match List.get(file, index) {
         \\            Ok(_) => (Ok(NewlineToken), index, index + 1)

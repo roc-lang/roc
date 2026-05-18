@@ -45,11 +45,13 @@ NO CHANGE
 		(p-assign (ident "data"))
 		(e-literal (string "")))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "data")))
-			(e-string
-				(e-literal (string ""))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "data"))))
+			(rhs
+				(e-string
+					(e-literal (string "")))))))
 ~~~
 # TYPES
 ~~~clojure

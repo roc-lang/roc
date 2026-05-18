@@ -61,11 +61,11 @@ EndOfFile,
 					(p-underscore))
 				(e-apply
 					(e-ident (raw "processDict"))
-					(e-field-access
-						(e-apply
-							(e-ident (raw "Dict.empty")))
-						(e-apply
-							(e-ident (raw "insert"))
+					(e-method-call (method ".insert")
+						(receiver
+							(e-apply
+								(e-ident (raw "Dict.empty"))))
+						(args
 							(e-string
 								(e-string-part (raw "one")))
 							(e-int (raw "1")))))))))
@@ -95,12 +95,12 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call
+			(e-call (constraint-fn-var 190)
 				(e-lookup-local
 					(p-assign (ident "processDict")))
-				(e-dot-access (field "insert")
+				(e-dispatch-call (method "insert") (constraint-fn-var 126)
 					(receiver
-						(e-call
+						(e-call (constraint-fn-var 109)
 							(e-lookup-external
 								(builtin))))
 					(args

@@ -99,14 +99,14 @@ pub const Expr = union(enum) {
     },
     /// An integer literal with explicit type annotation: `123.U64`
     /// The type_name stores the type identifier (e.g., "U64", "I32")
-    /// At compile time, from_numeral is called to validate and convert the value.
+    /// Type checking constrains it through `from_numeral`; lowering uses the solved expr type.
     e_typed_int: struct {
         value: CIR.IntValue,
         type_name: Ident.Idx,
     },
     /// A fractional literal with explicit type annotation: `3.14.Dec`
     /// The type_name stores the type identifier (e.g., "Dec", "F64")
-    /// At compile time, from_numeral is called to validate and convert the value.
+    /// Type checking constrains it through `from_numeral`; lowering uses the solved expr type.
     /// The value is stored as scaled i128 (like Dec, scaled by 10^18).
     e_typed_frac: struct {
         value: CIR.IntValue,
@@ -143,18 +143,6 @@ pub const Expr = union(enum) {
     e_lookup_external: struct {
         module_idx: CIR.Import.Idx,
         target_node_idx: u16,
-        ident_idx: Ident.Idx,
-        region: Region,
-    },
-    /// Deferred external module lookup - member name stored but target_node_idx not yet resolved.
-    /// Used during independent canonicalization when the target module hasn't been canonicalized yet.
-    /// Gets resolved to e_lookup_external before type-checking.
-    /// ```roc
-    /// import Message  # Message not yet canonicalized
-    /// foo = Message.msg()  # Creates e_lookup_pending until resolved
-    /// ```
-    e_lookup_pending: struct {
-        module_idx: CIR.Import.Idx,
         ident_idx: Ident.Idx,
         region: Region,
     },
@@ -212,6 +200,7 @@ pub const Expr = union(enum) {
         func: Expr.Idx,
         args: Expr.Span,
         called_via: CalledVia,
+        constraint_fn_var: ?TypeVar = null,
     },
     /// Record literal with zero or more fields.
     /// Records are Roc's primary data structure for grouping related values.
@@ -332,21 +321,68 @@ pub const Expr = union(enum) {
     /// !True           # Unary not on literal
     /// ```
     e_unary_not: UnaryNot,
-    /// Dot access expression that represents field access or method calls.
-    /// The exact meaning is determined after type inference based on the receiver's type:
-    /// - Record field access: `person.name`
-    /// - Static Dispatch (method-style) call: `list.map(fn)` (semantically this is equal to `List.map(list, fn)`)
+    /// Field access expression.
     ///
     /// ```roc
-    /// person.name         # Record field access
-    /// list.len()          # Static Dispatch
-    /// list.map(|x| x)     # Static Dispatch version of above
+    /// person.name
     /// ```
-    e_dot_access: struct {
-        receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
-        field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
-        field_name_region: base.Region, // Region of just the field/method name for error reporting
-        args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
+    e_field_access: struct {
+        receiver: Expr.Idx,
+        field_name: Ident.Idx,
+        field_name_region: base.Region,
+    },
+    /// Method call expression.
+    ///
+    /// ```roc
+    /// list.map(transform)
+    /// ```
+    e_method_call: struct {
+        receiver: Expr.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+    },
+    e_dispatch_call: struct {
+        receiver: Expr.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+        constraint_fn_var: TypeVar,
+    },
+    /// Structural equality chosen explicitly by the checker.
+    ///
+    /// This is not method dispatch. It represents the semantic case where
+    /// equality is satisfied structurally rather than via a user-defined
+    /// `is_eq` method.
+    e_structural_eq: struct {
+        lhs: Expr.Idx,
+        rhs: Expr.Idx,
+        negated: bool,
+    },
+    e_method_eq: struct {
+        lhs: Expr.Idx,
+        rhs: Expr.Idx,
+        negated: bool,
+        constraint_fn_var: types.Var,
+    },
+    /// Method call expression rooted in a type-var alias namespace.
+    ///
+    /// ```roc
+    /// Fmt : fmt
+    /// Fmt.decode_str(format, source)
+    /// ```
+    e_type_method_call: struct {
+        type_var_alias_stmt: CIR.Statement.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+    },
+    e_type_dispatch_call: struct {
+        type_var_alias_stmt: CIR.Statement.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+        constraint_fn_var: TypeVar,
     },
     /// Tuple element access by numeric index.
     /// Accesses an element of a tuple using dot notation with a numeric index.
@@ -449,29 +485,6 @@ pub const Expr = union(enum) {
         };
     },
 
-    /// Type variable dispatch expression for calling methods on type variable aliases.
-    /// This is created when the user writes `Thing.method(args)` inside a function body
-    /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
-    ///
-    /// The actual function to call is resolved during monomorphization once the type variable
-    /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
-    /// then `Thing.len(x)` becomes `List.len(x)`.
-    ///
-    /// ```roc
-    /// # Static dispatch: method is resolved based on concrete type at monomorphization time
-    /// call_default = |thing|
-    ///     Thing : thing
-    ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
-    /// ```
-    e_type_var_dispatch: struct {
-        /// Reference to the s_type_var_alias statement that introduced this type alias
-        type_var_alias_stmt: CIR.Statement.Idx,
-        /// The method name being called (e.g., "default" in Thing.default())
-        method_name: Ident.Idx,
-        /// Arguments to the method call (may be empty for no-arg methods)
-        args: Expr.Span,
-    },
-
     /// For expression that iterates over a list and executes a body for each element.
     /// The for expression evaluates to the empty record `{}`.
     /// This is the expression form of a for loop, allowing it to be used in expression contexts.
@@ -495,9 +508,7 @@ pub const Expr = union(enum) {
     /// ```
     e_hosted_lambda: struct {
         symbol_name: base.Ident.Idx,
-        index: u32, // Index into RocOps.hosted_fns (assigned during canonicalization)
         args: CIR.Pattern.Span,
-        body: Expr.Idx,
     },
 
     /// A low-level builtin operation.
@@ -854,23 +865,6 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_lookup_pending => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lookup-pending");
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
-                const attrs = tree.beginNode();
-
-                const module_idx_int = @intFromEnum(e.module_idx);
-                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
-                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
-                const module_name = ir.common.strings.get(string_lit_idx);
-                try tree.pushStringPair("pending-module", module_name);
-
-                const ident_name = ir.getIdent(e.ident_idx);
-                try tree.pushStringPair("pending-member", ident_name);
-
-                try tree.endNode(begin, attrs);
-            },
             .e_lookup_required => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-lookup-required");
@@ -937,6 +931,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-call");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                if (c.constraint_fn_var) |constraint_fn_var| {
+                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                }
                 const attrs = tree.beginNode();
 
                 const all_exprs = ir.store.exprSlice(c.args);
@@ -1164,9 +1161,9 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_dot_access => |e| {
+            .e_field_access => |e| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-dot-access");
+                try tree.pushStaticAtom("e-field-access");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("field", ir.getIdentText(e.field_name));
@@ -1178,15 +1175,138 @@ pub const Expr = union(enum) {
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
 
-                if (e.args) |args| {
-                    const args_begin = tree.beginNode();
-                    try tree.pushStaticAtom("args");
-                    const args_attrs = tree.beginNode();
-                    for (ir.store.exprSlice(args)) |arg_idx| {
-                        try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
-                    }
-                    try tree.endNode(args_begin, args_attrs);
+                try tree.endNode(begin, attrs);
+            },
+            .e_method_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-method-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                const attrs = tree.beginNode();
+
+                const receiver_begin = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
+                try tree.endNode(receiver_begin, receiver_attrs);
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_dispatch_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-dispatch-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                const attrs = tree.beginNode();
+
+                const receiver_begin = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
+                try tree.endNode(receiver_begin, receiver_attrs);
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_structural_eq => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-structural-eq");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("negated", if (e.negated) "true" else "false");
+                const attrs = tree.beginNode();
+
+                const lhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("lhs");
+                const lhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
+                try tree.endNode(lhs_begin, lhs_attrs);
+
+                const rhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("rhs");
+                const rhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
+                try tree.endNode(rhs_begin, rhs_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_method_eq => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-method-eq");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("negated", if (e.negated) "true" else "false");
+                const attrs = tree.beginNode();
+
+                const lhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("lhs");
+                const lhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
+                try tree.endNode(lhs_begin, lhs_attrs);
+
+                const rhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("rhs");
+                const rhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
+                try tree.endNode(rhs_begin, rhs_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_method_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-method-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                const attrs = tree.beginNode();
+
+                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_dispatch_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-dispatch-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
 
                 try tree.endNode(begin, attrs);
             },
@@ -1316,25 +1436,6 @@ pub const Expr = union(enum) {
 
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
-
-                try tree.endNode(begin, attrs);
-            },
-            .e_type_var_dispatch => |tvd| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-type-var-dispatch");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                // Add method name
-                const method_text = ir.getIdent(tvd.method_name);
-                try tree.pushStringPair("method", method_text);
-
-                const attrs = tree.beginNode();
-
-                // Add arguments if any
-                for (ir.store.exprSlice(tvd.args)) |arg_idx| {
-                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
-                }
 
                 try tree.endNode(begin, attrs);
             },

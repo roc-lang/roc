@@ -126,10 +126,10 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call
+			(e-call (constraint-fn-var 58)
 				(e-lookup-local
 					(p-assign (ident "print_number!")))
-				(e-call
+				(e-call (constraint-fn-var 57)
 					(e-lookup-local
 						(p-assign (ident "multiply")))
 					(e-lookup-local
@@ -137,7 +137,7 @@ NO CHANGE
 					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call
+		(e-call (constraint-fn-var 77)
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))
@@ -150,11 +150,11 @@ NO CHANGE
 	(defs
 		(patt (type "a, b -> a where [a.times : a, b -> a]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.times : a, Dec -> a]"))
+		(patt (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "a, b -> a where [a.times : a, b -> a]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.times : a, Dec -> a]"))
+		(expr (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))))
 ~~~

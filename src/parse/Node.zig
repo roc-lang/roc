@@ -410,11 +410,15 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     record_update,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// Record field access.
+    /// * lhs - receiver expr
+    /// * rhs - field ident expr
     field_access,
+    /// Method call syntax `a.foo(...)`.
+    /// * main_token - dotted method token
+    /// * lhs - receiver expr
+    /// * rhs - extra_data index storing [args_start, args_len]
+    method_call,
     /// Tuple element access: tuple.0, tuple.1, etc.
     /// * lhs - node index of tuple expression
     /// * main_token - the element index token (NoSpaceDotInt or DotInt)
@@ -423,7 +427,7 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    local_dispatch,
+    arrow_call,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - node index of left expression

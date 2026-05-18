@@ -548,6 +548,77 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Deferred arg sources that read through a base register cannot safely keep
+        /// that register live if it is also one of the destination parameter regs.
+        /// Materialize those sources into caller-frame slots first so later parallel
+        /// moves read from stable memory instead of a clobbered base register.
+        ///
+        /// Every public call emission path must run this before resolving deferred
+        /// register arguments. Direct, indirect, and relocatable calls are all one
+        /// simultaneous ABI assignment from original argument sources to parameter
+        /// registers.
+        fn stabilizeDeferredMemorySources(self: *Self) !void {
+            if (self.reg_arg_count == 0) return;
+
+            var has_dst_reg = [_]bool{false} ** 32;
+            for (self.reg_args[0..self.reg_arg_count]) |ra| {
+                has_dst_reg[@intFromEnum(CC_EMIT.PARAM_REGS[ra.dst_index])] = true;
+            }
+
+            for (self.reg_args[0..self.reg_arg_count]) |*ra| {
+                switch (ra.src) {
+                    .from_mem => |mem| {
+                        if (!has_dst_reg[@intFromEnum(mem.base)]) continue;
+
+                        const save_offset = self.allocCallerTempSlot();
+                        if (comptime is_aarch64) {
+                            try self.emit.ldrRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.BASE_PTR, save_offset);
+                        } else {
+                            try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                            try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, save_offset, CC_EMIT.SCRATCH_REG);
+                        }
+                        ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
+                    },
+                    .from_lea => |lea| {
+                        if (!has_dst_reg[@intFromEnum(lea.base)]) continue;
+
+                        const save_offset = self.allocCallerTempSlot();
+                        if (comptime is_aarch64) {
+                            if (lea.offset >= 0 and lea.offset <= 4095) {
+                                try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset));
+                            } else if (lea.offset < 0 and -lea.offset <= 4095) {
+                                try self.emit.subRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(-lea.offset));
+                            } else {
+                                try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, lea.offset)));
+                                try self.emit.addRegRegReg(.w64, CC_EMIT.SCRATCH_REG, lea.base, CC_EMIT.SCRATCH_REG);
+                            }
+                        } else {
+                            try self.emit.leaRegMem(CC_EMIT.SCRATCH_REG, lea.base, lea.offset);
+                        }
+                        if (comptime is_aarch64) {
+                            try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.BASE_PTR, save_offset);
+                        } else {
+                            try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, save_offset, CC_EMIT.SCRATCH_REG);
+                        }
+                        ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        fn allocCallerTempSlot(self: *Self) i32 {
+            if (comptime is_aarch64) {
+                const offset = self.stack_offset.*;
+                self.stack_offset.* += 16;
+                return offset;
+            } else {
+                self.stack_offset.* -= 8;
+                return self.stack_offset.*;
+            }
+        }
+
         /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
         /// This handles arbitrary permutations of param registers without clobbering,
         /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
@@ -660,6 +731,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 }
             }
 
+            try self.stabilizeDeferredMemorySources();
+
             // Resolve deferred register args AFTER stack args are stored,
             // so the parallel move doesn't clobber stack arg source registers.
             try self.emitDeferredRegArgs();
@@ -752,6 +825,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 }
             }
 
+            try self.stabilizeDeferredMemorySources();
+
             // Resolve deferred register args AFTER stack args are stored
             try self.emitDeferredRegArgs();
 
@@ -839,6 +914,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emitStackArgAarch64(arg, @intCast(i));
                 }
             }
+
+            try self.stabilizeDeferredMemorySources();
 
             // Resolve deferred register args AFTER stack args are stored
             try self.emitDeferredRegArgs();
@@ -1986,6 +2063,23 @@ fn findPattern3(buf: []const u8, b0: u8, b1: u8, b2: u8) ?usize {
     return null;
 }
 
+fn findPattern4(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8) ?usize {
+    if (buf.len < 4) return null;
+    for (0..buf.len - 3) |i| {
+        if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2 and buf[i + 3] == b3) return i;
+    }
+    return null;
+}
+
+fn findPattern7(buf: []const u8, b0: u8, b1: u8, b2: u8, b3: u8, b4: u8, b5: u8, b6: u8) ?usize {
+    if (buf.len < 7) return null;
+    for (0..buf.len - 6) |i| {
+        if (buf[i] == b0 and buf[i + 1] == b1 and buf[i + 2] == b2 and buf[i + 3] == b3 and
+            buf[i + 4] == b4 and buf[i + 5] == b5 and buf[i + 6] == b6) return i;
+    }
+    return null;
+}
+
 // x86_64 MOV reg,reg encoding reference (opcode 0x89, MOV r/m64, r64):
 // REX = 0x40 | (W<<3) | (R<<2) | B, where R=src.rexR, B=dst.rexB
 // ModRM = 0xC0 | (src.enc()<<3) | dst.enc()
@@ -2120,6 +2214,31 @@ test "parallel move: LEA then REG reading same dest — reordered" {
 
     // No scratch needed (LEA source isn't a register, can't form cycle)
     try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "aarch64 parallel move: LEA then REG reading same dest — reordered" {
+    const Emit = aarch64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addLeaArg(.FP, -32); // dst=X0, sub x0, x29, #32
+    try builder.addRegArg(.X0); // dst=X1, src=X0
+
+    try builder.call(0x12345678);
+
+    // mov x1, x0  == aa0003e1
+    const mov_pos = findPattern4(emit.buf.items, 0xE1, 0x03, 0x00, 0xAA);
+    try std.testing.expect(mov_pos != null);
+    // sub x0, x29, #32 == d10083a0
+    const lea_pos = findPattern4(emit.buf.items, 0xA0, 0x83, 0x00, 0xD1);
+    try std.testing.expect(lea_pos != null);
+
+    try std.testing.expect(mov_pos.? < lea_pos.?);
 }
 
 test "parallel move: self-move eliminated" {
@@ -2338,6 +2457,37 @@ test "parallel move: mixed LEA, MEM, IMM, REG without conflicts" {
     try std.testing.expect(findPattern3(emit.buf.items, 0x41, 0xFF, 0xD3) != null);
     // No scratch needed
     try std.testing.expect(findPattern3(emit.buf.items, 0x49, 0x89, 0xF3) == null);
+}
+
+test "relocatable call stabilizes memory args before clobbering base param register" {
+    const Emit = x86_64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var relocs = std.ArrayList(Relocation){};
+    defer relocs.deinit(std.testing.allocator);
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+
+    try builder.addMemArg(.RDI, 0); // RDI <- [old RDI]
+    try builder.addMemArg(.RDI, 8); // RSI <- [old RDI + 8]
+
+    try builder.callRelocatable("roc_test_target", std.testing.allocator, &relocs);
+
+    // Without stabilization, the first argument would emit `mov rdi, [rdi]`
+    // and the second would then read through the clobbered RDI.
+    try std.testing.expect(findPattern3(emit.buf.items, 0x48, 0x8B, 0x3F) == null);
+    try std.testing.expect(findPattern7(emit.buf.items, 0x48, 0x8B, 0xBF, 0x00, 0x00, 0x00, 0x00) == null);
+    try std.testing.expect(findPattern4(emit.buf.items, 0x48, 0x8B, 0x77, 0x08) == null);
+    try std.testing.expect(findPattern7(emit.buf.items, 0x48, 0x8B, 0xB7, 0x08, 0x00, 0x00, 0x00) == null);
+
+    // The original RDI is read into scratch before parameter registers move.
+    // The x86 emitter currently uses the disp32 memory form even for offset 0.
+    try std.testing.expect(findPattern7(emit.buf.items, 0x4C, 0x8B, 0x9F, 0x00, 0x00, 0x00, 0x00) != null);
+    try std.testing.expectEqual(@as(usize, 1), relocs.items.len);
 }
 
 test "parallel move: swap cycle on Windows x64 (RCX/RDX)" {

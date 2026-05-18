@@ -314,3 +314,67 @@ test "check - repro - issue 8848" {
     // No assertion here, this repro previously panicked, so that's the
     // regression we're guarding against
 }
+
+test "check - repro - bad return branch mismatch after utf8 empty guard" {
+    const src =
+        \\main! = |_| {}
+        \\
+        \\to_uppercase : U8 -> U8
+        \\to_uppercase = |ch| ch - 32
+        \\
+        \\capitalize_first : Str -> Str
+        \\capitalize_first = |s| {
+        \\    bytes = Str.to_utf8(s)
+        \\    if List.is_empty(bytes) {
+        \\        return ""
+        \\    }
+        \\
+        \\    first = match List.first(bytes) {
+        \\        Ok(b) => b
+        \\        Err(_) => 0
+        \\    }
+        \\    first_is_lower = first >= 'a' and first <= 'z'
+        \\    new_first = if first_is_lower to_uppercase(first) else first
+        \\    match Str.from_utf8([new_first]) {
+        \\        Ok(str) => str
+        \\        Err(_) => s
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - bad inline if branch mismatch in utf8 byte loop" {
+    const src =
+        \\main! = |_| {}
+        \\
+        \\to_lowercase : U8 -> U8
+        \\to_lowercase = |ch| ch + 32
+        \\
+        \\to_lower_snake_case : Str -> Str
+        \\to_lower_snake_case = |s| {
+        \\    bytes = Str.to_utf8(s)
+        \\    var $output = []
+        \\
+        \\    for byte in bytes {
+        \\        is_upper = byte >= 'A' and byte <= 'Z'
+        \\        new_byte = if is_upper to_lowercase(byte) else byte
+        \\        $output = $output.append(new_byte)
+        \\    }
+        \\
+        \\    match Str.from_utf8($output) {
+        \\        Ok(str) => str
+        \\        Err(_) => s
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}

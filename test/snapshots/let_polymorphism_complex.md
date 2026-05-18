@@ -851,21 +851,21 @@ main = |_| {
 									(p-assign (ident "val"))))))))))
 	(d-let
 		(p-assign (ident "container1"))
-		(e-call
+		(e-call (constraint-fn-var 627)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "container2"))
-		(e-call
+		(e-call (constraint-fn-var 632)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "container3"))
-		(e-call
+		(e-call (constraint-fn-var 637)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -1057,7 +1057,7 @@ main = |_| {
 				(p-underscore))
 			(e-block
 				(e-binop (op "add")
-					(e-dot-access (field "value")
+					(e-field-access (field "value")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "container1")))))

@@ -2,6 +2,7 @@
 ~~~ini
 description=Error - main! with wrong number of parameters
 type=file
+module_validation_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc

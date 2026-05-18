@@ -13,6 +13,7 @@ PARSE ERROR - fuzz_crash_040.md:1:20:1:21
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_040.md:2:3:2:4
 PARSE ERROR - fuzz_crash_040.md:2:4:2:5
 MALFORMED TYPE - fuzz_crash_040.md:2:3:2:4
+DECLARATION HAS NO VALUE - fuzz_crash_040.md:2:1:2:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -56,6 +57,17 @@ o:0)
 ```
   ^
 
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_040.md:2:1:2:4:**
+```roc
+o:0)
+```
+^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

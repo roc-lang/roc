@@ -99,10 +99,12 @@ expect result == True
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "result")))
-			(e-tag (name "True")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-tag (name "True"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -8,22 +8,9 @@ type=file
 x = 5
 ~~~
 # EXPECTED
-MISSING MAIN! FUNCTION - no_type_no_main.md:1:1:1:6
+NIL
 # PROBLEMS
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**no_type_no_main.md:1:1:1:6:**
-```roc
-x = 5
-```
-^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,

@@ -77,6 +77,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:20:55:20:60
 DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
+MODULE NOT FOUND - can_import_exposing_types.md:35:30:35:37
 UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
@@ -286,6 +287,17 @@ This type is referenced here:
 createClient : Config -> Http.Client
 ```
                ^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Client` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_exposing_types.md:35:30:35:37:**
+```roc
+createClient : Config -> Http.Client
+```
+                             ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -703,7 +715,7 @@ combineTrys = |jsonTry, httpStatus|
 					(p-assign (ident "result"))
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-dot-access (field "body")
+						(e-field-access (field "body")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "req")))))))
@@ -778,7 +790,7 @@ combineTrys = |jsonTry, httpStatus|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Client") (external-module "http.Client")))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-lambda
@@ -787,7 +799,7 @@ combineTrys = |jsonTry, httpStatus|
 			(e-match
 				(match
 					(cond
-						(e-dot-access (field "status")
+						(e-field-access (field "status")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "response"))))))

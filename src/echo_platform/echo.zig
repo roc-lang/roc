@@ -11,8 +11,14 @@
 //! modules, while delegating everything else to WasmFilesystem.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const base = @import("base");
+const check = @import("check");
 const compile = @import("compile");
 const echo_platform = @import("echo_platform");
+const eval = @import("eval");
+const layout = @import("layout");
+const lir = @import("lir");
 const roc_target = @import("roc_target");
 const reporting = @import("reporting");
 
@@ -25,6 +31,19 @@ const HostedFn = echo_platform.host_abi.HostedFn;
 const ReportingConfig = reporting.ReportingConfig;
 
 const Allocator = std.mem.Allocator;
+
+/// Public API.
+pub const std_options: std.Options = .{
+    .log_level = .warn,
+    .logFn = logFn,
+};
+
+fn logFn(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), comptime format: []const u8, args: anytype) void {
+    if (comptime builtin.target.os.tag == .freestanding) {
+        return;
+    }
+    std.log.defaultLog(level, scope, format, args);
+}
 
 // Fixed-size heap in WASM linear memory (64 MB).
 var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined;
@@ -57,6 +76,83 @@ fn emitDiagnostics(build_env: *BuildEnv) void {
             }
         }
     }
+}
+
+fn platformRootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) lir.LirProcSpecId {
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "echo platform invariant violated: root metadata mismatch roots={d} metadata={d}",
+                .{ root_procs.len, root_metadata.len },
+            );
+        }
+        unreachable;
+    }
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.abi == .platform or metadata.exposure == .platform_required) return root_proc;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("echo platform invariant violated: checked artifact lowering produced no platform root", .{});
+    }
+    unreachable;
+}
+
+fn argLayoutsForProc(
+    alloc: Allocator,
+    store: *const lir.LirStore,
+    proc_id: lir.LirProcSpecId,
+) ![]layout.Idx {
+    const proc = store.getProcSpec(proc_id);
+    const arg_ids = store.getLocalSpan(proc.args);
+    const arg_layouts = try alloc.alloc(layout.Idx, arg_ids.len);
+    errdefer alloc.free(arg_layouts);
+
+    for (arg_ids, 0..) |local_id, i| {
+        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    }
+
+    return arg_layouts;
+}
+
+fn runEchoLir(lowered: *const lir.CheckedPipeline.LoweredProgram) !u8 {
+    var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
+    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, &hosted_fn_array);
+    var cli_args_list = echo_platform.buildCliArgs(&.{}, &roc_ops);
+    var result_buf: [16]u8 align(16) = undefined;
+
+    const root_proc = platformRootProc(lowered);
+    const arg_layouts = try argLayoutsForProc(allocator, &lowered.lir_result.store, root_proc);
+    defer allocator.free(arg_layouts);
+
+    var interpreter = try eval.LirInterpreter.init(
+        allocator,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &roc_ops,
+    );
+    defer interpreter.deinit();
+
+    const proc = lowered.lir_result.store.getProcSpec(root_proc);
+    _ = interpreter.eval(.{
+        .proc_id = root_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = @ptrCast(&cli_args_list),
+        .ret_ptr = @ptrCast(&result_buf),
+    }) catch |err| switch (err) {
+        error.RuntimeError, error.DivisionByZero => {
+            if (interpreter.getRuntimeErrorMessage()) |msg| jsErr(msg);
+            return error.EvaluationFailed;
+        },
+        error.Crash => return error.EvaluationFailed,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    if (default_roc_ops_env.inline_expect_failed) return 1;
+    return result_buf[0];
 }
 
 // --- Extra module file storage (static, survives FBA reset) ---
@@ -287,126 +383,65 @@ export fn compileAndRun(source_ptr: [*]const u8, source_len: usize) u8 {
 }
 
 fn compileAndRunInner(source: []const u8) !u8 {
-    // Reset the allocator for each compilation so we don't leak between runs.
     fba.reset();
     allocator = fba.allocator();
 
-    const target = RocTarget.wasm32;
-
-    // Virtual absolute paths for the echo platform files.
-    const app_abs = "/app/main.roc";
+    const app_abs_path = "/app/main.roc";
     const platform_main_path = "/app/.roc_echo_platform/main.roc";
     const echo_module_path = "/app/.roc_echo_platform/Echo.roc";
 
-    // Build the synthetic app header with imports for the echo platform
-    // and all user-provided modules.
-    var import_buf: [4096]u8 = undefined;
-    var import_len: usize = 0;
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n";
+    const footer =
+        "\n\necho! = |msg| Echo.line!(msg)\n";
+    const synthetic_source = try std.mem.concat(allocator, u8, &.{ header, source, footer });
 
-    // Always import pf.Echo
-    const base_imports = "import pf.Echo\n";
-    @memcpy(import_buf[0..base_imports.len], base_imports);
-    import_len = base_imports.len;
-
-    // Add imports for each extra file
-    for (extra_files[0..extra_file_count]) |*ef| {
-        const prefix = "import ";
-        const suffix = "\n";
-        const needed = prefix.len + ef.name_len + suffix.len;
-        if (import_len + needed <= import_buf.len) {
-            @memcpy(import_buf[import_len..][0..prefix.len], prefix);
-            @memcpy(import_buf[import_len + prefix.len ..][0..ef.name_len], ef.name());
-            @memcpy(import_buf[import_len + prefix.len + ef.name_len ..][0..suffix.len], suffix);
-            import_len += needed;
-        }
-    }
-
-    const header = std.fmt.allocPrint(
-        allocator,
-        "app [main!] {{ pf: platform \"{s}\" }}\n\n{s}\necho! = |msg| Echo.line!(msg)\n\n",
-        .{ platform_main_path, import_buf[0..import_len] },
-    ) catch return error.OutOfMemory;
-
-    const synthetic_source = std.mem.concat(allocator, u8, &.{ header, source }) catch return error.OutOfMemory;
-
-    // Set the app source into WasmFilesystem so canonicalize/fileExists work.
+    wasm_ctx.setFilename(allocator, app_abs_path);
     wasm_ctx.setSource(allocator, synthetic_source);
-    wasm_ctx.setFilename(allocator, "main.roc");
 
-    // Initialize the build environment with the echo I/O context, which intercepts
-    // reads for synthetic files and delegates everything else to WasmFilesystem.
     var echo_ctx = EchoCtx{
-        .app_abs_path = app_abs,
+        .app_abs_path = app_abs_path,
         .synthetic_app_source = synthetic_source,
         .platform_main_path = platform_main_path,
         .echo_module_path = echo_module_path,
         .fallback = WasmFilesystem.wasm(&wasm_ctx),
     };
-    var build_env = try BuildEnv.init(allocator, .single_threaded, 1, target, "/app");
+
+    var build_env = try BuildEnv.init(allocator, .single_threaded, 1, RocTarget.wasm32, "/app");
     defer build_env.deinit();
     build_env.filesystem = echo_ctx.io();
 
-    // Phase 1: Discover dependencies (parses headers of all modules).
-    build_env.discoverDependencies(app_abs) catch {
+    build_env.discoverDependencies(app_abs_path) catch |err| {
         emitDiagnostics(&build_env);
-        return error.CompilationFailed;
+        return err;
+    };
+    build_env.compileDiscovered() catch |err| {
+        emitDiagnostics(&build_env);
+        return err;
     };
 
-    // Phase 2: Compile all discovered modules.
-    build_env.compileDiscovered() catch {
-        emitDiagnostics(&build_env);
-        return error.CompilationFailed;
-    };
+    emitDiagnostics(&build_env);
 
-    // Check for errors even if phases didn't return an error.
-    // Single pass: render diagnostics and detect errors together.
-    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-    var has_errors = false;
-    {
-        const config = ReportingConfig.initHtml();
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                if (report.severity == .fatal or report.severity == .runtime_error) {
-                    has_errors = true;
-                }
-                var diag_writer: std.Io.Writer.Allocating = .init(allocator);
-                reporting.renderReportToHtml(report, &diag_writer.writer, config) catch continue;
-                const output = diag_writer.written();
-                if (output.len > 0) {
-                    js.js_stderr(output.ptr, output.len);
-                }
-            }
-        }
-    }
-    build_env.freeDrainedReports(drained);
-    if (has_errors) return error.CompilationFailed;
+    const root_artifact = build_env.executableRootCheckedArtifact();
 
-    // Phase 3: Resolve module environments and find the entrypoint.
-    var resolved = try build_env.getResolvedModuleEnvs(allocator);
-    try resolved.processHostedFunctions(allocator, null);
-    const entry = try resolved.findEntrypoint();
+    const import_views = try build_env.collectImportedArtifactViews(allocator, root_artifact);
+    defer allocator.free(import_views);
+    const relation_views = try build_env.collectRelationArtifactViews(allocator, root_artifact);
+    defer allocator.free(relation_views);
 
-    // Phase 4: Execute via interpreter.
-    var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
-    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
-    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, &hosted_fn_array);
-    var cli_args_list = echo_platform.buildCliArgs(&.{}, &roc_ops);
-    var result_buf: [16]u8 align(16) = undefined;
-
-    compile.runner.runViaInterpreter(
+    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         allocator,
-        entry.platform_env,
-        build_env.builtin_modules,
-        resolved.all_module_envs,
-        entry.app_module_env,
-        entry.entrypoint_expr,
-        &roc_ops,
-        @ptrCast(&cli_args_list),
-        @ptrCast(&result_buf),
-        target,
-    ) catch {
-        return error.InterpreterFailed;
-    };
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
+            .imports = import_views,
+        },
+        .{ .requests = root_artifact.root_requests.requests },
+        .{
+            .target_usize = base.target.TargetUsize.u32,
+        },
+    );
+    defer lowered.deinit();
 
-    return result_buf[0];
+    return try runEchoLir(&lowered);
 }

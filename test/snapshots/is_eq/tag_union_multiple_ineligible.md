@@ -205,15 +205,15 @@ expect result == result
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]")))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]")))
 	(expressions
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))
-		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(Dec -> Bool), ..]"))))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))))
 ~~~

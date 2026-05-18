@@ -223,6 +223,7 @@ UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
+DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
@@ -232,6 +233,7 @@ MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
+DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -880,6 +882,19 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_027.md:28:1:31:2:**
+```roc
+line : ( # Cpen
+	Bar, #
+	Baz, #m
+) # Co
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TYPE MISMATCH**
 This `if` condition must evaluate to a `Bool` – either `True` or `False`:
 **fuzz_crash_027.md:50:5:50:8:**
@@ -1091,6 +1106,17 @@ But the annotation say it should be:
     List(Error) -> Error
 
 **Hint:** This function is effectful, but a pure function is expected.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_027.md:153:1:153:25:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -1455,7 +1481,7 @@ EndOfFile,
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
 								(field (name "rest") (rest true)))
-							(e-local-dispatch
+							(e-arrow-call
 								(e-int (raw "12"))
 								(e-apply
 									(e-ident (raw "add"))
@@ -1650,17 +1676,17 @@ EndOfFile,
 							(e-question-suffix
 								(e-field-access
 									(e-question-suffix
-										(e-field-access
-											(e-question-suffix
-												(e-field-access
-													(e-question-suffix
-														(e-apply
-															(e-ident (raw "some_fn"))
-															(e-ident (raw "arg1"))))
-													(e-apply
-														(e-ident (raw "statod")))))
-											(e-apply
-												(e-ident (raw "ned")))))
+										(e-method-call (method ".ned")
+											(receiver
+												(e-question-suffix
+													(e-method-call (method ".statod")
+														(receiver
+															(e-question-suffix
+																(e-apply
+																	(e-ident (raw "some_fn"))
+																	(e-ident (raw "arg1")))))
+														(args))))
+											(args)))
 									(e-ident (raw "recd")))))
 						(e-apply
 							(e-tag (raw "Stdoline!"))
@@ -2099,7 +2125,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 1113)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2265,17 +2291,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "recd")
+								(e-field-access (field "recd")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "ned")
+													(e-dispatch-call (method "ned") (constraint-fn-var 1532)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "statod")
+																		(e-dispatch-call (method "statod") (constraint-fn-var 1499)
 																			(receiver
 																				(e-match
 																					(match
@@ -2488,18 +2514,20 @@ expect {
 			(s-let
 				(p-assign (ident "blah"))
 				(e-num (value "1")))
-			(e-binop (op "eq")
-				(e-lookup-local
-					(p-assign (ident "blah")))
-				(e-lookup-local
-					(p-assign (ident "foo")))))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-lookup-local
+						(p-assign (ident "blah"))))
+				(rhs
+					(e-lookup-local
+						(p-assign (ident "foo"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> Dec"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Blue, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
@@ -2536,7 +2564,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> Dec"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
 		(expr (type "[Blue, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))

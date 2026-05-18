@@ -62,9 +62,8 @@ test "storeRawBytes and loadRawBytes round-trip" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    // Generate a cache key
     const test_data = "Hello, test cache!";
-    const cache_key = CacheManager.generateCacheKey("test_source", "test_version");
+    const cache_key = [_]u8{0x42} ** 32;
 
     // Store raw bytes
     manager.storeRawBytes(cache_key, test_data, tmp_path);
@@ -93,8 +92,7 @@ test "loadRawBytes returns null on miss" {
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
-    // Try to load a key that was never stored
-    const cache_key = CacheManager.generateCacheKey("nonexistent_source", "nonexistent_version");
+    const cache_key = [_]u8{0x24} ** 32;
     const loaded = manager.loadRawBytes(cache_key, tmp_path);
 
     // Should return null

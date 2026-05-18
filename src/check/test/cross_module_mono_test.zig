@@ -76,10 +76,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
-        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-        .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
     return LoadedModule{
@@ -162,7 +160,8 @@ const MonoTestEnv = struct {
         var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
         try imported_envs_list.append(gpa, builtin_module.env);
 
-        module_env.imports.resolveImports(module_env, imported_envs_list.items);
+        module_env.imports.clearResolvedModules();
+        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -277,7 +276,8 @@ const MonoTestEnv = struct {
             }
         }
 
-        module_env.imports.resolveImports(module_env, imported_envs_list.items);
+        module_env.imports.clearResolvedModules();
+        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -398,7 +398,8 @@ const MonoTestEnv = struct {
             }
         }
 
-        module_env.imports.resolveImports(module_env, imported_envs_list.items);
+        module_env.imports.clearResolvedModules();
+        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -562,6 +563,82 @@ test "cross-module mono: static dispatch with chained method calls" {
     try testing.expect(main_ident != null);
 }
 
+test "cross-module mono: recursive nominal type with self-referencing children" {
+    // Module A defines a recursive nominal type where children reference
+    // the type itself (Elem contains List(Elem)). This pattern is the key
+    // scenario where cross-module nominal remapping does
+    // meaningful work: the TypeId for List(Elem) may contain a `.rec`
+    // placeholder indirection internally, which must be resolved when used
+    // from a different module for TypeId comparisons to succeed.
+    const source_a =
+        \\Elem := [Div(List(Elem)), Text(Str)].{
+        \\  div : List(Elem) -> Elem
+        \\  div = |children| Div(children)
+        \\
+        \\  text : Str -> Elem
+        \\  text = |content| Text(content)
+        \\}
+    ;
+    var env_a = try MonoTestEnv.init("Elem", source_a);
+    defer env_a.deinit();
+
+    // Module B imports Elem and uses both constructors
+    const source_b =
+        \\import Elem
+        \\
+        \\main : Elem
+        \\main = Elem.div([Elem.text("hello")])
+    ;
+    var env_b = try MonoTestEnv.initWithImport("B", source_b, "Elem", &env_a);
+    defer env_b.deinit();
+
+    // Type-check should succeed — the recursive nominal type is usable cross-module
+    const main_ident = env_b.module_env.common.findIdent("main");
+    try testing.expect(main_ident != null);
+}
+
+test "cross-module mono: recursive nominal through 3-module chain" {
+    // Recursive nominal type used transitively: A defines the type,
+    // B wraps it, C uses B's wrapper. This exercises cross-module
+    // TypeId canonicalization across multiple module boundaries.
+    const source_a =
+        \\Tree := [Leaf(U64), Branch(List(Tree))].{
+        \\  leaf : U64 -> Tree
+        \\  leaf = |n| Leaf(n)
+        \\
+        \\  branch : List(Tree) -> Tree
+        \\  branch = |children| Branch(children)
+        \\}
+    ;
+    var env_a = try MonoTestEnv.init("Tree", source_a);
+    defer env_a.deinit();
+
+    const source_b =
+        \\import Tree
+        \\
+        \\make_pair : U64, U64 -> Tree
+        \\make_pair = |a, b| Tree.branch([Tree.leaf(a), Tree.leaf(b)])
+    ;
+    var env_b = try MonoTestEnv.initWithImport("B", source_b, "Tree", &env_a);
+    defer env_b.deinit();
+
+    const source_c =
+        \\import B
+        \\import Tree
+        \\
+        \\main : Tree
+        \\main = B.make_pair(1, 2)
+    ;
+    var env_c = try MonoTestEnv.initWithImports("C", source_c, &.{
+        .{ .name = "B", .env = &env_b },
+        .{ .name = "Tree", .env = &env_a },
+    });
+    defer env_c.deinit();
+
+    const main_ident = env_c.module_env.common.findIdent("main");
+    try testing.expect(main_ident != null);
+}
+
 test "type checker catches polymorphic recursion (infinite type)" {
     // This test verifies that polymorphic recursion (f = |x| f([x])) is caught
     // during type checking as a circular/infinite type.
@@ -639,7 +716,8 @@ test "type checker catches polymorphic recursion (infinite type)" {
     defer imported_envs_list.deinit(gpa);
     try imported_envs_list.append(gpa, builtin_module.env);
 
-    module_env.imports.resolveImports(module_env, imported_envs_list.items);
+    module_env.imports.clearResolvedModules();
+    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
     var checker = try Check.init(
         gpa,

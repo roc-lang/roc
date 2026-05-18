@@ -13,9 +13,21 @@ advance = |robot| { ..robot, y: robot.y + 1 }
 expect advance({ x: 7, y: 3 }) == { x: 7, y: 4 }
 ~~~
 # EXPECTED
-NIL
+INFINITE TYPE - record_i64_field_addition.md:4:1:4:46
 # PROBLEMS
-NIL
+**INFINITE TYPE**
+I am inferring a weird self-referential type:
+**record_i64_field_addition.md:4:1:4:46:**
+```roc
+advance = |robot| { ..robot, y: robot.y + 1 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+
+    Robot
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
@@ -89,7 +101,7 @@ NO CHANGE
 				(fields
 					(field (name "y")
 						(e-binop (op "add")
-							(e-dot-access (field "y")
+							(e-field-access (field "y")
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "robot")))))
@@ -106,31 +118,32 @@ NO CHANGE
 			(field (field "y")
 				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "advance")))
+		(e-structural-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 171)
+					(e-runtime-error (tag "erroneous_value_use"))
+					(e-record
+						(fields
+							(field (name "x")
+								(e-num (value "7")))
+							(field (name "y")
+								(e-num (value "3")))))))
+			(rhs
 				(e-record
 					(fields
 						(field (name "x")
 							(e-num (value "7")))
 						(field (name "y")
-							(e-num (value "3"))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "7")))
-					(field (name "y")
-						(e-num (value "4"))))))))
+							(e-num (value "4")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Robot -> Robot")))
+		(patt (type "Error")))
 	(type_decls
 		(alias (type "Robot")
 			(ty-header (name "Robot"))))
 	(expressions
-		(expr (type "Robot -> Robot"))))
+		(expr (type "Error"))))
 ~~~

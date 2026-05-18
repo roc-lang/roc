@@ -10,16 +10,14 @@ pub const TargetsConfig = targets_config.TargetsConfig;
 pub const single_module = @import("compile_module.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
-pub const serialize_modules = @import("serialize_modules.zig");
-pub const runner = @import("runner.zig");
 pub const threading = @import("threading.zig");
+pub const static_data_exports = @import("static_data_exports.zig");
 
 // Actor model components
 pub const messages = @import("messages.zig");
 pub const channel = @import("channel.zig");
 pub const coordinator = @import("coordinator.zig");
 
-pub const module = @import("cache_module.zig");
 pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
 pub const reporting = @import("cache_reporting.zig");
@@ -42,11 +40,7 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
     pub fn deleteTempDir(_: std.mem.Allocator, _: []const u8) void {}
 };
 
-pub const Header = module.Header;
-pub const CacheModule = module.CacheModule;
-pub const Diagnostics = module.Diagnostics;
 pub const CacheManager = manager.CacheManager;
-pub const CacheResult = manager.CacheResult;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
 /// Cache cleanup utilities for managing temporary and persistent cache files.
@@ -84,7 +78,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(@import("cache_manager.zig"));
-    std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_reporting.zig"));
     std.testing.refAllDecls(@import("compile_build.zig"));
     std.testing.refAllDecls(@import("targets_config.zig"));
@@ -92,8 +85,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
     std.testing.refAllDecls(@import("dependency_sort.zig"));
-    std.testing.refAllDecls(@import("serialize_modules.zig"));
-    std.testing.refAllDecls(@import("runner.zig"));
+    std.testing.refAllDecls(@import("static_data_exports.zig"));
 
     // Actor model components
     std.testing.refAllDecls(@import("messages.zig"));
@@ -101,8 +93,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("coordinator.zig"));
 
     std.testing.refAllDecls(@import("test/cache_test.zig"));
-    std.testing.refAllDecls(@import("test/module_env_test.zig"));
     std.testing.refAllDecls(@import("test/test_build_env.zig"));
     std.testing.refAllDecls(@import("test/test_package_env.zig"));
+    std.testing.refAllDecls(@import("test/module_env_test.zig"));
     std.testing.refAllDecls(@import("test/type_printing_bug_test.zig"));
 }

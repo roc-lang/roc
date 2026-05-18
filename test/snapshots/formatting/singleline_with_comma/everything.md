@@ -49,6 +49,7 @@ UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:21:2:21:4
 UNSUPPORTED WHERE CLAUSE - everything.md:14:19:14:22
 UNSUPPORTED WHERE CLAUSE - everything.md:14:24:14:27
+DECLARATION HAS NO VALUE - everything.md:14:1:14:29
 NON-EXHAUSTIVE MATCH - everything.md:23:2:28:3
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
@@ -200,6 +201,17 @@ g : e -> e where [e.A, e.B,]
                        ^^^
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**everything.md:14:1:14:29:**
+```roc
+g : e -> e where [e.A, e.B,]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:
@@ -541,7 +553,7 @@ h = |x, y| {
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call
+					(e-call (constraint-fn-var 160)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

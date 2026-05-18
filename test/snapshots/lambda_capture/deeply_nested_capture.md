@@ -84,9 +84,9 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
-	(e-call
-		(e-call
+(e-call (constraint-fn-var 88)
+	(e-call (constraint-fn-var 77)
+		(e-call (constraint-fn-var 63)
 			(e-lambda
 				(args
 					(p-assign (ident "a")))

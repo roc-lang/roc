@@ -168,7 +168,7 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "r")))
-			(e-dot-access (field "value")
+			(e-field-access (field "value")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "r"))))))
@@ -185,14 +185,13 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call
+			(e-call (constraint-fn-var 118)
 				(e-lookup-local
 					(p-assign (ident "get_value")))
-				(e-call
+				(e-call (constraint-fn-var 117)
 					(e-lookup-local
 						(p-assign (ident "make_record")))
-					(e-lookup-local
-						(p-assign (ident "n"))))))
+					(e-runtime-error (tag "erroneous_value_use")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -200,7 +199,7 @@ answer = composed([42])
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call
+		(e-call (constraint-fn-var 134)
 			(e-lookup-local
 				(p-assign (ident "composed")))
 			(e-list

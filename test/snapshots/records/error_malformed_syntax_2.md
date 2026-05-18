@@ -10,10 +10,7 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
-MALFORMED TYPE - error_malformed_syntax_2.md:1:8:1:10
-UNRECOGNIZED SYNTAX - error_malformed_syntax_2.md:1:10:1:11
-UNUSED VARIABLE - error_malformed_syntax_2.md:1:3:1:10
-UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
+DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **42** is not expected in a type annotation.
@@ -37,32 +34,8 @@ Expressions can be identifiers, literals, function calls, or operators.
          ^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**error_malformed_syntax_2.md:1:8:1:10:**
-```roc
-{ age: 42, name = "Alice" }
-```
-       ^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**error_malformed_syntax_2.md:1:10:1:11:**
-```roc
-{ age: 42, name = "Alice" }
-```
-         ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNUSED VARIABLE**
-Variable `age` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
 **error_malformed_syntax_2.md:1:3:1:10:**
 ```roc
 { age: 42, name = "Alice" }
@@ -70,17 +43,7 @@ The unused variable is declared here:
   ^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `name` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
-**error_malformed_syntax_2.md:1:12:1:16:**
-```roc
-{ age: 42, name = "Alice" }
-```
-           ^^^^
-
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

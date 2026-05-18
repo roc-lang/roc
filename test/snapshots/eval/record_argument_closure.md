@@ -40,7 +40,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
+(e-call (constraint-fn-var 45)
 	(e-lambda
 		(args
 			(p-record-destructure

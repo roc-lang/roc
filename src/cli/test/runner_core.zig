@@ -9,7 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+const util = @import("util.zig");
 
 /// Result of a test execution
 pub const TestResult = enum {
@@ -37,43 +37,28 @@ pub const TestStats = struct {
     }
 };
 
-fn createIsolatedTestCacheDir(allocator: Allocator) ![]u8 {
-    const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        @as(u64, @intCast(std.time.nanoTimestamp())),
-        cache_dir_id,
-    });
-    defer allocator.free(cache_leaf);
-
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(cwd_path);
-
-    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
-    defer allocator.free(cache_rel);
-
-    std.fs.cwd().makePath(cache_rel) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
-}
-
-fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
+fn runRocChildWithOutputLimit(allocator: Allocator, argv: []const []const u8, max_output_bytes: usize) !std.process.Child.RunResult {
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
 
-    // Give every child build/run its own persistent cache root so test runner processes
-    // cannot share module/build artifacts or observe one another's cache state.
-    const cache_dir = try createIsolatedTestCacheDir(allocator);
-    defer allocator.free(cache_dir);
-    try env_map.put("ROC_CACHE_DIR", cache_dir);
+    // Give every child build/run its own Roc and Zig local cache roots so test
+    // runner processes cannot share module/build artifacts or observe one
+    // another's cache state.
+    const cache_dirs = try util.createIsolatedTestCacheDirs(allocator);
+    defer cache_dirs.deinit(allocator);
+    try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 
     return std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
         .env_map = &env_map,
+        .max_output_bytes = max_output_bytes,
     });
+}
+
+fn runRocChild(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
+    return runRocChildWithOutputLimit(allocator, argv, 50 * 1024);
 }
 
 /// Cross-compile a Roc app to a specific target.
@@ -354,19 +339,27 @@ pub fn runWithValgrind(
     roc_binary: []const u8,
     roc_file: []const u8,
 ) !TestResult {
+    const valgrind_max_output_bytes = 16 * 1024 * 1024;
+
     // Valgrind only works on Linux x86_64
     if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) {
         std.debug.print("SKIP (valgrind requires Linux x86_64)\n", .{});
         return .skipped;
     }
 
-    const result = runRocChild(allocator, &[_][]const u8{
+    const result = runRocChildWithOutputLimit(allocator, &[_][]const u8{
         "./ci/custom_valgrind.sh",
         roc_binary,
         "--no-cache",
         roc_file,
-    }) catch |err| {
-        std.debug.print("FAIL (spawn error: {})\n", .{err});
+    }, valgrind_max_output_bytes) catch |err| {
+        std.debug.print("FAIL (valgrind runner error: {})\n", .{err});
+        switch (err) {
+            error.StdoutStreamTooLong, error.StderrStreamTooLong => {
+                std.debug.print("       Valgrind output exceeded {d} bytes\n", .{valgrind_max_output_bytes});
+            },
+            else => {},
+        }
         return .failed;
     };
     defer allocator.free(result.stdout);
@@ -379,8 +372,11 @@ pub fn runWithValgrind(
                 return .passed;
             } else {
                 std.debug.print("FAIL (valgrind exit code {d})\n", .{code});
+                if (result.stdout.len > 0) {
+                    printTruncatedOutput(result.stdout, 20, "       ");
+                }
                 if (result.stderr.len > 0) {
-                    printTruncatedOutput(result.stderr, 5, "       ");
+                    printTruncatedOutput(result.stderr, 20, "       ");
                 }
                 return .failed;
             }

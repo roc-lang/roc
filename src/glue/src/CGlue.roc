@@ -134,6 +134,10 @@ roc_type_to_c = |roc_type| {
 		return "RocList"
 	}
 
+	if Str.starts_with(trimmed, "Box") and Str.contains(trimmed, "->") {
+		return "RocErasedCallable"
+	}
+
 	match trimmed {
 		"Str" => "RocStr"
 		"Bool" => "bool"
@@ -327,6 +331,7 @@ generate_args_struct = |func| {
 			"Roc signature: ${func.type_str}",
 			"C function name: ${c_func_name}",
 			"Return type: ${ret_c_type}",
+			"Refcounted fields are owned by the hosted function.",
 		],
 	)
 	struct_def = "typedef struct {\n${$fields}\n} ${struct_name}Args;\n\n"
@@ -417,7 +422,7 @@ generate_example_impl = |func_name, struct_name, args, ret_c_type| {
 		"${struct_name}Args* args"
 	}
 
-	"/*\n * Example implementation:\n * void hosted_${c_func_name}(struct RocOps* ops, ${args_param}, void* ret) {\n${args_comment}\n${ret_comment}\n * }\n */\n\n"
+	"/*\n * Example implementation:\n * void hosted_${c_func_name}(struct RocOps* ops, void* ret, ${args_param}) {\n${args_comment}\n${ret_comment}\n * }\n */\n\n"
 }
 
 ## Generate the complete C header file
@@ -532,6 +537,11 @@ header_guard_top = {
 			"2. Implement each hosted function according to its signature",
 			"3. Register your implementations with the Roc runtime",
 			"",
+			"HOSTED ARGUMENT OWNERSHIP:",
+			"Roc transfers ownership of refcounted arguments to the hosted function.",
+			"The hosted function must decref owned refcounted arguments when done,",
+			"or retain/transfer ownership explicitly when storing or returning them.",
+			"",
 		],
 	)
 
@@ -578,7 +588,28 @@ core_types_section = {
 	roc_list_def = 
 		"typedef struct {\n    void* elements;\n    size_t len;\n    size_t capacity;\n} RocList;\n\n_Static_assert(sizeof(RocList) == 24, \"RocList must be 24 bytes\");\n_Static_assert(_Alignof(RocList) == 8, \"RocList must be 8-byte aligned\");\n\n"
 
-	section("Core Roc Types", "${roc_str_doc}${roc_str_def}${roc_list_doc}${roc_list_def}")
+	erased_callable_doc = doc_comment(
+		[
+			"RocErasedCallable - Box(function) erased callable payload pointer",
+			"",
+			"The payload starts with RocErasedCallablePayload and then inline capture bytes",
+			"at ROC_ERASED_CALLABLE_CAPTURE_OFFSET.",
+		],
+	)
+	erased_callable_def =
+			"struct RocOps;\n\n"
+				.concat("typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);\n")
+				.concat("typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);\n")
+				.concat("typedef struct {\n    RocErasedCallableFn callable_fn_ptr;\n    RocErasedCallableOnDrop on_drop;\n} RocErasedCallablePayload;\n")
+				.concat("typedef uint8_t* RocErasedCallable;\n")
+				.concat("#define ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT 16\n")
+				.concat("#define ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT 16\n")
+				.concat("#define ROC_ERASED_CALLABLE_CAPTURE_OFFSET ((sizeof(RocErasedCallablePayload) + 15u) & ~15u)\n")
+				.concat("#define ROC_ERASED_CALLABLE_PAYLOAD_SIZE(capture_size) (ROC_ERASED_CALLABLE_CAPTURE_OFFSET + (capture_size))\n")
+				.concat("static inline RocErasedCallablePayload* roc_erased_callable_payload_ptr(RocErasedCallable callable) {\n    return (RocErasedCallablePayload*)callable;\n}\n")
+				.concat("static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callable) {\n    return callable == 0 ? 0 : callable + ROC_ERASED_CALLABLE_CAPTURE_OFFSET;\n}\n\n")
+
+	section("Core Roc Types", "${roc_str_doc}${roc_str_def}${roc_list_doc}${roc_list_def}${erased_callable_doc}${erased_callable_def}")
 }
 
 hosted_fn_infrastructure : Str
@@ -598,12 +629,16 @@ hosted_fn_infrastructure = {
 			"",
 			"All hosted functions follow this signature:",
 			"  - ops: pointer to Roc runtime operations",
-			"  - args: pointer to function-specific arguments struct (or NULL if no args)",
 			"  - ret: pointer to return value storage (or NULL if void return)",
+			"  - args: pointer to function-specific arguments struct (or NULL if no args)",
+			"",
+			"Roc transfers ownership of refcounted arguments to hosted functions.",
+			"Hosted functions must decref owned refcounted arguments when done,",
+			"or retain/transfer ownership explicitly when storing or returning them.",
 		],
 	)
 	hosted_fn_typedef = 
-		"typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);\n\n"
+		"typedef void (*HostedFn)(struct RocOps* ops, void* ret, void* args);\n\n"
 
 	section(
 		"Hosted Function Infrastructure",

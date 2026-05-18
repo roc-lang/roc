@@ -249,12 +249,12 @@ main = {
 				(p-assign (ident "g")))
 			(e-tuple
 				(elems
-					(e-call
+					(e-call (constraint-fn-var 124)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
 							(p-assign (ident "x"))))
-					(e-call
+					(e-call (constraint-fn-var 125)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
@@ -280,7 +280,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "p1"))
-				(e-call
+				(e-call (constraint-fn-var 155)
 					(e-lookup-local
 						(p-assign (ident "swap_pair")))
 					(e-tuple
@@ -289,7 +289,7 @@ main = {
 							(e-num (value "2"))))))
 			(s-let
 				(p-assign (ident "p2"))
-				(e-call
+				(e-call (constraint-fn-var 213)
 					(e-lookup-local
 						(p-assign (ident "map_pair")))
 					(e-num (value "3"))

@@ -209,6 +209,7 @@ UNUSED VARIABLE - everything.md:67:2:67:4
 UNUSED VARIABLE - everything.md:71:2:71:4
 UNUSED VARIABLE - everything.md:75:2:75:4
 UNUSED VARIABLE - everything.md:79:2:79:4
+DECLARATION HAS NO VALUE - everything.md:56:1:56:17
 NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 # PROBLEMS
 **WHERE CLAUSE ERROR**
@@ -1314,6 +1315,17 @@ The unused variable is declared here:
 	^^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**everything.md:56:1:56:17:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:
 **everything.md:84:2:107:3:**
@@ -1809,7 +1821,7 @@ h = |x, y| {
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call
+					(e-call (constraint-fn-var 144)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

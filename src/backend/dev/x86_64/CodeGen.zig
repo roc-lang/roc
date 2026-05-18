@@ -738,6 +738,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.movsdMemReg(.RBP, offset, src);
         }
 
+        /// Store float32 to stack slot.
+        pub fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) !void {
+            try self.emit.movssMemReg(.RBP, offset, src);
+        }
+
         // Immediate loading
 
         /// Load immediate value into register

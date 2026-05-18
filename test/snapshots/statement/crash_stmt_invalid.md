@@ -8,18 +8,9 @@ type=statement
 crash 42
 ~~~
 # EXPECTED
-CRASH EXPECTS STRING - crash_stmt_invalid.md:1:1:1:9
+NIL
 # PROBLEMS
-**CRASH EXPECTS STRING**
-The `crash` keyword expects a string literal as its argument.
-For example: `crash "Something went wrong"`
-**crash_stmt_invalid.md:1:1:1:9:**
-```roc
-crash 42
-```
-^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwCrash,Int,

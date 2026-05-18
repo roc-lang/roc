@@ -8,20 +8,9 @@ type=expr
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:18
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `a` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
-The unused variable is declared here:
-**function_record_parameter_capture.md:1:15:1:18:**
-```roc
-|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
-```
-              ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpBar,OpenCurly,LowerIdent,Comma,LowerIdent,Comma,DoubleDot,LowerIdent,CloseCurly,KwAs,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,OpenStringInterpolation,LowerIdent,CloseStringInterpolation,StringPart,StringEnd,Comma,LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpColon,LowerIdent,OpGreaterThanOrEq,Int,CloseCurly,
@@ -99,5 +88,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: Dec, name: Str, .. } -> { full_record: { age: Dec, name: Str, .. }, greeting: Str, is_adult: Bool }"))
+(expr (type "{ age: b, name: Str, .. } -> { full_record: { age: b, name: Str, .. }, greeting: Str, is_adult: Bool } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gte : b, b -> Bool]"))
 ~~~

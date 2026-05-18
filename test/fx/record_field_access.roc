@@ -2,11 +2,11 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
 
-# Regression test: record field access where monotype order (alphabetical)
+# Regression test: record field access where canonical field order (alphabetical)
 # differs from layout order (alignment-sorted). For { name: Str, age: U8, score: I64 }:
-# - Monotype order: [age=0, name=1, score=2]
+# - Canonical field order: [age=0, name=1, score=2]
 # - Layout order: [name=0, score=1, age=2] (24B, 8B, 1B)
-# Catches bug where field_idx was computed from monotype order.
+# Catches bug where field_idx was computed from canonical field order.
 
 main! = || {
     rec : { name : Str, age : U8, score : I64 }

@@ -12,19 +12,9 @@ match shape {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_with_payload.md:1:7:1:12
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `shape` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tag_with_payload.md:1:7:1:12:**
-```roc
-match shape {
-```
-      ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

@@ -58,7 +58,7 @@ EndOfFile,
 		(e-num (value "5")))
 	(s-let
 		(p-assign (ident "y"))
-		(e-call
+		(e-call (constraint-fn-var 42)
 			(e-closure
 				(captures
 					(capture (ident "x")))

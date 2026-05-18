@@ -18,8 +18,10 @@ pub fn generateObjectFile(
     allocator: Allocator,
     target: RocTarget,
     code: []const u8,
+    rodata: []const u8,
     symbols: []const Symbol,
     relocations: []const Relocation,
+    rodata_relocations: []const DataRelocation,
     output: *std.ArrayList(u8),
 ) !void {
     const cpu_arch = target.toCpuArch();
@@ -36,12 +38,13 @@ pub fn generateObjectFile(
             defer elf.deinit();
 
             try elf.setCode(code);
+            try elf.setRodata(rodata);
 
             // Add symbols
             for (symbols) |sym| {
                 const sym_idx = try elf.addSymbol(.{
                     .name = sym.name,
-                    .section = if (sym.is_external) .undef else .text,
+                    .section = if (sym.is_external) .undef else elfSection(sym.section),
                     .offset = sym.offset,
                     .size = sym.size,
                     .is_global = sym.is_global or sym.is_external,
@@ -61,6 +64,12 @@ pub fn generateObjectFile(
                         try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
                     }
                 }
+
+                for (rodata_relocations) |rel| {
+                    if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
+                        try elf.addRodataRelocation(rel.offset, sym_idx, rel.addend);
+                    }
+                }
             }
 
             try elf.write(output);
@@ -75,12 +84,13 @@ pub fn generateObjectFile(
             defer macho.deinit();
 
             try macho.setCode(code);
+            try macho.setRodata(rodata);
 
             // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
             for (symbols) |sym| {
                 const sym_idx = try macho.addSymbol(.{
                     .name = sym.name,
-                    .section = if (sym.is_external) 0 else 1, // 0 = NO_SECT, 1 = __text
+                    .section = if (sym.is_external) 0 else machoSectionNumber(sym.section),
                     .offset = sym.offset,
                     .is_external = sym.is_global or sym.is_external,
                 });
@@ -94,6 +104,12 @@ pub fn generateObjectFile(
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
+                    }
+                }
+
+                for (rodata_relocations) |rel| {
+                    if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
+                        try macho.addRodataRelocation(@intCast(rel.offset), sym_idx, true, rel.addend);
                     }
                 }
             }
@@ -110,12 +126,13 @@ pub fn generateObjectFile(
             defer coff_writer.deinit();
 
             try coff_writer.setCode(code);
+            try coff_writer.setRodata(rodata);
 
             // Add symbols and function info for unwind tables
             for (symbols) |sym| {
                 const sym_idx = try coff_writer.addSymbol(.{
                     .name = sym.name,
-                    .section = if (sym.is_external) .undef else .text,
+                    .section = if (sym.is_external) .undef else coffSection(sym.section),
                     .offset = @intCast(sym.offset),
                     .is_global = sym.is_global or sym.is_external,
                     .is_function = sym.is_function,
@@ -130,6 +147,12 @@ pub fn generateObjectFile(
                     };
                     if (std.mem.eql(u8, rel_name, sym.name)) {
                         try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);
+                    }
+                }
+
+                for (rodata_relocations) |rel| {
+                    if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
+                        try coff_writer.addRdataRelocation(@intCast(rel.offset), sym_idx, rel.addend);
                     }
                 }
 
@@ -155,6 +178,7 @@ pub fn generateObjectFile(
 /// Symbol information for object file generation
 pub const Symbol = struct {
     name: []const u8,
+    section: Section = .text,
     offset: u64,
     size: u64,
     is_global: bool,
@@ -165,6 +189,44 @@ pub const Symbol = struct {
     stack_alloc: u32 = 0,
     uses_frame_pointer: bool = true,
 };
+
+/// One absolute pointer relocation inside the readonly data section.
+pub const DataRelocation = struct {
+    offset: u64,
+    target_symbol_name: []const u8,
+    addend: i64 = 0,
+};
+
+/// Logical object section used by the dev object writer facade.
+pub const Section = enum {
+    text,
+    rodata,
+    undef,
+};
+
+fn machoSectionNumber(section: Section) u8 {
+    return switch (section) {
+        .text => 1,
+        .rodata => 2,
+        .undef => 0,
+    };
+}
+
+fn elfSection(section: Section) object.elf.Section {
+    return switch (section) {
+        .text => .text,
+        .rodata => .rodata,
+        .undef => .undef,
+    };
+}
+
+fn coffSection(section: Section) object.coff.Section {
+    return switch (section) {
+        .text => .text,
+        .rodata => .rdata,
+        .undef => .undef,
+    };
+}
 
 // Tests
 
@@ -192,7 +254,9 @@ test "generate x86_64 linux object" {
         allocator,
         .x64linux,
         code,
+        &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );
@@ -226,7 +290,9 @@ test "generate x86_64 macos object" {
         allocator,
         .x64mac,
         code,
+        &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );
@@ -260,7 +326,9 @@ test "generate aarch64 linux object" {
         allocator,
         .arm64linux,
         code,
+        &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );
@@ -293,7 +361,9 @@ test "generate x86_64 windows object" {
         allocator,
         .x64win,
         code,
+        &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );
@@ -327,7 +397,9 @@ test "generate aarch64 windows object" {
         allocator,
         .arm64win,
         code,
+        &.{},
         symbols,
+        &.{},
         &.{},
         &output,
     );

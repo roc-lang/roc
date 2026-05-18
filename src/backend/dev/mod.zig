@@ -13,19 +13,8 @@ const base = @import("base");
 const layout = @import("layout");
 const builtins = @import("builtins");
 
-/// Backend selection for code evaluation
-pub const EvalBackend = enum {
-    dev,
-    interpreter,
-    llvm,
-
-    pub fn fromString(s: []const u8) ?EvalBackend {
-        if (std.mem.eql(u8, s, "dev")) return .dev;
-        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
-        if (std.mem.eql(u8, s, "llvm")) return .llvm;
-        return null;
-    }
-};
+// EvalBackend was removed from here — it is defined in src/eval/mod.zig.
+// Callers should import via @import("eval").EvalBackend.
 
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
@@ -53,12 +42,19 @@ pub const LirCodeGenMod = @import("LirCodeGen.zig");
 /// Pre-instantiated LirCodeGen for the host platform (the machine running the compiler)
 pub const HostLirCodeGen = LirCodeGenMod.HostLirCodeGen;
 
+/// Whether the direct dev backend can generate code for the host architecture.
+pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
+
 /// Object file compiler for generating object files from Mono IR.
 /// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
+pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
+pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
+pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
+pub const writeFileWindowsAvSafe = @import("ObjectFileCompiler.zig").writeFileWindowsAvSafe;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///

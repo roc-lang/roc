@@ -33,12 +33,16 @@ validateAuth = |creds| HttpAuth.validate(creds)
 # EXPECTED
 MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
+MODULE NOT FOUND - can_import_nested_modules.md:10:36:10:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
+MODULE NOT FOUND - can_import_nested_modules.md:23:24:23:36
+MODULE NOT FOUND - can_import_nested_modules.md:23:52:23:58
+MODULE NOT FOUND - can_import_nested_modules.md:23:68:23:74
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
 **MODULE NOT IMPORTED**
@@ -60,6 +64,17 @@ parseConfig : Config.Settings -> Str
 parseConfig = |settings| Config.toString(settings)
 ```
                          ^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Token` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_nested_modules.md:10:36:10:42:**
+```roc
+authenticate : Str, Str -> HttpAuth.Token
+```
+                                   ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -124,6 +139,39 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 ```
                                     ^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Credentials` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:24:23:36:**
+```roc
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+```
+                       ^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Token` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:52:23:58:**
+```roc
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+```
+                                                   ^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Error` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:68:23:74:**
+```roc
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+```
+                                                                   ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -301,7 +349,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Token") (external-module "http.Client")))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -346,10 +394,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign (ident "creds")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Credentials") (external-module "http.Client"))
+				(ty-malformed)
 				(ty-apply (name "Try") (builtin)
-					(ty-lookup (name "Token") (external-module "http.Client"))
-					(ty-lookup (name "Error") (external-module "http.Client"))))))
+					(ty-malformed)
+					(ty-malformed)))))
 	(s-import (module "json.Parser")
 		(exposes
 			(exposed (name "Config") (wildcard false))))

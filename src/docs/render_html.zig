@@ -151,7 +151,7 @@ const RenderContext = struct {
             // same-module `[Foo]` writes `#Foo` and a cross-module `[Foo]`
             // navigates to the module page (no fragment).
             try addAnchor(&anchors, gpa, arena.allocator(), mod.name);
-            try collectAnchorsForEntries(&anchors, gpa, arena.allocator(), mod.entries, "");
+            try collectAnchorsForEntries(&anchors, gpa, arena.allocator(), mod.name, mod.entries, "");
         }
 
         const active_doc = try arena.allocator().create(ActiveDoc);
@@ -231,7 +231,7 @@ const RenderContext = struct {
         self.current_module_entries = mod.entries;
         self.current_source_path.* = mod.source_path orelse "";
         self.current_module_anchors.clearRetainingCapacity();
-        try populateAnchorMap(&self.current_module_anchors, gpa, mod.name, mod.entries);
+        try populateAnchorMap(&self.current_module_anchors, gpa, self.anchor_arena.allocator(), mod.name, mod.entries, "");
     }
 
     fn leaveModule(self: *RenderContext) void {
@@ -263,37 +263,37 @@ const RenderContext = struct {
 fn populateAnchorMap(
     map: *std.StringHashMapUnmanaged([]const u8),
     gpa: Allocator,
+    arena: Allocator,
     module_name: []const u8,
     entries: []const DocModel.DocEntry,
+    parent_rel_path: []const u8,
 ) !void {
     for (entries) |entry| {
-        // Skip the leading `<module_name>.` if present so the recorded path is
-        // module-relative (matching how anchors are written: `<module>.<rel>`).
-        var rel_start: usize = 0;
-        if (std.mem.startsWith(u8, entry.name, module_name) and
-            entry.name.len > module_name.len and
-            entry.name[module_name.len] == '.')
-        {
-            rel_start = module_name.len + 1;
-        }
+        const local_name = moduleRelativeEntryName(module_name, entry.name);
+        const entry_rel_path = if (parent_rel_path.len == 0)
+            try arena.dupe(u8, local_name)
+        else
+            try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_rel_path, local_name });
 
         // For value entries, the final dotted segment is the value's own name
         // (e.g. `default` in `Builtin.Num.U8.default`) — exclude it so we only
         // map type-like prefixes (`Num`, `Num.U8`).
-        var rel_end: usize = entry.name.len;
+        var rel_end: usize = entry_rel_path.len;
         if (entry.kind == .value) {
-            const last_dot = std.mem.lastIndexOfScalar(u8, entry.name, '.') orelse continue;
-            if (last_dot < rel_start) continue;
+            const last_dot = std.mem.lastIndexOfScalar(u8, entry_rel_path, '.') orelse {
+                try populateAnchorMap(map, gpa, arena, module_name, entry.children, entry_rel_path);
+                continue;
+            };
             rel_end = last_dot;
         }
 
         // Walk each `.`-separated prefix of the relative path.
-        var seg_start = rel_start;
+        var seg_start: usize = 0;
         while (seg_start < rel_end) {
-            const next_dot = std.mem.indexOfScalarPos(u8, entry.name[0..rel_end], seg_start, '.');
+            const next_dot = std.mem.indexOfScalarPos(u8, entry_rel_path[0..rel_end], seg_start, '.');
             const seg_end = next_dot orelse rel_end;
-            const short_name = entry.name[seg_start..seg_end];
-            const prefix_path = entry.name[rel_start..seg_end];
+            const short_name = entry_rel_path[seg_start..seg_end];
+            const prefix_path = entry_rel_path[0..seg_end];
 
             const result = try map.getOrPut(gpa, short_name);
             if (!result.found_existing) {
@@ -303,8 +303,18 @@ fn populateAnchorMap(
             seg_start = if (next_dot) |d| d + 1 else rel_end;
         }
 
-        try populateAnchorMap(map, gpa, module_name, entry.children);
+        try populateAnchorMap(map, gpa, arena, module_name, entry.children, entry_rel_path);
     }
+}
+
+fn moduleRelativeEntryName(module_name: []const u8, entry_name: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, entry_name, module_name) and
+        entry_name.len > module_name.len and
+        entry_name[module_name.len] == '.')
+    {
+        return entry_name[module_name.len + 1 ..];
+    }
+    return entry_name;
 }
 
 /// Add `name` to the anchor set, duplicating the slice into `arena` so the
@@ -332,14 +342,17 @@ fn collectAnchorsForEntries(
     set: *std.StringHashMapUnmanaged(void),
     gpa: Allocator,
     arena: Allocator,
+    module_name: []const u8,
     entries: []const DocModel.DocEntry,
     parent_path: []const u8,
 ) !void {
     for (entries) |entry| {
-        const full_path = if (parent_path.len == 0)
-            try arena.dupe(u8, entry.name)
-        else
-            try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, entry.name });
+        const full_path = if (parent_path.len == 0) blk: {
+            if (entryNameHasModulePrefix(module_name, entry.name)) {
+                break :blk try arena.dupe(u8, entry.name);
+            }
+            break :blk try std.fmt.allocPrint(arena, "{s}.{s}", .{ module_name, entry.name });
+        } else try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, entry.name });
 
         // Add every dotted prefix of `full_path` as a valid anchor.
         var i: usize = 0;
@@ -353,8 +366,15 @@ fn collectAnchorsForEntries(
             }
         }
 
-        try collectAnchorsForEntries(set, gpa, arena, entry.children, full_path);
+        try collectAnchorsForEntries(set, gpa, arena, module_name, entry.children, full_path);
     }
+}
+
+fn entryNameHasModulePrefix(module_name: []const u8, entry_name: []const u8) bool {
+    return std.mem.eql(u8, entry_name, module_name) or
+        (std.mem.startsWith(u8, entry_name, module_name) and
+            entry_name.len > module_name.len and
+            entry_name[module_name.len] == '.');
 }
 
 /// Generate the complete HTML documentation site from PackageDocs.
@@ -651,9 +671,12 @@ fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_nam
         // Build path through tree
         var path_so_far = try std.ArrayList(u8).initCapacity(gpa, 256);
         defer path_so_far.deinit(gpa);
+        if (!entryNameHasModulePrefix(module_name, entry.name)) {
+            try path_so_far.appendSlice(gpa, module_name);
+        }
 
         for (parts.items, 0..) |part, idx| {
-            if (idx > 0) try path_so_far.append(gpa, '.');
+            if (idx > 0 or path_so_far.items.len > 0) try path_so_far.append(gpa, '.');
             try path_so_far.appendSlice(gpa, part);
 
             const is_last = (idx == parts.items.len - 1);
@@ -684,7 +707,7 @@ fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_nam
                 // Also add entry's children as nested nodes,
                 // splitting dotted names into sub-trees
                 for (entry.children) |*child_entry| {
-                    try addChildToEntryTree(gpa, node, entry.name, child_entry);
+                    try addChildToEntryTree(gpa, node, node.full_path, child_entry);
                 }
             }
 

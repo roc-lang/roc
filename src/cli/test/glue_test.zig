@@ -213,8 +213,9 @@ test "glue command generated C header compiles with zig cc (dev backend)" {
     return error.SkipZigTest;
 }
 
-test "glue command with ZigGlue succeeds (interpreter)" {
-    // Regression test for nominal_translate_cache fix in interpreter.zig.
+test "glue regression: ZigGlue interpreter succeeds on fx platform" {
+    // This is the normal CLI-level repro for:
+    //   roc glue --opt=interpreter src/glue/src/ZigGlue.roc <tmp> test/fx/platform/main.roc
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -254,14 +255,9 @@ test "glue command with ZigGlue succeeds (dev backend)" {
 test "CGlue.roc expect tests pass (interpreter)" {
     const allocator = std.testing.allocator;
 
-    // Run: roc test --opt=interpreter src/glue/src/CGlue.roc
-    // --no-cache avoids a cache interaction bug where the module cache
-    // populated by earlier glue tests (roc build) is incompatible with
-    // what roc test's interpreter expects, causing a .ty_tag_union panic.
     const result = try util.runRocCommand(allocator, &.{
         "test",
         "--opt=interpreter",
-        "--no-cache",
         "src/glue/src/CGlue.roc",
     });
     defer allocator.free(result.stdout);

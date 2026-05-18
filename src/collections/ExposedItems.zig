@@ -37,6 +37,12 @@ pub const ExposedItems = struct {
         self.items.deinit(allocator);
     }
 
+    pub fn clone(self: *const Self, allocator: Allocator) !Self {
+        return .{
+            .items = try self.items.clone(allocator),
+        };
+    }
+
     /// Add an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
     pub fn addExposedById(self: *Self, allocator: Allocator, ident_idx: IdentIdx) !void {
         // Add with value 0 to indicate "exposed but not yet defined"
@@ -247,7 +253,8 @@ test "ExposedItems empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    const serialized = try original.serialize(allocator, &writer);
+    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -258,7 +265,8 @@ test "ExposedItems empty CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, bytes_read);
 
     // Cast and relocate
     const deserialized = @as(*ExposedItems, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(ExposedItems))));
@@ -304,7 +312,8 @@ test "ExposedItems basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    const serialized = try original.serialize(allocator, &writer);
+    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -315,7 +324,8 @@ test "ExposedItems basic CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, bytes_read);
 
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
@@ -361,7 +371,8 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    const serialized = try original.serialize(allocator, &writer);
+    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -372,7 +383,8 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, bytes_read);
 
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
@@ -427,7 +439,8 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    _ = try original.serialize(allocator, &writer);
+    const serialized = try original.serialize(allocator, &writer);
+    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
 
     // Write to file
     try writer.writeGather(allocator, file);
@@ -439,7 +452,8 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), @intCast(file_size));
     defer allocator.free(buffer);
 
-    _ = try file.read(buffer);
+    const bytes_read = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, bytes_read);
 
     // Cast to Serialized type and deserialize
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -466,11 +480,13 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         var writer = CompactWriter.init();
         defer writer.deinit(allocator);
 
-        _ = try exposed.serialize(allocator, &writer);
+        const serialized = try exposed.serialize(allocator, &writer);
+        try testing.expectEqual(exposed.items.entries.items.len, serialized.items.entries.capacity);
 
         const buffer = try allocator.alloc(u8, writer.total_bytes);
         defer allocator.free(buffer);
-        _ = try writer.writeToBuffer(buffer);
+        const written = try writer.writeToBuffer(buffer);
+        try testing.expectEqual(buffer.len, written.len);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
@@ -496,7 +512,8 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         var writer = CompactWriter.init();
         defer writer.deinit(allocator);
 
-        _ = try exposed.serialize(allocator, &writer);
+        const serialized = try exposed.serialize(allocator, &writer);
+        try testing.expectEqual(exposed.items.entries.items.len, serialized.items.entries.capacity);
 
         // Test writeGather
         try writer.writeGather(allocator, file);
@@ -507,7 +524,8 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         const buffer = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ExposedItems.Serialized)), @intCast(file_size));
         defer allocator.free(buffer);
 
-        _ = try file.read(buffer);
+        const bytes_read = try file.readAll(buffer);
+        try testing.expectEqual(buffer.len, bytes_read);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));

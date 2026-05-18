@@ -45,12 +45,14 @@ NO CHANGE
 			(builtin)
 			(e-tag (name "True"))))
 	(s-expect
-		(e-binop (op "ne")
-			(e-lookup-local
-				(p-assign (ident "foo")))
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "False"))))))
+		(e-method-eq (negated "true")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "foo"))))
+			(rhs
+				(e-nominal-external
+					(builtin)
+					(e-tag (name "False")))))))
 ~~~
 # TYPES
 ~~~clojure

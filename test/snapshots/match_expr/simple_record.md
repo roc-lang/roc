@@ -11,19 +11,9 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_record.md:1:7:1:13
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**simple_record.md:1:7:1:13:**
-```roc
-match person {
-```
-      ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

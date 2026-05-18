@@ -272,6 +272,7 @@ MISSING METHOD - syntax_grab_bag.md:176:12:176:22
 + - :0:0:0:0
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
+DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -1076,6 +1077,17 @@ But the annotation say it should be:
 
 **Hint:** This function is effectful, but a pure function is expected.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**syntax_grab_bag.md:201:1:201:25:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -1536,7 +1548,7 @@ EndOfFile,
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
 								(field (name "rest") (rest true)))
-							(e-local-dispatch
+							(e-arrow-call
 								(e-int (raw "12"))
 								(e-apply
 									(e-ident (raw "add"))
@@ -1749,17 +1761,17 @@ EndOfFile,
 							(e-question-suffix
 								(e-field-access
 									(e-question-suffix
-										(e-field-access
-											(e-question-suffix
-												(e-field-access
-													(e-question-suffix
-														(e-apply
-															(e-ident (raw "some_fn"))
-															(e-ident (raw "arg1"))))
-													(e-apply
-														(e-ident (raw "static_dispatch_method")))))
-											(e-apply
-												(e-ident (raw "next_static_dispatch_method")))))
+										(e-method-call (method ".next_static_dispatch_method")
+											(receiver
+												(e-question-suffix
+													(e-method-call (method ".static_dispatch_method")
+														(receiver
+															(e-question-suffix
+																(e-apply
+																	(e-ident (raw "some_fn"))
+																	(e-ident (raw "arg1")))))
+														(args))))
+											(args)))
 									(e-ident (raw "record_field")))))
 						(e-question-suffix
 							(e-apply
@@ -2296,7 +2308,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 1309)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2469,17 +2481,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "record_field")
+								(e-field-access (field "record_field")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "next_static_dispatch_method")
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1734)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "static_dispatch_method")
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1701)
 																			(receiver
 																				(e-match
 																					(match
@@ -2753,17 +2765,19 @@ expect {
 			(s-let
 				(p-assign (ident "blah"))
 				(e-num (value "1")))
-			(e-binop (op "eq")
-				(e-lookup-local
-					(p-assign (ident "blah")))
-				(e-lookup-local
-					(p-assign (ident "foo")))))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-lookup-local
+						(p-assign (ident "blah"))))
+				(rhs
+					(e-lookup-local
+						(p-assign (ident "foo"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Dec"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
@@ -2809,7 +2823,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Dec"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))

@@ -1,92 +1,57 @@
-//! Low-level Intermediate Representation (LIR)
-//!
-//! This module provides the IR layer between MIR and code generation.
-//! It solves cross-module index collisions by using globally unique symbols.
-//!
-//! Key components:
-//! - `LIR`: Core types (LirExpr, LirPattern, Symbol)
-//! - `LirExprStore`: Flat storage for all lowered expressions
-//! - `MirToLir`: MIR → LIR translation pass
-//!
-//! Usage:
-//! ```zig
-//! const lir = @import("lir");
-//!
-//! // Create a store for lowered expressions
-//! var store = lir.LirExprStore.init(allocator);
-//! defer store.deinit();
-//!
-//! // Access the lowered expression
-//! const lir_expr = store.getExpr(expr_id);
-//! ```
+//! Statement-only LIR module.
 
 const std = @import("std");
 
-/// Core IR types: LirExpr, LirPattern, Symbol, etc.
+/// Core statement-only LIR type definitions.
 pub const LIR = @import("LIR.zig");
+/// Flat storage for statement-only LIR nodes and spans.
+pub const LirStore = @import("LirStore.zig");
+/// Source-blind IR-to-LIR lowering boundary.
+pub const LowerIr = @import("lower_ir.zig");
+/// Public checked-artifact-to-LIR lowering entrypoint.
+pub const CheckedPipeline = @import("checked_pipeline.zig");
+/// Mechanical ARC insertion over explicit LIR values and control flow.
+pub const Arc = @import("arc.zig");
+/// Shared-memory ARC-inserted LIR runtime image for interpreter-shim execution.
+pub const RuntimeImage = @import("runtime_image.zig");
 
-/// Flat storage for expressions and patterns
-pub const LirExprStore = @import("LirExprStore.zig");
-
-/// Tail recursion detection and transformation
-pub const TailRecursion = @import("TailRecursion.zig");
-
-/// MIR → LIR translation pass
-pub const MirToLir = @import("MirToLir.zig");
-
-/// Ownership normalization for binding-based RC analysis
-pub const OwnershipNormalize = @import("OwnershipNormalize.zig");
-
-/// LIR-level reference counting insertion pass
-pub const RcInsert = @import("rc_insert.zig");
-
-/// Re-export commonly used types from LIR
-pub const LirExpr = LIR.LirExpr;
-/// Re-export pattern type
-pub const LirPattern = LIR.LirPattern;
-/// Re-export symbol type
+/// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
-/// Re-export expression ID type
-pub const LirExprId = LIR.LirExprId;
-/// Re-export pattern ID type
-pub const LirPatternId = LIR.LirPatternId;
-/// Re-export expression span type
-pub const LirExprSpan = LIR.LirExprSpan;
-/// Re-export pattern span type
-pub const LirPatternSpan = LIR.LirPatternSpan;
-/// Re-export capture type
-pub const LirCapture = LIR.LirCapture;
-/// Re-export recursive flag type
-pub const Recursive = LIR.Recursive;
-/// Re-export self-recursive flag type
-pub const SelfRecursive = LIR.SelfRecursive;
-/// Re-export join point ID type
+/// Explicit local metadata used throughout statement-only LIR.
+pub const Local = LIR.Local;
+/// Identifier of one LIR local.
+pub const LocalId = LIR.LocalId;
+/// Span into flat local-id storage.
+pub const LocalSpan = LIR.LocalSpan;
+/// Identifier for LIR join points.
 pub const JoinPointId = LIR.JoinPointId;
-/// Control flow statement type for tail recursion
+/// Literal RHS values assignable in statement-only LIR.
+pub const LiteralValue = LIR.LiteralValue;
+/// Platform-hosted proc metadata.
+pub const HostedProc = LIR.HostedProc;
+/// Ref-producing operations lowerable by `assign_ref`.
+pub const RefOp = LIR.RefOp;
+/// Canonical statement/control-flow node.
 pub const CFStmt = LIR.CFStmt;
-/// Control flow statement ID type
+/// Identifier of a stored `CFStmt`.
 pub const CFStmtId = LIR.CFStmtId;
-/// Control flow switch branch type
+/// One explicit switch branch.
 pub const CFSwitchBranch = LIR.CFSwitchBranch;
-/// Control flow switch branch span type
+/// Span into flat switch-branch storage.
 pub const CFSwitchBranchSpan = LIR.CFSwitchBranchSpan;
-/// Control flow match branch type
-pub const CFMatchBranch = LIR.CFMatchBranch;
-/// Control flow match branch span type
-pub const CFMatchBranchSpan = LIR.CFMatchBranchSpan;
-/// Layout index span type
-pub const LayoutIdxSpan = LIR.LayoutIdxSpan;
-/// LIR proc-spec ID type
-pub const LirProcSpecId = LIR.LirProcSpecId;
-/// LIR proc-spec type
+/// Stored proc specification rooted at a statement body.
 pub const LirProcSpec = LIR.LirProcSpec;
+/// Identifier of a stored proc specification.
+pub const LirProcSpecId = LIR.LirProcSpecId;
+/// Builtin low-level operation identifier reused from `base`.
+pub const LowLevel = LIR.LowLevel;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
-    std.testing.refAllDecls(LirExprStore);
-    std.testing.refAllDecls(MirToLir);
-    std.testing.refAllDecls(OwnershipNormalize);
-    std.testing.refAllDecls(TailRecursion);
-    std.testing.refAllDecls(RcInsert);
+    std.testing.refAllDecls(LirStore);
+    std.testing.refAllDecls(LowerIr);
+    std.testing.refAllDecls(CheckedPipeline);
+    std.testing.refAllDecls(Arc);
+    std.testing.refAllDecls(RuntimeImage);
 }

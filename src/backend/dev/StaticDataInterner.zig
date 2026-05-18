@@ -158,13 +158,12 @@ pub const MemoryBackend = struct {
         };
     }
 
-    fn alloc(ptr: *anyopaque, data: []const u8, alignment: usize) Allocator.Error!InternedData {
+    fn alloc(ptr: *anyopaque, data: []const u8, _: usize) Allocator.Error!InternedData {
         const self: *MemoryBackend = @ptrCast(@alignCast(ptr));
         const allocator = self.arena.allocator();
 
         // Allocate with refcount prefix: [refcount: 8 bytes][data]
         // This allows RC operations to safely check and skip static data
-        _ = alignment; // Strings just need byte alignment
         const total_size = @sizeOf(isize) + data.len;
         const allocated = try allocator.alignedAlloc(u8, .@"8", total_size);
 

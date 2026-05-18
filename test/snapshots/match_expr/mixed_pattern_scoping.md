@@ -13,19 +13,9 @@ match data {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `data` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**mixed_pattern_scoping.md:1:7:1:11:**
-```roc
-match data {
-```
-      ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

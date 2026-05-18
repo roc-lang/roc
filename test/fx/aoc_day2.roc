@@ -1,4 +1,4 @@
-app [main!] { pf: platform "https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/download/0.6/2BfGn4M9uWJNhDVeMghGeXNVDFijMfPsmmVeo6M4QjKX.tar.zst" }
+app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
 
@@ -6,10 +6,10 @@ demo_input = "11-22,95-115,998-1012,1188511880-1188511890,222220-222224,1698522-
 #day_input = demo_input # TODO: copy actual input here
 day_input = "3308-4582,9123-12332,1095-1358,23-48,294-400,1-18,5735-8423,58-72,538-812,1491-1766,53435-76187,81867-97148,73-97,1894-2622,149-216,123456-223456,9876543-9976543,1234567-1334567,12345678-12545678,123456789-123756789,23456789-23756789,33456789-33756789,43456789-43756789,53456789-53756789,63456789-63756789"
 
-main! = |_args| {
+main! = || {
     match run!() {
-        Ok(_) => Ok({})
-        Err(_) => Err(1)
+        Ok(_) => {}
+        Err(_) => {}
     }
 }
 

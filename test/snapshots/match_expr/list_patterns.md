@@ -2,6 +2,7 @@
 ~~~ini
 description=Match expression with list patterns including invalid rest pattern
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc

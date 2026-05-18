@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Record field access used in expressions (dot-access)
+description=Record field access used in expressions (field-access)
 type=expr
 ~~~
 # SOURCE
@@ -8,19 +8,9 @@ type=expr
 person.age + 5
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_access_in_expression.md:1:1:1:7
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_access_in_expression.md:1:1:1:7:**
-```roc
-person.age + 5
-```
-^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,OpPlus,Int,
@@ -41,7 +31,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-binop (op "add")
-	(e-dot-access (field "age")
+	(e-field-access (field "age")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(e-num (value "5")))

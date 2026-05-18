@@ -64,6 +64,8 @@ const NominalTypeResolutionFailed = problem_mod.NominalTypeResolutionFailed;
 // Platform errors
 const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
+const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -574,7 +576,7 @@ pub const ReportBuilder = struct {
                     }, self, report);
                 },
                 .fields_missing => |fm| {
-                    // Reconstruct slice from range
+                    // Materialize slice from range
                     const fields = self.diff_fields.sliceRange(fm.fields).items(.name);
                     if (fields.len == 1) {
                         try D.renderSlice(&.{
@@ -781,6 +783,12 @@ pub const ReportBuilder = struct {
             },
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
+            },
+            .annotation_only_value => |data| {
+                return self.buildAnnotationOnlyValueReport(data);
+            },
+            .hosted_unboxed_function => |data| {
+                return self.buildHostedUnboxedFunctionReport(data);
             },
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
@@ -3033,6 +3041,44 @@ pub const ReportBuilder = struct {
             },
         }
 
+        return report;
+    }
+
+    fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) !Report {
+        var report = Report.init(self.gpa, "HOSTED FUNCTION REQUIRES BOXED LAMBDA", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("Hosted functions cannot accept or return unboxed functions."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Wrap function types in"),
+            D.bytes("Box").withAnnotation(.inline_code),
+            D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildAnnotationOnlyValueReport(self: *Self, data: AnnotationOnlyValue) !Report {
+        var report = Report.init(self.gpa, "DECLARATION HAS NO VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This declaration has a type annotation but no implementation."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
+        }, self, &report);
         return report;
     }
 

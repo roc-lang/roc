@@ -2,18 +2,11 @@
 //! This module contains type definitions and utilities used across the canonicalization IR.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const build_options = @import("build_options");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
-
-// Module tracing flag - enabled via `zig build -Dtrace-modules`
-// On native platforms, uses std.debug.print. On WASM, tracing in CIR is disabled
-// since we don't have roc_ops here (tracing is enabled in the interpreter/shim instead).
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
@@ -759,11 +752,20 @@ pub const Import = struct {
     };
 
     pub const ResolvedModuleIdx = enum(u32) {
+        failed_before_checking = std.math.maxInt(u32) - 1,
         none = std.math.maxInt(u32),
         _,
 
         pub fn isNone(self: ResolvedModuleIdx) bool {
             return self == .none;
+        }
+
+        pub fn isFailedBeforeChecking(self: ResolvedModuleIdx) bool {
+            return self == .failed_before_checking;
+        }
+
+        pub fn isResolved(self: ResolvedModuleIdx) bool {
+            return !self.isNone() and !self.isFailedBeforeChecking();
         }
     };
 
@@ -788,6 +790,23 @@ pub const Import = struct {
             self.imports.deinit(allocator);
             self.import_idents.deinit(allocator);
             self.resolved_modules.deinit(allocator);
+        }
+
+        pub fn clone(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+            var result = Store{
+                .map = .{},
+                .imports = try self.imports.clone(allocator),
+                .import_idents = try self.import_idents.clone(allocator),
+                .resolved_modules = try self.resolved_modules.clone(allocator),
+            };
+            errdefer result.deinit(allocator);
+
+            for (result.imports.items.items, 0..) |string_idx, i| {
+                const import_idx = @as(Import.Idx, @enumFromInt(i));
+                try result.map.put(allocator, string_idx, import_idx);
+            }
+
+            return result;
         }
 
         /// Deinit only the hash map, not the SafeLists.
@@ -833,9 +852,12 @@ pub const Import = struct {
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially
-            _ = try self.imports.append(allocator, string_idx);
-            _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            _ = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            const imports_idx = try self.imports.append(allocator, string_idx);
+            std.debug.assert(@intFromEnum(imports_idx) == @intFromEnum(idx));
+            const ident_idx_added = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
+            std.debug.assert(@intFromEnum(ident_idx_added) == @intFromEnum(idx));
+            const resolved_idx = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            std.debug.assert(@intFromEnum(resolved_idx) == @intFromEnum(idx));
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
@@ -855,8 +877,17 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
-            if (resolved.isNone()) return null;
+            if (!resolved.isResolved()) return null;
             return @intFromEnum(resolved);
+        }
+
+        /// Return true when import resolution has already reported a user-facing
+        /// diagnostic before type checking. Type checking may continue for source
+        /// tooling, but post-check lowering must never consume this import.
+        pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.resolved_modules.len()) return false;
+            return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
@@ -867,42 +898,59 @@ pub const Import = struct {
             }
         }
 
-        /// Resolve all imports by matching import names to module names in the provided array.
-        /// This sets the resolved_modules index for each import that matches a module.
+        /// Mark one import as intentionally unavailable because an earlier stage
+        /// already owns the user-facing diagnostic.
+        pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
+            const idx = @intFromEnum(import_idx);
+            if (idx < self.resolved_modules.len()) {
+                self.resolved_modules.items.items[idx] = .failed_before_checking;
+            }
+        }
+
+        /// Diagnostics-only tooling can continue type inspection after unresolved
+        /// imports have been reported. This makes that state explicit instead of
+        /// leaving imports in the pre-resolution state.
+        pub fn markUnresolvedImportsFailedBeforeChecking(self: *Store) void {
+            for (self.resolved_modules.items.items) |*resolved| {
+                if (resolved.isNone()) resolved.* = .failed_before_checking;
+            }
+        }
+
+        /// Clear all resolved module indices.
+        pub fn clearResolvedModules(self: *Store) void {
+            for (self.resolved_modules.items.items) |*resolved| {
+                resolved.* = .none;
+            }
+        }
+
+        /// Resolve any still-unresolved imports by exact module-name match against
+        /// the provided array.
+        /// Existing `resolved_modules` entries are preserved.
         ///
         /// Parameters:
         /// - env: The module environment containing the string store for import names
         /// - available_modules: Array of module environments to match against
         ///
-        /// For each import, this finds the module in available_modules whose module_name
-        /// matches the import name and sets the resolved index accordingly.
-        ///
-        /// For package-qualified imports like "pf.Stdout", this also tries to match the
-        /// base module name ("Stdout") if the full qualified name doesn't match.
-        pub fn resolveImports(self: *Store, env: anytype, available_modules: []const *const @import("ModuleEnv.zig")) void {
+        /// For each unresolved import, this finds the module in available_modules whose
+        /// module_name exactly matches the import name and sets the resolved index
+        /// accordingly.
+        pub fn resolveImportsByExactModuleName(
+            self: *Store,
+            env: anytype,
+            available_modules: []const *const @import("ModuleEnv.zig"),
+        ) void {
             const import_count: usize = @intCast(self.imports.len());
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
+                const current = self.resolved_modules.items.items[i];
+                if (!current.isNone()) continue;
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                // For package-qualified imports like "pf.Stdout", extract the base module name
-                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
-                    import_name[dot_pos + 1 ..]
-                else
-                    import_name;
-
                 // Find matching module in available_modules by comparing module names
                 for (available_modules, 0..) |module_env, module_idx| {
-                    // Try exact match first, then base name match for package-qualified imports
-                    if (std.mem.eql(u8, module_env.module_name, import_name) or
-                        std.mem.eql(u8, module_env.module_name, base_name))
-                    {
+                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
                         self.setResolvedModule(import_idx, @intCast(module_idx));
-
-                        if (comptime trace_modules) {
-                            std.debug.print("[TRACE-MODULES] resolveImports: \"{s}\" -> module_idx={d} (matched \"{s}\")\n", .{ import_name, module_idx, module_env.module_name });
-                        }
                         break;
                     }
                 }

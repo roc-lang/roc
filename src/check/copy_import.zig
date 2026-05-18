@@ -29,8 +29,24 @@ const NominalType = types_mod.NominalType;
 /// of type variables that appear multiple times in the same type structure.
 const VarMapping = std.AutoHashMap(Var, Var);
 
+fn copyImportedIdent(
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    source_ident: base.Ident.Idx,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!base.Ident.Idx {
+    const text = source_idents.getText(source_ident);
+    const source_ident_value = base.Ident.for_text(text);
+    if (dest_idents.lookup(source_ident_value)) |existing| return existing;
+    return try dest_idents.insert(allocator, source_ident_value);
+}
+
 /// Copy a type from one module's type store to another module's type store.
 /// This creates a completely fresh copy with new variable indices in the destination store.
+///
+/// Imported identifiers are interned directly into the destination module's
+/// authoritative identifier store so all copied types in that module reference
+/// one consistent `Ident.Store`.
 pub fn copyVar(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -42,24 +58,31 @@ pub fn copyVar(
 ) std.mem.Allocator.Error!Var {
     const resolved = source_store.resolveVar(source_var);
 
-    // Check if we've already copied this variable
     if (var_mapping.get(resolved.var_)) |dest_var| {
         return dest_var;
     }
 
-    // Create a placeholder variable first to break cycles
     const placeholder_var = try dest_store.fresh();
-
-    // Record the mapping immediately to handle recursive types
     try var_mapping.put(resolved.var_, placeholder_var);
 
-    // Now copy the content (which may recursively reference this variable)
-    const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
+    const dest_content = try copyContent(
+        source_store,
+        dest_store,
+        resolved.desc.content,
+        var_mapping,
+        source_idents,
+        dest_idents,
+        allocator,
+    );
 
-    // Update the placeholder with the actual content
+    const from_numeral_origin = switch (resolved.desc.content) {
+        .flex => resolved.desc.from_numeral_origin,
+        else => false,
+    };
     try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
+        .from_numeral_origin = from_numeral_origin,
     });
 
     return placeholder_var;
@@ -92,18 +115,11 @@ fn copyFlex(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Flex {
-    // Translate the type name ident
-    const mb_translated_name = blk: {
-        if (source_flex.name) |name_ident| {
-            const name_bytes = source_idents.getText(name_ident);
-            const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_bytes));
-            break :blk translated_name;
-        } else {
-            break :blk null;
-        }
-    };
+    const mb_translated_name = if (source_flex.name) |name_ident|
+        try copyImportedIdent(source_idents, dest_idents, name_ident, allocator)
+    else
+        null;
 
-    // Copy the constraints
     const dest_constraints_range = try copyStaticDispatchConstraints(
         source_store,
         dest_store,
@@ -129,11 +145,8 @@ fn copyRigid(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Rigid {
-    // Translate the type name ident
-    const name_bytes = source_idents.getText(source_rigid.name);
-    const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_bytes));
+    const translated_name = try copyImportedIdent(source_idents, dest_idents, source_rigid.name, allocator);
 
-    // Copy the constraints
     const dest_constraints_range = try copyStaticDispatchConstraints(
         source_store,
         dest_store,
@@ -159,9 +172,7 @@ fn copyAlias(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Alias {
-    // Translate the type name ident
-    const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
-    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
+    const translated_ident = try copyImportedIdent(source_idents, dest_idents, source_alias.ident.ident_idx, allocator);
 
     var dest_args = std.ArrayList(Var).empty;
     defer dest_args.deinit(dest_store.gpa);
@@ -177,10 +188,7 @@ fn copyAlias(
     }
 
     const dest_vars_span = try dest_store.appendVars(dest_args.items);
-
-    // Translate the type name ident
-    const module_name_str = source_idents.getText(source_alias.origin_module);
-    const translated_module_ident = try dest_idents.insert(allocator, base.Ident.for_text(module_name_str));
+    const translated_module_ident = try copyImportedIdent(source_idents, dest_idents, source_alias.origin_module, allocator);
 
     return Alias{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
@@ -234,6 +242,7 @@ fn copyTuple(
     const dest_range = try dest_store.appendVars(dest_elems.items);
     return types_mod.Tuple{ .elems = dest_range };
 }
+
 fn copyFunc(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -278,10 +287,9 @@ fn copyRecordFields(
     defer fresh_fields.deinit(allocator);
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
-        const name_str = source_idents.getText(name);
-        const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
-        _ = try fresh_fields.append(allocator, .{
-            .name = translated_name, // Field names are local to the record type
+        const translated_name = try copyImportedIdent(source_idents, dest_idents, name, allocator);
+        try fresh_fields.append(allocator, .{
+            .name = translated_name,
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
     }
@@ -340,12 +348,10 @@ fn copyTagUnion(
         }
 
         const dest_args_range = try dest_store.appendVars(dest_args.items);
+        const translated_name = try copyImportedIdent(source_idents, dest_idents, name, allocator);
 
-        const name_str = source_idents.getText(name);
-        const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
-
-        _ = try fresh_tags.append(allocator, .{
-            .name = translated_name, // Tag names are local to the union type
+        try fresh_tags.append(allocator, .{
+            .name = translated_name,
             .args = dest_args_range,
         });
     }
@@ -366,14 +372,8 @@ fn copyNominalType(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!NominalType {
-
-    // Translate the type name ident
-    const type_name_str = source_idents.getText(source_nominal.ident.ident_idx);
-    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
-
-    // Translate the origin module ident
-    const origin_str = source_idents.getText(source_nominal.origin_module);
-    const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
+    const translated_ident = try copyImportedIdent(source_idents, dest_idents, source_nominal.ident.ident_idx, allocator);
+    const translated_origin = try copyImportedIdent(source_idents, dest_idents, source_nominal.origin_module, allocator);
 
     var dest_args = std.ArrayList(Var).empty;
     defer dest_args.deinit(dest_store.gpa);
@@ -410,42 +410,20 @@ fn copyStaticDispatchConstraints(
     const source_constraints_len = source_constraints.len();
     if (source_constraints_len == 0) {
         return StaticDispatchConstraint.SafeList.Range.empty();
-    } else {
-        // Setup tmp state
-        var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
-        defer dest_constraints.deinit();
-
-        // Iterate over the constraints
-        for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
-            // Translate the fn name
-            const fn_name_bytes = source_idents.getText(source_constraint.fn_name);
-            const translated_fn_name = try dest_idents.insert(allocator, base.Ident.for_text(fn_name_bytes));
-
-            var dest_constraint = source_constraint;
-            dest_constraint.fn_name = translated_fn_name;
-            dest_constraint.fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator);
-
-            // Imported constraints originate from source module expressions, so
-            // their source expr indices are not meaningful in the destination module.
-            // Clearing this prevents accidental expr-index collisions in MIR dispatch lookup.
-            dest_constraint.source_expr_idx = StaticDispatchConstraint.no_source_expr;
-
-            // Translate resolved target idents into destination ident space.
-            if (!source_constraint.resolved_target.isNone()) {
-                const origin_name = source_idents.getText(source_constraint.resolved_target.origin_module);
-                const method_name = source_idents.getText(source_constraint.resolved_target.method_ident);
-                dest_constraint.resolved_target = .{
-                    .origin_module = try dest_idents.insert(allocator, base.Ident.for_text(origin_name)),
-                    .method_ident = try dest_idents.insert(allocator, base.Ident.for_text(method_name)),
-                };
-            } else {
-                dest_constraint.resolved_target = .none;
-            }
-
-            try dest_constraints.append(dest_constraint);
-        }
-
-        const dest_constraints_range = try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
-        return dest_constraints_range;
     }
+
+    var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
+    defer dest_constraints.deinit();
+
+    for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
+        const translated_fn_name = try copyImportedIdent(source_idents, dest_idents, source_constraint.fn_name, allocator);
+
+        var dest_constraint = source_constraint;
+        dest_constraint.fn_name = translated_fn_name;
+        dest_constraint.fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator);
+
+        try dest_constraints.append(dest_constraint);
+    }
+
+    return try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
 }

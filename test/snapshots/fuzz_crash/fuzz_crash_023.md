@@ -274,13 +274,16 @@ UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:70:5:70:8
 TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
+DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
 TYPE MISMATCH - fuzz_crash_023.md:146:15:146:18
 MISSING METHOD - fuzz_crash_023.md:176:12:176:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_023.md:178:42:178:45
+DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 TYPE MISMATCH - fuzz_crash_023.md:144:9:196:2
+DECLARATION HAS NO VALUE - fuzz_crash_023.md:201:1:201:25
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -1031,6 +1034,17 @@ But the expression between the `match` parenthesis has the type:
 
 These can never match! Either the pattern or expression has a problem.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_023.md:178:47:178:71:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TOO FEW ARGS**
 The `match_time` function expects 2 arguments, but it got 1 instead:
 **fuzz_crash_023.md:155:2:157:3:**
@@ -1112,6 +1126,17 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_023.md:178:47:178:71:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_023.md:144:9:196:2:**
@@ -1180,6 +1205,17 @@ But the annotation say it should be:
     List(Error) -> Error
 
 **Hint:** This function is effectful, but a pure function is expected.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_023.md:201:1:201:25:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -1641,7 +1677,7 @@ EndOfFile,
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
 								(field (name "rest") (rest true)))
-							(e-local-dispatch
+							(e-arrow-call
 								(e-int (raw "12"))
 								(e-apply
 									(e-ident (raw "add"))
@@ -1847,17 +1883,17 @@ EndOfFile,
 							(e-question-suffix
 								(e-field-access
 									(e-question-suffix
-										(e-field-access
-											(e-question-suffix
-												(e-field-access
-													(e-question-suffix
-														(e-apply
-															(e-ident (raw "some_fn"))
-															(e-ident (raw "arg1"))))
-													(e-apply
-														(e-ident (raw "static_dispatch_method")))))
-											(e-apply
-												(e-ident (raw "next_static_dispatch_method")))))
+										(e-method-call (method ".next_static_dispatch_method")
+											(receiver
+												(e-question-suffix
+													(e-method-call (method ".static_dispatch_method")
+														(receiver
+															(e-question-suffix
+																(e-apply
+																	(e-ident (raw "some_fn"))
+																	(e-ident (raw "arg1")))))
+														(args))))
+											(args)))
 									(e-ident (raw "record_field")))))
 						(e-question-suffix
 							(e-apply
@@ -2401,7 +2437,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 1315)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2568,17 +2604,17 @@ expect {
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "record_field")
+								(e-field-access (field "record_field")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "next_static_dispatch_method")
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1729)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dot-access (field "static_dispatch_method")
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1696)
 																			(receiver
 																				(e-match
 																					(match
@@ -2852,17 +2888,19 @@ expect {
 			(s-let
 				(p-assign (ident "blah"))
 				(e-num (value "1")))
-			(e-binop (op "eq")
-				(e-lookup-local
-					(p-assign (ident "blah")))
-				(e-lookup-local
-					(p-assign (ident "foo")))))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-lookup-local
+						(p-assign (ident "blah"))))
+				(rhs
+					(e-lookup-local
+						(p-assign (ident "foo"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Dec"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(patt (type "Error"))
@@ -2909,7 +2947,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Dec"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
 		(expr (type "Error"))

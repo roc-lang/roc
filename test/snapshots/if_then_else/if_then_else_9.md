@@ -14,22 +14,10 @@ if bool {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_9.md:1:4:1:8
 TYPE MISMATCH - if_then_else_9.md:3:11:3:13
 MISSING METHOD - if_then_else_9.md:2:2:2:3
 MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `bool` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**if_then_else_9.md:1:4:1:8:**
-```roc
-if bool {
-```
-   ^^^^
-
-
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
 **if_then_else_9.md:3:11:3:13:**

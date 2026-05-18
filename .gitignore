@@ -50,6 +50,13 @@ zig-out
 *.ll
 *.bc
 
+# Force-include musl runtime files that are checked into the repo with
+# `git add -f`. The build copies these from test/fx into other test
+# platforms (e.g. test/static-data-host), so they need to exist in any
+# filtered source view (e.g. nix's gitignoreSource).
+!test/fx/platform/targets/*musl/crt1.o
+!test/fx/platform/targets/*musl/libc.a
+
 # valgrind
 vgcore.*
 

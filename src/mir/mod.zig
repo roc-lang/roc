@@ -1,40 +1,33 @@
-//! Monomorphic Intermediate Representation (MIR)
+//! MIR-family post-check lowering pipeline.
 //!
-//! MIR sits between CIR (Canonical IR) and LIR (Layout IR).
-//! It is monomorphic, desugared, and uses globally unique symbols.
-//! Lambda set inference happens later on top of MIR.
+//! `design.md` is the source of truth for these type-state boundaries. The
+//! submodules here implement the post-check MIR-family architecture.
 
 const std = @import("std");
 
-pub const MIR = @import("MIR.zig");
-pub const Monotype = @import("Monotype.zig");
-pub const Monomorphize = @import("Monomorphize.zig");
-pub const Lower = @import("Lower.zig");
-pub const LambdaSet = @import("LambdaSet.zig");
-
-/// Re-export of MIR expression type
-pub const Expr = MIR.Expr;
-/// Re-export of MIR pattern type
-pub const Pattern = MIR.Pattern;
-/// Globally unique opaque symbol identifier
-pub const Symbol = MIR.Symbol;
-/// Index into the MIR expression store
-pub const ExprId = MIR.ExprId;
-/// Index into the MIR pattern store
-pub const PatternId = MIR.PatternId;
-/// Index into the MIR proc store
-pub const ProcId = MIR.ProcId;
-/// MIR proc metadata
-pub const Proc = MIR.Proc;
-/// MIR expression and pattern store with parallel type mapping
-pub const Store = MIR.Store;
+pub const Mono = @import("mono/mod.zig");
+pub const MonoRow = @import("mono_row/mod.zig");
+pub const Lifted = @import("lifted/mod.zig");
+pub const LambdaSolved = @import("lambda_solved/mod.zig");
+pub const Executable = @import("executable/mod.zig");
+pub const Ids = @import("ids.zig");
+pub const DebugVerify = @import("debug_verify.zig");
+pub const ConcreteSourceType = @import("concrete_source_type.zig");
+pub const ArtifactNames = @import("artifact_names.zig");
+pub const Hosted = @import("hosted.zig");
+pub const StructuralTest = @import("structural_test.zig");
 
 test "mir tests" {
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(MIR);
-    std.testing.refAllDecls(Monotype);
-    std.testing.refAllDecls(Monomorphize);
-    std.testing.refAllDecls(Lower);
-    std.testing.refAllDecls(LambdaSet);
-    std.testing.refAllDecls(@import("test/lower_test.zig"));
+    std.testing.refAllDecls(Mono);
+    std.testing.refAllDecls(MonoRow);
+    std.testing.refAllDecls(Lifted);
+    std.testing.refAllDecls(LambdaSolved);
+    std.testing.refAllDecls(Executable);
+    std.testing.refAllDecls(Ids);
+    std.testing.refAllDecls(DebugVerify);
+    std.testing.refAllDecls(ConcreteSourceType);
+    std.testing.refAllDecls(ArtifactNames);
+    std.testing.refAllDecls(Hosted);
+    std.testing.refAllDecls(StructuralTest);
 }

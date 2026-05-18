@@ -19,67 +19,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-DEPRECATED NUMBER SUFFIX - issue_8899.md:3:22:3:26
-DEPRECATED NUMBER SUFFIX - issue_8899.md:4:21:4:25
-DEPRECATED NUMBER SUFFIX - issue_8899.md:11:20:11:25
-DEPRECATED NUMBER SUFFIX - issue_8899.md:11:27:11:32
-DEPRECATED NUMBER SUFFIX - issue_8899.md:11:34:11:39
+NIL
 # PROBLEMS
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**issue_8899.md:3:22:3:26:**
-```roc
-        var $total = 0i64
-```
-                     ^^^^
-
-The `i64` suffix is no longer supported. Use `0.I64` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**issue_8899.md:4:21:4:25:**
-```roc
-        var $acc = [0i64]
-```
-                    ^^^^
-
-The `i64` suffix is no longer supported. Use `0.I64` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**issue_8899.md:11:20:11:25:**
-```roc
-    sum_with_last([10i64, 20i64, 30i64])
-```
-                   ^^^^^
-
-The `i64` suffix is no longer supported. Use `10.I64` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**issue_8899.md:11:27:11:32:**
-```roc
-    sum_with_last([10i64, 20i64, 30i64])
-```
-                          ^^^^^
-
-The `i64` suffix is no longer supported. Use `20.I64` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**issue_8899.md:11:34:11:39:**
-```roc
-    sum_with_last([10i64, 20i64, 30i64])
-```
-                                 ^^^^^
-
-The `i64` suffix is no longer supported. Use `30.I64` instead.
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -190,7 +132,7 @@ EndOfFile,
 					(e-block
 						(s-reassign
 							(p-assign (ident "$acc"))
-							(e-call
+							(e-call (constraint-fn-var 83)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local
@@ -202,7 +144,7 @@ EndOfFile,
 							(e-match
 								(match
 									(cond
-										(e-call
+										(e-call (constraint-fn-var 104)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -228,7 +170,7 @@ EndOfFile,
 						(e-empty_record)))
 				(e-lookup-local
 					(p-assign (ident "$total"))))))
-	(e-call
+	(e-call (constraint-fn-var 128)
 		(e-lookup-local
 			(p-assign (ident "sum_with_last")))
 		(e-list

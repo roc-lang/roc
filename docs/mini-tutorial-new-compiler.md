@@ -288,8 +288,8 @@ For example, here are three different ways you can handle an assumption turning 
 
 All three of these have different tradeoffs, and different situations can reasonably call for one over the others.
 
-The point of `expect` working the way it does is that it does not run in `--opt=speed` builds at all, 
-so it does not have production tradeoffs! You can use it as often as you like, and the consequences will 
+The point of `expect` working the way it does is that it does not run in `--opt=speed` builds at all,
+so it does not have production tradeoffs! You can use it as often as you like, and the consequences will
 only be felt during development.
 
 ### `dbg` statements

@@ -103,10 +103,12 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "sum")))
-			(e-num (value "15")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "sum"))))
+			(rhs
+				(e-num (value "15"))))))
 ~~~
 # TYPES
 ~~~clojure

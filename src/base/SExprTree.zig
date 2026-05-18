@@ -141,6 +141,7 @@ const Node = union(enum) {
     List: struct { begin: u32, attrs_marker: u32, end: u32 },
     String: struct { begin: u32, end: u32 },
     Boolean: bool,
+    UnsignedInt: u64,
     NodeIdx: u32,
     BytesRange: struct { begin: u32, end: u32, region: RegionInfo },
 };
@@ -218,6 +219,20 @@ pub fn pushBoolPair(self: *SExprTree, key: []const u8, value: bool) std.mem.Allo
     try self.endNode(begin, attrs);
 }
 
+/// Push an unsigned integer node onto the stack
+pub fn pushU64(self: *SExprTree, value: u64) std.mem.Allocator.Error!void {
+    try self.stack.append(Node{ .UnsignedInt = value });
+}
+
+/// Push an unsigned integer key-value pair onto the stack
+pub fn pushU64Pair(self: *SExprTree, key: []const u8, value: u64) std.mem.Allocator.Error!void {
+    const begin = self.beginNode();
+    try self.pushStaticAtom(key);
+    try self.pushU64(value);
+    const attrs = self.beginNode();
+    try self.endNode(begin, attrs);
+}
+
 /// Push a NodeIdx node onto the stack
 pub fn pushNodeIdx(self: *SExprTree, idx: u32) std.mem.Allocator.Error!void {
     try self.stack.append(Node{ .NodeIdx = idx });
@@ -282,6 +297,11 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
         .Boolean => |b| {
             try writer_impl.setColor(.number);
             try writer_impl.print("{}", .{b});
+            try writer_impl.setColor(.default);
+        },
+        .UnsignedInt => |value| {
+            try writer_impl.setColor(.number);
+            try writer_impl.print("{d}", .{value});
             try writer_impl.setColor(.default);
         },
         .NodeIdx => |idx| {

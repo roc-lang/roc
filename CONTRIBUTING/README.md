@@ -49,6 +49,10 @@ zig build test -- --test-filter "name of test"
 
 If you need to do some debugging, check out [our tips](../devtools/debug_tips.md).
 
+### Code coverage
+
+To measure eval interpreter code coverage and find untested code paths, see the [eval coverage guide](eval_coverage.md).
+
 ### Commit signing
 
 All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g).  

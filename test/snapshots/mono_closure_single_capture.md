@@ -14,8 +14,13 @@ result = func(42)
 ~~~
 # MONO
 ~~~roc
+func = |x| {
+	add_x = |y| x + y
+	add_x(10)
+}
+
 result : Dec
-result = 52
+result = func(42)
 ~~~
 # FORMATTED
 ~~~roc
@@ -85,13 +90,16 @@ EndOfFile,
 									(p-assign (ident "x")))
 								(e-lookup-local
 									(p-assign (ident "y")))))))
-				(e-call
+				(e-call (constraint-fn-var 42)
 					(e-lookup-local
 						(p-assign (ident "add_x")))
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "52"))))
+		(e-call (constraint-fn-var 57)
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "42")))))
 ~~~
 # TYPES
 ~~~clojure

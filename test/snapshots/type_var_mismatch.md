@@ -34,11 +34,11 @@ This number is being used where a non-number type is needed:
 	       ^^
 
 The type was determined to be non-numeric here:
-**type_var_mismatch.md:11:34:11:38:**
+**type_var_mismatch.md:11:11:11:39:**
 ```roc
 	result = List.first(list).ok_or(item)
 ```
-	                                ^^^^
+	         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Other code expects this to have the type:
 
@@ -92,12 +92,12 @@ EndOfFile,
 							(ty-var (raw "item")))
 						(s-decl
 							(p-ident (raw "result"))
-							(e-field-access
-								(e-apply
-									(e-ident (raw "List.first"))
-									(e-ident (raw "list")))
-								(e-apply
-									(e-ident (raw "ok_or"))
+							(e-method-call (method ".ok_or")
+								(receiver
+									(e-apply
+										(e-ident (raw "List.first"))
+										(e-ident (raw "list"))))
+								(args
 									(e-ident (raw "item")))))
 						(e-ident (raw "result"))))))
 		(s-decl
@@ -125,9 +125,9 @@ NO CHANGE
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dot-access (field "ok_or")
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 76)
 						(receiver
-							(e-call
+							(e-call (constraint-fn-var 75)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

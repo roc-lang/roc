@@ -132,12 +132,14 @@ NO CHANGE
 					(e-if
 						(if-branches
 							(if-branch
-								(e-binop (op "eq")
-									(e-binop (op "rem")
-										(e-lookup-local
-											(p-assign (ident "n")))
-										(e-num (value "2")))
-									(e-num (value "0")))
+								(e-method-eq (negated "false")
+									(lhs
+										(e-binop (op "rem")
+											(e-lookup-local
+												(p-assign (ident "n")))
+											(e-num (value "2"))))
+									(rhs
+										(e-num (value "0"))))
 								(e-block
 									(s-reassign
 										(p-assign (ident "lastEven_"))
@@ -161,10 +163,12 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "result")))
-			(e-num (value "32")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-num (value "32"))))))
 ~~~
 # TYPES
 ~~~clojure

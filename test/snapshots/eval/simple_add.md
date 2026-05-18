@@ -81,21 +81,25 @@ NO CHANGE
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "U8") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "addU8")))
-				(e-num (value "1"))
-				(e-num (value "2")))
-			(e-num (value "3"))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 92)
+					(e-lookup-local
+						(p-assign (ident "addU8")))
+					(e-num (value "1"))
+					(e-num (value "2"))))
+			(rhs
+				(e-num (value "3")))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "addU8")))
-				(e-num (value "0"))
-				(e-num (value "10")))
-			(e-num (value "10")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 235)
+					(e-lookup-local
+						(p-assign (ident "addU8")))
+					(e-num (value "0"))
+					(e-num (value "10"))))
+			(rhs
+				(e-num (value "10"))))))
 ~~~
 # TYPES
 ~~~clojure

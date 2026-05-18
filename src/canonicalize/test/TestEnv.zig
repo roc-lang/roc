@@ -87,7 +87,11 @@ pub fn canonicalizeExpr(self: *TestEnv) !?Can.CanonicalizedExpr {
         return null;
     }
 
-    return try self.can.canonicalizeExpr(expr_idx);
+    const result = try self.can.canonicalizeExpr(expr_idx);
+    if (self.module_env.store.scratch != null) {
+        self.module_env.diagnostics = try self.module_env.store.diagnosticSpanFrom(0);
+    }
+    return result;
 }
 
 /// Retrieves a canonical expression from the module store by its index.

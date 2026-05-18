@@ -56,13 +56,20 @@ PARSE ERROR - qualified_type_canonicalization.md:8:14:8:18
 MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
 MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
-UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
+MODULE NOT FOUND - qualified_type_canonicalization.md:14:24:14:28
+MODULE NOT FOUND - qualified_type_canonicalization.md:15:19:15:24
+MODULE NOT FOUND - qualified_type_canonicalization.md:18:26:18:35
+MODULE NOT FOUND - qualified_type_canonicalization.md:19:26:19:35
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
 MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:21
-UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
+MODULE NOT FOUND - qualified_type_canonicalization.md:30:23:30:27
+MODULE NOT FOUND - qualified_type_canonicalization.md:31:16:31:21
+MODULE NOT FOUND - qualified_type_canonicalization.md:34:21:34:25
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
 MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:20
+MODULE NOT FOUND - qualified_type_canonicalization.md:39:26:39:30
+MODULE NOT FOUND - qualified_type_canonicalization.md:39:38:39:44
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:49:39:70
 UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:12
 DOES NOT EXIST - qualified_type_canonicalization.md:42:24:42:39
@@ -137,15 +144,48 @@ import ExternalModule as ExtMod
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
-This type is referenced here:
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:14:24:14:28:**
+```roc
+simpleQualified : Color.RGB
+```
+                       ^^^^
+
+
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
 **qualified_type_canonicalization.md:15:19:15:24:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 ```
                   ^^^^^
+
+
+**MODULE NOT FOUND**
+The type `DataType` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:18:26:18:35:**
+```roc
+aliasedQualified : ExtMod.DataType
+```
+                         ^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `DataType` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:19:26:19:35:**
+```roc
+aliasedQualified = ExtMod.DataType.Default
+```
+                         ^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -180,15 +220,37 @@ resultType : Try.Try(I32, Str)
              ^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
-This type is referenced here:
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:30:23:30:27:**
+```roc
+getColor : {} -> Color.RGB
+```
+                      ^^^^
+
+
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
 **qualified_type_canonicalization.md:31:16:31:21:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 ```
                ^^^^^
+
+
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:34:21:34:25:**
+```roc
+processColor : Color.RGB -> Str
+```
+                    ^^^^
 
 
 **UNUSED VARIABLE**
@@ -212,6 +274,28 @@ It's referenced here:
 transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
             ^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:39:26:39:30:**
+```roc
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+                         ^^^^
+
+
+**MODULE NOT FOUND**
+The type `Error` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:39:38:39:44:**
+```roc
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+                                     ^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -456,16 +540,14 @@ transform = |result|
 (can-ir
 	(d-let
 		(p-assign (ident "simpleQualified"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-runtime-error (tag "type_from_missing_module"))
 		(annotation
-			(ty-lookup (name "RGB") (external-module "Color"))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "aliasedQualified"))
-		(e-nominal-external
-			(external-module "ExternalModule")
-			(e-tag (name "Default")))
+		(e-runtime-error (tag "type_from_missing_module"))
 		(annotation
-			(ty-lookup (name "DataType") (external-module "ExternalModule"))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
 		(e-runtime-error (tag "qualified_ident_does_not_exist"))
@@ -485,11 +567,11 @@ transform = |result|
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-runtime-error (tag "undeclared_type")))
+			(e-runtime-error (tag "type_from_missing_module")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record)
-				(ty-lookup (name "RGB") (external-module "Color")))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processColor"))
 		(e-lambda
@@ -499,7 +581,7 @@ transform = |result|
 				(e-literal (string "Color processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "RGB") (external-module "Color"))
+				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))

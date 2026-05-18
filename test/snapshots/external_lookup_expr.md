@@ -8,18 +8,9 @@ type=expr
 Json.utf8
 ~~~
 # EXPECTED
-DOES NOT EXIST - external_lookup_expr.md:1:1:1:10
+NIL
 # PROBLEMS
-**DOES NOT EXIST**
-`Json.utf8` does not exist.
-
-**external_lookup_expr.md:1:1:1:10:**
-```roc
-Json.utf8
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotLowerIdent,

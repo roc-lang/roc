@@ -1,0 +1,25 @@
+.{
+    .name = .bytebox,
+    .version = "0.0.1",
+    .fingerprint = 0x5a2a0eadb1367749,
+    .dependencies = .{
+        .@"zig-stable-array" = .{
+            .url = "git+https://github.com/rdunnington/zig-stable-array#9e4f089bd3abf127eafd307ecf9796455871becc",
+            .hash = "stable_array-0.1.0-3ihgvVxbAACET5MoiUn2T5ENunG_da_X3kGbji-f4QTF",
+        },
+    },
+    .minimum_zig_version = "0.13.0",
+    .paths = .{
+        "src",
+        "test/mem64",
+        "test/wasi/run.py",
+        "test/wasi/bytebox_adapter.py",
+        "test/wasm/main.zig",
+        "bench",
+        "run",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+    },
+}

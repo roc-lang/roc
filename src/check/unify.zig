@@ -45,16 +45,13 @@ const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
-const can = @import("can");
-
 const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
 
-const ModuleEnv = can.ModuleEnv;
-
 const Ident = base.Ident;
 const MkSafeList = collections.SafeList;
+const Allocator = std.mem.Allocator;
 
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
@@ -114,7 +111,9 @@ pub const Result = union(enum) {
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 pub fn unify(
-    module_env: *ModuleEnv,
+    gpa: Allocator,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -127,7 +126,9 @@ pub fn unify(
     b: Var,
 ) std.mem.Allocator.Error!Result {
     return unifyInContext(
-        module_env,
+        gpa,
+        ident_store,
+        qualified_module_ident,
         types,
         problems,
         snapshots,
@@ -149,7 +150,9 @@ pub fn unify(
 ///
 /// This function accepts a context and optional constraint origin var (for better error reporting)
 pub fn unifyInContext(
-    module_env: *ModuleEnv,
+    gpa: Allocator,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -169,7 +172,7 @@ pub fn unifyInContext(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, qualified_module_ident, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -192,7 +195,7 @@ pub fn unifyInContext(
                 },
             }
         };
-        const problem_idx = try problems.appendProblem(module_env.gpa, problem);
+        const problem_idx = try problems.appendProblem(gpa, problem);
         types.union_(a, b, .{
             .content = .err,
             .rank = Rank.generalized,
@@ -224,7 +227,8 @@ pub fn unifyInContext(
 const Unifier = struct {
     const Self = @This();
 
-    module_env: *ModuleEnv,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
@@ -234,13 +238,15 @@ const Unifier = struct {
 
     /// Init unifier
     pub fn init(
-        module_env: *ModuleEnv,
+        ident_store: *const Ident.Store,
+        qualified_module_ident: Ident.Idx,
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
     ) Unifier {
         return .{
-            .module_env = module_env,
+            .ident_store = ident_store,
+            .qualified_module_ident = qualified_module_ident,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
@@ -248,22 +254,36 @@ const Unifier = struct {
         };
     }
 
+    fn getTypeIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
+        return self.ident_store.getText(idx);
+    }
+
     // merge
 
     /// Link the variables & updated the content in the type_store
     /// In the old compiler, this function was called "merge"
     fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) void {
+        const is_flex = switch (new_content) {
+            .flex => true,
+            else => false,
+        };
         self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
         });
     }
 
     /// Create a new type variable *in this pool*
     fn fresh(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!Var {
+        const is_flex = switch (new_content) {
+            .flex => true,
+            else => false,
+        };
         const var_ = try self.types_store.register(.{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -279,9 +299,18 @@ const Unifier = struct {
         vars: *const ResolvedVarDescs,
         constraints: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!void {
+        const dispatcher_var = self.unresolved_b orelse vars.b.var_;
+        return self.recordDeferredConstraintOn(dispatcher_var, constraints);
+    }
+
+    fn recordDeferredConstraintOn(
+        self: *Self,
+        dispatcher_var: Var,
+        constraints: StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!void {
         if (constraints.len() > 0) {
             _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                .var_ = self.unresolved_b orelse vars.b.var_,
+                .var_ = dispatcher_var,
                 .constraints = constraints,
             });
         }
@@ -428,6 +457,9 @@ const Unifier = struct {
                 } });
             },
             .rigid => |b_rigid| {
+                if (self.flexHasFromNumeral(a_flex)) {
+                    self.types_store.from_numeral_flex_count -|= 1;
+                }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, .{ .rigid = b_rigid });
             },
@@ -460,7 +492,10 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                try self.recordDeferredConstraint(vars, b_flex.constraints);
+                if (self.flexHasFromNumeral(b_flex)) {
+                    self.types_store.from_numeral_flex_count -|= 1;
+                }
+                try self.recordDeferredConstraintOn(vars.a.var_, b_flex.constraints);
                 self.merge(vars, .{ .rigid = a_rigid });
             },
             .rigid => return error.TypeMismatch,
@@ -672,7 +707,7 @@ const Unifier = struct {
                     },
                     .empty_tag_union => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -694,7 +729,7 @@ const Unifier = struct {
                     },
                     .empty_record => {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!a_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!a_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -794,7 +829,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -840,7 +875,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -921,7 +956,7 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
-                        if (!b_type.canLiftInner(self.module_env.qualified_module_ident)) {
+                        if (!b_type.canLiftInner(self.qualified_module_ident)) {
                             return error.TypeMismatch;
                         }
 
@@ -1047,8 +1082,8 @@ const Unifier = struct {
         // We intentionally do not unify backing vars here: nominal identity is
         // defined by origin/name/args, and forcing backing vars to coincide at
         // unification time over-constrains row-polymorphic nominals like Try.
-        // MIR monotype lowering substitutes formal nominal params into backing
-        // types explicitly when it strips nominal wrappers.
+        // Lowering substitutes formal nominal params into backing types
+        // explicitly when it strips nominal wrappers.
         self.merge(vars, vars.b.desc.content);
     }
 
@@ -1065,7 +1100,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.module_env.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
             return error.TypeMismatch;
         }
 
@@ -1166,7 +1201,7 @@ const Unifier = struct {
         defer trace.end();
 
         // If this nominal is opaque and we're not in the origin module, error
-        if (!nominal_type.canLiftInner(self.module_env.qualified_module_ident)) {
+        if (!nominal_type.canLiftInner(self.qualified_module_ident)) {
             return error.TypeMismatch;
         }
 
@@ -1351,8 +1386,7 @@ const Unifier = struct {
         const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
 
         // Then partition the fields
-        const partitioned = try Self.partitionFields(
-            self.module_env.getIdentStore(),
+        const partitioned = try self.partitionFields(
             self.scratch,
             a_gathered_fields.range,
             b_gathered_fields.range,
@@ -1551,7 +1585,7 @@ const Unifier = struct {
                                         &range,
                                         next_fields.items(.name),
                                         next_fields.items(.var_),
-                                        self.module_env.getIdentStore(),
+                                        self.ident_store,
                                     );
 
                                     ext = .{ .ext = ext_record.ext };
@@ -1564,7 +1598,7 @@ const Unifier = struct {
                                         &range,
                                         next_fields.items(.name),
                                         next_fields.items(.var_),
-                                        self.module_env.getIdentStore(),
+                                        self.ident_store,
                                     );
 
                                     return .{ .ext = ext, .range = range };
@@ -1601,16 +1635,24 @@ const Unifier = struct {
     ///
     /// The caller must not mutate the field ranges between `gatherRecordFields` and `partitionFields`.
     fn partitionFields(
-        ident_store: *const Ident.Store,
+        self: *const Self,
         scratch: *Scratch,
         a_fields_range: RecordFieldSafeList.Range,
         b_fields_range: RecordFieldSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedRecordFields {
         // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
-        std.mem.sort(RecordField, a_fields, ident_store, comptime RecordField.sortByNameAsc);
+        std.mem.sort(RecordField, a_fields, self, struct {
+            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
-        std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
+        std.mem.sort(RecordField, b_fields, self, struct {
+            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
 
         // Get the start of index of the new range
         const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
@@ -1623,7 +1665,7 @@ const Unifier = struct {
         while (a_i < a_fields.len and b_i < b_fields.len) {
             const a_next = a_fields[a_i];
             const b_next = b_fields[b_i];
-            const ord = RecordField.orderByName(ident_store, a_next, b_next);
+            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
@@ -1826,8 +1868,7 @@ const Unifier = struct {
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
         // Then partition the tags
-        const partitioned = try Self.partitionTags(
-            self.module_env.getIdentStore(),
+        const partitioned = try self.partitionTags(
             self.scratch,
             a_gathered_tags.range,
             b_gathered_tags.range,
@@ -2028,7 +2069,7 @@ const Unifier = struct {
                                 &range,
                                 next_tags.items(.name),
                                 next_tags.items(.args),
-                                self.module_env.getIdentStore(),
+                                self.ident_store,
                             );
 
                             ext_var = ext_tag_union.ext;
@@ -2063,16 +2104,24 @@ const Unifier = struct {
     ///
     /// The caller must not mutate the field ranges between `gatherTagUnionTags` and `partitionTags`.
     fn partitionTags(
-        ident_store: *const Ident.Store,
+        self: *const Self,
         scratch: *Scratch,
         a_tags_range: TagSafeList.Range,
         b_tags_range: TagSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedTags {
         // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
         const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
-        std.mem.sort(Tag, a_tags, ident_store, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, a_tags, self, struct {
+            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
         const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
-        std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, b_tags, self, struct {
+            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
 
         // Get the start of index of the new range
         const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
@@ -2085,7 +2134,7 @@ const Unifier = struct {
         while (a_i < a_tags.len and b_i < b_tags.len) {
             const a_next = a_tags[a_i];
             const b_next = b_tags[b_i];
-            const ord = Tag.orderByName(ident_store, a_next, b_next);
+            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
@@ -2232,18 +2281,7 @@ const Unifier = struct {
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
         // Ensure we have enough memory for the new contiguous list.
-        // Count extra capacity for "in_both" entries where a and b have different source_expr_idx —
-        // both call sites need a resolved dispatch target.
-        var extra_capacity: usize = 0;
-        for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            if (two_constraints.a.source_expr_idx != two_constraints.b.source_expr_idx and
-                two_constraints.a.source_expr_idx != StaticDispatchConstraint.no_source_expr)
-            {
-                extra_capacity += 1;
-            }
-        }
-
-        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len() + extra_capacity;
+        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
         try self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
@@ -2251,15 +2289,6 @@ const Unifier = struct {
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
-            // When a and b have different source_expr_idx, both call sites need a resolved
-            // dispatch target. Emit a duplicate with a's source_expr_idx.
-            if (two_constraints.a.source_expr_idx != two_constraints.b.source_expr_idx and
-                two_constraints.a.source_expr_idx != StaticDispatchConstraint.no_source_expr)
-            {
-                var a_copy = two_constraints.b;
-                a_copy.source_expr_idx = two_constraints.a.source_expr_idx;
-                self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(a_copy);
-            }
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
@@ -2326,14 +2355,21 @@ const Unifier = struct {
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
         b_constraints_range: StaticDispatchConstraint.SafeList.Range,
     ) std.mem.Allocator.Error!PartitionedStaticDispatchConstraints {
-        const ident_store = self.module_env.getIdentStore();
         const scratch = self.scratch;
 
         // First sort the fields
         const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, a_constraints, ident_store, comptime StaticDispatchConstraint.sortByFnNameAsc);
+        std.mem.sort(StaticDispatchConstraint, a_constraints, self, struct {
+            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
+            }
+        }.less);
         const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, b_constraints, ident_store, comptime StaticDispatchConstraint.sortByFnNameAsc);
+        std.mem.sort(StaticDispatchConstraint, b_constraints, self, struct {
+            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
+            }
+        }.less);
 
         // Get the start of index of the new range
         const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
@@ -2346,7 +2382,7 @@ const Unifier = struct {
         while (a_i < a_constraints.len and b_i < b_constraints.len) {
             const a_next = a_constraints[a_i];
             const b_next = b_constraints[b_i];
-            const ord = StaticDispatchConstraint.orderByFnName(ident_store, a_next, b_next);
+            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.fn_name), self.getTypeIdentText(b_next.fn_name));
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{
@@ -2401,21 +2437,29 @@ pub const DeferredConstraintCheck = struct {
 /// Public helper functions for tests
 pub fn partitionFields(
     ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
+    types_store: *types_mod.Store,
     scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    return try Unifier.partitionFields(ident_store, scratch, a_fields_range, b_fields_range);
+    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
 /// Partitions tags from two tag ranges for unification.
 pub fn partitionTags(
     ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
+    types_store: *types_mod.Store,
     scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    return try Unifier.partitionTags(ident_store, scratch, a_tags_range, b_tags_range);
+    var unifier = Unifier.init(ident_store, qualified_module_ident, types_store, scratch, occurs_scratch);
+    return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
 /// A reusable memory arena used across unification calls to avoid per-call allocations.

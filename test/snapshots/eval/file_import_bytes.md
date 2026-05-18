@@ -46,13 +46,15 @@ NO CHANGE
 		(p-assign (ident "data"))
 		(e-bytes-literal (len "11")))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-external
-					(builtin))
-				(e-lookup-local
-					(p-assign (ident "data"))))
-			(e-num (value "11")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 36)
+					(e-lookup-external
+						(builtin))
+					(e-lookup-local
+						(p-assign (ident "data")))))
+			(rhs
+				(e-num (value "11"))))))
 ~~~
 # TYPES
 ~~~clojure

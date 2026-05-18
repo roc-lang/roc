@@ -130,10 +130,10 @@ EndOfFile,
 			(ty (name "MyType")))
 		(s-decl
 			(p-ident (raw "result2"))
-			(e-field-access
-				(e-ident (raw "c"))
-				(e-apply
-					(e-ident (raw "plus"))
+			(e-method-call (method ".plus")
+				(receiver
+					(e-ident (raw "c")))
+				(args
 					(e-ident (raw "d")))))))
 ~~~
 # FORMATTED
@@ -186,7 +186,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dot-access (field "plus")
+		(e-dispatch-call (method "plus") (constraint-fn-var 329)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "c"))))
@@ -205,7 +205,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "MyType"))
 		(patt (type "MyType"))
 		(patt (type "Error"))
 		(patt (type "MyType"))
@@ -215,7 +215,7 @@ NO CHANGE
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "MyType"))
 		(expr (type "MyType"))
 		(expr (type "Error"))
 		(expr (type "MyType"))

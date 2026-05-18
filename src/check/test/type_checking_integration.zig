@@ -3,8 +3,23 @@
 
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
+const canonical = @import("../canonical_names.zig");
+const checked_ids = @import("../checked_ids.zig");
+const static_dispatch = @import("../static_dispatch_registry.zig");
+const TypedCIR = @import("../typed_cir.zig");
+const types = @import("types");
 
 const testing = std.testing;
+
+const MethodRegistryTestCheckedTypes = struct {
+    pub fn rootForSourceVar(
+        _: *const @This(),
+        _: TypedCIR.Module,
+        _: types.Var,
+    ) ?checked_ids.CheckedTypeId {
+        unreachable;
+    }
+};
 
 // primitives - nums //
 
@@ -740,10 +755,13 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
+    // Numeric literals inside generalized functions stay overloaded so each
+    // call site can choose the concrete numeric type. Non-function values still
+    // default to Dec after checking.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "_arg -> Dec",
+        "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
     );
 }
 
@@ -1299,6 +1317,50 @@ test "check type - basic nominal" {
         \\x = MyNominal.MyNominal
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal");
+}
+
+test "checked artifact method registry skips nominal associated values" {
+    const source =
+        \\Basic := [Val(Str)].{
+        \\  rec = { foo: "hello", bar: 42 }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+        .{ .precompiled = test_env.builtin_module.env },
+    };
+    var modules = try TypedCIR.Modules.init(testing.allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+
+    const by_def = try testing.allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
+    defer testing.allocator.free(by_def);
+    @memset(by_def, null);
+
+    const template_lookup = static_dispatch.ProcedureTemplateLookup{
+        .module_idx = module.moduleIndex(),
+        .by_def = by_def,
+    };
+    const checked_types = MethodRegistryTestCheckedTypes{};
+
+    var names = canonical.CanonicalNameStore.init(testing.allocator);
+    defer names.deinit();
+
+    var registry = try static_dispatch.MethodRegistry.fromModule(
+        testing.allocator,
+        module,
+        &names,
+        &template_lookup,
+        &checked_types,
+    );
+    defer registry.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), registry.entries.len);
 }
 
 test "check type - nominal with tag arg" {
@@ -3668,7 +3730,7 @@ test "check type - bool diagnostic - lambda negation applied to Bool.True" {
 // CRITICAL DISTINCTION: In Roc, bare tags like `True` and `False` are structural tag unions,
 // NOT Bool primitives. They only become nominal `Bool` when unified with a Bool annotation
 // or a qualified reference like `Bool.True`. This is by design.
-// See also: corresponding MIR tests in lower_test.zig.
+// See also: corresponding lowering coverage in eval/backend integration tests.
 
 test "check type - nominal Bool - annotated True is Bool" {
     const source =
@@ -3879,19 +3941,7 @@ test "qualified imports don't produce MODULE NOT FOUND during canonicalization" 
         \\}
     ;
 
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    const diagnostics = try test_env.module_env.getDiagnostics();
-    defer test_env.gpa.free(diagnostics);
-
-    // Count MODULE NOT FOUND errors
-    var module_not_found_count: usize = 0;
-    for (diagnostics) |diag| {
-        if (diag == .module_not_found) {
-            module_not_found_count += 1;
-        }
-    }
+    const module_not_found_count = try TestEnv.countModuleNotFoundDiagnosticsAfterCanonicalization("Test", source);
 
     // Qualified imports (json.Json, http.Client, utils.String) should NOT produce
     // MODULE NOT FOUND errors - they're handled by the workspace resolver
@@ -3920,8 +3970,8 @@ test "check type - try return with match and error propagation should type-check
 test "check type - try operator on method call should apply to whole expression (#8646)" {
     // Regression test for https://github.com/roc-lang/roc/issues/8646
     // The `?` suffix on `strings.first()` should apply to the entire method call expression,
-    // not just to the right side of the field access. Previously, the parser was attaching
-    // `?` to `first()` before creating the field_access node, causing a type mismatch error
+    // not just to the callee fragment. Previously, the parser was attaching
+    // `?` to `first()` before creating the method_call node, causing a type mismatch error
     // that expected `{ unknown: _field }`.
     const source =
         \\question_fail : List(Str) -> Try(Str, _)
@@ -4168,6 +4218,9 @@ test "check type - range inferred" {
         \\  $answer
         \\}
     ;
+    // The literal `1` must remain overloaded in this generalized helper. Builtin
+    // integer range methods reuse this shape for U8, I8, I16, etc.; defaulting
+    // it once at the template level would make later instantiations invalid.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
@@ -4176,8 +4229,9 @@ test "check type - range inferred" {
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, Dec -> a,
+        \\    a.plus : a, b -> a,
         \\    a.to_u64 : a -> U64,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -4213,6 +4267,21 @@ test "check type - issue8934 recursive nominal type unification" {
     // The key thing is that the compiler should NOT crash with stack overflow.
     // It should successfully type-check the file.
     try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
+}
+
+test "check type - nested same-module mutually recursive nominal types" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Tree := [Leaf, Branch(Tree.Forest)].{
+        \\    Forest := [Empty, More(Tree, Forest)]
+        \\}
+        \\
+        \\mk : {} -> Tree
+        \\mk = |_| Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+    ;
+
+    try checkTypesModule(source, .{ .pass = .{ .def = "mk" } }, "{} -> Tree");
 }
 
 // early return //
@@ -4845,6 +4914,43 @@ test "check type - mutually recursive functions - type mismatch error" {
         \\}
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check can - recursive non-function top-level cycle is rejected before type checking" {
+    const source =
+        \\force : ({} -> I64) -> I64
+        \\force = |thunk| thunk(0)
+        \\
+        \\t1 = |_| force(|_| t2)
+        \\t2 = t1(0)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("CIRCULAR VALUE DEFINITION");
+}
+
+test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {
+    const source =
+        \\x = 5
+        \\a : I64
+        \\a = x
+        \\b : U8
+        \\b = x
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - monomorphic top-level empty list cannot be used at multiple element types" {
+    const source =
+        \\xs = []
+        \\a : List(I64)
+        \\a = xs
+        \\b : List(Str)
+        \\b = xs
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
 
 test "check type - mutually recursive functions - three-way polymorphic" {

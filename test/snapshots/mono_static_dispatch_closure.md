@@ -16,14 +16,13 @@ result = add_five(10.I64)
 ~~~
 # MONO
 ~~~roc
-make_adder : a -> (b -> a) where [a.plus : a, b -> a]
 make_adder = |x| |y| x + y
 
 add_five : I64 -> I64
 add_five = make_adder(5.I64)
 
 result : I64
-result = 15
+result = add_five(10.I64)
 ~~~
 # FORMATTED
 ~~~roc
@@ -88,13 +87,16 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(d-let
 		(p-assign (ident "add_five"))
-		(e-call
+		(e-call (constraint-fn-var 46)
 			(e-lookup-local
 				(p-assign (ident "make_adder")))
 			(e-typed-int (value "5") (type "I64"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "15"))))
+		(e-call (constraint-fn-var 67)
+			(e-lookup-local
+				(p-assign (ident "add_five")))
+			(e-typed-int (value "10") (type "I64")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -89,6 +89,50 @@ exit_code_is_benchmarkable() {
     return 1
 }
 
+is_intentional_error_fixture() {
+    local filename="$1"
+
+    # These files intentionally exercise diagnostics, --allow-errors, or
+    # runtime crash reporting. They are test fixtures, not successful execution
+    # benchmarks. Do not add compiler crash/regression repros here; those should
+    # fail if the PR binary cannot run them.
+    case "$filename" in
+        allow_errors_type_mismatch.roc|\
+        division_by_zero.roc|\
+        inspect_wrong_sig_test.roc|\
+        issue8433.roc|\
+        issue8517.roc|\
+        issue8826_full.roc|\
+        issue8826_minimal.roc|\
+        issue8943.roc|\
+        num_method_call.roc|\
+        parse_error.roc|\
+        run_allow_errors.roc|\
+        stack_overflow_runtime.roc|\
+        test_type_mismatch.roc|\
+        unused_state_var.roc)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+is_non_benchmark_fixture() {
+    local filename="$1"
+
+    # These files are tiny semantic/codegen regression fixtures. They should run
+    # in the FX test suite, but `roc <file> --no-cache` mostly measures fixed
+    # compiler/linker setup for them rather than program execution.
+    case "$filename" in
+        zst_nested_singleton_shapes.roc)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
 probe_command() {
     local roc_bin="$1"
     local fx_file="$2"
@@ -207,7 +251,7 @@ run_benchmark() {
 }
 
 echo "=== Building FX platform ==="
-zig build test-platforms -Dplatform=fx -Doptimize=ReleaseFast
+zig build build-test-hosts -Dplatform=fx -Doptimize=ReleaseFast
 
 echo ""
 echo "=== FX File Execution Benchmarks ==="
@@ -219,9 +263,12 @@ echo ""
 FX_FILES=""
 for fx_file in test/fx/*.roc; do
     filename=$(basename "$fx_file")
-    # Skip files that are flaky on CI
-    if [ "$filename" = "dbg_corrupts_recursive_tag_union.roc" ]; then
-        echo "Skipping $fx_file (flaky on CI)"
+    if is_intentional_error_fixture "$filename"; then
+        echo "Skipping $fx_file (intentional error fixture)"
+        continue
+    fi
+    if is_non_benchmark_fixture "$filename"; then
+        echo "Skipping $fx_file (semantic regression fixture, not an execution benchmark)"
         continue
     fi
     # Skip files that don't have a main! entry point (app [ main! ])
@@ -250,42 +297,8 @@ for fx_file in $FX_FILES; do
     filename=$(basename "$fx_file")
     echo "--- Benchmarking: $filename ---"
 
-    # Allow non-zero exit codes for files that are expected to fail
-    # (compilation errors, runtime errors, or expected test failures)
     EXTRA_ARGS="--discard-failure=137"
     ROC_EXTRA_ARGS=""
-    case "$filename" in
-        division_by_zero.roc|\
-        issue8433.roc|\
-        test_type_mismatch.roc|\
-        run_allow_errors.roc|\
-        parse_error.roc|\
-        run_warning_only.roc|\
-        issue8517.roc|\
-        stack_overflow_runtime.roc|\
-        issue8826_full.roc|\
-        issue8826_minimal.roc|\
-        unused_state_var.roc|\
-        issue8943.roc)
-            EXTRA_ARGS+=" --ignore-failure=1,2"
-            ;;
-        num_method_call.roc)
-            ROC_EXTRA_ARGS="--allow-errors"
-            EXTRA_ARGS+=" --ignore-failure=134"
-            ;;
-        # Known dev backend crashes (exit 134 = SIGABRT from compiler panics).
-        # These files work with the interpreter but crash during dev backend
-        # monomorphization or code generation. Skip them for benchmarking
-        # since the outputs will differ between main (interpreter) and PR (dev).
-        all_syntax_test.roc|\
-        wildcard_match_open_union_bug.roc|\
-        dbg_missing_return.roc|\
-        index_oob_instantiate.roc|\
-        repeating_pattern_segfault.roc|\
-        var_interp_segfault.roc)
-            EXTRA_ARGS+=" --ignore-failure=134"
-            ;;
-    esac
 
     if preflight_benchmark "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
         :

@@ -41,12 +41,17 @@ fn runDevBackendHostSelfTest(
     defer allocator.free(cache_path);
     try tmp_dir.dir.makePath("roc-cache");
 
+    const zig_local_cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_path);
+    try tmp_dir.dir.makePath("zig-local-cache");
+
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
     const build_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -87,6 +92,76 @@ fn runDevBackendHostSelfTest(
             output_path,
             self_test_flag,
         },
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+}
+
+fn buildAndRunDevBackendApp(
+    allocator: std.mem.Allocator,
+    roc_file: []const u8,
+    output_basename: []const u8,
+) !std.process.Child.RunResult {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, output_basename });
+    defer allocator.free(output_path);
+
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.makePath("roc-cache");
+
+    const zig_local_cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_path);
+    try tmp_dir.dir.makePath("zig-local-cache");
+
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
+
+    const build_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            util.roc_binary_path,
+            "build",
+            "--opt=dev",
+            "--no-cache",
+            output_arg,
+            roc_file,
+        },
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+
+    switch (build_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{build_result.stderr});
+                return error.DevBackendBuildFailed;
+            }
+        },
+        else => {
+            std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
+            std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{build_result.stderr});
+            return error.DevBackendBuildFailed;
+        },
+    }
+
+    return try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{output_path},
         .max_output_bytes = 10 * 1024 * 1024,
     });
 }
@@ -167,7 +242,7 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
                 return error.UnexpectedExitCode;
             }
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Roc crashed:") != null);
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "DivisionByZero") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Division by zero") != null);
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") == null);
         },
         else => {
@@ -220,28 +295,33 @@ fn expectDevRuntimeDivisionByZero() !void {
 // test runner.
 
 /// Shared body for IO spec tests with a specific backend.
-fn runIoSpecTests(comptime opt_flag: []const u8) !void {
+fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !void {
     const allocator = testing.allocator;
 
+    const result = util.runRocCommand(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
+        std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
+        return err;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    util.checkTestSuccess(result) catch |err| {
+        std.debug.print("\n[FAIL] {s} ({s}): {}\n", .{ spec.roc_file, opt_flag, err });
+        if (spec.description.len > 0) {
+            std.debug.print("       Description: {s}\n", .{spec.description});
+        }
+        return err;
+    };
+}
+
+fn runIoSpecTests(comptime opt_flag: []const u8) !void {
     var passed: usize = 0;
     var failed: usize = 0;
 
     for (fx_test_specs.io_spec_tests) |spec| {
         if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
 
-        const result = util.runRocCommand(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
-            std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
-            failed += 1;
-            continue;
-        };
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-
-        util.checkTestSuccess(result) catch |err| {
-            std.debug.print("\n[FAIL] {s} ({s}): {}\n", .{ spec.roc_file, opt_flag, err });
-            if (spec.description.len > 0) {
-                std.debug.print("       Description: {s}\n", .{spec.description});
-            }
+        runIoSpecTest(opt_flag, spec) catch {
             failed += 1;
             continue;
         };
@@ -263,6 +343,46 @@ test "fx platform IO spec tests (interpreter)" {
 
 test "fx platform IO spec tests (dev backend)" {
     try runIoSpecTests("--opt=dev");
+}
+
+test "fx platform boxed erased callable host boundary (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "fx platform boxed erased callable host boundary (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "provided static data exports are host-linkable readonly constants" {
+    const allocator = testing.allocator;
+
+    const run_result = try buildAndRunDevBackendApp(
+        allocator,
+        "test/static-data-host/app.roc",
+        "static_data_host_test",
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("static data host test exited with code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.StaticDataHostTestFailed;
+            }
+        },
+        else => {
+            std.debug.print("static data host test terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.StaticDataHostTestFailed;
+        },
+    }
+
+    try testing.expectEqualStrings("", run_result.stdout);
+    try testing.expectEqualStrings("static data host constants ok\n", run_result.stderr);
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.
@@ -512,7 +632,7 @@ test "custom platform and package qualifiers work in roc run" {
     // - Package qualifier "hlp" importing hlp.Helper from a sibling package
     //
     // Two bugs were fixed:
-    // 1. setupSharedMemoryWithModuleEnv hardcoded "pf." when registering platform modules
+    // 1. Runtime-image publication hardcoded "pf." when registering platform modules
     // 2. Non-platform packages weren't loaded at all during IPC mode execution
     //
     // The test verifies the app runs correctly and produces expected output.
@@ -575,7 +695,8 @@ test "fx platform string interpolation type mismatch (interpreter)" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // The program should run (exit 0) with --allow-errors despite type errors
+    // `--allow-errors` may exit successfully after reporting diagnostics, but
+    // it must not publish checked artifacts or run LIR for an erroneous graph.
     switch (run_result.term) {
         .Exited => |code| {
             try testing.expectEqual(@as(u8, 0), code);
@@ -588,16 +709,14 @@ test "fx platform string interpolation type mismatch (interpreter)" {
         },
     }
 
+    try testing.expectEqualStrings("", run_result.stdout);
+
     // Verify the error output contains proper diagnostic info
     // Should show TYPE MISMATCH error with the type information
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
-    // The coordinator now detects additional errors (COMPTIME EVAL ERROR) beyond TYPE MISMATCH
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 2 error") != null);
-
-    // The program should still produce output (it runs despite errors)
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 1 error") != null);
 }
 
 test "fx platform string interpolation type mismatch (dev backend)" {
@@ -791,8 +910,7 @@ test "fx platform test_type_mismatch" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail compilation with a type mismatch error
-    // The to_inspect method returns I64 instead of Str
+    // This file is expected to fail compilation with a type mismatch error.
     switch (run_result.term) {
         .Exited => |code| {
             if (code != 0) {
@@ -805,6 +923,30 @@ test "fx platform test_type_mismatch" {
         },
         else => {
             // Abnormal termination should also indicate error
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+        },
+    }
+}
+
+test "fx platform inspect_wrong_sig reports type mismatch" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{}, "test/fx/inspect_wrong_sig_test.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            } else {
+                std.debug.print("Expected compilation error but succeeded\n", .{});
+                return error.UnexpectedSuccess;
+            }
+        },
+        else => {
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
@@ -872,9 +1014,8 @@ test "run aborts on parse errors by default" {
 
 test "run with --allow-errors attempts execution despite type errors" {
     // Tests that roc run --allow-errors attempts to execute even with type errors.
-    // TODO: remove Windows workaround once the dev shim handles crash-on-type-error on Windows.
-    // With --opt=dev (the default), the dev shim hangs in ReleaseFast on Windows when
-    // the JIT-compiled code hits the undefined-variable crash path. Needs investigation.
+    // TODO: remove Windows workaround once the shared LIR runtime-image path
+    // handles crash-on-type-error consistently on Windows.
     const opt_flag: []const u8 = if (@import("builtin").os.tag == .windows) "--opt=interpreter" else "--opt=dev";
     const allocator = testing.allocator;
 
@@ -1011,7 +1152,6 @@ test "fx platform var with string interpolation segfault (dev backend)" {
 test "fx platform sublist method on inferred type" {
     // Regression test: Calling .sublist() method on a List(U8) from "".to_utf8()
     // causes a segfault when the variable doesn't have an explicit type annotation.
-    // Error was: "Roc crashed: Error evaluating from shared memory: InvalidMethodReceiver"
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(allocator, &.{}, "test/fx/sublist_method_segfault.roc");
@@ -1082,8 +1222,9 @@ test "fx platform inline expect fails as expected (interpreter)" {
 
     const stderr = run_result.stderr;
 
-    // Should report a crash with the expect expression snippet
-    try testing.expect(std.mem.indexOf(u8, stderr, "1 == 2") != null);
+    // The platform receives failed expectations through the expect-failed host
+    // callback, not through the crash callback.
+    try testing.expect(std.mem.indexOf(u8, stderr, "Expect failed: expect failed") != null);
 }
 
 test "fx platform inline expect fails as expected (dev backend)" {
@@ -1103,7 +1244,7 @@ test "fx platform inline expect succeeds as expected" {
 
 test "fx platform inline expect fails in dev backend binary" {
     // Regression test for #9261: the dev backend (object file compilation) must
-    // evaluate inline expect expressions. Previously, the MIR lowering of s_expect
+    // evaluate inline expect expressions. Previously, lowered `s_expect`
     // statements did not wrap the condition in an .expect node, causing the dev
     // backend to silently skip the assertion.
     const allocator = testing.allocator;
@@ -1142,8 +1283,9 @@ test "fx platform inline expect fails in dev backend binary" {
         },
     }
 
-    // Should report the failing inline expect via roc_expect_failed
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Expect failed") != null);
+    // The platform receives failed expectations through the expect-failed host
+    // callback, not through the crash callback.
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Expect failed: expect failed") != null);
 }
 
 test "fx platform index out of bounds in instantiate regression" {
@@ -1234,7 +1376,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
     // Regression test for https://github.com/roc-lang/roc/issues/8826
     // The bug was that `roc check` reported "No errors found" when the app's main!
     // signature didn't match the platform's requires. This happened because
-    // getRootEnv() was returning the wrong module (the first one added rather
+    // The root semantic-data lookup used to return the wrong module (the first one added rather
     // than the actual root module set in buildRoot).
     const allocator = testing.allocator;
 
@@ -1308,7 +1450,7 @@ test "fx platform issue8943 error message memory corruption" {
     // a non-Try type.
     //
     // The root cause was:
-    // 1. ComptimeEvaluator.deinit() freed crash messages before reports were built
+    // 1. Compile-time evaluation cleanup freed crash messages before reports were built
     // 2. addSourceCodeWithUnderlines didn't dupe the filename from SourceCodeDisplayRegion
     const allocator = testing.allocator;
 
@@ -1316,7 +1458,9 @@ test "fx platform issue8943 error message memory corruption" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail with TYPE MISMATCH and COMPTIME CRASH errors
+    // This file is expected to fail during checking before post-check
+    // compile-time evaluation can run. Regression coverage here is about error
+    // report memory ownership, not preserving an obsolete later-stage crash.
     try util.checkFailure(run_result);
 
     // Check that the TYPE MISMATCH error is present
@@ -1327,12 +1471,13 @@ test "fx platform issue8943 error message memory corruption" {
         return error.ExpectedTryTypeError;
     }
 
-    // Check that the COMPTIME CRASH error is present
+    // The invalid top-level `?` must not escape checking and become a
+    // post-check compile-time crash.
     const has_comptime_crash = std.mem.indexOf(u8, run_result.stderr, "COMPTIME CRASH") != null;
-    if (!has_comptime_crash) {
-        std.debug.print("Expected 'COMPTIME CRASH' error but got:\n", .{});
+    if (has_comptime_crash) {
+        std.debug.print("Unexpected 'COMPTIME CRASH' after checking reported the invalid `?` expression:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-        return error.ExpectedComptimeCrash;
+        return error.UnexpectedComptimeCrash;
     }
 
     // The key check: verify no memory corruption in error messages
@@ -1345,8 +1490,8 @@ test "fx platform issue8943 error message memory corruption" {
         search_start = pos + 1;
     }
 
-    // We expect at least 2 occurrences: one in TYPE MISMATCH and one in COMPTIME CRASH
-    // Plus one more at the end in "Found X error(s)..."
+    // We expect at least 2 occurrences from source regions plus one more at
+    // the end in "Found X error(s)..."
     if (filename_count < 3) {
         std.debug.print("Error output appears corrupted - filename 'issue8943.roc' found only {d} times (expected at least 3):\n", .{filename_count});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});

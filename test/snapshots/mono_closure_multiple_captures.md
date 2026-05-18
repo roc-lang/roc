@@ -14,8 +14,13 @@ result = func(1, 2)
 ~~~
 # MONO
 ~~~roc
+func = |a, b| {
+	add_ab = |x| a + b + x
+	add_ab(10)
+}
+
 result : Dec
-result = 13
+result = func(1, 2)
 ~~~
 # FORMATTED
 ~~~roc
@@ -94,21 +99,25 @@ EndOfFile,
 										(p-assign (ident "b"))))
 								(e-lookup-local
 									(p-assign (ident "x")))))))
-				(e-call
+				(e-call (constraint-fn-var 47)
 					(e-lookup-local
 						(p-assign (ident "add_ab")))
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "13"))))
+		(e-call (constraint-fn-var 75)
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "1"))
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, Dec -> c where [c.plus : c, Dec -> c]"))
+		(patt (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "c, Dec -> c where [c.plus : c, Dec -> c]"))
+		(expr (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~

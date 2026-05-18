@@ -8,18 +8,9 @@ type=statement
 return Bool.True
 ~~~
 # EXPECTED
-RETURN OUTSIDE FUNCTION - return_stmt.md:1:1:1:17
+NIL
 # PROBLEMS
-**RETURN OUTSIDE FUNCTION**
-The `return` keyword can only be used inside function bodies.
-
-**return_stmt.md:1:1:1:17:**
-```roc
-return Bool.True
-```
-^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwReturn,UpperIdent,NoSpaceDotUpperIdent,

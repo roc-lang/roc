@@ -300,21 +300,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call
+		(e-call (constraint-fn-var 165)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call
+		(e-call (constraint-fn-var 173)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call
+		(e-call (constraint-fn-var 181)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -335,7 +335,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call
+		(e-call (constraint-fn-var 198)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -343,7 +343,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call
+		(e-call (constraint-fn-var 210)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -352,7 +352,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call
+		(e-call (constraint-fn-var 226)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -370,20 +370,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call
+		(e-call (constraint-fn-var 242)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call
+		(e-call (constraint-fn-var 252)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call
+		(e-call (constraint-fn-var 288)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -403,11 +403,11 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "update_data")))))
 				(e-binop (op "add")
-					(e-dot-access (field "count")
+					(e-field-access (field "count")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "int_container")))))
-					(e-dot-access (field "count")
+					(e-field-access (field "count")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "str_container"))))))))))
@@ -421,7 +421,7 @@ NO CHANGE
 		(patt (type "Str"))
 		(patt (type "List(_a)"))
 		(patt (type "List(Dec)"))
-		(patt (type "a -> { count: Dec, data: a }"))
+		(patt (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "{ count: Dec, data: Dec }"))
 		(patt (type "{ count: Dec, data: Str }"))
 		(patt (type "{ count: Dec, data: List(_a) }"))
@@ -440,7 +440,7 @@ NO CHANGE
 		(expr (type "Str"))
 		(expr (type "List(_a)"))
 		(expr (type "List(Dec)"))
-		(expr (type "a -> { count: Dec, data: a }"))
+		(expr (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "{ count: Dec, data: Dec }"))
 		(expr (type "{ count: Dec, data: Str }"))
 		(expr (type "{ count: Dec, data: List(_a) }"))
