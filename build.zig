@@ -3065,6 +3065,59 @@ pub fn build(b: *std.Build) void {
             const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
             playground_step.dependOn(&install_file.step);
         }
+
+        // echo_native: native binary that drives the same runEcho pipeline as
+        // echo.wasm. Use it to debug compile/run failures with real stack
+        // traces. `zig build run-echo -- path/to/app.roc [--with-file Name=path] ...`
+        const echo_native_exe = b.addExecutable(.{
+            .name = "echo_native",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/echo_platform/echo_native.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_native_exe, target);
+        echo_native_exe.root_module.addImport("compile", roc_modules.compile);
+        echo_native_exe.root_module.addImport("check", roc_modules.check);
+        echo_native_exe.root_module.addImport("eval", roc_modules.eval);
+        echo_native_exe.root_module.addImport("lir", roc_modules.lir);
+        echo_native_exe.root_module.addImport("layout", roc_modules.layout);
+        echo_native_exe.root_module.addImport("base", roc_modules.base);
+        echo_native_exe.root_module.addImport("can", roc_modules.can);
+        echo_native_exe.root_module.addImport("echo_platform", roc_modules.echo_platform);
+        echo_native_exe.root_module.addImport("reporting", roc_modules.reporting);
+        echo_native_exe.root_module.addImport("roc_target", roc_modules.roc_target);
+        echo_native_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        echo_native_exe.step.dependOn(&write_compiled_builtins.step);
+
+        const echo_native_install = b.addInstallArtifact(echo_native_exe, .{});
+
+        const run_echo_step = b.step("run-echo", "Run the native echo platform driver (debug helper for echo.wasm)");
+        const run_echo_cmd = b.addRunArtifact(echo_native_exe);
+        if (run_args.len != 0) run_echo_cmd.addArgs(run_args);
+        run_echo_cmd.step.dependOn(&echo_native_install.step);
+        run_echo_step.dependOn(&run_echo_cmd.step);
+
+        // test-echo-wasm: bytebox-driven integration test that loads
+        // zig-out/lib/echo.wasm, supplies in-process js_echo + js_stderr,
+        // and asserts the tutorial example produces the expected output.
+        const echo_wasm_test_exe = b.addExecutable(.{
+            .name = "echo_wasm_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/echo-wasm-test/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_wasm_test_exe, target);
+        echo_wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+
+        const test_echo_wasm_step = b.step("test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
+        const run_echo_wasm_test = b.addRunArtifact(echo_wasm_test_exe);
+        // Ensure the wasm is built before the test runs.
+        run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
+        test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
 
     // Build playground integration tests - now enabled for all optimization modes
@@ -4664,7 +4717,7 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = std.fs.cwd().readFileAlloc(
+    const builtin_source = b.build_root.handle.readFileAlloc(
         b.allocator,
         "src/build/roc/Builtin.roc",
         32 * 1024 * 1024,
