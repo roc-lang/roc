@@ -374,6 +374,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: Polymorphic function with for loop list literal panic (issue #8898)",
     },
     .{
+        .roc_file = "test/fx/issue_9113_opaque_payload_list_match.roc",
+        .io_spec = "1>Test 1: Text elements in list|1>Div branch|1>  iterating child|1>Text branch: Hello|1>  iterating child|1>Text branch: World|1>|1>Test 2: Label element with opaque payload in list|1>Div branch|1>  iterating child|1>Label branch|1>Done!",
+        .description = "Regression test: Opaque payload in list match works with platform modules (issue #9113)",
+    },
+    .{
         .roc_file = "test/fx/static_dispatch_platform_module.roc",
         .io_spec = "1>Result: start-middle-end",
         .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",

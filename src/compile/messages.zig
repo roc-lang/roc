@@ -237,6 +237,22 @@ pub const ParseFailure = struct {
     partial_env: ?*ModuleEnv,
 };
 
+/// Result when a non-parsing compilation stage cannot continue safely.
+pub const CompileFailure = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+    /// Path to the module file
+    path: []const u8,
+    /// Error reports explaining the failure
+    reports: std.ArrayList(Report),
+    /// Partial module env if available. The coordinator takes ownership.
+    partial_env: ?*ModuleEnv,
+};
+
 /// Result when an import cycle is detected during canonicalization
 pub const CycleDetected = struct {
     /// Package where the cycle was detected
@@ -265,6 +281,8 @@ pub const WorkerResult = union(enum) {
     type_checked: TypeCheckedResult,
     /// Parsing failed
     parse_failed: ParseFailure,
+    /// A later compilation stage failed before producing explicit facts
+    compile_failed: CompileFailure,
     /// Import cycle was detected
     cycle_detected: CycleDetected,
 
@@ -274,6 +292,7 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .parse_failed => |r| r.package_name,
+            .compile_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
         };
     }
@@ -284,6 +303,7 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .parse_failed => |r| r.module_id,
+            .compile_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
         };
     }
@@ -294,6 +314,7 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .parse_failed => |r| r.module_name,
+            .compile_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
         };
     }
@@ -334,6 +355,10 @@ pub const WorkerResult = union(enum) {
                 r.reports.deinit(gpa);
             },
             .parse_failed => |*r| {
+                for (r.reports.items) |*rep| rep.deinit();
+                r.reports.deinit(gpa);
+            },
+            .compile_failed => |*r| {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },

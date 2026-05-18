@@ -6334,7 +6334,7 @@ pub fn canonicalizeExpr(
                 }
 
                 const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
-                var bound_vars_view = self.scratch_bound_vars.setViewFrom(bound_vars_top);
+                var bound_vars_view = try self.scratch_bound_vars.setViewFrom(bound_vars_top, self.env.gpa);
                 defer bound_vars_view.deinit();
                 for (body_free_vars_slice) |fv| {
                     if (!self.scratch_captures.containsFrom(captures_top, fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
@@ -7339,7 +7339,7 @@ pub fn canonicalizeExpr(
                     if (can_guard_result.free_vars.len > 0) {
                         const guard_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
                         self.scratch_free_vars.clearFrom(body_free_vars_start);
-                        var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
+                        var bound_vars_view = try self.scratch_bound_vars.setViewFrom(branch_bound_vars_top, self.env.gpa);
                         defer bound_vars_view.deinit();
                         for (guard_free_vars_slice) |fv| {
                             if (!bound_vars_view.contains(fv)) {
@@ -7373,7 +7373,7 @@ pub fn canonicalizeExpr(
                     // Clear back to before body canonicalization
                     self.scratch_free_vars.clearFrom(body_free_vars_start_after_guard);
                     // Re-add only filtered vars (not bound by branch patterns)
-                    var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
+                    var bound_vars_view = try self.scratch_bound_vars.setViewFrom(branch_bound_vars_top, self.env.gpa);
                     defer bound_vars_view.deinit();
                     for (body_free_vars_slice) |fv| {
                         if (!bound_vars_view.contains(fv)) {

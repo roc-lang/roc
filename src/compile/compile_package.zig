@@ -217,6 +217,9 @@ const ModuleState = struct {
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing external_imports (len={})\n", .{ self.name, self.external_imports.items.len });
         }
+        for (self.external_imports.items) |import_name| {
+            gpa.free(import_name);
+        }
         self.external_imports.deinit(gpa);
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing dependents (len={})\n", .{ self.name, self.dependents.items.len });
@@ -474,6 +477,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -512,6 +517,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -965,7 +972,7 @@ pub const PackageEnv = struct {
         // to CommonEnv remains valid after this function returns.
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(self.gpa);
-        // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
+        defer allocators.deinit();
         const parse_ast = parse.parse(&allocators, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             st.phase = .Canonicalize;
@@ -1371,8 +1378,12 @@ pub const PackageEnv = struct {
 
     /// Standalone type checking function that can be called from other tools (e.g., snapshot tool)
     /// This ensures all tools use the exact same type checking logic as production builds
+    ///
+    /// `check_alloc` owns checker/session data that dies with `TypeCheckOutput.deinit`.
+    /// `artifact_alloc` owns any published checked artifact returned in `TypeCheckOutput`.
     pub fn typeCheckModule(
-        gpa: Allocator,
+        check_alloc: Allocator,
+        artifact_alloc: Allocator,
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
@@ -1382,7 +1393,7 @@ pub const PackageEnv = struct {
         _: ?Io,
     ) !TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
-        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = env.qualified_module_ident,
@@ -1394,14 +1405,14 @@ pub const PackageEnv = struct {
         };
 
         // Create module_envs map for explicit imported modules used during canonicalization
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
         errdefer module_envs_map.deinit();
 
-        const owner_envs = try buildCheckOwnerEnvs(gpa, imported_envs, imported_artifacts, available_artifacts);
-        defer gpa.free(owner_envs);
+        const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts);
+        defer check_alloc.free(owner_envs);
 
         var checker = try Check.initWithOwnerModules(
-            gpa,
+            check_alloc,
             &env.types,
             env,
             imported_envs,
@@ -1427,7 +1438,7 @@ pub const PackageEnv = struct {
         }
 
         var checked_artifact = try publishCheckedArtifactFromCheckedModule(
-            gpa,
+            artifact_alloc,
             env,
             imported_envs,
             imported_artifacts,
@@ -1438,7 +1449,7 @@ pub const PackageEnv = struct {
                 .available_artifacts = available_artifacts,
             },
         );
-        errdefer checked_artifact.deinit(gpa);
+        errdefer checked_artifact.deinit(artifact_alloc);
 
         return .{
             .checker = checker,
@@ -1598,6 +1609,7 @@ pub const PackageEnv = struct {
         const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
         var typecheck_output = try typeCheckModule(
             self.gpa,
+            self.gpa,
             env,
             self.builtin_modules.builtin_module.env,
             imported_envs.items,
@@ -1630,7 +1642,8 @@ pub const PackageEnv = struct {
         );
         defer rb.deinit();
         for (typecheck_output.checker.problems.problems.items) |prob| {
-            const rep = rb.build(prob) catch continue;
+            var rep = try rb.build(prob);
+            errdefer rep.deinit();
             try st.reports.append(self.gpa, rep);
         }
         const check_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
