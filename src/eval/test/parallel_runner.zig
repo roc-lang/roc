@@ -43,8 +43,8 @@
 //! ## Hang detection
 //!
 //! Integrated into the parent's poll() loop. If a child has been running
-//! longer than the timeout (default 30s), the parent SIGKILLs it. No
-//! separate watchdog thread is needed.
+//! longer than the timeout (default 30s for interpreter/dev/wasm, 7 minutes
+//! for LLVM), the parent SIGKILLs it. No separate watchdog thread is needed.
 //!
 //! ## Usage
 //!
@@ -133,6 +133,12 @@ const BackendDetail = struct {
 
 const NUM_BACKENDS = 4; // interpreter, dev, wasm, llvm
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev", "wasm", "llvm" };
+const LLVM_BACKEND_INDEX = 3;
+/// Ubuntu ARM Nix CI measured these LLVM crash-test evaluations at roughly
+/// 305-310s. Use a 7 minute LLVM-only budget so that slow LLVM codegen can
+/// finish while the other backends keep the normal eval timeout.
+const LLVM_BACKEND_TIMEOUT_MS: u64 = 420_000;
+const BACKEND_TIMEOUT_REPORT_GRACE_MS: u64 = 5_000;
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
 const LLVM_BACKEND_IMPLEMENTED = eval.backendAvailable(.llvm);
@@ -556,6 +562,16 @@ fn deadlineExpired(deadline_ms: ?i64) bool {
     return if (deadline_ms) |deadline| std.time.milliTimestamp() >= deadline else false;
 }
 
+fn backendUsesStandardTimeout(index: usize) bool {
+    return index != LLVM_BACKEND_INDEX;
+}
+
+fn backendTimeoutBudgetMs(index: usize, standard_deadline_ms: ?i64) u64 {
+    if (standard_deadline_ms == null) return 0;
+    if (index == LLVM_BACKEND_INDEX) return LLVM_BACKEND_TIMEOUT_MS;
+    return remainingBackendBudgetMs(standard_deadline_ms);
+}
+
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, deadline_ms: ?i64) !TestOutcome {
     return switch (tc.expected) {
         .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, deadline_ms),
@@ -605,7 +621,7 @@ fn runInspectTest(
         if (backends[i].status != .not_run) {
             continue;
         }
-        if (deadlineExpired(deadline_ms)) {
+        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline_ms)) {
             backends[i] = .{ .status = .timeout };
             any_timeout = true;
             break;
@@ -614,7 +630,7 @@ fn runInspectTest(
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, remainingBackendBudgetMs(deadline_ms));
+        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
         const dur = timer.read();
         trace.log("finished backend {s} for inspected source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 
@@ -824,7 +840,7 @@ fn runCrashTest(
         if (backends[i].status != .not_run) {
             continue;
         }
-        if (deadlineExpired(deadline_ms)) {
+        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline_ms)) {
             backends[i] = .{ .status = .timeout };
             any_timeout = true;
             break;
@@ -832,7 +848,7 @@ fn runCrashTest(
 
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, remainingBackendBudgetMs(deadline_ms));
+        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
         const dur = timer.read();
 
         switch (fork_result) {
@@ -1254,10 +1270,11 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .timeout_result = timeout_result,
     .stabilizeResult = &stabilizeResult,
     .getName = getTestName,
-    // Backend children enforce the real test timeout. The outer worker gets a
-    // short cleanup/reporting budget so it can serialize the backend row that
-    // timed out instead of being killed at the same instant.
-    .timeout_report_grace_ms = 5_000,
+    // Backend children enforce the real backend timeout. The outer worker gets
+    // enough extra time for the LLVM-only budget plus a short cleanup/reporting
+    // window, so it can serialize the backend row that timed out instead of
+    // being killed at the same instant.
+    .timeout_report_grace_ms = LLVM_BACKEND_TIMEOUT_MS + BACKEND_TIMEOUT_REPORT_GRACE_MS,
     .onTestStarted = &onTestStarted,
 });
 
@@ -1296,7 +1313,8 @@ fn printHelp() void {
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
-        \\  --timeout <MS>        Per-test hang timeout in ms (default: 30000).
+        \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
+        \\                        LLVM uses a separate 420000ms backend budget.
         \\
         \\COVERAGE:
         \\  Use `zig build coverage-eval` to build with coverage instrumentation.
