@@ -2414,6 +2414,7 @@ pub fn build(b: *std.Build) void {
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + glue)");
@@ -3059,11 +3060,13 @@ pub fn build(b: *std.Build) void {
             .dest_dir = .{ .override = .lib },
         });
         playground_step.dependOn(&echo_wasm_install.step);
+        echo_wasm_step.dependOn(&echo_wasm_install.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
             const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
             playground_step.dependOn(&install_file.step);
+            echo_wasm_step.dependOn(&install_file.step);
         }
 
         // echo_native: native binary that drives the same runEcho pipeline as
