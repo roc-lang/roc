@@ -387,6 +387,7 @@ pub const LoweredProgram = struct {
     runtime_value_schemas: RuntimeValueSchemaStore,
     compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor = &.{},
+    callable_set_runtime_encodings: []const CallableSetRuntimeEncoding = &.{},
     callable_set_member_payloads: []const LoweredCallableSetMemberPayload = &.{},
     erased_callable_code_map: []LoweredErasedCallableCodeEntry = &.{},
 
@@ -411,6 +412,45 @@ pub const LoweredProgram = struct {
         self.lir_result.deinit();
     }
 };
+
+/// Public `CallableSetRuntimeEncoding` declaration.
+pub const CallableSetRuntimeEncoding = LowerIr.CallableSetRuntimeEncoding;
+
+/// Public `CallableSetRuntimeEncodingMember` declaration.
+pub const CallableSetRuntimeEncodingMember = LowerIr.CallableSetRuntimeEncodingMember;
+
+/// Looks up the committed runtime encoding for a callable-set descriptor key.
+pub fn callableSetRuntimeEncodingForKey(
+    encodings: []const CallableSetRuntimeEncoding,
+    key: canonical.CanonicalCallableSetKey,
+) ?*const CallableSetRuntimeEncoding {
+    for (encodings) |*encoding| {
+        if (repr.callableSetKeyEql(encoding.callable_set_key, key)) return encoding;
+    }
+    return null;
+}
+
+/// Looks up the committed runtime entry for a semantic callable-set member.
+pub fn callableSetRuntimeMember(
+    encoding: *const CallableSetRuntimeEncoding,
+    member_id: canonical.CallableSetMemberId,
+) ?CallableSetRuntimeEncodingMember {
+    for (encoding.members) |member| {
+        if (member.member == member_id) return member;
+    }
+    return null;
+}
+
+/// Looks up the committed runtime entry for an observed callable-set discriminant.
+pub fn callableSetRuntimeMemberForDiscriminant(
+    encoding: *const CallableSetRuntimeEncoding,
+    discriminant: u16,
+) ?CallableSetRuntimeEncodingMember {
+    for (encoding.members) |member| {
+        if (member.discriminant == discriminant) return member;
+    }
+    return null;
+}
 
 /// Public `LoweredCallableSetMemberPayload` declaration.
 pub const LoweredCallableSetMemberPayload = struct {
@@ -617,6 +657,7 @@ pub fn lowerArtifactsToLir(
         .runtime_value_schemas = runtime_value_schemas,
         .compile_time_payloads = compile_time_payloads,
         .callable_set_descriptors = runtime_callable_set_descriptors,
+        .callable_set_runtime_encodings = lowered_lir.callable_set_runtime_encodings.items,
         .callable_set_member_payloads = runtime_callable_set_member_payloads,
         .erased_callable_code_map = erased_callable_code_map,
     };

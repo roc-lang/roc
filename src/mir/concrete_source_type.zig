@@ -180,8 +180,17 @@ pub const Store = struct {
             },
             false,
         );
-        try self.rememberKeyOwner(type_key, ref);
+        self.roots.items[@intFromEnum(ref)].key = type_key;
+        try self.rememberKeyOwnerIfAbsent(type_key, ref);
         return ref;
+    }
+
+    pub fn publishKeyOwner(
+        self: *Store,
+        ref: ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const root_ref = self.root(ref);
+        try self.rememberKeyOwner(root_ref.key, ref);
     }
 
     pub fn root(self: *const Store, ref: ConcreteSourceTypeRef) ConcreteSourceTypeRoot {
@@ -239,6 +248,15 @@ pub const Store = struct {
         const owned_key = try self.allocator.dupe(u8, type_key.bytes[0..]);
         errdefer self.allocator.free(owned_key);
         try self.by_key.put(owned_key, ref);
+    }
+
+    fn rememberKeyOwnerIfAbsent(
+        self: *Store,
+        type_key: canonical.CanonicalTypeKey,
+        ref: ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        if (self.by_key.get(type_key.bytes[0..]) != null) return;
+        try self.rememberKeyOwner(type_key, ref);
     }
 };
 

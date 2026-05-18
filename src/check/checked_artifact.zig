@@ -1365,6 +1365,123 @@ pub const CheckedTypeStoreView = struct {
     }
 };
 
+/// A checked type graph together with the canonical names that own its labels.
+pub const CheckedTypeSourceView = struct {
+    names: *const canonical.CanonicalNameStore,
+    view: CheckedTypeStoreView,
+};
+
+/// Compare record field labels that may come from different canonical name stores.
+pub fn recordFieldLabelsMatch(
+    source_names: *const canonical.CanonicalNameStore,
+    source_field: canonical.RecordFieldLabelId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_field: canonical.RecordFieldLabelId,
+) bool {
+    if (source_names == target_names and source_field == target_field) return true;
+    return Ident.textEql(
+        source_names.recordFieldLabelText(source_field),
+        target_names.recordFieldLabelText(target_field),
+    );
+}
+
+/// Compare tag labels that may come from different canonical name stores.
+pub fn tagLabelsMatch(
+    source_names: *const canonical.CanonicalNameStore,
+    source_tag: canonical.TagLabelId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_tag: canonical.TagLabelId,
+) bool {
+    if (source_names == target_names and source_tag == target_tag) return true;
+    return Ident.textEql(
+        source_names.tagLabelText(source_tag),
+        target_names.tagLabelText(target_tag),
+    );
+}
+
+/// Find a record field payload child by label while walking aliases and row tails.
+pub fn checkedTypeRecordFieldChild(
+    source: CheckedTypeSourceView,
+    root: CheckedTypeId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_field: canonical.RecordFieldLabelId,
+) ?CheckedTypeId {
+    var current = root;
+    while (true) {
+        const payload = checkedTypeViewResolvedPayload(source.view, current) orelse return null;
+        current = payload.root;
+        switch (payload.payload) {
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (recordFieldLabelsMatch(source.names, field.name, target_names, target_field)) return field.ty;
+                }
+                current = record.ext;
+            },
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    if (recordFieldLabelsMatch(source.names, field.name, target_names, target_field)) return field.ty;
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+}
+
+/// Find a tag payload child by tag label and payload index while walking aliases and row tails.
+pub fn checkedTypeTagPayloadChild(
+    source: CheckedTypeSourceView,
+    root: CheckedTypeId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_tag: canonical.TagLabelId,
+    payload_index: u32,
+) ?CheckedTypeId {
+    const raw_payload_index: usize = @intCast(payload_index);
+    var current = root;
+    while (true) {
+        const payload = checkedTypeViewResolvedPayload(source.view, current) orelse return null;
+        current = payload.root;
+        switch (payload.payload) {
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    if (!tagLabelsMatch(source.names, tag.name, target_names, target_tag)) continue;
+                    if (raw_payload_index >= tag.args.len) return null;
+                    return tag.args[raw_payload_index];
+                }
+                current = tag_union.ext;
+            },
+            else => return null,
+        }
+    }
+}
+
+const ResolvedCheckedTypePayload = struct {
+    root: CheckedTypeId,
+    payload: CheckedTypePayload,
+};
+
+fn checkedTypeViewResolvedPayload(
+    view: CheckedTypeStoreView,
+    root: CheckedTypeId,
+) ?ResolvedCheckedTypePayload {
+    var current = root;
+    while (true) {
+        const index: usize = @intFromEnum(current);
+        if (index >= view.payloads.len) {
+            checkedArtifactInvariant("checked type source child lookup referenced a missing root", .{});
+        }
+        switch (view.payloads[index]) {
+            .alias => |alias| current = alias.backing,
+            .nominal => |nominal| current = nominal.backing,
+            .pending => checkedArtifactInvariant("checked type source child lookup reached a pending payload", .{}),
+            else => |payload| return .{
+                .root = current,
+                .payload = payload,
+            },
+        }
+    }
+}
+
 fn checkedTypeViewIsConcreteConstProducerSchemeInner(
     checked_types: CheckedTypeStoreView,
     root: CheckedTypeId,
@@ -17760,18 +17877,6 @@ pub const CheckedTypeProjector = struct {
         return null;
     }
 
-    pub fn projectImportedCheckedTypeForKey(
-        self: *CheckedTypeProjector,
-        imported: ImportedModuleView,
-        key: canonical.CanonicalTypeKey,
-    ) Allocator.Error!?CheckedTypeId {
-        const imported_root = for (imported.checked_types.roots) |root| {
-            if (std.meta.eql(root.key.bytes, key.bytes)) break root.id;
-        } else return null;
-
-        return try self.projectImportedCheckedType(imported, imported_root);
-    }
-
     pub fn projectCheckedTypeViewRoot(
         self: *CheckedTypeProjector,
         source: CheckedTypeStoreView,
@@ -18099,7 +18204,7 @@ pub const CheckedTypeProjector = struct {
         );
     }
 
-    fn projectImportedCheckedType(
+    pub fn projectImportedCheckedType(
         self: *CheckedTypeProjector,
         imported: ImportedModuleView,
         ty: CheckedTypeId,

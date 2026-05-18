@@ -5546,8 +5546,8 @@ const CallableEmissionAssigner = struct {
             }
             lambdaInvariant("lambda-solved callable group set has no members");
         }
-        for (set.members.items, 0..) |*member, raw_member| {
-            member.member = canonical.callableSetMemberForRuntimeIndex(raw_member);
+        for (set.members.items, 0..) |*member, semantic_member_index| {
+            member.member = @enumFromInt(@as(u32, @intCast(semantic_member_index)));
         }
         const interned = try self.representationStore().internCallableSetDescriptor(set.members.items);
         set.key = interned.key;
@@ -11224,6 +11224,7 @@ const TypeImporter = struct {
                     self.allocator,
                     self.concrete_source_types.localView(),
                     &temp_store,
+                    self.name_resolver.lowering_names,
                 );
                 defer lowerer.deinit();
                 break :blk try lowerer.lowerChecked(local);
@@ -11650,7 +11651,7 @@ const BodySolver = struct {
                         try self.lowerCaptureSlotRootsWithExistingValues(fn_.captures, roots.captures)
                     else
                         try self.lowerCaptureSlotRoots(fn_.captures);
-                    const expected_ret = try self.expectedProcedureReturn(def.proc);
+                    const expected_ret = try self.expectedReturnFromExpr(fn_.body);
                     const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty);
                     try self.publishProcedureReturnRootKind(public_ret);
                     const previous_captures = self.active_captures;
@@ -11698,7 +11699,7 @@ const BodySolver = struct {
                 },
                 .val => |expr| blk: {
                     const existing = self.existing_public_roots;
-                    const expected_ret = try self.expectedProcedureReturn(def.proc);
+                    const expected_ret = try self.expectedReturnFromExpr(expr);
                     const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty);
                     try self.publishProcedureReturnRootKind(public_ret);
                     const previous_return = self.active_return_value;
@@ -11716,7 +11717,7 @@ const BodySolver = struct {
                 },
                 .run => |run_def| blk: {
                     const existing = self.existing_public_roots;
-                    const expected_ret = try self.expectedProcedureReturn(def.proc);
+                    const expected_ret = try self.expectedReturnFromExpr(run_def.body);
                     const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty);
                     try self.publishProcedureReturnRootKind(public_ret);
                     const previous_return = self.active_return_value;
@@ -11752,7 +11753,7 @@ const BodySolver = struct {
             .fn_ => |fn_| blk: {
                 const lowered_args = try self.lowerParamSpan(fn_.args);
                 const captures = try self.lowerCaptureSlotRoots(fn_.captures);
-                const expected_ret = try self.expectedProcedureReturn(def.proc);
+                const expected_ret = try self.expectedReturnFromExpr(fn_.body);
                 const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty);
                 try self.publishProcedureReturnRootKind(ret);
                 break :blk .{
@@ -11774,8 +11775,8 @@ const BodySolver = struct {
                     .function_root = self.representation_store.reserveRoot(),
                 };
             },
-            .val => blk: {
-                const expected_ret = try self.expectedProcedureReturn(def.proc);
+            .val => |expr| blk: {
+                const expected_ret = try self.expectedReturnFromExpr(expr);
                 const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty);
                 try self.publishProcedureReturnRootKind(ret);
                 break :blk .{
@@ -11785,8 +11786,8 @@ const BodySolver = struct {
                     .function_root = self.representation_store.reserveRoot(),
                 };
             },
-            .run => blk: {
-                const expected_ret = try self.expectedProcedureReturn(def.proc);
+            .run => |run_def| blk: {
+                const expected_ret = try self.expectedReturnFromExpr(run_def.body);
                 const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty);
                 try self.publishProcedureReturnRootKind(ret);
                 break :blk .{
@@ -12240,67 +12241,15 @@ const BodySolver = struct {
         };
     }
 
-    fn expectedProcedureReturn(
+    fn expectedReturnFromExpr(
         self: *BodySolver,
-        proc: canonical.MirProcedureRef,
+        expr_id: Lifted.Ast.ExprId,
     ) Allocator.Error!ExpectedReturn {
-        const source_fn_ty = proc.callable.source_fn_ty;
-        const concrete = self.concrete_source_types.refForKey(source_fn_ty) orelse {
-            lambdaInvariant("lambda-solved procedure source function type has no concrete payload");
-        };
-        const fn_ty = try self.type_importer.importConcreteRef(concrete);
-        const fn_root = self.type_importer.output.unlinkConst(fn_ty);
-        const ret_ty = switch (self.type_importer.output.getNode(fn_root)) {
-            .content => |content| switch (content) {
-                .func => |func| func.ret,
-                else => lambdaInvariant("lambda-solved procedure source type payload was not a function"),
-            },
-            else => lambdaInvariant("lambda-solved procedure source type payload was not a function"),
-        };
+        const expr = self.input.getExpr(expr_id);
         return .{
-            .ty = ret_ty,
-            .source_ty = self.expectedProcedureReturnSourceType(source_fn_ty),
+            .ty = try self.type_importer.importType(expr.ty),
+            .source_ty = expr.source_ty,
         };
-    }
-
-    fn expectedProcedureReturnSourceType(
-        self: *const BodySolver,
-        source_fn_ty: canonical.CanonicalTypeKey,
-    ) canonical.CanonicalTypeKey {
-        const concrete = self.concrete_source_types.refForKey(source_fn_ty) orelse {
-            lambdaInvariant("lambda-solved procedure source function type has no concrete payload");
-        };
-        const root = self.concrete_source_types.root(concrete);
-        const checked_types, const checked_root = switch (root.source) {
-            .artifact => |artifact_ref| blk: {
-                const checked_types = checkedTypesForArtifactViews(self.registry.artifact_views, artifact_ref.artifact) orelse {
-                    lambdaInvariant("lambda-solved procedure source function type artifact was not available");
-                };
-                break :blk .{ checked_types, artifact_ref.ty };
-            },
-            .local => |local| .{ self.concrete_source_types.localView(), local },
-        };
-        const payload = checked_types.payloads[@intFromEnum(checked_root)];
-        const ret = switch (payload) {
-            .alias => |alias| return self.checkedFunctionReturnSourceType(checked_types, alias.backing),
-            .function => |func| func.ret,
-            else => lambdaInvariant("lambda-solved procedure source function type payload was not a function"),
-        };
-        return checked_types.roots[@intFromEnum(ret)].key;
-    }
-
-    fn checkedFunctionReturnSourceType(
-        self: *const BodySolver,
-        checked_types: checked_artifact.CheckedTypeStoreView,
-        checked_root: checked_artifact.CheckedTypeId,
-    ) canonical.CanonicalTypeKey {
-        const payload = checked_types.payloads[@intFromEnum(checked_root)];
-        const ret = switch (payload) {
-            .alias => |alias| return self.checkedFunctionReturnSourceType(checked_types, alias.backing),
-            .function => |func| func.ret,
-            else => lambdaInvariant("lambda-solved procedure source function alias did not resolve to a function"),
-        };
-        return checked_types.roots[@intFromEnum(ret)].key;
     }
 
     fn wrapImplicitReturn(
@@ -14989,10 +14938,11 @@ const BodySolver = struct {
         source_field: canonical.RecordFieldLabelId,
         logical_field: canonical.RecordFieldLabelId,
     ) bool {
-        return std.mem.eql(
-            u8,
-            materialization.names.recordFieldLabelText(source_field),
-            self.canonical_names.recordFieldLabelText(logical_field),
+        return checked_artifact.recordFieldLabelsMatch(
+            materialization.names,
+            source_field,
+            self.canonical_names,
+            logical_field,
         );
     }
 
@@ -15002,10 +14952,11 @@ const BodySolver = struct {
         source_tag: canonical.TagLabelId,
         logical_tag: canonical.TagLabelId,
     ) bool {
-        return std.mem.eql(
-            u8,
-            materialization.names.tagLabelText(source_tag),
-            self.canonical_names.tagLabelText(logical_tag),
+        return checked_artifact.tagLabelsMatch(
+            materialization.names,
+            source_tag,
+            self.canonical_names,
+            logical_tag,
         );
     }
 
@@ -15840,9 +15791,8 @@ const BodySolver = struct {
         source_ty: canonical.CanonicalTypeKey,
     ) ?ConcreteSourceType.ConcreteSourceTypeRef {
         if (isEmptyCanonicalTypeKey(source_ty)) return null;
-        return self.concrete_source_types.refForKey(source_ty) orelse {
+        return self.concrete_source_types.refForKey(source_ty) orelse
             lambdaInvariant("lambda-solved value source type key has no concrete source type payload");
-        };
     }
 
     fn sourceRootForPayload(
@@ -15972,25 +15922,12 @@ const BodySolver = struct {
         source: ConcreteSourceTypeView,
         logical_field: canonical.RecordFieldLabelId,
     ) ?checked_artifact.CheckedTypeId {
-        var current = source;
-        while (true) {
-            const resolved = self.resolvedSourcePayload(current) orelse return null;
-            switch (checkedTypePayload(resolved.view, resolved.root)) {
-                .record => |record| {
-                    for (record.fields) |field| {
-                        if (self.sourceRecordFieldMatches(resolved.names, field.name, logical_field)) return field.ty;
-                    }
-                    current.root = record.ext;
-                },
-                .record_unbound => |fields| {
-                    for (fields) |field| {
-                        if (self.sourceRecordFieldMatches(resolved.names, field.name, logical_field)) return field.ty;
-                    }
-                    return null;
-                },
-                else => return null,
-            }
-        }
+        return checked_artifact.checkedTypeRecordFieldChild(
+            .{ .names = source.names, .view = source.view },
+            source.root,
+            self.canonical_names,
+            logical_field,
+        );
     }
 
     fn sourceTagPayload(
@@ -15999,22 +15936,13 @@ const BodySolver = struct {
         logical_tag: canonical.TagLabelId,
         payload_index: u32,
     ) ?checked_artifact.CheckedTypeId {
-        const raw_payload_index: usize = @intCast(payload_index);
-        var current = source;
-        while (true) {
-            const resolved = self.resolvedSourcePayload(current) orelse return null;
-            switch (checkedTypePayload(resolved.view, resolved.root)) {
-                .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| {
-                        if (!self.sourceTagMatches(resolved.names, tag.name, logical_tag)) continue;
-                        if (raw_payload_index >= tag.args.len) return null;
-                        return tag.args[raw_payload_index];
-                    }
-                    current.root = tag_union.ext;
-                },
-                else => return null,
-            }
-        }
+        return checked_artifact.checkedTypeTagPayloadChild(
+            .{ .names = source.names, .view = source.view },
+            source.root,
+            self.canonical_names,
+            logical_tag,
+            payload_index,
+        );
     }
 
     fn sourceFunctionArg(
@@ -16039,32 +15967,6 @@ const BodySolver = struct {
             .function => |function| function.ret,
             else => null,
         };
-    }
-
-    fn sourceRecordFieldMatches(
-        self: *const BodySolver,
-        source_names: *const canonical.CanonicalNameStore,
-        source_field: canonical.RecordFieldLabelId,
-        logical_field: canonical.RecordFieldLabelId,
-    ) bool {
-        return std.mem.eql(
-            u8,
-            source_names.recordFieldLabelText(source_field),
-            self.canonical_names.recordFieldLabelText(logical_field),
-        );
-    }
-
-    fn sourceTagMatches(
-        self: *const BodySolver,
-        source_names: *const canonical.CanonicalNameStore,
-        source_tag: canonical.TagLabelId,
-        logical_tag: canonical.TagLabelId,
-    ) bool {
-        return std.mem.eql(
-            u8,
-            source_names.tagLabelText(source_tag),
-            self.canonical_names.tagLabelText(logical_tag),
-        );
     }
 
     fn exprValue(self: *const BodySolver, expr: Ast.ExprId) repr.ValueInfoId {

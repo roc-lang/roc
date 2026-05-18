@@ -19,6 +19,14 @@ incomplete. The consumer must not recover the missing data from source syntax,
 names, body scans, display strings, runtime bytes, object symbols, or backend
 state.
 
+Semantic identity and physical representation are separate facts. A canonical
+id, descriptor member id, source row key, procedure ref, or source type key may
+identify what a value means. It must not also be treated as the integer tag,
+variant slot, byte offset, ABI register class, object symbol, or memory layout
+used to represent that value. The stage that commits a physical representation
+publishes the explicit mapping from semantic ids to physical encodings, and all
+later stages consume that mapping.
+
 All user-facing failures are reported during checking at the latest. Checking is
 not complete until type checking, static-dispatch finalization, platform/app
 relation publication, compile-time constant evaluation, and callable promotion
@@ -3081,6 +3089,14 @@ union whose member payload is the lowered capture record, and
 same solved lambda-set payload. There is no later recovery step because the
 capture payload is already in the type being lowered.
 
+Cor also avoids a separate callable-set member encoding problem by collapsing
+semantic lambda identity and ordinary tag-union lowering into one path. After a
+lambda-set type has lowered to a tag union, IR lowering computes the tag id from
+the lowered constructor order. That is cleaner than a design where a lambda
+member id is sometimes a semantic member and sometimes a runtime discriminant,
+but it relies on lambda sets being part of types and on tag-union constructor
+order becoming the physical dispatch encoding.
+
 Roc keeps source types, callable-set identity, and executable specialization
 identity separate so that static dispatch, source-type diagnostics, and runtime
 representation can remain independently controlled. That separation is fine,
@@ -3097,6 +3113,16 @@ The design mistake to avoid is a split model where value flow publishes only a
 key and a later stage reconstructs the rest from a type store. That duplicates
 the type solver's facts in an unchecked way and breaks whenever two compatible
 keys are not enough to identify the same checked payload.
+
+The same rule applies to callable-set runtime representation. Roc should not
+copy Cor's type/lambda-set merger just to get one tag-union lowering path.
+Instead, Roc publishes a separate callable-set runtime encoding artifact at the
+layout/representation boundary. That artifact is the explicit Roc counterpart
+to Cor's lowered tag-union constructor order: it maps each semantic
+`CallableSetMemberId` to the concrete variant index, runtime discriminant, and
+payload layout chosen for this lowering run. No stage may substitute
+`CallableSetMemberId` ordinal order, descriptor order, source procedure name,
+or tag-union layout order for that artifact.
 
 ### Program Literal Pool
 
@@ -4762,16 +4788,17 @@ pub const LoweredProgram = struct {
     lir: LirProgram,
     arc_inserted_lir: LirProgram,
     runtime_image: ?LirRuntimeImage,
-    callable_set_descriptors: []const RuntimeCallableSetDescriptor,
-    callable_set_member_payloads: []const RuntimeCallableSetMemberPayloads,
+    callable_set_descriptors: []const LoweredCallableSetDescriptor,
+    callable_set_member_payloads: []const LoweredCallableSetMemberPayloads,
+    callable_set_runtime_encodings: []const CallableSetRuntimeEncoding,
 };
 
-pub const RuntimeCallableSetDescriptor = struct {
+pub const LoweredCallableSetDescriptor = struct {
     key: CanonicalCallableSetKey,
-    members: []const RuntimeCallableSetMember,
+    members: []const LoweredCallableSetMember,
 };
 
-pub const RuntimeCallableSetMember = struct {
+pub const LoweredCallableSetMember = struct {
     member: CallableSetMemberId,
     proc_value: ProcedureCallableRef,
     source_proc: MirProcedureRef,
@@ -4781,11 +4808,25 @@ pub const RuntimeCallableSetMember = struct {
     capture_shape_key: CaptureShapeKey,
 };
 
-pub const RuntimeCallableSetMemberPayloads = struct {
+pub const LoweredCallableSetMemberPayloads = struct {
     callable_set_key: CanonicalCallableSetKey,
     member: CallableSetMemberId,
     member_proc_source_fn_ty_payload: CheckedTypePayloadRef,
     member_lifted_owner_source_fn_ty_payload: ?CheckedTypePayloadRef,
+};
+
+pub const CallableSetRuntimeEncoding = struct {
+    callable_set_key: CanonicalCallableSetKey,
+    value_layout: PhysicalLayoutId,
+    members: []const CallableSetRuntimeEncodingMember,
+};
+
+pub const CallableSetRuntimeEncodingMember = struct {
+    member: CallableSetMemberId,
+    variant_index: u32,
+    discriminant: u16,
+    payload_layout: PhysicalLayoutId,
+    payload_exec_key: ?CanonicalExecValueTypeKey,
 };
 
 pub const CompileTimeLoweringMetadata = struct {
@@ -4795,6 +4836,14 @@ pub const CompileTimeLoweringMetadata = struct {
     erased_callable_code_map: LoweredErasedCallableCodeMap,
 };
 ```
+
+`LoweredCallableSetDescriptor` is semantic lowering data: which callable members
+exist, which procedure/callable refs they target, and which capture slots they
+own. It is not the runtime representation of a callable-set value.
+`CallableSetRuntimeEncoding` is physical representation data for one lowered
+program and target layout store. It is the only lowered-program output that may
+answer "which discriminant, variant slot, and payload layout represents this
+callable-set member in memory?"
 
 The exact exported names may differ, but the error type is resource-only.
 `IOError`, `ObjectEmissionError`, `RuntimeImagePublicationError`, and
@@ -6677,7 +6726,10 @@ session. Every `arg_exec_keys` entry and the `ret_exec_key` must have a
 matching executable type payload in that same semantic boundary's executable
 payload store.
 
-Canonical callable-set descriptors are pure representation data:
+Canonical callable-set descriptors are pure semantic callable representation
+data. They identify the members of a solved callable set and the capture schema
+for each member. They do not define how the callable-set value is encoded as a
+tag union in memory:
 
 ```zig
 const CanonicalCallableSetDescriptor = struct {
@@ -6727,12 +6779,15 @@ const CanonicalCallableSetMember = struct {
 };
 ```
 
-Descriptor member order is stable `ProcOrderKey` order. Capture field order is
-`CaptureSlot.index`. Descriptors may contain procedure callable refs, source
-type keys, executable value type keys, capture shape keys, and representation
-ids. They must not contain executable proc ids, physical layouts, generated
-symbols, runtime pointers, ARC data, backend ABI handles, object-file symbols,
-or interpreter handles.
+Descriptor member order is stable `ProcOrderKey` order. That order is a
+deterministic publication order and an input to later representation planning;
+it is not a runtime discriminant assignment, a tag-union variant index, or a
+physical layout order. Capture field order is `CaptureSlot.index`. Descriptors
+may contain procedure callable refs, source type keys, executable value type
+keys, capture shape keys, and representation ids. They must not contain
+executable proc ids, physical layouts, generated symbols, runtime discriminants,
+runtime variant indexes, runtime pointers, ARC data, backend ABI handles,
+object-file symbols, or interpreter handles.
 
 `CallableSetMemberIdentity` is a solve-session identity. `capture_slots`,
 `capture_shape_key`, and derived executable payload keys are solved schema for
@@ -6742,6 +6797,13 @@ already contains a member with the same `source_proc`, `proc_value`, and
 before sealing. Appending a second member for the same identity with a different
 capture schema is a compiler bug because branch tags would depend on transient
 solver order.
+
+`CallableSetMemberId` is a semantic descriptor-member id. It may be dense for
+storage efficiency, but density is not a physical encoding contract. Code that
+needs a tag-union variant slot, discriminant, or payload layout must first
+resolve the member through the callable-set runtime encoding published for the
+current lowered program. Casting a member id to an integer is always a bug
+outside descriptor-store implementation details such as dense array indexing.
 
 `source_fn_ty_payload` is the concrete source-type payload for the procedure
 value occurrence selected by solving. Its key must equal
@@ -7874,6 +7936,13 @@ const SessionExecutableErasedFnPayload = struct {
 };
 ```
 
+The executable callable-set payload records the semantic member-to-payload-type
+relationship for the current session. It is still not a runtime encoding table.
+`member` selects a descriptor member; `payload_ty` tells executable lowering
+which executable payload type that member carries. It does not say which
+tag-union variant index, discriminant, physical payload layout, or discriminant
+storage location will represent the member after layout lowering.
+
 An artifact `ExecutableTypePayloadRef` is stable published data. A
 `SessionExecutableTypePayloadRef` is valid only inside one lambda-solved or
 executable lowering session. Isomorphic payloads can share a canonical key, but
@@ -8005,30 +8074,107 @@ branch must agree with:
 Singleton finite callable sets still lower through `callable_match`; singleton
 status is not permission to bypass the callable value representation.
 
-Callable-set member tag assignment is deterministic. Member ordering uses the
-canonical lambda-solved callable-set member order, which is derived from stable
-`ProcOrderKey` values. It must not depend on raw symbols, display names,
+Callable-set member publication is deterministic. Descriptor member order uses
+the canonical lambda-solved callable-set member order, which is derived from
+stable `ProcOrderKey` values. It must not depend on raw symbols, display names,
 hash-map iteration order, allocation order, pointer identity, fresh-symbol
 suffixes, or incidental traversal order.
 
-Finite callable-set runtime encoding is explicit:
+Descriptor member order is not runtime tag assignment. A
+`CallableSetMemberId` answers "which solved callable-set member is this?" It
+does not answer "which integer is stored in memory?" or "which tag-union
+variant payload layout should be accessed?" Those answers belong to the
+callable-set runtime encoding artifact published by representation/layout
+lowering.
 
-```text
-runtime discriminant == dense CallableSetMemberId
+Finite callable-set runtime encoding is explicit, table-owned data. Here
+"runtime" means the in-memory representation of a value in the lowered program:
+the tag value, variant slot, and payload layout that generated code,
+interpreters, static data, and backends consume. It does not mean a separate
+runtime library or VM subsystem.
+
+```zig
+const CallableSetRuntimeEncoding = struct {
+    callable_set_key: CanonicalCallableSetKey,
+    value_layout: PhysicalLayoutId,
+    members: Span(CallableSetRuntimeEncodingMember),
+};
+
+const CallableSetRuntimeEncodingMember = struct {
+    member: CallableSetMemberId,
+    variant_index: u32,
+    discriminant: u16,
+    payload_layout: PhysicalLayoutId,
+    payload_exec_key: ?CanonicalExecValueTypeKey,
+};
 ```
 
-The conversion lives behind `callableSetRuntimeDiscriminantForMember`,
-`callableSetRuntimeIndexForMember`, and the inverse helpers next to canonical
-callable-set identities. Lambda-solved member publication assigns member ids
-through that encoding. IR layout construction, callable-set value construction,
-callable-match switch construction, and capture-payload extraction all consume
-the helper instead of casting member ids directly. A runtime callable-set
-discriminant read carries the callable-set key as metadata, and compile-time
-finalization decodes the runtime value by indexing the published
-runtime-discriminant-ordered member plan and verifying that the planned member
-maps back to the observed discriminant. No stage may select a callable-set
-member by descriptor order, source procedure name, layout order, or a raw
-`@enumFromInt(discriminant)` cast.
+The encoding is keyed by `CanonicalCallableSetKey` because the semantic
+callable-set descriptor selects the member universe. It also names the
+committed callable-set value layout because the same semantic member only has a
+physical payload layout after representation/layout lowering has committed a
+layout for this lowered program and target.
+
+Ownership is split deliberately:
+
+- Lambda-solved MIR owns callable-set member identity, descriptor membership,
+  member publication order, target procedure identity, and capture schema.
+- Executable type lowering owns the semantic executable payload graph for each
+  member payload.
+- IR/layout lowering owns callable-set tag-union representation: variant
+  ordering, discriminants, and the link from each semantic member to its
+  payload layout ref.
+- Physical layout commit owns final `PhysicalLayoutId` values, discriminant
+  storage size/offset, payload offsets, and any target-dependent layout facts.
+
+The final `CallableSetRuntimeEncoding` is produced when the callable-set layout
+has enough information to publish all of those facts together. It may currently
+choose the same dense order as descriptor member ids, but equality between
+`member`, `variant_index`, and `discriminant` is not a contract. Future layout
+work may reserve discriminants, compact variants, reorder variants for layout,
+or use ABI-specific encodings without changing callable-set semantic identity.
+
+There must be no public conversion helper of the form:
+
+```zig
+CallableSetMemberId -> runtime discriminant
+CallableSetMemberId -> runtime variant index
+runtime discriminant -> CallableSetMemberId
+```
+
+Such a helper is missing the callable-set key and the layout-owned encoding
+table, so it necessarily smuggles a global physical encoding into semantic
+identity. Valid APIs take a `CallableSetRuntimeEncoding` or an encoding ref and
+then resolve by member or discriminant:
+
+```zig
+encoding.member(member_id) -> CallableSetRuntimeEncodingMember
+encoding.memberForDiscriminant(discriminant) -> CallableSetMemberId
+```
+
+Every consumer uses this encoding:
+
+- callable-set value construction writes `encoding.member(selected).discriminant`
+  and materializes captures using that member's payload layout
+- `callable_match` reads a discriminant whose source names the callable-set
+  encoding, branches on encoded discriminants, and extracts payloads using the
+  encoded payload layout
+- singleton finite callable sets still carry an encoding entry; singleton status
+  permits constant-folding the read only through the encoding entry
+- static data materialization writes the encoded discriminant and uses the
+  encoded payload layout instead of indexing tag-union variants by member id
+- compile-time finalization decodes an interpreted callable value through the
+  encoding's inverse discriminant map and verifies the selected descriptor
+  member matches the decoded member
+- backend and interpreter code consume LIR that already contains encoded
+  discriminants and committed payload layouts; they do not recover member ids
+  from descriptor order or enum ordinals
+
+No stage may select a callable-set member, payload layout, switch case,
+materialized capture payload, or finalization result by source procedure name,
+descriptor order, source function type, tag-union layout order, raw
+`@intFromEnum(member)`, raw `@enumFromInt(discriminant)`, or a helper that only
+knows a member id.
 
 Capture payload field order is `CaptureSlot.index` order for every
 callable-set member and every erased capture record. Executable MIR consumes
@@ -8160,6 +8306,16 @@ real `tag_union`, LIR unboxes and reads the payload discriminant. Any other
 physical layout with more than one logical tag is a layout-graph invariant
 violation. This rule is generic tag-union lowering; it does not give `Bool` a
 special runtime representation.
+
+Callable-set discriminant reads carry a callable-set runtime encoding ref
+instead of a row-finalized `TagUnionShapeId`. For multi-member callable sets,
+LIR reads the stored discriminant from the committed callable-set value layout
+and treats the result as an encoded runtime discriminant. For singleton
+callable sets, LIR may materialize the encoding entry's discriminant as a
+constant only after verifying that the value's callable-set key and committed
+layout match the encoding. LIR must not recover the discriminant from
+`CallableSetMemberId`, descriptor position, or physical tag-union variant
+order.
 
 ### Source Match Decision Plans
 
@@ -10873,6 +11029,14 @@ maps stable labels/indexes onto those local ids by checking the explicit
 expected payload. Missing fields, payload arity mismatches, or canonical-order
 disagreements are compiler bugs.
 
+`MaterializedFiniteCallableSetValue.selected_member` is semantic. It selects
+the descriptor member whose captures are being materialized. Static data
+emission must resolve that member through the lowered program's
+`CallableSetRuntimeEncoding` before it writes bytes. The encoding supplies the
+stored discriminant and the physical payload layout. Static data must not
+derive either one from `selected_member`, descriptor array position, tag-union
+layout variant order, or source procedure identity.
+
 Materialization records code dependencies separately from layout/data
 dependencies. A boxed erased callable constant depends on executable wrapper
 code and on a static capture materialization graph. The wrapper symbol is code;
@@ -11276,6 +11440,28 @@ on logical nodes and local recursive references before physical storage
 indirection is inserted. Physical layout lowering then commits field offsets,
 tag payload offsets, pointer indirections, static allocation prefixes, and
 backend storage sizes.
+
+Callable-set runtime encodings are layout publication records, not canonical
+name helpers. When the logical layout graph contains a finite callable-set
+value, layout lowering builds the callable-set tag-union node from the explicit
+executable callable-set payload and descriptor member table. Physical layout
+commit then publishes the `CallableSetRuntimeEncoding` for that
+`CanonicalCallableSetKey` and committed value layout. The encoding records the
+only valid mapping from semantic `CallableSetMemberId` values to runtime
+variant indexes, stored discriminants, and physical payload layouts.
+
+The layout publication verifier rejects:
+
+- a callable-set encoding whose members differ from the descriptor's member ids
+- duplicate members, duplicate variant indexes, or duplicate discriminants
+- an encoded payload executable key that differs from the descriptor/member
+  payload executable key
+- a payload layout that does not match the committed payload layout for the
+  encoded variant
+- a discriminant that cannot be represented by the committed tag-union
+  discriminant storage
+- any consumer that requests callable-set payload layout by indexing the
+  tag-union layout with `CallableSetMemberId`
 
 Zero-sized values are represented by the committed layout graph, not by source
 syntax rules. Records with zero-sized fields, singleton tag unions, boxes of
@@ -11921,11 +12107,13 @@ Structural tests cover every type-state boundary:
 - generic zero-sized and singleton lowering, including ZST aggregate elision,
   singleton `get_union_id`, ZST tag bridges, singleton callable-set
   finalization, and Bool lowered as ordinary tag-union data
-- `get_union_id` fixtures where the operation carries `TagUnionShapeId`, lowers
-  singleton ZST unions to known logical-index literals, reads real tag-union
-  discriminants, unboxes boxed tag-union payloads before reading, rejects
-  inconsistent physical layouts for multi-tag logical shapes, and keeps Bool on
-  the ordinary tag-union path
+- `get_union_id` fixtures where ordinary tag-union reads carry
+  `TagUnionShapeId`, callable-set reads carry a callable-set runtime encoding
+  ref, singleton ZST unions lower to known logical-index literals, singleton
+  callable-set reads lower only to the encoded discriminant, real tag-union
+  discriminants are read from committed layouts, boxed tag-union payloads are
+  unboxed before reading, inconsistent physical layouts for multi-tag logical
+  shapes are rejected, and Bool stays on the ordinary tag-union path
 - source-match decision plan records: `SourceMatch`, `PatternDecisionPlan`,
   `DecisionNode`, `DecisionEdge`, `DecisionLeaf`, `PatternPathValuePlan`,
   `RecordRestProjection`, and `PatternBinding`
@@ -11963,10 +12151,13 @@ Structural tests cover every type-state boundary:
 - public `lowerArtifactsToLir` API shape, resource-only error type, explicit
   roots, relation artifacts, target config, `LoweredProgram`, and
   `CompileTimeLoweringMetadata`
-- runtime callable-set descriptor tests for
-  `LoweredProgram.callable_set_descriptors`, runtime versus persisted
-  descriptor separation, optional published identities, deep cloning of
-  `published_proc_value` and `published_source_proc`, and interpreter decoding
+- lowered callable-set descriptor and runtime encoding tests for
+  `LoweredProgram.callable_set_descriptors`,
+  `LoweredProgram.callable_set_runtime_encodings`, descriptor versus encoding
+  separation, optional published identities, deep cloning of
+  `published_proc_value` and `published_source_proc`, decoding through the
+  published encoding inverse map, and rejection of raw member-id/discriminant
+  casts
 - `CallableSetDescriptorStore` tests for append-only publication, duplicate-key
   semantic equality, singleton key stability, publication from every reachable
   descriptor source, and rejection of session-local ids in published keys
@@ -12274,9 +12465,9 @@ Structural tests cover every type-state boundary:
   capture, and result transforms
 - finite-set erased adapter plan fixtures for `FiniteSetErasePlan`,
   `FiniteSetEraseAdapterBranchPlan`, singleton finite set through `Box`,
-  multi-member branches, raw arg/result endpoints, descriptor-order validation,
-  erased ABI equality, capture-shape agreement, and rejection of synthesized
-  missing adapter members
+  multi-member branches, raw arg/result endpoints, descriptor-member validation,
+  runtime-encoding validation, erased ABI equality, capture-shape agreement,
+  and rejection of synthesized missing adapter members
 - promoted wrapper finite-adapter normalization to the promoted wrapper
   executable signature while preserving concrete procedure identity fields
 - lambda-solved fixed-point loop ordering: solve sessions, callable emissions,
@@ -12319,12 +12510,16 @@ Structural tests cover every type-state boundary:
   values on descriptor-only instances, and function-valued captures that depend
   on other callable groups
 - dynamic solve-session membership and recursive session fixed points
-- executable callable-set construction, `callable_match`, erased packing, and
-  source `match` decision plans
+- executable callable-set construction, `callable_match`, runtime encoding
+  publication, erased packing, and source `match` decision plans
 - executable callable-set value fixtures for `CallableCaptureRecord`,
   `CaptureValueRef`, capture-slot order, zero-sized capture metadata,
   branch-local direct-call result, mandatory identity result transform, and
   exactly one shared result assignment per returning branch
+- callable-set runtime encoding fixtures proving semantic member ids are not
+  physical discriminants: construction, `callable_match`, payload extraction,
+  static data materialization, and compile-time finalization all consume the
+  published encoding table, including singleton and multi-member cases
 - executable callable-set construction verifier fixtures for valid
   `CallableSetConstructionPlan` consumption, missing construction plan, wrong
   result value, wrong finite emission plan, missing descriptor member, source

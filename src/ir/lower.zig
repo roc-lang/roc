@@ -28,6 +28,8 @@ pub const Program = struct {
     root_procs: std.ArrayList(Ast.ProcRef),
     root_metadata: std.ArrayList(mir.Ids.RootMetadata),
     requested_layouts: std.ArrayList(RequestedLayout),
+    callable_set_runtime_encodings: std.ArrayList(Ast.CallableSetRuntimeEncoding),
+    callable_set_runtime_encoding_members: std.ArrayList(Ast.CallableSetRuntimeEncodingMember),
 
     pub fn init(allocator: Allocator) Program {
         return .{
@@ -40,10 +42,14 @@ pub const Program = struct {
             .root_procs = .empty,
             .root_metadata = .empty,
             .requested_layouts = .empty,
+            .callable_set_runtime_encodings = .empty,
+            .callable_set_runtime_encoding_members = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.callable_set_runtime_encoding_members.deinit(self.allocator);
+        self.callable_set_runtime_encodings.deinit(self.allocator);
         self.requested_layouts.deinit(self.allocator);
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
@@ -273,8 +279,10 @@ const IrBuilder = struct {
             },
             .tag => |tag| blk: {
                 const payload = try self.lowerTagPayloadForConstruction(expr.ty, tag.tag, tag.payloads, stmts);
+                const tag_index: u16 = @intCast(self.input.row_shapes.tag(tag.tag).logical_index);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
-                    .discriminant = @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
+                    .variant_index = tag_index,
+                    .discriminant = tag_index,
                     .payload = payload.var_,
                     .payload_bridge_plan = payload.bridge,
                 } }, stmts);
@@ -476,8 +484,11 @@ const IrBuilder = struct {
         }
 
         const payload_bridge = if (payload != null) try self.output.store.addBridgePlan(.direct) else null;
-        return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
-            .discriminant = repr.callableSetRuntimeDiscriminantForMember(callable.member.member_index),
+        const value_layout = try self.layoutForType(expr.ty);
+        const runtime_member = self.callableSetRuntimeMember(callable.callable_set_key, callable.member.member_index);
+        return try self.bindExpr(expr.value, value_layout, .{ .make_union = .{
+            .variant_index = runtime_member.variant_index,
+            .discriminant = runtime_member.discriminant,
             .payload = payload,
             .payload_bridge_plan = payload_bridge,
         } }, stmts);
@@ -562,11 +573,13 @@ const IrBuilder = struct {
     ) LowerResourceError!Ast.Var {
         const result_layout = try self.layoutForType(result_ty);
         const true_value = try self.bindAnonymous(result_layout, .{ .make_union = .{
+            .variant_index = result_bool.true_discriminant,
             .discriminant = result_bool.true_discriminant,
             .payload = null,
             .payload_bridge_plan = null,
         } }, stmts);
         const false_value = try self.bindAnonymous(result_layout, .{ .make_union = .{
+            .variant_index = result_bool.false_discriminant,
             .discriminant = result_bool.false_discriminant,
             .payload = null,
             .payload_bridge_plan = null,
@@ -636,6 +649,11 @@ const IrBuilder = struct {
         const callee = self.value_env.get(callable_match.callee) orelse irInvariant("IR lowering callable_match callee was not bound");
         const branch_ids = self.input.ast.callable_match_branches.items[callable_match.branches.start..][0..callable_match.branches.len];
         if (branch_ids.len == 0) irInvariant("IR lowering callable_match received no branches");
+        const encoding = self.callableSetRuntimeEncodingId(callable_match.callable_set_key);
+        const singleton_member = if (branch_ids.len == 1)
+            self.callableSetRuntimeMemberFromEncoding(encoding, branch_ids[0].member.member_index)
+        else
+            null;
 
         const subject = try self.bindExpr(
             self.freshInternalValueRef(),
@@ -643,9 +661,12 @@ const IrBuilder = struct {
             .{ .get_union_id = .{
                 .value = callee,
                 .source = if (branch_ids.len == 1)
-                    .{ .known_singleton = repr.callableSetRuntimeDiscriminantForMember(branch_ids[0].member.member_index) }
+                    .{ .known_singleton_callable_set = .{
+                        .encoding = encoding,
+                        .discriminant = singleton_member.?.discriminant,
+                    } }
                 else
-                    .{ .runtime_callable_set = callable_match.callable_set_key },
+                    .{ .runtime_callable_set = encoding },
             } },
             stmts,
         );
@@ -658,8 +679,9 @@ const IrBuilder = struct {
             if (!repr.callableSetKeyEql(branch.member.callable_set_key, callable_match.callable_set_key)) {
                 irInvariant("IR lowering callable_match branch points at a different callable set");
             }
+            const runtime_member = self.callableSetRuntimeMemberFromEncoding(encoding, branch.member.member_index);
             branches[i] = .{
-                .value = repr.callableSetRuntimeDiscriminantForMember(branch.member.member_index),
+                .value = runtime_member.discriminant,
                 .block = try self.lowerCallableMatchBranchBlock(branch, callee),
             };
         }
@@ -694,11 +716,13 @@ const IrBuilder = struct {
         if (branch.capture_payload) |payload_ref| {
             const payload_ty = branch.capture_payload_ty orelse irInvariant("IR lowering callable_match branch has capture payload value without payload type");
             const payload = try self.freshVar(try self.layoutForType(payload_ty));
+            const runtime_member = self.callableSetRuntimeMember(branch.member.callable_set_key, branch.member.member_index);
             try stmts.append(self.allocator, try self.output.store.addStmt(.{ .let_ = .{
                 .bind = payload,
                 .expr = try self.output.store.addExpr(.{ .get_union_struct = .{
                     .value = callee,
-                    .tag_discriminant = repr.callableSetRuntimeDiscriminantForMember(branch.member.member_index),
+                    .variant_index = runtime_member.variant_index,
+                    .tag_discriminant = runtime_member.discriminant,
                 } }),
             } }));
             try self.pushValueBinding(payload_ref, payload, &saved);
@@ -1181,9 +1205,11 @@ const IrBuilder = struct {
             },
             .tag_payload_record => |payload| blk: {
                 const parent = try self.materializePatternPathValue(payload.parent, scrutinee_values, path_values, stmts);
+                const tag_index: u16 = @intCast(self.input.row_shapes.tag(payload.tag).logical_index);
                 break :blk try self.bindAnonymous(try self.payloadStructLayoutFromUnionLayout(parent.layout, payload.tag), .{ .get_union_struct = .{
                     .value = parent,
-                    .tag_discriminant = @intCast(self.input.row_shapes.tag(payload.tag).logical_index),
+                    .variant_index = tag_index,
+                    .tag_discriminant = tag_index,
                 } }, stmts);
             },
             .tag_payload_field => |payload| blk: {
@@ -1421,6 +1447,91 @@ const IrBuilder = struct {
         return .{ .runtime_tag_union = shape };
     }
 
+    fn callableSetRuntimeEncodingId(
+        self: *const IrBuilder,
+        key: repr.CanonicalCallableSetKey,
+    ) Ast.CallableSetRuntimeEncodingId {
+        for (self.output.callable_set_runtime_encodings.items, 0..) |encoding, index| {
+            if (repr.callableSetKeyEql(encoding.callable_set_key, key)) return @enumFromInt(@as(u32, @intCast(index)));
+        }
+        irInvariant("IR lowering missing callable-set runtime encoding for callable set");
+    }
+
+    fn callableSetRuntimeEncoding(
+        self: *const IrBuilder,
+        id: Ast.CallableSetRuntimeEncodingId,
+    ) Ast.CallableSetRuntimeEncoding {
+        const index = @intFromEnum(id);
+        if (index >= self.output.callable_set_runtime_encodings.items.len) {
+            irInvariant("IR lowering callable-set runtime encoding id out of range");
+        }
+        return self.output.callable_set_runtime_encodings.items[index];
+    }
+
+    fn callableSetRuntimeEncodingMembers(
+        self: *const IrBuilder,
+        encoding: Ast.CallableSetRuntimeEncoding,
+    ) []const Ast.CallableSetRuntimeEncodingMember {
+        if (encoding.members.len == 0) return &.{};
+        return self.output.callable_set_runtime_encoding_members.items[encoding.members.start..][0..encoding.members.len];
+    }
+
+    fn callableSetRuntimeMember(
+        self: *const IrBuilder,
+        key: repr.CanonicalCallableSetKey,
+        member: repr.CallableSetMemberId,
+    ) Ast.CallableSetRuntimeEncodingMember {
+        return self.callableSetRuntimeMemberFromEncoding(self.callableSetRuntimeEncodingId(key), member);
+    }
+
+    fn callableSetRuntimeMemberFromEncoding(
+        self: *const IrBuilder,
+        id: Ast.CallableSetRuntimeEncodingId,
+        member: repr.CallableSetMemberId,
+    ) Ast.CallableSetRuntimeEncodingMember {
+        const encoding = self.callableSetRuntimeEncoding(id);
+        for (self.callableSetRuntimeEncodingMembers(encoding)) |runtime_member| {
+            if (runtime_member.member == member) return runtime_member;
+        }
+        irInvariant("IR lowering callable-set runtime encoding did not contain selected member");
+    }
+
+    fn publishCallableSetRuntimeEncoding(
+        self: *IrBuilder,
+        key: repr.CanonicalCallableSetKey,
+        value_layout: Ast.LayoutRef,
+        members: []const Ast.CallableSetRuntimeEncodingMember,
+    ) LowerResourceError!void {
+        for (self.output.callable_set_runtime_encodings.items) |encoding| {
+            if (!repr.callableSetKeyEql(encoding.callable_set_key, key)) continue;
+            if (!std.meta.eql(encoding.value_layout, value_layout)) {
+                irInvariant("IR lowering callable-set runtime encoding key was published with two value layouts");
+            }
+            const existing_members = self.callableSetRuntimeEncodingMembers(encoding);
+            if (existing_members.len != members.len) {
+                irInvariant("IR lowering callable-set runtime encoding key was published with two arities");
+            }
+            for (existing_members, members) |existing, new| {
+                if (!std.meta.eql(existing, new)) {
+                    irInvariant("IR lowering callable-set runtime encoding key was published with different members");
+                }
+            }
+            return;
+        }
+
+        const start: u32 = @intCast(self.output.callable_set_runtime_encoding_members.items.len);
+        try self.output.callable_set_runtime_encoding_members.appendSlice(self.allocator, members);
+        const span: Ast.Span(Ast.CallableSetRuntimeEncodingMember) = .{
+            .start = start,
+            .len = @intCast(members.len),
+        };
+        try self.output.callable_set_runtime_encodings.append(self.allocator, .{
+            .callable_set_key = key,
+            .value_layout = value_layout,
+            .members = span,
+        });
+    }
+
     fn boolStructuralEq(
         self: *IrBuilder,
         lhs: Ast.Var,
@@ -1513,12 +1624,14 @@ const IrBuilder = struct {
                 const payload_ids = self.input.ast.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 if (payload_ids.len == 0) return;
 
+                const tag_index: u16 = @intCast(self.input.row_shapes.tag(tag.tag).logical_index);
                 const payload_record = try self.bindExpr(
                     self.freshInternalValueRef(),
                     try self.payloadStructLayoutFromUnionLayout(value.layout, tag.tag),
                     .{ .get_union_struct = .{
                         .value = value,
-                        .tag_discriminant = @intCast(self.input.row_shapes.tag(tag.tag).logical_index),
+                        .variant_index = tag_index,
+                        .tag_discriminant = tag_index,
                     } },
                     stmts,
                 );
@@ -1812,16 +1925,19 @@ const IrBuilder = struct {
         if (tag_payloads.len == 0) irInvariant("IR lowering tag payload projection targeted a nullary tag");
 
         const payload_struct_layout = try self.payloadStructLayoutFromUnionLayout(tag_union.layout, payload_info.tag);
+        const tag_index: u16 = @intCast(tag_info.logical_index);
         if (tag_payloads.len == 1) {
             return try self.bindExpr(expr.value, payload_struct_layout, .{ .get_union_struct = .{
                 .value = tag_union,
-                .tag_discriminant = @intCast(tag_info.logical_index),
+                .variant_index = tag_index,
+                .tag_discriminant = tag_index,
             } }, stmts);
         }
 
         const payload_struct = try self.bindAnonymous(payload_struct_layout, .{ .get_union_struct = .{
             .value = tag_union,
-            .tag_discriminant = @intCast(tag_info.logical_index),
+            .variant_index = tag_index,
+            .tag_discriminant = tag_index,
         } }, stmts);
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_struct_field = .{
             .record = payload_struct,
@@ -2134,22 +2250,26 @@ const IrBuilder = struct {
         if (callable_set.members.len == 0) irInvariant("IR lowering callable-set type had no members");
         const variants = try self.allocator.alloc(Ast.LayoutRef, callable_set.members.len);
         defer self.allocator.free(variants);
-        var seen = try self.allocator.alloc(bool, callable_set.members.len);
-        defer self.allocator.free(seen);
-        @memset(seen, false);
+        const encoding_members = try self.allocator.alloc(Ast.CallableSetRuntimeEncodingMember, callable_set.members.len);
+        defer self.allocator.free(encoding_members);
 
-        for (callable_set.members) |member| {
-            const index = repr.callableSetRuntimeIndexForMember(member.member);
-            if (index >= callable_set.members.len) irInvariant("IR lowering callable-set member index exceeded member count");
-            if (seen[index]) irInvariant("IR lowering callable-set type saw duplicate member index");
-            variants[index] = if (member.payload_ty) |payload_ty| try self.layoutForType(payload_ty) else .{ .canonical = .zst };
-            seen[index] = true;
-        }
-        for (seen) |was_seen| {
-            if (!was_seen) irInvariant("IR lowering callable-set type did not provide every member payload layout");
+        for (callable_set.members, 0..) |member, index| {
+            if (index > std.math.maxInt(u16)) irInvariant("IR lowering callable-set member index exceeded runtime encoding range");
+            const payload_layout: Ast.LayoutRef = if (member.payload_ty) |payload_ty| try self.layoutForType(payload_ty) else .{ .canonical = .zst };
+            const variant_index: u16 = @intCast(index);
+            variants[index] = payload_layout;
+            encoding_members[index] = .{
+                .member = member.member,
+                .variant_index = variant_index,
+                .discriminant = variant_index,
+                .payload_layout = payload_layout,
+                .payload_exec_key = null,
+            };
         }
 
+        const value_layout: Ast.LayoutRef = .{ .local = node };
         self.output.layouts.setNode(node, .{ .tag_union = try self.output.layouts.appendRefs(self.allocator, variants) });
+        try self.publishCallableSetRuntimeEncoding(callable_set.key, value_layout, encoding_members);
     }
 
     fn layoutForType(self: *IrBuilder, ty: Exec.Type.TypeId) LowerResourceError!Ast.LayoutRef {

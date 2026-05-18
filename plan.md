@@ -1,885 +1,747 @@
-# Plan: Long-Term Fixes For Late Guessing And Recovery
+# Plan: Long-Term Fixes For Remaining Late Guessing And Recovery
 
-This file records the result of investigating each suspect in `problems.md`.
+This file records the investigation for each problem in `problems.md` and gives
+the long-term recommendation. The goal is not to find the smallest local patch.
+The goal is to make the compiler design keep facts in the stage that owns them
+and pass those facts forward explicitly.
 
-The standard for every recommendation is the same:
+The standard for all recommendations:
 
-- The stage that knows a fact directly must publish it.
-- Later stages must consume explicit published facts.
-- Missing published facts are compiler invariant violations.
-- No source-name lookup, type-key search, layout shape matching, or value-shape guessing should substitute for missing metadata.
+- Source selection must use explicit source payload ids or explicit producer
+  records.
+- Canonical keys may validate identity and dedupe already-selected payloads.
+- Runtime encodings must have one published conversion point.
+- Layouts may be used for memory representation, not for source semantics.
+- Backends and interpreters should reject impossible LIR with invariant errors.
 
-## Implementation Status: 2026-05-17
-
-This branch implements the consolidated checked-payload publication design for
-the const/callable/capture problems below.
-
-Completed:
-
-- Problem 1: the dev backend now requires matching `Num.abs_diff` argument
-  layouts, passes the operand layout into code generation, and no longer falls
-  back to signedness guesses from literals or result layout.
-- Problem 2: const and callable instantiation records now preserve the checked
-  payload ids from their requests, dependency summaries carry payload-bearing
-  requests, and finalization consumes those requests instead of rediscovering
-  payloads from canonical type keys.
-- Problem 3: capture-slot planning is payload-driven. Capture slot sources read
-  published `ValueInfo.source_ty_payload`, project it once when necessary, and
-  store the checked payload on the capture plan. The const record-extra-field
-  path now also consumes the child value's published source payload instead of
-  calling `rootForKey(child_info.source_ty)`.
-- Problem 4: private capture finalization is payload-driven. Capture-slot plan
-  nodes carry `source_ty`, `source_ty_payload`, and `source_scheme`; serializable
-  leaves use the enclosing node's payload; `PrivateCaptureRef` carries
-  `source_ty_payload`; mono lowering uses that payload directly.
-- Problem 5: `layout.Idx.named_fn` has been removed. Static/direct call identity
-  stays in call IR; layouts describe runtime memory representation only.
-- Problem 6: callable-set runtime encoding is explicit. Member ids convert to
-  runtime discriminants through shared canonical helpers, IR carries the
-  callable-set key on runtime discriminant reads, and compile-time finalization
-  verifies decoded members against runtime-discriminant order.
-- `design.md` now describes this as the long-term model: canonical keys validate
-  payload identity, checked payload ids are carried through the boundaries that
-  consume them, layouts do not encode call identity, numeric low-level lowering
-  consumes operand layouts, and callable-set runtime discriminants are centrally
-  encoded. It also records the comparison with Cor's LSS experiment.
-- The callable-in-data crash repros are covered by eval tests and pass through
-  interpreter, dev, and wasm.
-- `Num.abs_diff` signedness coverage exercises signed `I8` operands whose result
-  layout is unsigned.
-
-Verification on the final code:
-
-```sh
-zig build fmt
-zig build test-eval -- --filter "compile-time callable result reused" --filter "Bool constants inside heap containers" --threads 1 --verbose
-zig build test-eval -- --filter "I8.abs_diff uses signed operand layout" --threads 1 --verbose
-zig build minici
-```
-
-All passed. On macOS, the final coverage step in `minici` reports that kcov
-coverage is unsupported on this platform, but the `minici` command exits 0.
-
-Still left from this plan:
-
-- Hardening: add semantic-audit checks for the completed payload-boundary rules
-  and runtime-encoding rules so these recovery patterns cannot silently return
-  in future changes.
-
-## 1. Dev Backend `Num.abs_diff` Signedness Guess
+## 1. Static Data Callable-Set Capture Uses Raw Member Index
 
 ### Current State
 
-`Num.abs_diff` is a low-level numeric operation. In Roc source, signed integer `abs_diff` returns an unsigned result:
+`src/check/canonical_names.zig` defines the callable-set runtime encoding:
 
-- `I8.abs_diff : I8, I8 -> U8`
-- `I16.abs_diff : I16, I16 -> U16`
-- `I32.abs_diff : I32, I32 -> U32`
-- `I64.abs_diff : I64, I64 -> U64`
-- `I128.abs_diff : I128, I128 -> U128`
+- `callableSetRuntimeDiscriminantForMember(member)`
+- `callableSetRuntimeIndexForMember(member)`
+- `callableSetMemberForRuntimeDiscriminant(discriminant)`
+- `callableSetMemberForRuntimeIndex(index)`
 
-That means the return layout is not enough to decide how to compare the operands. The backend needs the operand layout, because signed operands require signed comparison and unsigned operands require unsigned comparison.
+The comments there say that finite callable-set member ids are the runtime
+discriminants used in callable-set layouts, value construction, callable matches,
+and compile-time result decoding.
 
-The dev backend currently has the right fact available at the call site:
+Most of the new callable-set lowering now uses this shared encoding. However,
+`StaticDataBuilder.writeFiniteCallableSetCapture` in
+`src/compile/static_data_exports.zig` still does this:
 
-- `assign_low_level` stores argument locals.
-- each local has a layout in the LIR store.
-- `src/backend/dev/LirCodeGen.zig` calls `self.valueLayout(args[0])` before calling `generateAbsDiff`.
+```zig
+const member_index: usize = @intFromEnum(finite.selected_member);
+...
+const payload_layout_idx =
+    tag_info.variants.get(@intCast(member_index)).payload_layout;
+...
+self.writeDiscriminant(..., @intCast(member_index));
+```
 
-But `generateAbsDiff` still accepts `arg_layout: ?layout.Idx` and falls back to `inferAbsDiffInputLayout` if it is missing. That fallback guesses signedness from the return layout and whether either operand is a negative immediate.
+It does verify that the selected member exists in the executable callable-set
+payload, but it uses the raw enum value both as the layout variant index and the
+runtime discriminant.
 
-### Why This Is The Same Class Of Problem
+### Investigation
 
-Signedness is not a backend inference problem. It is already known by checking/lowering and is present in the argument local layout. The fallback is dangerous because it creates a second, weaker source of truth:
+This path is materializing static bytes for erased capture data. It is not
+merely inspecting a value; it commits runtime representation into emitted static
+data. That makes it one of the places that most needs to follow the exact same
+runtime encoding contract as normal codegen and finalization.
 
-- negative immediates imply signed input only for some cases;
-- non-negative literals do not prove unsigned input;
-- return type is explicitly not authoritative for signed `abs_diff`;
-- future refactors could accidentally call `generateAbsDiff` without the operand layout and get plausible but wrong code.
+The current helper implementation happens to return the raw member id. So today
+the direct `@intFromEnum` and the helper produce the same number. That is why the
+bug is not necessarily observable right now.
+
+The design problem is that this code bypasses the contract. If we later change
+runtime order, add a compacted representation, reserve discriminants, sort
+members by layout, or introduce an ABI-specific encoding, this static-data path
+will keep compiling and silently use stale assumptions.
 
 ### Long-Term Ideal
 
-There should be exactly one source of truth for `abs_diff` operand signedness in backend code: the operand layout attached to the LIR argument local.
+Callable-set runtime encoding should have one owner. No caller should convert
+member ids to variant indexes or discriminants by hand.
 
-The dev backend should not infer signedness from value shape or return layout.
+Static data materialization should:
 
-### Concrete Plan
+1. Resolve the selected member semantically from the callable-set payload.
+2. Convert that member id to a runtime variant index through
+   `canonical.callableSetRuntimeIndexForMember`.
+3. Convert that member id to a runtime discriminant through
+   `canonical.callableSetRuntimeDiscriminantForMember`.
+4. Validate that the runtime variant index is present in the tag-union layout.
+5. Use the runtime variant's payload layout for capture tuple materialization.
+6. Write the runtime discriminant returned by the helper.
 
-1. Change `generateAbsDiff` to require `operand_layout: layout.Idx`, not `?layout.Idx`.
-2. Delete `inferAbsDiffInputLayout`, `immediateIsNegative`, and `signedCounterpartLayout` from the dev backend.
-3. At the low-level call lowering site, compute:
+### Recommendation
 
-   ```zig
-   const lhs_layout = self.valueLayout(args[0]);
-   const rhs_layout = self.valueLayout(args[1]);
-   ```
+Replace the raw `@intFromEnum(finite.selected_member)` path with the shared
+runtime helpers.
 
-   Then require `lhs_layout == rhs_layout`, except for operations whose ABI deliberately allows mixed layouts. `Num.abs_diff` should not be mixed.
-4. Pass `lhs_layout` into `generateAbsDiff`.
-5. Add an invariant message if the argument layouts differ:
+Concretely:
 
-   ```text
-   dev backend invariant violated: num_abs_diff argument layouts differ
-   ```
+- In `writeFiniteCallableSetCapture`, compute:
+  - `runtime_index = canonical.callableSetRuntimeIndexForMember(finite.selected_member)`
+  - `runtime_discriminant = canonical.callableSetRuntimeDiscriminantForMember(finite.selected_member)`
+- Use `runtime_index` for `tag_info.variants.get(...)`.
+- Use `runtime_discriminant` for `writeDiscriminant`.
+- Keep the semantic `findCallableSetMemberPayload` check.
+- Add a debug verification helper near the callable-set layout construction that
+  checks layout variant count and runtime order against the callable-set member
+  table. Static data should consume that verified contract, not infer it.
 
-6. Add eval coverage for signed non-negative variables, not only negative literals. The test should force a signed input layout even when neither immediate is negative:
+Tests:
 
-   ```roc
-   x : I8
-   x = 120
+- Add a static-data eval test that materializes an erased callable with a
+  non-empty finite callable-set capture in static data.
+- The test should cover at least two callable-set members so the selected member
+  is not only the zero case.
+- If feasible, assert through the existing eval paths that interpreter, dev, and
+  wasm agree on the selected callable behavior.
 
-   y : I8
-   y = -120
+Priority:
 
-   I8.abs_diff(x, y)
-   ```
+High. This is a direct leftover from the callable-set runtime-encoding cleanup.
 
-   This guards the actual signed comparison path rather than the literal fallback.
-7. Add a small backend/unit test or audit rule preventing `inferAbsDiffInputLayout` from returning.
-
-### Expected End State
-
-`Num.abs_diff` signedness is carried by LIR local layouts all the way to codegen. Backend code generation either receives the operand layout explicitly or reports a compiler invariant violation. It never guesses from literals or result layout.
-
-## 2. Checked-Type Payload Lookup From Type Keys During Dependency Finalization
+## 2. Nominal Backing Is Rediscovered By Name And Argument Keys
 
 ### Current State
 
-Const and callable binding instantiation requests already have the right shape at their public API boundary:
+`TypeInstantiator.materializePublishedNominalBacking` and
+`TypeInstantiator.publishedNominalBackingRef` in
+`src/mir/mono/specialize.zig` derive a nominal key and argument keys, then call
+`publishedNominalBackingRootForRefs`.
 
-```zig
-pub const ConstInstantiationRequest = struct {
-    key: ConstInstantiationKey,
-    requested_source_ty_payload: CheckedTypeId,
-};
+That function searches:
 
-pub const CallableBindingInstantiationRequest = struct {
-    key: CallableBindingInstantiationKey,
-    requested_source_fn_ty_payload: CheckedTypeId,
-};
-```
+1. The root artifact.
+2. Imports.
+3. Relation artifacts.
 
-The stores validate those payloads against the key:
+For each artifact, `publishedNominalBackingRootInArtifact` tries:
 
-- the payload id must be in the current artifact's checked type store;
-- the payload root key must match the requested canonical type key.
+1. `instantiatePublishedNominalDeclarationBacking`, which finds a nominal
+   declaration by nominal key and instantiates its backing.
+2. `exported_nominal_representations`, matching nominal name and
+   `capability.instantiated_args` against the requested argument keys.
 
-But after validation, the payload id is discarded. `ConstInstantiationRecord` stores only:
+`CheckedTypeProjector.publishedNominalBacking` in
+`src/check/checked_artifact.zig` has a similar search. It first checks exported
+nominal representations in the target artifact, then target nominal
+declarations, then imported exported representations, then imported nominal
+declarations.
 
-```zig
-id
-key
-state
-```
+There is already a better-shaped capability mechanism:
 
-and `CallableBindingInstantiationRecord` does the same. Dependency summaries also store only keys for const/callable instances:
+- `ModuleInterfaceCapabilities.fromModule` publishes
+  `ExportedNominalRepresentation`.
+- `BoxPayloadCapabilityEntry` records `source_ty`, `backing_ty`,
+  `backing_ty_key`, `instantiated_args`, and opacity.
+- `BoxPayloadPlanFinalizer.nominalCapability` resolves nominal capability by
+  `source_ty`.
 
-```zig
-pub const ComptimeConcreteValueUse = union(enum) {
-    const_instance: ConstInstantiationKey,
-    callable_binding_instance: CallableBindingInstantiationKey,
-    ...
-};
-```
+So the compiler has two models:
 
-Because the payload id was thrown away, `ensureDependencySummaryConcreteDependency` later has to call:
+- A source-type-based publication model.
+- A late search model based on nominal name plus argument keys.
 
-- `checkedTypePayloadForConstInstanceDependency`
-- `checkedTypePayloadForCallableBindingDependency`
+### Investigation
 
-Those functions search the current artifact and imported artifacts for a checked type root whose canonical key matches the requested type key.
+The source-type-based model is closer to the long-term ideal. A nominal payload
+is not just "a name plus some arguments." It is a checked source payload with a
+particular backing payload. The module that checked the nominal declaration knows
+that relation exactly.
 
-### Why This Is The Same Class Of Problem
+The late search model works by rebuilding the relationship:
 
-The earlier stage had the checked payload id. We validate that it is correct, then discard it, then later reconstruct it by searching for the same key.
+1. Recover the nominal key from the current artifact's name store.
+2. Recover argument keys from concrete argument refs.
+3. Search artifacts for a matching nominal declaration or exported nominal
+   representation.
+4. Instantiate or materialize the backing.
 
-That creates the exact shape of bug we want to eliminate:
+That is exactly the kind of search we are trying to avoid. It is better than
+guessing from layout because it uses canonical keys and verifies arity, but it is
+still a consumer recreating a producer-owned relationship.
 
-1. A producer knows a concrete fact.
-2. The persisted/published data keeps only a lossy key.
-3. A consumer later searches stores to recover the missing fact.
-4. If the key is ambiguous, stale, missing from the searched imports, or not projected yet, the consumer has to guess, broaden the search, or fail late.
-
-The current code is better than the old callable descriptor bug because it validates the recovered payload before using it. But validation after recovery is still weaker than carrying the payload directly.
+The cache in `Program.nominal_backing_instantiations` is not the core problem.
+Caching instantiated backing roots by artifact, nominal, and arg keys is a
+reasonable implementation detail once the backing source has been selected. The
+problem is selecting the source by searching nominal/arg keys instead of
+consuming an explicit nominal representation reference.
 
 ### Long-Term Ideal
 
-Instantiation identity and instantiation payload should be separate, but both should be preserved.
+Nominal backing should be resolved from the nominal source payload, not by
+artifact-wide search.
 
-- The key remains the deduplication identity.
-- The checked payload id is stored as required payload attached to the row/request/use.
-- Later stages never call `rootForKey` to recreate that payload.
+Every checked nominal payload that can cross a compile-time, mono, lambda, or
+executable boundary should be able to answer:
 
-### Concrete Plan
+- What is the source type key for this nominal instantiation?
+- If the nominal is not builtin, what published nominal representation owns it?
+- What exact backing checked payload ref should a consumer use?
+- If the backing must be instantiated from a declaration, what declaration ref
+  and exact argument payload refs are used?
 
-1. Extend `ConstInstantiationRecord`:
+The consumer should not know how to search artifacts for nominal declarations or
+exported nominal representations. It should ask the publication boundary for the
+representation attached to this nominal source payload.
 
-   ```zig
-   pub const ConstInstantiationRecord = struct {
-       id: ConstInstanceId,
-       key: ConstInstantiationKey,
-       requested_source_ty_payload: CheckedTypeId,
-       state: ConstInstantiationState,
-   };
-   ```
+### Recommendation
 
-2. Extend `CallableBindingInstantiationRecord`:
+Consolidate nominal backing around source payload publication.
 
-   ```zig
-   pub const CallableBindingInstantiationRecord = struct {
-       id: CallableBindingInstanceId,
-       key: CallableBindingInstantiationKey,
-       requested_source_fn_ty_payload: CheckedTypeId,
-       state: CallableBindingInstantiationState,
-   };
-   ```
+Concrete design:
 
-3. Change `reserveRequest` so it stores the validated payload id. If a key is already present, verify the incoming payload id matches the existing record's payload id. A mismatch is a checked artifact invariant violation.
+1. Add an explicit nominal representation ref type. It should identify:
+   - artifact key
+   - source nominal checked payload id, or source type key plus payload id
+   - backing checked payload id
+   - backing type key
+   - instantiated argument payload ids
+   - instantiated argument keys for validation
+   - whether the nominal is opaque
 
-4. Add store accessors:
+2. Extend `ExportedNominalRepresentation` or the capability it points to so the
+   source payload id is carried, not just `source_ty`.
 
-   ```zig
-   pub fn requestForRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstantiationRequest
-   pub fn requestForRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstantiationRequest
-   pub fn requestForKey(self: *const ..., key: ...) ?...
-   ```
+3. Build a per-artifact map from nominal source payload identity to nominal
+   representation. The lookup key should be the exact source payload id for
+   same-artifact data, or an artifact-qualified payload ref for imported data.
+   Canonical keys can be stored alongside it for validation.
 
-5. Change `ComptimeConcreteValueUse` to carry full requests for instance dependencies:
+4. Replace `publishedNominalBackingRootForRefs` with a function whose input is
+   the nominal source ref. The function should:
+   - resolve the nominal representation attached to that source ref
+   - verify the source key still matches
+   - project or instantiate the published backing payload
+   - return the exact backing source ref/root
 
-   ```zig
-   pub const ComptimeConcreteValueUse = union(enum) {
-       const_instance: ConstInstantiationRequest,
-       callable_binding_instance: CallableBindingInstantiationRequest,
-       procedure_callable: canonical.ProcedureCallableRef,
-       procedure_callable_with_payloads: ProcedureCallableDependency,
-   };
-   ```
+5. Keep declaration instantiation, but move it behind the same publication API.
+   A declaration can be the producer of a representation for a local nominal
+   payload. Mono should not scan declarations by name.
 
-   If copying full request structs everywhere is too verbose, introduce named dependency structs, but they must contain both key and payload.
+6. After the new API is in place, remove:
+   - artifact scans by nominal key from mono
+   - `CheckedTypeProjector.publishedNominalBacking` searches by nominal name
+   - duplicated nominal argument key matching in consumers
 
-6. Update dependency summary builders:
+Tests:
 
-   - When the dependency is the original compile-time request, use the request payload already in hand.
-   - When the dependency comes from an existing instance ref, read the request from the instantiation store.
-   - When the dependency comes from an imported const/callable use, project the checked payload once at dependency-summary construction time, then store the projected payload id in the summary.
+- A nominal from an imported module with the same structural backing as another
+  nominal should resolve through its own published representation, not whichever
+  key search finds first.
+- An opaque nominal should preserve the same representation path as a transparent
+  nominal, with opacity checked as metadata rather than inferred from where the
+  backing was found.
+- Recursive or mutually recursive nominal backing instantiation should continue
+  to use a reservation cache, but the cache should be keyed after the
+  representation has been selected.
 
-7. Delete these recovery helpers:
+Priority:
 
-   - `checkedTypePayloadForConstInstanceDependency`
-   - `checkedTypePayloadForCallableBindingDependency`
+High. This is the largest remaining design duplication in this audit.
 
-8. Change `ensureDependencySummaryConcreteDependency` so it consumes the request from the summary directly:
-
-   ```zig
-   .const_instance => |request| ensureConstInstanceRequest(..., request)
-   .callable_binding_instance => |request| ensureCallableBindingInstanceRequest(..., request)
-   ```
-
-9. Add semantic audit checks preventing the old recovery helpers from returning:
-
-   - `checkedTypePayloadForConstInstanceDependency`
-   - `checkedTypePayloadForCallableBindingDependency`
-   - direct `rootForKey(key.requested_source_ty)` in finalization
-   - direct `rootForKey(key.requested_source_fn_ty)` in finalization
-
-### Expected End State
-
-Concrete dependency summaries are no longer lossy. A const/callable instance dependency carries the exact checked payload root required to reserve or evaluate it. Finalization does not search checked type stores by canonical key to recover missing payloads.
-
-## 3. Capture And Const Planning Recover Checked Payloads From Source Type Keys
+## 3. Record And Tag Source Children Are Recovered By Label Text
 
 ### Current State
 
-There are two related but different paths in `src/lir/checked_pipeline.zig`.
+There are two main source-child lookup implementations:
 
-Capture-slot planning is still primarily key-driven. `CaptureSlotPlanBuilder.planFor` receives:
+- `BodySolver.sourceRecordField` and `BodySolver.sourceTagPayload` in
+  `src/mir/lambda_solved/solve.zig`
+- `SessionExecutableTypePayloadBuilder.sourceRecordField` and
+  `SessionExecutableTypePayloadBuilder.sourceTagPayload` in
+  `src/mir/lambda_solved/representation.zig`
 
-```zig
-source_ty: CanonicalTypeKey
-value_info: ValueInfoId
-```
-
-and `buildPlan` recovers the checked payload with:
-
-```zig
-artifact.checked_types.rootForKey(source_ty)
-```
-
-That is exactly the recovery pattern we want to eliminate. The source value metadata already has more precise information:
+Both walk checked source payloads and match labels like this:
 
 ```zig
-pub const ValueInfo = struct {
-    source_ty: canonical.CanonicalTypeKey,
-    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
-    ...
-};
+source_names.recordFieldLabelText(source_field)
+self.canonical_names.recordFieldLabelText(logical_field)
 ```
 
-The lambda-solved stage validates that `source_ty_payload`, when present, matches `source_ty`. The LIR checked pipeline also already has a good projection helper:
+and similarly for tags.
 
-```zig
-projectCheckedPayloadForConcreteSourcePayload(...)
-```
+There are related const-backed helper functions in
+`src/mir/lambda_solved/solve.zig`:
 
-That helper projects a concrete source type payload into the current artifact's checked type store and validates the expected canonical key. It is already used in callable-result planning, so the compiler has the right model available. Capture-slot planning is just not using it consistently.
+- `constRecordFieldMatches`
+- `constTagMatches`
 
-Const-graph planning is in better shape. `ConstGraphPlanBuilder.buildPlan` starts from a `CheckedTypeId`, and most recursive const planning passes child checked payload ids directly. The suspect path is the "extra record field" path in `recordFields`. When aggregate metadata contains a field that is not present in the checked record payload, the code reads the child's `ValueInfo` and then calls:
+There is already a projection mechanism in `CheckedTypeProjector` that remaps
+record field labels and tag labels into the target name store when it projects
+checked type payloads. There is also `ArtifactNamePublisher`, which interns
+lowering-run names into checked artifact names.
 
-```zig
-artifact.checked_types.rootForKey(child_info.source_ty)
-```
+### Investigation
 
-That is another recovery from a key even though the child `ValueInfo` can carry `source_ty_payload`.
+The current text matching is not arbitrary string guessing. It exists because
+different artifacts and lowering runs have different canonical-name stores.
+Record field label id `5` in one store is not necessarily label id `5` in
+another.
 
-### Why This Is The Same Class Of Problem
+However, comparing text every time a later stage needs a child source payload is
+still the wrong boundary. The later stage wants a payload relationship, not a
+name-store reconciliation operation.
 
-The producer of `ValueInfo` knows the value's concrete source type payload, or it knows that publishing a payload failed and should have been an invariant violation earlier. Capture and const planning should not replace that payload with only a canonical key and later search checked type stores for a root with the same key.
+The current code repeats this work in several places:
 
-The canonical key is not enough information for long-term compiler correctness:
+- record fields
+- tag payloads
+- erased boundary type-key hashing
+- erased boundary endpoint construction
+- const-backed record/tag value handling
 
-- it does not identify which artifact published the payload;
-- it does not identify which checked payload root should be used when several roots share a key through imports or projection;
-- it hides whether the value metadata was incomplete;
-- it makes later stages responsible for recreating information they did not produce.
+Each repetition is a chance to forget row extension behavior, mishandle imported
+name stores, or treat "same text" as enough information after the precise source
+payload relationship has been lost.
 
 ### Long-Term Ideal
 
-Capture and const reification planning should be payload-driven.
+Cross-name-store label reconciliation should happen exactly once at the boundary
+where the payload crosses stores.
 
-The planning APIs should accept either a checked payload id or a concrete source payload reference that can be projected exactly once into a checked payload id. A bare `CanonicalTypeKey` may be used only as a validation key, never as the thing from which the checked payload is rediscovered.
+After that boundary, later stages should use explicit child selectors that are
+valid in the current store, or explicit child source refs.
 
-### Concrete Plan
+The model should be:
 
-1. Introduce an explicit planning input for source values, for example:
+- A record field child is selected by a remapped canonical field id plus the
+  exact checked child payload id.
+- A tag payload child is selected by a remapped canonical tag id, payload index,
+  and exact checked child payload id.
+- Row extension traversal should be part of a checked-type child projection API,
+  not duplicated in consumers.
+- Missing children should be invariant errors when the consumer had a source
+  payload and the logical type says the child exists.
 
-   ```zig
-   const SourceValuePayload = struct {
-       key: canonical.CanonicalTypeKey,
-       payload: ConcreteSourceType.ConcreteSourceTypeRef,
-   };
-   ```
+### Recommendation
 
-   If the call site already has a checked payload id, use a sibling form:
+Introduce a checked-source child projection API and make both lambda solving and
+executable payload building use it.
 
-   ```zig
-   const CheckedValuePayload = struct {
-       key: canonical.CanonicalTypeKey,
-       payload: checked_artifact.CheckedTypeId,
-   };
-   ```
+Concrete design:
 
-   The important rule is that the key is validation context, not lookup input.
+1. Add a helper owned by the checked type projection/source module, not by lambda
+   solving:
 
-2. Change `CaptureSlotPlanBuilder.planFor` so it receives a payload-bearing input instead of `source_ty` alone. The common path should read:
+   - `checkedRecordFieldChild(source_ref, target_field_label) -> source_ref`
+   - `checkedTagPayloadChild(source_ref, target_tag_label, payload_index) -> source_ref`
+   - plus tuple/list/box/function/nominal child helpers for consistency
 
-   ```zig
-   const value_info = artifact.getValueInfo(value_info_id);
-   const payload_ref = value_info.source_ty_payload orelse invariant(...);
-   const checked_ty = projectCheckedPayloadForConcreteSourcePayload(..., payload_ref, value_info.source_ty, ...);
-   ```
+2. The helper should accept enough name-store context to remap once:
+   - source artifact/name store
+   - target name store
+   - source checked payload ref
+   - target logical child selector
 
-3. For capture-slot descriptors that currently publish only `source_ty`, extend the descriptor data so each capture slot has the source payload reference too. If there are call sites where the slot source is already known as a checked type, publish that checked payload directly.
+3. Intern or remap target labels into the source boundary before lookup, or build
+   a small correspondence table when projecting a source payload:
+   - target field label id -> source checked child id
+   - target tag label id and payload index -> source checked child id
 
-   The descriptor should not force consumers to reconstruct the payload. A capture slot means "this value with this source type payload is stored in the closure/callable value", so the payload belongs in the slot metadata.
+4. Store child source refs in representation roots or source-root publication
+   records where consumers repeatedly need them. This avoids repeated traversal
+   and makes the graph explicit.
 
-4. Delete the `rootForKey(source_ty)` call from `CaptureSlotPlanBuilder.buildPlan`. Missing payload metadata should produce a checked-pipeline invariant violation with a direct message such as:
+5. Remove local text comparison helpers from:
+   - `BodySolver`
+   - `SessionExecutableTypePayloadBuilder`
+   - const-backed record/tag materialization paths
 
-   ```text
-   capture slot source type payload was not published
-   ```
+6. Keep text equality only in boundary code that imports or projects names into
+   a shared store. That boundary should return ids/refs, not booleans.
 
-5. Fix the const-graph "extra record field" path the same way. When it reads `child_info`, it should require `child_info.source_ty_payload`, project it with `projectCheckedPayloadForConcreteSourcePayload`, and pass the resulting `CheckedTypeId` into the recursive const planning path.
+Tests:
 
-6. Audit all value metadata that can be followed by const/capture planning. Aggregate fields, tuple elements, tag payloads, list elements, boxes, nominal backing values, and callable captures should publish a child `ValueInfoId` whose `source_ty_payload` is present whenever the child is later reified.
+- Import a module with records and tags, then use those fields/tags through
+  lambda-solved and erased-boundary paths. The test should force source and
+  target name stores to be different.
+- Exercise row-extension traversal so the selected field/tag is not in the
+  first payload node.
+- Include a const-backed record/tag value so the const materialization path uses
+  the same child projection API.
 
-7. Add semantic audit checks that fail if these patterns return:
+Priority:
 
-   - `CaptureSlotPlanBuilder` calling `rootForKey(source_ty)`
-   - const planning calling `rootForKey(child_info.source_ty)`
-   - any checked-pipeline reification planner deriving `CheckedTypeId` from only a `CanonicalTypeKey`
+High. This is a recurring boundary leak and should be consolidated before more
+erased-boundary cases are added.
 
-8. Add regression coverage that exercises the specific paths:
-
-   - a closure capture whose source type payload comes from an imported artifact;
-   - a captured boxed callable value;
-   - a record constant with an extra runtime field whose child type is not recoverable by a local root key;
-   - a recursive callable/record case where key lookup would find the wrong root if payload identity were lost.
-
-### Expected End State
-
-Capture-slot planning and const planning consume exact payload metadata. Source type keys remain useful for validation and error messages, but they are not used as database queries to recover checked payload roots.
-
-## 4. Private Capture Finalization Recovers Checked Payloads
+## 4. Imported Checked-Type Projection Still Selects Source Roots By Key
 
 ### Current State
 
-Private capture publication happens in `src/eval/compile_time_finalization.zig` through `PrivateCaptureBuilder`.
+`ConcreteSourceType.Store` is already designed around explicit payload refs. Its
+file comment says canonical type keys are identity keys and later lowering should
+retain explicit payload refs.
 
-There are three concrete recovery sites:
-
-1. `captureRef` receives a top-level capture `source_ty` from a callable-set descriptor slot and calls:
-
-   ```zig
-   artifact.checked_types.rootForKey(source_ty)
-   ```
-
-   It only needs this to produce a `source_scheme` for `PrivateCaptureRef`.
-
-2. `serializableLeaf` receives `SerializableCaptureLeafPlan`, which contains `requested_source_ty`, `source_scheme`, `schema`, and `reification_plan`. It reserves a promoted const template using `leaf.source_scheme`, then calls:
-
-   ```zig
-   artifact.checked_types.rootForKey(leaf.requested_source_ty)
-   ```
-
-   to reserve the const instance.
-
-3. `executableSerializableLeaf` does the same thing for executable capture leaves that contain callable slots and therefore must be persisted as promoted const instances.
-
-The plan builder already had the exact checked payload when it created serializable leaves:
+The store root has:
 
 ```zig
-serializableLeafPlan(checked_ty, source_ty, value_info_id)
+key: CanonicalTypeKey
+source: artifact { artifact, ty } | local ty
 ```
 
-It uses `checked_ty` to build the const reification plan and to compute `source_scheme`, but the payload id is not stored in `SerializableCaptureLeafPlan`. Finalization therefore recreates it from `requested_source_ty`.
+So an artifact-backed concrete source type already knows the exact imported
+checked payload id.
 
-For the top-level `PrivateCaptureRef`, the situation is worse. The `captureRef` call is driven by `canonical.CallableSetCaptureSlot`, whose fields are currently:
+However, `publishConcreteConstProducerType` and
+`publishConcreteConstDependencyType` in `src/mir/mono/specialize.zig` still call
+`CheckedTypeProjector.projectImportedCheckedTypeForKey` for imported data.
 
-```zig
-slot
-source_ty
-exec_value_ty
-```
+`projectImportedCheckedTypeForKey` scans `imported.checked_types.roots` looking
+for a matching key and then projects that root.
 
-The descriptor slot does not publish the source payload for the captured value. Finalization combines that descriptor key with a capture-slot plan id, then uses `rootForKey` to get the root.
+For producers, `ConcreteConstProducer` already contains:
 
-`PrivateCaptureRef` itself also stores only `source_scheme`, not the checked payload root. Later mono lowering resolves that scheme key back to a root before lowering the private capture node.
+- producer artifact
+- producer payload id
+- producer key
 
-### Why This Is The Same Class Of Problem
+For concrete refs, `ConcreteSourceTypeRoot.source.artifact` already contains:
 
-Private capture finalization is a consumer of plans. It should not be discovering type payloads.
+- artifact key
+- checked payload id
 
-The checked-pipeline planner and lambda-solved value metadata know the payload. Finalization only sees a runtime value, a capture plan id, and a callable descriptor slot. When finalization calls `rootForKey`, it is compensating for a lossy plan boundary.
+### Investigation
 
-The `source_scheme` field is better than a bare type key for some public cross-artifact cases, but for private capture lowering it is still a key that must be resolved later. A private capture is already an artifact-local graph node with an artifact key, so it can refer to the exact checked root directly.
+There are two different uses of keys here:
+
+1. Target dedupe:
+   - If the target checked type store already has a root for the same key, reuse
+     it.
+   - This is fine. The source payload has already been selected, and the key is
+     being used as an interning key.
+
+2. Source selection:
+   - Search an imported artifact for a root with this key.
+   - This is the problem. It discards exact source identity and tries to find it
+     again.
+
+The current code is unlikely to pick the wrong source often because checked
+type roots are usually canonical-key unique. But the whole point of the recent
+payload-publication work was to stop relying on that property for source
+selection.
 
 ### Long-Term Ideal
 
-Private capture plans and private capture refs should be checked-payload-driven.
+All imported projection should start from an artifact-qualified checked payload
+ref.
 
-Every `CaptureSlotReificationPlanId` should identify both:
+The projector should expose public APIs that make this distinction obvious:
 
-- the exact checked payload root for the value represented by the slot;
-- the reification shape for that payload.
+- `projectImportedCheckedType(imported, ty)` for exact source projection.
+- `projectCheckedTypeViewRoot(source_view, ty)` for exact local/view projection.
+- `rootForKey` only inside projection internals for target dedupe.
 
-Finalization should consume that payload directly when it creates:
+There should not be a public `projectImportedCheckedTypeForKey` used by lowering
+or finalization paths.
 
-- `PrivateCaptureRef`;
-- promoted const templates;
-- promoted const instance requests;
-- lowered private capture expressions.
+### Recommendation
 
-### Concrete Plan
+Remove key-based source selection from compile-time dependency publication.
 
-1. Replace the bare union storage for capture-slot plans with a payload-bearing record:
+Concrete changes:
 
-   ```zig
-   pub const CaptureSlotReificationPlan = struct {
-       source_ty: canonical.CanonicalTypeKey,
-       source_ty_payload: CheckedTypeId,
-       source_scheme: canonical.CanonicalTypeSchemeKey,
-       kind: CaptureSlotReificationPlanKind,
-   };
-   ```
-
-   Move the current union cases into `CaptureSlotReificationPlanKind`.
-
-   This makes the payload/scheme part of every node, not only serializable leaves.
-
-2. Remove `requested_source_ty` and `source_scheme` duplication from `SerializableCaptureLeafPlan`, or keep them only as cached derived fields with debug verification. The ideal data is:
+1. Make exact imported projection public if necessary:
 
    ```zig
-   pub const SerializableCaptureLeafPlan = struct {
-       schema: ComptimeSchemaId,
-       reification_plan: ConstGraphReificationPlanId,
-   };
+   pub fn projectImportedCheckedType(
+       self: *CheckedTypeProjector,
+       imported: ImportedModuleView,
+       ty: CheckedTypeId,
+   ) Allocator.Error!CheckedTypeId
    ```
 
-   The enclosing `CaptureSlotReificationPlan` supplies `source_ty`, `source_ty_payload`, and `source_scheme`.
+2. Change `publishConcreteConstProducerType`:
 
-3. Change `PrivateCaptureBuilder.captureRef` to accept only `plan_id`, `physical`, and `capture_index`. It should read the plan record:
+   - For same-artifact producer, keep projecting `producer.payload`.
+   - For imported producer, find the imported artifact by artifact key, then call
+     `projectImportedCheckedType(imported, producer.payload)`.
+   - Verify the projected root key equals `producer.key`.
 
-   ```zig
-   const plan = artifact.comptime_plans.captureSlot(plan_id);
-   const source_payload = plan.source_ty_payload;
-   const source_scheme = plan.source_scheme;
-   ```
+3. Change `publishConcreteConstDependencyType`:
 
-   Then it can verify that the descriptor slot, if one is available at the call site, agrees with `plan.source_ty`. It should not use the descriptor slot as the source of type metadata.
+   - For `.local`, keep projecting the local root with names.
+   - For `.artifact`, use `artifact_ref.ty` directly after finding the artifact.
+   - Verify the projected root key equals `root.key`.
 
-4. Extend callable-set capture slots or their checked-pipeline plan input so descriptor slot metadata is not the only source of top-level capture type identity.
+4. Delete or deprecate `projectImportedCheckedTypeForKey`.
 
-   The better long-term model is:
+5. Keep `rootForKey` in:
+   - target checked type store dedupe
+   - synthetic root interning
+   - projector active recursion handling
 
-   - lambda-solved `ValueInfo` carries `source_ty_payload`;
-   - `CaptureSlotPlanBuilder` projects that payload to a `CheckedTypeId`;
-   - the resulting `CaptureSlotReificationPlan` stores that `CheckedTypeId`;
-   - descriptor slots remain executable-shape descriptors and validation keys.
+Tests:
 
-   If `canonical.CallableSetCaptureSlot` remains a canonical descriptor, it may keep `source_ty` and `exec_value_ty`, but finalization must not rely on it to recover checked payload identity.
+- Add a compile-time dependency summary test where an imported concrete type is
+  projected from a payload id and validated by key.
+- Add a debug-only invariant test if the projected payload key does not match the
+  expected key. That should fail loudly rather than search for another root.
 
-5. Change `serializableLeaf` and `executableSerializableLeaf` to reserve const instances using the plan's `source_ty_payload`:
+Priority:
 
-   ```zig
-   .requested_source_ty_payload = plan.source_ty_payload
-   ```
+Medium-high. This is not as dangerous as nominal backing search because the
+exact refs already exist and the local change is straightforward.
 
-   Delete both `rootForKey(leaf.requested_source_ty)` calls.
-
-6. Change `PrivateCaptureRef` from scheme-only to payload-direct:
-
-   ```zig
-   pub const PrivateCaptureRef = struct {
-       artifact: CheckedModuleArtifactKey,
-       owner: PromotedCaptureId,
-       node: PrivateCaptureNodeId,
-       source_ty_payload: CheckedTypeId,
-   };
-   ```
-
-   If some serialized/public boundary still needs `source_scheme`, keep it as a derived compatibility field temporarily, but mono lowering should use `source_ty_payload` directly. A private capture is concrete, so mono should not need to resolve a type scheme key to discover its root.
-
-7. Update mono lowering:
-
-   - `lowerPrivateCaptureExpr` should read `capture.source_ty_payload`;
-   - it should validate the id is in `capture.artifact`'s checked type store;
-   - it should pass that id to `lowerPrivateCaptureNode`;
-   - it should not call `checkedTypeSchemeForKey` for private captures.
-
-8. Add checked-artifact verification:
-
-   - each capture-slot plan's `source_ty_payload` is in range;
-   - `checked_types.roots[source_ty_payload].key == source_ty`;
-   - `source_scheme` resolves to the same root, while the compatibility field exists;
-   - serializable leaf const instances use the enclosing plan's payload;
-   - `PrivateCaptureRef.source_ty_payload` is in range for `PrivateCaptureRef.artifact`.
-
-9. Add semantic audit checks preventing these recovery calls:
-
-   - `PrivateCaptureBuilder.captureRef` calling `rootForKey`;
-   - `serializableLeaf` calling `rootForKey(leaf.requested_source_ty)`;
-   - `executableSerializableLeaf` calling `rootForKey(leaf.requested_source_ty)`;
-   - `lowerPrivateCaptureExpr` resolving a private capture type through only `source_scheme`.
-
-### Expected End State
-
-Private capture finalization becomes a pure consumer of capture plans. The capture plan says what type payload each captured value has, and finalization uses that payload when publishing private capture handles and promoted const instances. No private capture path recovers a checked root by matching a canonical type key.
-
-## 5. `named_fn` Layout Sentinel And Backend Symbol Lookup
+## 5. Wasm Numeric Low-Level Lowering Uses Return Layout For Some Signedness
 
 ### Current State
 
-`layout.Idx.named_fn` exists in two layout modules:
+`src/backend/wasm/WasmCodeGen.zig` has one large helper,
+`emitNumericLowLevel`, for scalar and composite numeric low-level operations.
 
-- `src/layout/layout.zig`
-- `src/interpreter_layout/layout.zig`
+It already uses operand layout for:
 
-The comment says it is a sentinel for call expressions where the function is resolved by name, and that the dev backend resolves these via symbol lookup.
+- comparisons
+- `num_mod_by`
+- `num_abs_diff`
+- composite i128/Dec comparisons and `abs_diff`
 
-However, a repository search shows no consumers. The only matches for `named_fn` are the two definitions. The new LIR call representation also does not need this sentinel:
+But it still uses `ret_layout` for signedness in:
 
-```zig
-assign_call: struct {
-    target: LocalId,
-    proc: LirProcSpecId,
-    args: LocalSpan,
-    next: CFStmtId,
-},
-assign_call_erased: struct {
-    target: LocalId,
-    closure: LocalId,
-    args: LocalSpan,
-    next: CFStmtId,
-},
-```
+- `num_div_by`
+- `num_div_trunc_by`
+- `num_rem_by`
 
-Direct calls carry a procedure spec. Erased calls carry the callable value local. Packed erased callable construction carries the concrete procedure spec and capture layout. That is the right split: call target identity is not a layout.
+The dev backend now routes numeric/comparison operations through an explicit
+`operand_layout` derived from `args[0]`, and the recent `abs_diff` fix validates
+that both argument layouts match before codegen.
 
-### Why This Is The Same Class Of Problem
+The interpreter also passes `arg_layout` into numeric operations.
 
-If this sentinel were active, it would be the wrong design. A layout id should describe the runtime representation of a value. It should not mean "the callee will be recovered later by name".
+### Investigation
 
-That would mix two independent facts:
+For normal integer division, return layout and operand layout are expected to be
+the same. That makes the current Wasm code probably correct for current valid
+LIR.
 
-- value representation;
-- callable identity / dispatch target.
+But the invariant is accidental. The semantic question "signed or unsigned?" is
+answered by the input operands, not by the output location. We already hit this
+class of problem with `I8.abs_diff`, where the result layout is unsigned but the
+comparison must use signed operand semantics.
 
-The current compiler appears not to use the sentinel, which makes this less dangerous than the other problems. But leaving the sentinel in the public layout index enum documents and preserves a bad escape hatch.
+The Wasm helper's `use_operand_layout` flag currently includes comparisons and
+`abs_diff`, but not division or remainder. That flag is doing two jobs:
+
+- deciding whether composite-ness should be detected from operands
+- deciding which valtype/layout drives operation semantics
+
+Those should be clearer.
 
 ### Long-Term Ideal
 
-Remove `named_fn` entirely.
-
-There should be no layout value for "named function". Named/static calls should be represented by call IR fields, such as `LirProcSpecId`, `ProcedureCallableRef`, `ProcedureBindingRef`, or an explicit static-dispatch plan. Callable values should be represented by closure/callable layouts only when an actual runtime value exists.
-
-### Concrete Plan
-
-1. Delete `Idx.named_fn` from `src/layout/layout.zig`.
-2. Delete `Idx.named_fn` from `src/interpreter_layout/layout.zig`.
-3. Keep `Idx.none` as the only non-layout sentinel in the layout index type if the map implementation still needs it.
-4. Add a semantic audit check:
-
-   ```text
-   rg named_fn src
-   ```
-
-   should return no matches.
-
-5. Add or keep tests that prove direct named calls do not need a function layout:
-
-   - top-level direct function call;
-   - method-style builtin call such as `List.map` or `List.iter`;
-   - static dispatch through an associated method;
-   - erased callable call, to prove actual runtime callable values still use callable-specific representation.
-
-6. If any future lowering path wants a "no closure layout needed" marker, it should use an explicit optional field:
-
-   ```zig
-   capture_layout: ?layout.Idx
-   ```
-
-   or a call-target union:
-
-   ```zig
-   const CallTarget = union(enum) {
-       direct: LirProcSpecId,
-       erased_value: LocalId,
-       hosted: HostedProcRef,
-   };
-   ```
-
-   It should not encode this in `layout.Idx`.
-
-### Expected End State
-
-Layouts describe memory representation only. Static call identity travels through call IR. There is no layout sentinel that implies a backend should recover a function by name.
-
-## 6. Callable-Set Member Selection By Runtime Discriminant
-
-### Current State
-
-Compile-time finalization selects a finite callable-set member by decoding the runtime callable-set value:
+Every low-level numeric operation should receive an explicit numeric operation
+context:
 
 ```zig
-const discriminant = info.data.readDiscriminant(value.ptr);
-return .{
-    .member = @enumFromInt(discriminant),
-    .payload_layout = info.variants.get(@intCast(discriminant)).payload_layout,
+const NumericOpContext = struct {
+    op: LowLevel,
+    operand_layout: layout.Idx,
+    ret_layout: layout.Idx,
+    operand_val_type: ValType,
+    ret_val_type: ValType,
 };
 ```
 
-At first glance this looks like a guess. After tracing the producer side, it is not currently arbitrary:
+The backend should:
 
-- `RepresentationStore` canonicalizes callable-set members with dense member ids, using slice position as the id.
-- checked-artifact verification requires published callable-set descriptor members to be dense canonical ids.
-- executable type lowering keeps callable-set members as member-id-indexed variants.
-- IR lowering builds callable-set layouts as tag unions where `variants[member_id]` is the member payload layout.
-- IR lowering constructs callable-set values with:
+- validate that required operands have matching layouts
+- derive signedness from `operand_layout`
+- derive result storage from `ret_layout`
+- use `ret_layout` for memory/register result shape only
+- reject impossible layout combinations in debug builds
 
-  ```zig
-  .discriminant = @intCast(@intFromEnum(callable.member.member_index))
-  ```
+### Recommendation
 
-- IR lowering switches on callable-set values using branch values equal to `member.member_index`.
+Refactor Wasm numeric lowering to separate operand semantics from result shape.
 
-So the current representation contract is:
+Concrete changes:
 
-```text
-callable-set runtime discriminant == dense canonical CallableSetMemberId
-```
+1. At the start of `emitNumericLowLevel`, compute:
+   - `operand_layout = self.procLocalLayoutIdx(args[0])`
+   - `operand_vt = self.procLocalValType(args[0])`
+   - `ret_vt = self.resolveValType(ret_layout)`
 
-That is a valid runtime encoding. The problem is that this encoding is implicit and scattered. Finalization sees a plain tag-union layout plus a callable result plan, then casts the tag discriminant to a member id without naming the encoding it is consuming.
+2. For binary numeric operations, validate that `args[1]` has the expected
+   operand layout. Shifts are the exception: lhs has numeric layout, rhs is the
+   shift count layout.
 
-### Why This Is Related But Not The Same Bug
+3. Use `operand_layout` for signedness in:
+   - division
+   - truncating division
+   - remainder
+   - modulo
+   - comparisons
+   - `abs_diff`
+   - shifts where signedness matters
 
-This is legitimate value decoding, not type/layout recovery. Runtime values must be decoded somehow, and a finite callable set is represented as a tag union.
+4. Use `ret_layout` only for:
+   - result valtype when the operation naturally returns a different type
+   - memory storage/canonicalization
+   - return-by-pointer or composite result shape
 
-The risk is not that finalization has no producer fact. The producer fact exists: member ids are dense and are used as discriminants. The risk is that the fact is not first-class. Several stages independently rely on the convention:
+5. Rename or remove `use_operand_layout`; it should not be a semantic switch
+   hidden inside the helper.
 
-- descriptor member order;
-- executable callable-set type order;
-- tag-union variant order;
-- callable value construction discriminants;
-- callable match branch discriminants;
-- finalization's discriminant-to-member cast.
+Tests:
 
-If any one stage later changes member ordering or allows sparse member ids, finalization can still compile while decoding the wrong member.
+- Mirror the existing dev/eval signedness tests through Wasm where possible.
+- Add direct Wasm eval coverage for signed and unsigned division/remainder with
+  operands whose values distinguish signed and unsigned behavior.
+- Keep the `I8.abs_diff` test as a regression for "result layout differs from
+  operand semantics."
+
+Priority:
+
+Medium. It may not currently be user-visible, but it is the same design smell as
+the bug we just fixed.
+
+## 6. LIR Interpreter Numeric Helpers Silently Default On Unsupported Layouts
+
+### Current State
+
+`src/eval/interpreter.zig` has several numeric helpers that switch on
+`helper.sizeOf(arg_layout)`.
+
+Some paths fail correctly:
+
+- `numCmpOp` returns an invariant error for unsupported non-equality compare
+  sizes.
+- `valuesEqual` reports invariant errors for unsupported scalar and opaque
+  pointer sizes.
+
+Some paths silently default:
+
+- `evalCompare` returns `1`, meaning equality, for unsupported sizes.
+- `numShiftOp` does nothing for unsupported sizes and returns the allocated
+  result.
+- `numBinOp` ignores unsupported sizes both in division-by-zero checking and in
+  the actual operation.
+- `numWiden` does nothing for unsupported return sizes.
+
+These defaults can return zeroed or equality-looking values for invalid LIR.
+
+### Investigation
+
+The interpreter is supposed to be a dumb executor of valid LIR. That does not
+mean it should accept invalid LIR. A dumb interpreter is useful precisely when it
+fails at the point where LIR violates its contract.
+
+Silent defaults weaken that role:
+
+- Invalid LIR can appear to pass in eval.
+- A backend can fail or panic later on the same program.
+- Debugging points at the backend even though the interpreter had enough
+  information to reject the program earlier.
+
+The issue is not that the interpreter lacks type information. These helpers have
+`arg_layout` and `ret_layout`. If a numeric low-level op reaches them with a
+non-numeric layout or unsupported size, that is an invariant violation.
 
 ### Long-Term Ideal
 
-Make callable-set runtime encoding explicit and centrally verified.
+The interpreter should have one numeric layout classifier and all numeric helpers
+should use it.
 
-The long-term design can keep the efficient identity mapping:
+For example:
 
-```text
-discriminant == member id
+```zig
+const NumericOperandKind = union(enum) {
+    unsigned_int: struct { bits: u16 },
+    signed_int: struct { bits: u16 },
+    float: struct { bits: u16 },
+    dec,
+};
 ```
 
-That is a good representation. But it should be expressed as a named compiler invariant or a published encoding object, not as repeated raw casts.
+The classifier should:
 
-### Concrete Plan
+- inspect the layout tag, not just byte size
+- distinguish integer, float, Dec, and unsupported layouts
+- return an invariant error for anything outside the numeric domain
+- be reused by binops, comparisons, compare, shifts, pow/log/round/floor/ceiling,
+  widening, and truncation helpers where applicable
 
-1. Define the runtime encoding in one place, preferably next to canonical callable-set descriptors:
+Then the numeric helpers should switch on `NumericOperandKind`, not raw sizes.
 
-   ```zig
-   pub const CallableSetRuntimeVariant = struct {
-       discriminant: u16,
-       member: CallableSetMemberId,
-       payload_exec_ty: ?CanonicalExecValueTypeKey,
-   };
+### Recommendation
 
-   pub const CallableSetRuntimeEncoding = struct {
-       callable_set_key: CanonicalCallableSetKey,
-       variants: []const CallableSetRuntimeVariant,
-   };
-   ```
+Replace silent numeric defaults with explicit invariant errors and centralize
+numeric layout decoding.
 
-   If we choose not to allocate a separate object, define equivalent helper functions and document that `CanonicalCallableSetDescriptor.members` is ordered by runtime discriminant.
+Concrete changes:
 
-2. Centralize the invariant with helpers:
+1. Add a helper near the interpreter numeric functions:
 
    ```zig
-   pub fn callableSetDiscriminantForMember(member: CallableSetMemberId) u16
-   pub fn callableSetMemberForDiscriminant(encoding: CallableSetRuntimeEncoding, discriminant: u16) CallableSetMemberId
-   pub fn verifyCallableSetRuntimeEncoding(descriptor: CanonicalCallableSetDescriptor, encoding: CallableSetRuntimeEncoding) void
+   fn numericOperandKind(self: *LirInterpreter, layout: layout_mod.Idx) Error!NumericOperandKind
    ```
 
-   The helper may return `@enumFromInt(discriminant)` internally, but only after checking the descriptor/encoding is dense and in range.
+2. Use it in:
+   - `numBinOp`
+   - `numUnaryOp`
+   - `numCmpOp`
+   - `evalCompare`
+   - `numShiftOp`
+   - `evalNumPow`
+   - `evalNumSqrt`
+   - `evalNumLog`
+   - `evalNumRound`
+   - `evalNumFloor`
+   - `evalNumCeiling`
+   - numeric widening/truncation helpers where layout sizes are decoded
 
-3. Make the producer publish the encoding.
+3. Replace every `else => {}` or `else => 1` in numeric helpers with
+   `invariantFailedError`.
 
-   The natural producer is lambda-solved representation finalization, where callable-set descriptors are canonicalized and member ids are assigned. At that point the compiler should publish either:
+4. Validate binary operand layouts before interpreting binary low-level numeric
+   ops. Shifts should validate the lhs numeric layout and rhs shift-count layout
+   separately.
 
-   - `CallableSetRuntimeEncoding` alongside each descriptor; or
-   - a descriptor invariant that says `descriptor.members[i].member == @enumFromInt(i)` and that descriptor order is runtime discriminant order.
+5. Add focused interpreter tests that construct invalid LIR at the unit-test
+   level and assert that the interpreter reports an invariant error. Do not rely
+   on source Roc programs for invalid LIR cases.
 
-4. Make executable type lowering consume the encoding.
+Tests:
 
-   `src/ir/lower.zig` currently builds callable-set layouts with local `seen` checks and `variants[index] = payload_layout`. Keep the checks, but route through the shared helper:
+- Existing eval tests should still pass.
+- Add unit tests for unsupported compare/binop/shift sizes.
+- Add valid tests for signed/unsigned numeric behavior to make sure the shared
+  classifier does not regress semantics.
 
-   ```zig
-   const discriminant = callableSetDiscriminantForMember(member.member);
-   variants[discriminant] = payload_layout;
-   ```
+Priority:
 
-   If a first-class encoding object exists, iterate `encoding.variants` instead of trusting local member order.
+Medium. This is mostly hardening, but it directly protects us from
+interpreter/backend disagreement.
 
-5. Make callable-set value construction consume the encoding.
+## Consolidated Order
 
-   `lowerCallableSetValue` should not manually cast `member.member_index`. It should call:
+Recommended implementation order:
 
-   ```zig
-   const discriminant = callableSetDiscriminantForMember(callable.member.member_index);
-   ```
+1. Fix static data callable-set runtime indexing. It is small, concrete, and
+   directly related to the recent callable-set work.
+2. Remove key-based imported source selection. The exact refs already exist, so
+   this should be a contained cleanup.
+3. Refactor Wasm numeric signedness to use operand layout for all numeric
+   semantics.
+4. Replace interpreter silent numeric defaults with invariant failures and a
+   shared numeric layout classifier.
+5. Consolidate record/tag child source projection. This is larger because it
+   crosses lambda solving, executable payload building, and const-backed paths.
+6. Redesign nominal backing publication around source payload representations.
+   This is the most invasive and should be done after the smaller remaining
+   payload-boundary leaks are gone.
 
-   or ask the encoding for the discriminant.
-
-6. Make callable match consume the encoding.
-
-   `lowerCallableMatch` should build switch branch values from the same helper/encoding. It should also verify every branch has a member in the encoding for that callable-set key.
-
-7. Make finalization consume the encoding.
-
-   Change `selectFiniteCallableSetMember` so it does not do:
-
-   ```zig
-   .member = @enumFromInt(discriminant)
-   ```
-
-   It should do one of these:
-
-   ```zig
-   const variant = encoding.variantForDiscriminant(discriminant);
-   .member = variant.member
-   ```
-
-   or, if `FiniteCallableResultPlan.members` remains the published runtime-order table:
-
-   ```zig
-   const planned_variant = members[discriminant];
-   verifyCallableSetDiscriminantForMember(planned_variant.member, discriminant);
-   .member = planned_variant.member
-   ```
-
-   The second option is smaller and still good if the field is renamed/documented as runtime-discriminant order.
-
-8. Strengthen checked-artifact and lambda-solved verification:
-
-   - every callable-set descriptor has at least one member;
-   - member ids are dense and equal to their runtime discriminant;
-   - `CallableResultMemberPlan` arrays are in runtime-discriminant order;
-   - executable callable-set payload members are in runtime-discriminant order;
-   - callable-set layout variant count equals descriptor member count;
-   - every non-ZST payload layout corresponds to the member capture payload type.
-
-9. Consider making `DiscriminantSource.runtime_callable_set` carry the callable-set key or encoding id:
-
-   ```zig
-   runtime_callable_set: CanonicalCallableSetKey
-   ```
-
-   or:
-
-   ```zig
-   runtime_callable_set: CallableSetRuntimeEncodingId
-   ```
-
-   `lower_ir` can still lower it exactly like a tag-union discriminant read, but the IR node would retain enough metadata for verification and debugging.
-
-10. Add tests/audits:
-
-   - a finite callable set with multiple closed members;
-   - a finite callable set with captured members whose payload layouts differ;
-   - an erased finite-set adapter that switches over multiple members;
-   - a semantic audit that no code outside the encoding helper casts a callable-set runtime discriminant directly with `@enumFromInt(discriminant)`.
-
-### Expected End State
-
-Callable-set runtime decoding remains cheap: one discriminant read. But the relationship between runtime discriminants and callable-set members is explicit, centralized, and verified. Finalization decodes a value using a published runtime encoding instead of relying on an implicit convention.
-
-## Recommended Implementation Order
-
-These should not be fixed as six unrelated patches. The payload-related items share the same root cause and should be consolidated into one payload-publication design.
-
-1. First, fix the small independent backend issue:
-
-   - make `Num.abs_diff` require operand layout;
-   - delete the fallback signedness inference;
-   - add signed non-literal eval coverage.
-
-2. Then do the checked-payload publication consolidation:
-
-   - store payload ids in const/callable instantiation records;
-   - store full payload-bearing instantiation requests in dependency summaries;
-   - make capture-slot plans payload-bearing records;
-   - make private capture refs and private capture const leaves consume payload ids directly;
-   - delete all finalization/capture-planning `rootForKey` recovery helpers covered above.
-
-3. After that, clean up dead layout vocabulary:
-
-   - delete `Idx.named_fn`;
-   - prove direct/static calls still lower through explicit call targets.
-
-4. Finally, make callable-set runtime encoding explicit:
-
-   - centralize the discriminant/member mapping;
-   - route IR lowering and finalization through the same helper or encoding table;
-   - add verifier/audit coverage.
-
-The most important invariant across the whole plan is this:
-
-```text
-canonical keys validate payload identity; they do not recover payload identity
-```
-
-Any time a later stage needs a checked payload, callable identity, executable payload, or runtime encoding, that fact must have been published by the stage that knew it directly.
+The final desired state is that only dedicated boundary modules do name remapping,
+source payload projection, runtime encoding conversion, and checked-type graph
+projection. All later lowering, backend, and interpreter stages should consume
+explicit refs and fail loudly if those refs are missing or inconsistent.

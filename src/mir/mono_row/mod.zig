@@ -443,10 +443,8 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
     owned_mono.root_procs.deinit(allocator);
     owned_mono.executable_synthetic_procs.deinit(allocator);
     owned_mono.procs.deinit(allocator);
+    owned_mono.deinitNominalBackingInstantiationCache();
     owned_mono.concrete_dependency_type_projections.deinit(allocator);
-    var nominal_keys = owned_mono.nominal_backing_instantiations.keyIterator();
-    while (nominal_keys.next()) |stored_key| allocator.free(stored_key.*);
-    owned_mono.nominal_backing_instantiations.deinit();
 
     const result = Result{
         .program = program,

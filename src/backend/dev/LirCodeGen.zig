@@ -4846,11 +4846,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag_payload => |payload| try self.generateTagPayloadAccess(.{
                     .source = payload.source,
                     .payload_idx = payload.payload_idx,
+                    .variant_index = payload.variant_index,
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
                 .tag_payload_struct => |payload| try self.generateTagPayloadStructAccess(.{
                     .source = payload.source,
+                    .variant_index = payload.variant_index,
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
@@ -8576,7 +8578,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
-                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                    break :blk variants.get(tpa.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner_layout = ls.getLayout(union_layout.data.box);
@@ -8584,7 +8586,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return raw_value_loc;
                     }
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
-                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                    break :blk variants.get(tpa.variant_index).payload_layout;
                 },
                 else => tpa.target_layout,
             };
@@ -8647,7 +8649,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
-                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                    break :blk variants.get(tps.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner_layout = ls.getLayout(union_layout.data.box);
@@ -8655,7 +8657,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return raw_value_loc;
                     }
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
-                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                    break :blk variants.get(tps.variant_index).payload_layout;
                 },
                 else => tps.target_layout,
             };
@@ -8926,24 +8928,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
-            return switch (loc) {
-                .stack_str => roc_str_size,
-                .list_stack => roc_list_size,
-                .stack_i128, .immediate_i128 => 16,
-                .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
-                else => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: valueSizeFromLoc unsupported location {s}",
-                            .{@tagName(loc)},
-                        );
-                    }
-                    unreachable;
-                },
-            };
-        }
-
         fn generateZeroArgTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const union_layout = ls.getLayout(tag.target_layout);
@@ -8969,6 +8953,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (union_layout.tag == .box) {
                 return try self.generateTag(.{
                     .target_layout = tag.target_layout,
+                    .variant_index = tag.variant_index,
                     .discriminant = tag.discriminant,
                     .payload = null,
                 });
@@ -9045,23 +9030,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 const inner_tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
                 const variants = ls.getTagUnionVariants(inner_tu_data);
-                const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
-                    variants.get(tag.discriminant).payload_layout
-                else
-                    null;
+                if (@as(usize, tag.variant_index) >= variants.len) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
+                            .{ tag.variant_index, variants.len },
+                        );
+                    }
+                    unreachable;
+                }
+                const variant_payload_layout = variants.get(tag.variant_index).payload_layout;
 
                 if (tag.payload) |payload_local| {
-                    const arg_layout_idx = variant_payload_layout orelse self.valueLayout(payload_local);
                     const arg_loc = self.requireExactValueLocationToLayout(
                         try self.emitValueLocal(payload_local),
                         self.valueLayout(payload_local),
-                        arg_layout_idx,
+                        variant_payload_layout,
                         "assign_tag.boxed_payload",
                     );
-                    const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
-                        const pl_val = ls.getLayout(pl);
-                        break :blk ls.layoutSizeAlign(pl_val).size;
-                    } else valueSizeFromLoc(self, arg_loc);
+                    const payload_layout = ls.getLayout(variant_payload_layout);
+                    const payload_size: u32 = ls.layoutSizeAlign(payload_layout).size;
                     if (payload_size > 0) {
                         const arg_stack_offset = try self.ensureOnStack(arg_loc, payload_size);
                         const heap_ptr = try self.allocTempGeneral();
@@ -9100,28 +9088,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.zeroStackArea(base_offset, stack_size);
 
             const variants = ls.getTagUnionVariants(tu_data);
-            const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
-                variants.get(tag.discriminant).payload_layout
-            else
-                null;
+            if (@as(usize, tag.variant_index) >= variants.len) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
+                        .{ tag.variant_index, variants.len },
+                    );
+                }
+                unreachable;
+            }
+            const variant_payload_layout = variants.get(tag.variant_index).payload_layout;
 
             if (tag.payload == null) {
                 return try self.generateZeroArgTag(.{
                     .target_layout = tag.target_layout,
+                    .variant_index = tag.variant_index,
                     .discriminant = tag.discriminant,
                 });
             } else if (tag.payload) |payload_local| {
-                const arg_layout_idx = variant_payload_layout orelse self.valueLayout(payload_local);
                 const arg_loc = self.requireExactValueLocationToLayout(
                     try self.emitValueLocal(payload_local),
                     self.valueLayout(payload_local),
-                    arg_layout_idx,
+                    variant_payload_layout,
                     "assign_tag.payload",
                 );
-                const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
-                    const pl_val = ls.getLayout(pl);
-                    break :blk ls.layoutSizeAlign(pl_val).size;
-                } else valueSizeFromLoc(self, arg_loc);
+                const payload_layout = ls.getLayout(variant_payload_layout);
+                const payload_size: u32 = ls.layoutSizeAlign(payload_layout).size;
                 try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
             }
 
@@ -12879,6 +12871,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .assign_tag => |assign| {
                     const value_loc = try self.generateTag(.{
                         .target_layout = self.localLayout(assign.target),
+                        .variant_index = assign.variant_index,
                         .discriminant = assign.discriminant,
                         .payload = assign.payload,
                     });
@@ -14413,6 +14406,7 @@ test "generate bool literal" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const assign_true = try store.addCFStmt(.{ .assign_tag = .{
         .target = result,
+        .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = ret,
@@ -14452,6 +14446,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
         .op = .{ .tag_payload = .{
             .source = source,
             .payload_idx = 0,
+            .variant_index = 0,
             .tag_discriminant = 0,
         } },
         .next = ret,

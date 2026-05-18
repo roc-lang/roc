@@ -614,7 +614,7 @@ pub const Store = struct {
                         .args = lowered_args,
                     };
                 }
-                self.assertDistinctSortedTags(lowered_tags);
+                self.assertDistinctTags(lowered_tags);
                 break :blk .{ .tag_union = .{ .tags = lowered_tags } };
             },
             .record => |record| blk: {
@@ -750,7 +750,8 @@ pub const Store = struct {
                         for (nominal.args) |arg| {
                             try self_builder.serializeType(arg);
                         }
-                        try self_builder.serializeType(nominal.backing);
+                        // Backing is intentionally excluded from nominal
+                        // identity; see equalIdsVisited for the matching rule.
                     },
                     .list => |elem| {
                         try self_builder.store.appendInternKeyValue(@as(u8, 13));
@@ -801,30 +802,24 @@ pub const Store = struct {
         try builder.serializeType(root);
     }
 
-    fn assertDistinctSortedTags(self: *Store, tags: []const Tag) void {
+    fn assertDistinctTags(self: *Store, tags: []const Tag) void {
         if (tags.len <= 1) return;
 
-        var prev = tags[0];
-        for (tags[1..]) |tag| {
-            if (@intFromEnum(tag.name) > @intFromEnum(prev.name)) {
-                prev = tag;
-                continue;
-            }
-            if (@intFromEnum(tag.name) < @intFromEnum(prev.name)) {
-                debugPanic("mono.type tag constructors were not pre-sorted", .{});
-            }
-            if (prev.args.len != tag.args.len) {
-                debugPanic("mono.type duplicate tag constructor had different arity", .{});
-            }
-            for (prev.args, tag.args) |prev_arg, tag_arg| {
-                if (!self.equalIds(prev_arg, tag_arg)) {
-                    debugPanic("mono.type duplicate tag constructor had different payload types", .{});
+        for (tags, 0..) |prev, i| {
+            for (tags[i + 1 ..]) |tag| {
+                if (prev.name != tag.name) continue;
+                if (prev.args.len != tag.args.len) {
+                    debugPanic("mono.type duplicate tag constructor had different arity", .{});
                 }
+                for (prev.args, tag.args) |prev_arg, tag_arg| {
+                    if (!self.equalIds(prev_arg, tag_arg)) {
+                        debugPanic("mono.type duplicate tag constructor had different payload types", .{});
+                    }
+                }
+                debugPanic("mono.type duplicate tag constructor reached interning", .{});
             }
-            debugPanic("mono.type duplicate tag constructor reached interning", .{});
         }
     }
-
     const TypePair = struct {
         left: TypeId,
         right: TypeId,
@@ -861,7 +856,11 @@ pub const Store = struct {
                 for (nominal.args, right_nominal.args) |left_arg, right_arg| {
                     if (!try self.equalIdsVisited(left_arg, right_arg, visited)) break :blk false;
                 }
-                break :blk try self.equalIdsVisited(nominal.backing, right_nominal.backing, visited);
+                // Backing is the runtime representation of this nominal, not
+                // its identity. The canonical source type key and arguments
+                // determine which nominal this is; backing can be materialized
+                // independently along different lowering paths.
+                break :blk true;
             },
             .primitive => |prim| prim == right.primitive,
             .func => |func| blk: {
@@ -951,6 +950,37 @@ test "nominal identity preserves generic arguments" {
 
     try std.testing.expect(foo_u8 == foo_u8_again);
     try std.testing.expect(!store.equalIds(foo_u8, foo_i64));
+}
+
+test "nominal identity is independent from materialized backing" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const bool_ty = try store.internResolved(.{ .primitive = .bool });
+    const u8_ty = try store.internResolved(.{ .primitive = .u8 });
+    const foo_nominal = canonical.NominalTypeKey{
+        .module_name = @enumFromInt(7),
+        .type_name = @enumFromInt(1),
+    };
+    const source_ty = canonical.CanonicalTypeKey{ .bytes = [_]u8{1} ** 32 };
+
+    const foo_from_bool_backing = try store.internResolved(.{ .nominal = .{
+        .nominal = foo_nominal,
+        .source_ty = source_ty,
+        .is_opaque = true,
+        .args = &.{},
+        .backing = bool_ty,
+    } });
+    const foo_from_u8_backing = try store.internResolved(.{ .nominal = .{
+        .nominal = foo_nominal,
+        .source_ty = source_ty,
+        .is_opaque = true,
+        .args = &.{},
+        .backing = u8_ty,
+    } });
+
+    try std.testing.expect(foo_from_bool_backing == foo_from_u8_backing);
+    try std.testing.expect(store.equalIds(foo_from_bool_backing, foo_from_u8_backing));
 }
 
 test "keyId does not intern abstract leaves" {

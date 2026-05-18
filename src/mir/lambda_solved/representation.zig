@@ -84,16 +84,6 @@ pub const RepresentationSolveSessionId = enum(u32) { _ };
 pub const ValueInfoStoreId = enum(u32) { _ };
 /// Public `CallableSetMemberId` alias.
 pub const CallableSetMemberId = canonical.CallableSetMemberId;
-/// Public `CallableSetRuntimeDiscriminant` alias.
-pub const CallableSetRuntimeDiscriminant = canonical.CallableSetRuntimeDiscriminant;
-/// Public `callableSetRuntimeDiscriminantForMember` alias.
-pub const callableSetRuntimeDiscriminantForMember = canonical.callableSetRuntimeDiscriminantForMember;
-/// Public `callableSetRuntimeIndexForMember` alias.
-pub const callableSetRuntimeIndexForMember = canonical.callableSetRuntimeIndexForMember;
-/// Public `callableSetMemberForRuntimeDiscriminant` alias.
-pub const callableSetMemberForRuntimeDiscriminant = canonical.callableSetMemberForRuntimeDiscriminant;
-/// Public `callableSetMemberForRuntimeIndex` alias.
-pub const callableSetMemberForRuntimeIndex = canonical.callableSetMemberForRuntimeIndex;
 /// Public `ErasedAdapterId` declaration.
 pub const ErasedAdapterId = enum(u32) { _ };
 pub const Symbol = symbol_mod.Symbol;
@@ -4497,32 +4487,6 @@ const SessionExecutableTypePayloadBuilder = struct {
         return view.payloads[index];
     }
 
-    fn sourceRecordFieldMatches(
-        self: *const SessionExecutableTypePayloadBuilder,
-        source_field: canonical.RecordFieldLabelId,
-        logical_field: canonical.RecordFieldLabelId,
-    ) bool {
-        const source_names = self.erased_source_names orelse self.names;
-        return std.mem.eql(
-            u8,
-            source_names.recordFieldLabelText(source_field),
-            self.names.recordFieldLabelText(logical_field),
-        );
-    }
-
-    fn sourceTagMatches(
-        self: *const SessionExecutableTypePayloadBuilder,
-        source_tag: canonical.TagLabelId,
-        logical_tag: canonical.TagLabelId,
-    ) bool {
-        const source_names = self.erased_source_names orelse self.names;
-        return std.mem.eql(
-            u8,
-            source_names.tagLabelText(source_tag),
-            self.names.tagLabelText(logical_tag),
-        );
-    }
-
     fn resolvedSourcePayload(
         self: *const SessionExecutableTypePayloadBuilder,
         source: ErasedBoundarySourceCursor,
@@ -4600,27 +4564,16 @@ const SessionExecutableTypePayloadBuilder = struct {
         source: ErasedBoundarySourceCursor,
         field: canonical.RecordFieldLabelId,
     ) ErasedBoundarySourceCursor {
-        var current = source;
-        var resolved = self.resolvedSourcePayload(current) orelse return .{};
-        while (true) {
-            switch (resolved.payload) {
-                .record => |record| {
-                    for (record.fields) |candidate| {
-                        if (self.sourceRecordFieldMatches(candidate.name, field)) return self.sourceCursorForCheckedRoot(candidate.ty);
-                    }
-                    current = self.sourceCursorForCheckedRoot(record.ext);
-                    resolved = self.resolvedSourcePayload(current) orelse return .{};
-                },
-                .record_unbound => |fields| {
-                    for (fields) |candidate| {
-                        if (self.sourceRecordFieldMatches(candidate.name, field)) return self.sourceCursorForCheckedRoot(candidate.ty);
-                    }
-                    representationInvariant("erased boundary record source payload is missing a field");
-                },
-                .empty_record => representationInvariant("erased boundary record source payload is missing a field"),
-                else => representationInvariant("erased boundary record source payload is not a record"),
-            }
-        }
+        const root = source.root orelse return .{};
+        const view = self.erased_source_types orelse representationInvariant("erased boundary source root has no checked source type view");
+        const names = self.erased_source_names orelse self.names;
+        const child = checked_artifact.checkedTypeRecordFieldChild(
+            .{ .names = names, .view = view },
+            root,
+            self.names,
+            field,
+        ) orelse representationInvariant("erased boundary record source payload is missing a field");
+        return self.sourceCursorForCheckedRoot(child);
     }
 
     fn sourceTagPayload(
@@ -4629,23 +4582,17 @@ const SessionExecutableTypePayloadBuilder = struct {
         tag: canonical.TagLabelId,
         index: usize,
     ) ErasedBoundarySourceCursor {
-        var current = source;
-        var resolved = self.resolvedSourcePayload(current) orelse return .{};
-        while (true) {
-            switch (resolved.payload) {
-                .tag_union => |tag_union| {
-                    for (tag_union.tags) |candidate| {
-                        if (!self.sourceTagMatches(candidate.name, tag)) continue;
-                        if (index >= candidate.args.len) representationInvariant("erased boundary tag source payload arity mismatch");
-                        return self.sourceCursorForCheckedRoot(candidate.args[index]);
-                    }
-                    current = self.sourceCursorForCheckedRoot(tag_union.ext);
-                    resolved = self.resolvedSourcePayload(current) orelse return .{};
-                },
-                .empty_tag_union => representationInvariant("erased boundary tag-union source payload is missing a tag"),
-                else => representationInvariant("erased boundary tag-union source payload is not a tag union"),
-            }
-        }
+        const root = source.root orelse return .{};
+        const view = self.erased_source_types orelse representationInvariant("erased boundary source root has no checked source type view");
+        const names = self.erased_source_names orelse self.names;
+        const child = checked_artifact.checkedTypeTagPayloadChild(
+            .{ .names = names, .view = view },
+            root,
+            self.names,
+            tag,
+            @intCast(index),
+        ) orelse representationInvariant("erased boundary tag-union source payload is missing a tag payload");
+        return self.sourceCursorForCheckedRoot(child);
     }
 
     fn resolvedFunctionSourcePayload(

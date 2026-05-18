@@ -1489,7 +1489,13 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
-                    self.setLocalChecked(frame, current, assign.target, try self.evalTagLiteral(frame, assign.discriminant, assign.payload, self.store.getLocal(assign.target).layout_idx));
+                    self.setLocalChecked(frame, current, assign.target, try self.evalTagLiteral(
+                        frame,
+                        assign.variant_index,
+                        assign.discriminant,
+                        assign.payload,
+                        self.store.getLocal(assign.target).layout_idx,
+                    ));
                     current = assign.next;
                 },
                 .set_local => |assign| {
@@ -1864,9 +1870,10 @@ pub const Interpreter = struct {
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_tag => |assign| {
-                    debugPrint("    {d}: assign_tag target={d} discrim={d} next={d}\n", .{
+                    debugPrint("    {d}: assign_tag target={d} variant={d} discrim={d} next={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(assign.target),
+                        assign.variant_index,
                         assign.discriminant,
                         @intFromEnum(assign.next),
                     });
@@ -2135,7 +2142,7 @@ pub const Interpreter = struct {
                         .{ payload.tag_discriminant, disc },
                     );
                 }
-                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
+                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.variant_index);
                 const payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
                 switch (payload_layout_val.tag) {
                     .struct_ => {
@@ -2177,7 +2184,7 @@ pub const Interpreter = struct {
                         .{ payload.tag_discriminant, disc },
                     );
                 }
-                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.tag_discriminant);
+                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.variant_index);
                 const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
                 break :blk try self.materializeLocalValue(payload_value, target_layout);
             },
@@ -2680,6 +2687,7 @@ pub const Interpreter = struct {
     fn evalTagLiteral(
         self: *LirInterpreter,
         frame: *const Frame,
+        variant_index: u16,
         discriminant: u16,
         payload_local: ?LocalId,
         union_layout: layout_mod.Idx,
@@ -2694,7 +2702,7 @@ pub const Interpreter = struct {
             );
         }
 
-        const payload_layout = self.tagPayloadLayout(union_layout, discriminant);
+        const payload_layout = self.tagPayloadLayout(union_layout, variant_index);
         if (payload_local) |local| {
             const payload_size = self.helper.sizeOf(payload_layout);
             if (payload_size > 0) {
@@ -4388,6 +4396,12 @@ pub const Interpreter = struct {
     const NumOp = enum { add, sub, mul, div, div_trunc, rem, mod, negate, abs, abs_diff };
     const CmpOp = enum { eq, lt, lte, gt, gte };
     const ShiftOp = enum { shl, shr, shr_zf };
+    const NumericOperandKind = union(enum) {
+        unsigned_int: u16,
+        signed_int: u16,
+        float: u16,
+        dec,
+    };
 
     /// Determine if a layout index represents a Dec type.
     fn isDec(layout_idx: layout_mod.Idx) bool {
@@ -4402,105 +4416,85 @@ pub const Interpreter = struct {
         };
     }
 
+    fn numericOperandKind(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!NumericOperandKind {
+        return switch (layout_idx) {
+            .u8 => .{ .unsigned_int = 8 },
+            .u16 => .{ .unsigned_int = 16 },
+            .u32 => .{ .unsigned_int = 32 },
+            .u64 => .{ .unsigned_int = 64 },
+            .u128 => .{ .unsigned_int = 128 },
+            .i8 => .{ .signed_int = 8 },
+            .i16 => .{ .signed_int = 16 },
+            .i32 => .{ .signed_int = 32 },
+            .i64 => .{ .signed_int = 64 },
+            .i128 => .{ .signed_int = 128 },
+            .f32 => .{ .float = 32 },
+            .f64 => .{ .float = 64 },
+            .dec => .dec,
+            else => self.invariantFailedError(
+                "LIR/interpreter invariant violated: numeric low-level op used non-numeric layout {d} ({s})",
+                .{ @intFromEnum(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
+            ),
+        };
+    }
+
     fn numBinOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
+        const kind = try self.numericOperandKind(arg_layout);
         const is_division_like = op == .div or op == .div_trunc or op == .rem or op == .mod;
 
-        trace.log("numBinOp: op={s} arg_layout={any} ret_layout={any} size={d}", .{
+        trace.log("numBinOp: op={s} arg_layout={any} ret_layout={any}", .{
             @tagName(op),
             arg_layout,
             ret_layout,
-            size,
         });
 
         if (is_division_like) {
-            switch (size) {
-                1 => {
-                    if (isUnsigned(arg_layout)) {
-                        if (b.read(u8) == 0) return self.divisionByZero();
-                    } else if (b.read(i8) == 0) return self.divisionByZero();
+            switch (kind) {
+                .unsigned_int => |bits| switch (bits) {
+                    8 => if (b.read(u8) == 0) return self.divisionByZero(),
+                    16 => if (b.read(u16) == 0) return self.divisionByZero(),
+                    32 => if (b.read(u32) == 0) return self.divisionByZero(),
+                    64 => if (b.read(u64) == 0) return self.divisionByZero(),
+                    128 => if (b.read(u128) == 0) return self.divisionByZero(),
+                    else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
                 },
-                2 => {
-                    if (isUnsigned(arg_layout)) {
-                        if (b.read(u16) == 0) return self.divisionByZero();
-                    } else if (b.read(i16) == 0) return self.divisionByZero();
+                .signed_int => |bits| switch (bits) {
+                    8 => if (b.read(i8) == 0) return self.divisionByZero(),
+                    16 => if (b.read(i16) == 0) return self.divisionByZero(),
+                    32 => if (b.read(i32) == 0) return self.divisionByZero(),
+                    64 => if (b.read(i64) == 0) return self.divisionByZero(),
+                    128 => if (b.read(i128) == 0) return self.divisionByZero(),
+                    else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
                 },
-                4 => {
-                    const l = self.layout_store.getLayout(arg_layout);
-                    if (!(l.tag == .scalar and l.data.scalar.tag == .frac)) {
-                        if (isUnsigned(arg_layout)) {
-                            if (b.read(u32) == 0) return self.divisionByZero();
-                        } else if (b.read(i32) == 0) return self.divisionByZero();
-                    }
-                },
-                8 => {
-                    const l = self.layout_store.getLayout(arg_layout);
-                    if (!(l.tag == .scalar and l.data.scalar.tag == .frac)) {
-                        if (isUnsigned(arg_layout)) {
-                            if (b.read(u64) == 0) return self.divisionByZero();
-                        } else if (b.read(i64) == 0) return self.divisionByZero();
-                    }
-                },
-                16 => {
-                    if (isDec(arg_layout)) {
-                        if (b.read(i128) == 0) return self.divisionByZero();
-                    } else if (isUnsigned(arg_layout)) {
-                        if (b.read(u128) == 0) return self.divisionByZero();
-                    } else if (b.read(i128) == 0) return self.divisionByZero();
-                },
-                else => {},
+                .dec => if (b.read(i128) == 0) return self.divisionByZero(),
+                .float => {},
             }
         }
 
-        switch (size) {
-            1 => {
-                if (isUnsigned(arg_layout)) {
-                    val.write(u8, intBinOp(u8, a.read(u8), b.read(u8), op));
-                } else {
-                    val.write(i8, intBinOp(i8, a.read(i8), b.read(i8), op));
-                }
+        switch (kind) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => val.write(u8, intBinOp(u8, a.read(u8), b.read(u8), op)),
+                16 => val.write(u16, intBinOp(u16, a.read(u16), b.read(u16), op)),
+                32 => val.write(u32, intBinOp(u32, a.read(u32), b.read(u32), op)),
+                64 => val.write(u64, intBinOp(u64, a.read(u64), b.read(u64), op)),
+                128 => val.write(u128, intBinOp(u128, a.read(u128), b.read(u128), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
-            2 => {
-                if (isUnsigned(arg_layout)) {
-                    val.write(u16, intBinOp(u16, a.read(u16), b.read(u16), op));
-                } else {
-                    val.write(i16, intBinOp(i16, a.read(i16), b.read(i16), op));
-                }
+            .signed_int => |bits| switch (bits) {
+                8 => val.write(i8, intBinOp(i8, a.read(i8), b.read(i8), op)),
+                16 => val.write(i16, intBinOp(i16, a.read(i16), b.read(i16), op)),
+                32 => val.write(i32, intBinOp(i32, a.read(i32), b.read(i32), op)),
+                64 => val.write(i64, intBinOp(i64, a.read(i64), b.read(i64), op)),
+                128 => val.write(i128, intBinOp(i128, a.read(i128), b.read(i128), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
-            4 => {
-                const l = self.layout_store.getLayout(arg_layout);
-                if (l.tag == .scalar and l.data.scalar.tag == .frac) {
-                    val.write(f32, floatBinOp(f32, a.read(f32), b.read(f32), op));
-                } else if (isUnsigned(arg_layout)) {
-                    val.write(u32, intBinOp(u32, a.read(u32), b.read(u32), op));
-                } else {
-                    val.write(i32, intBinOp(i32, a.read(i32), b.read(i32), op));
-                }
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, floatBinOp(f32, a.read(f32), b.read(f32), op)),
+                64 => val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float width {d}", .{bits}),
             },
-            8 => {
-                const l = self.layout_store.getLayout(arg_layout);
-                if (l.tag == .scalar and l.data.scalar.tag == .frac) {
-                    trace.log("numBinOp f64: a={d} b={d}", .{ a.read(f64), b.read(f64) });
-                    val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op));
-                } else if (isUnsigned(arg_layout)) {
-                    trace.log("numBinOp u64: a={d} b={d}", .{ a.read(u64), b.read(u64) });
-                    val.write(u64, intBinOp(u64, a.read(u64), b.read(u64), op));
-                } else {
-                    trace.log("numBinOp i64: a={d} b={d}", .{ a.read(i64), b.read(i64) });
-                    val.write(i64, intBinOp(i64, a.read(i64), b.read(i64), op));
-                }
-            },
-            16 => {
-                if (isDec(arg_layout)) {
-                    val.write(i128, self.decBinOp(a.read(i128), b.read(i128), op));
-                } else if (isUnsigned(arg_layout)) {
-                    val.write(u128, intBinOp(u128, a.read(u128), b.read(u128), op));
-                } else {
-                    val.write(i128, intBinOp(i128, a.read(i128), b.read(i128), op));
-                }
-            },
-            else => {},
+            .dec => val.write(i128, self.decBinOp(a.read(i128), b.read(i128), op)),
         }
         return val;
     }
@@ -4511,7 +4505,6 @@ pub const Interpreter = struct {
 
     fn numCmpOp(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, op: CmpOp) Error!Value {
         const val = try self.alloc(.bool);
-        const size = self.helper.sizeOf(arg_layout);
         const layout_val = self.layout_store.getLayout(arg_layout);
 
         if (op == .eq and switch (layout_val.tag) {
@@ -4523,39 +4516,29 @@ pub const Interpreter = struct {
             return val;
         }
 
-        const result: bool = switch (size) {
-            1 => if (isUnsigned(arg_layout))
-                cmpOp(u8, a.read(u8), b.read(u8), op)
-            else
-                cmpOp(i8, a.read(i8), b.read(i8), op),
-            2 => if (isUnsigned(arg_layout))
-                cmpOp(u16, a.read(u16), b.read(u16), op)
-            else
-                cmpOp(i16, a.read(i16), b.read(i16), op),
-            4 => blk: {
-                break :blk if (layout_val.tag == .scalar and layout_val.data.scalar.tag == .frac)
-                    cmpOp(f32, a.read(f32), b.read(f32), op)
-                else if (isUnsigned(arg_layout))
-                    cmpOp(u32, a.read(u32), b.read(u32), op)
-                else
-                    cmpOp(i32, a.read(i32), b.read(i32), op);
+        const result: bool = switch (try self.numericOperandKind(arg_layout)) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => cmpOp(u8, a.read(u8), b.read(u8), op),
+                16 => cmpOp(u16, a.read(u16), b.read(u16), op),
+                32 => cmpOp(u32, a.read(u32), b.read(u32), op),
+                64 => cmpOp(u64, a.read(u64), b.read(u64), op),
+                128 => cmpOp(u128, a.read(u128), b.read(u128), op),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
-            8 => blk: {
-                break :blk if (layout_val.tag == .scalar and layout_val.data.scalar.tag == .frac)
-                    cmpOp(f64, a.read(f64), b.read(f64), op)
-                else if (isUnsigned(arg_layout))
-                    cmpOp(u64, a.read(u64), b.read(u64), op)
-                else
-                    cmpOp(i64, a.read(i64), b.read(i64), op);
+            .signed_int => |bits| switch (bits) {
+                8 => cmpOp(i8, a.read(i8), b.read(i8), op),
+                16 => cmpOp(i16, a.read(i16), b.read(i16), op),
+                32 => cmpOp(i32, a.read(i32), b.read(i32), op),
+                64 => cmpOp(i64, a.read(i64), b.read(i64), op),
+                128 => cmpOp(i128, a.read(i128), b.read(i128), op),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
-            16 => if (isUnsigned(arg_layout))
-                cmpOp(u128, a.read(u128), b.read(u128), op)
-            else
-                cmpOp(i128, a.read(i128), b.read(i128), op),
-            else => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: non-equality compare on unsupported layout {d} size={d}",
-                .{ @intFromEnum(arg_layout), size },
-            ),
+            .float => |bits| switch (bits) {
+                32 => cmpOp(f32, a.read(f32), b.read(f32), op),
+                64 => cmpOp(f64, a.read(f64), b.read(f64), op),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float compare width {d}", .{bits}),
+            },
+            .dec => cmpOp(i128, a.read(i128), b.read(i128), op),
         };
         val.write(u8, if (result) 1 else 0);
         return val;
@@ -4664,40 +4647,30 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
         // Returns 0=LT, 1=EQ, 2=GT
-        const result: u8 = switch (size) {
-            1 => if (isUnsigned(arg_layout))
-                cmpOrder(u8, a.read(u8), b.read(u8))
-            else
-                cmpOrder(i8, a.read(i8), b.read(i8)),
-            2 => if (isUnsigned(arg_layout))
-                cmpOrder(u16, a.read(u16), b.read(u16))
-            else
-                cmpOrder(i16, a.read(i16), b.read(i16)),
-            4 => blk: {
-                const l = self.layout_store.getLayout(arg_layout);
-                break :blk if (l.tag == .scalar and l.data.scalar.tag == .frac)
-                    cmpOrder(f32, a.read(f32), b.read(f32))
-                else if (isUnsigned(arg_layout))
-                    cmpOrder(u32, a.read(u32), b.read(u32))
-                else
-                    cmpOrder(i32, a.read(i32), b.read(i32));
+        const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => cmpOrder(u8, a.read(u8), b.read(u8)),
+                16 => cmpOrder(u16, a.read(u16), b.read(u16)),
+                32 => cmpOrder(u32, a.read(u32), b.read(u32)),
+                64 => cmpOrder(u64, a.read(u64), b.read(u64)),
+                128 => cmpOrder(u128, a.read(u128), b.read(u128)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
-            8 => blk: {
-                const l = self.layout_store.getLayout(arg_layout);
-                break :blk if (l.tag == .scalar and l.data.scalar.tag == .frac)
-                    cmpOrder(f64, a.read(f64), b.read(f64))
-                else if (isUnsigned(arg_layout))
-                    cmpOrder(u64, a.read(u64), b.read(u64))
-                else
-                    cmpOrder(i64, a.read(i64), b.read(i64));
+            .signed_int => |bits| switch (bits) {
+                8 => cmpOrder(i8, a.read(i8), b.read(i8)),
+                16 => cmpOrder(i16, a.read(i16), b.read(i16)),
+                32 => cmpOrder(i32, a.read(i32), b.read(i32)),
+                64 => cmpOrder(i64, a.read(i64), b.read(i64)),
+                128 => cmpOrder(i128, a.read(i128), b.read(i128)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
-            16 => if (isUnsigned(arg_layout))
-                cmpOrder(u128, a.read(u128), b.read(u128))
-            else
-                cmpOrder(i128, a.read(i128), b.read(i128)),
-            else => 1, // EQ as default
+            .float => |bits| switch (bits) {
+                32 => cmpOrder(f32, a.read(f32), b.read(f32)),
+                64 => cmpOrder(f64, a.read(f64), b.read(f64)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float compare width {d}", .{bits}),
+            },
+            .dec => cmpOrder(i128, a.read(i128), b.read(i128)),
         };
         val.write(u8, result);
         return val;
@@ -4705,122 +4678,152 @@ pub const Interpreter = struct {
 
     fn numShiftOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: ShiftOp) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
-        switch (size) {
-            1 => if (isUnsigned(arg_layout))
-                val.write(u8, shiftOp(u8, a.read(u8), b.read(u8), op))
-            else
-                val.write(i8, shiftOp(i8, a.read(i8), b.read(u8), op)),
-            2 => if (isUnsigned(arg_layout))
-                val.write(u16, shiftOp(u16, a.read(u16), b.read(u8), op))
-            else
-                val.write(i16, shiftOp(i16, a.read(i16), b.read(u8), op)),
-            4 => if (isUnsigned(arg_layout))
-                val.write(u32, shiftOp(u32, a.read(u32), b.read(u8), op))
-            else
-                val.write(i32, shiftOp(i32, a.read(i32), b.read(u8), op)),
-            8 => if (isUnsigned(arg_layout))
-                val.write(u64, shiftOp(u64, a.read(u64), b.read(u8), op))
-            else
-                val.write(i64, shiftOp(i64, a.read(i64), b.read(u8), op)),
-            16 => if (isUnsigned(arg_layout))
-                val.write(u128, shiftOp(u128, a.read(u128), b.read(u8), op))
-            else
-                val.write(i128, shiftOp(i128, a.read(i128), b.read(u8), op)),
-            else => {},
+        switch (try self.numericOperandKind(arg_layout)) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => val.write(u8, shiftOp(u8, a.read(u8), b.read(u8), op)),
+                16 => val.write(u16, shiftOp(u16, a.read(u16), b.read(u8), op)),
+                32 => val.write(u32, shiftOp(u32, a.read(u32), b.read(u8), op)),
+                64 => val.write(u64, shiftOp(u64, a.read(u64), b.read(u8), op)),
+                128 => val.write(u128, shiftOp(u128, a.read(u128), b.read(u8), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer shift width {d}", .{bits}),
+            },
+            .signed_int => |bits| switch (bits) {
+                8 => val.write(i8, shiftOp(i8, a.read(i8), b.read(u8), op)),
+                16 => val.write(i16, shiftOp(i16, a.read(i16), b.read(u8), op)),
+                32 => val.write(i32, shiftOp(i32, a.read(i32), b.read(u8), op)),
+                64 => val.write(i64, shiftOp(i64, a.read(i64), b.read(u8), op)),
+                128 => val.write(i128, shiftOp(i128, a.read(i128), b.read(u8), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer shift width {d}", .{bits}),
+            },
+            .float, .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: shift used non-integer layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
         }
         return val;
     }
 
     fn evalNumPow(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
-        const l = self.layout_store.getLayout(arg_layout);
-        if (isDec(arg_layout)) {
-            var crash_boundary = self.enterCrashBoundary();
-            defer crash_boundary.deinit();
-            const sj = crash_boundary.set();
-            if (sj != 0) return error.Crash;
-            val.write(i128, builtins.dec.powC(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
-        } else if (l.tag == .scalar and l.data.scalar.tag == .frac) {
-            if (size == 4)
-                val.write(f32, std.math.pow(f32, a.read(f32), b.read(f32)))
-            else
-                val.write(f64, std.math.pow(f64, a.read(f64), b.read(f64)));
-        } else {
-            // Integer power — use wrapping multiply loop
-            val.write(i128, intPow(a.read(i128), b.read(i128)));
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                val.write(i128, builtins.dec.powC(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
+            },
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, std.math.pow(f32, a.read(f32), b.read(f32))),
+                64 => val.write(f64, std.math.pow(f64, a.read(f64), b.read(f64))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float pow width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_pow survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
         }
         return val;
     }
 
     fn evalNumSqrt(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
-        if (isDec(arg_layout)) {
-            // Dec sqrt: convert to f64, sqrt, convert back
-            const dec = RocDec{ .num = a.read(i128) };
-            const f = @sqrt(dec.toF64());
-            val.write(i128, (RocDec{ .num = builtins.dec.fromF64C(f, &self.roc_ops) }).num);
-        } else if (size == 4)
-            val.write(f32, @sqrt(a.read(f32)))
-        else
-            val.write(f64, @sqrt(a.read(f64)));
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => {
+                const dec = RocDec{ .num = a.read(i128) };
+                const f = @sqrt(dec.toF64());
+                val.write(i128, (RocDec{ .num = builtins.dec.fromF64C(f, &self.roc_ops) }).num);
+            },
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, @sqrt(a.read(f32))),
+                64 => val.write(f64, @sqrt(a.read(f64))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float sqrt width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_sqrt survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
         return val;
     }
 
     fn evalNumLog(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
-        if (isDec(arg_layout)) {
-            val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) }));
-        } else if (size == 4)
-            val.write(f32, @log(a.read(f32)))
-        else
-            val.write(f64, @log(a.read(f64)));
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) })),
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, @log(a.read(f32))),
+                64 => val.write(f64, @log(a.read(f64))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float log width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_log survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
         return val;
     }
 
     fn evalNumRound(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
-        if (isDec(arg_layout)) {
-            // Dec round: divide by scale, round
-            const dec = RocDec{ .num = a.read(i128) };
-            const f = @round(dec.toF64());
-            val.write(i128, @as(i128, @intFromFloat(f)));
-        } else if (size == 4)
-            val.write(i32, @as(i32, @intFromFloat(@round(a.read(f32)))))
-        else
-            val.write(i64, @as(i64, @intFromFloat(@round(a.read(f64)))));
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => {
+                const dec = RocDec{ .num = a.read(i128) };
+                const f = @round(dec.toF64());
+                val.write(i128, @as(i128, @intFromFloat(f)));
+            },
+            .float => |bits| switch (bits) {
+                32 => val.write(i32, @as(i32, @intFromFloat(@round(a.read(f32))))),
+                64 => val.write(i64, @as(i64, @intFromFloat(@round(a.read(f64))))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float round width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_round survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
         return val;
     }
 
     fn evalNumFloor(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
-        if (isDec(arg_layout)) {
-            const dec = RocDec{ .num = a.read(i128) };
-            const f = @floor(dec.toF64());
-            val.write(i128, @as(i128, @intFromFloat(f)));
-        } else if (size == 4)
-            val.write(i32, @as(i32, @intFromFloat(@floor(a.read(f32)))))
-        else
-            val.write(i64, @as(i64, @intFromFloat(@floor(a.read(f64)))));
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => {
+                const dec = RocDec{ .num = a.read(i128) };
+                const f = @floor(dec.toF64());
+                val.write(i128, @as(i128, @intFromFloat(f)));
+            },
+            .float => |bits| switch (bits) {
+                32 => val.write(i32, @as(i32, @intFromFloat(@floor(a.read(f32))))),
+                64 => val.write(i64, @as(i64, @intFromFloat(@floor(a.read(f64))))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float floor width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_floor survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
         return val;
     }
 
     fn evalNumCeiling(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        const size = self.helper.sizeOf(arg_layout);
-        if (isDec(arg_layout)) {
-            const dec = RocDec{ .num = a.read(i128) };
-            const f = @ceil(dec.toF64());
-            val.write(i128, @as(i128, @intFromFloat(f)));
-        } else if (size == 4)
-            val.write(i32, @as(i32, @intFromFloat(@ceil(a.read(f32)))))
-        else
-            val.write(i64, @as(i64, @intFromFloat(@ceil(a.read(f64)))));
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => {
+                const dec = RocDec{ .num = a.read(i128) };
+                const f = @ceil(dec.toF64());
+                val.write(i128, @as(i128, @intFromFloat(f)));
+            },
+            .float => |bits| switch (bits) {
+                32 => val.write(i32, @as(i32, @intFromFloat(@ceil(a.read(f32))))),
+                64 => val.write(i64, @as(i64, @intFromFloat(@ceil(a.read(f64))))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float ceiling width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_ceiling survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
         return val;
     }
 
@@ -4836,7 +4839,10 @@ pub const Interpreter = struct {
             4 => val.write(if (@typeInfo(Src).int.signedness == .signed) i32 else u32, @intCast(sv)),
             8 => val.write(if (@typeInfo(Src).int.signedness == .signed) i64 else u64, @intCast(sv)),
             16 => val.write(if (@typeInfo(Src).int.signedness == .signed) i128 else u128, @intCast(sv)),
-            else => {},
+            else => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: numeric widen target layout {d} has unsupported size {d}",
+                .{ @intFromEnum(ret_layout), ret_size },
+            ),
         }
         return val;
     }
@@ -5363,19 +5369,6 @@ pub const Interpreter = struct {
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
         };
-    }
-
-    fn intPow(base_val: i128, exp: i128) i128 {
-        if (exp <= 0) return 1;
-        var result: i128 = 1;
-        var b = base_val;
-        var e = exp;
-        while (e > 0) {
-            if (e & 1 != 0) result = result *% b;
-            b = b *% b;
-            e >>= 1;
-        }
-        return result;
     }
 
     // String operations

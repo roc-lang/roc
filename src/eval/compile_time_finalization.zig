@@ -820,6 +820,7 @@ fn evaluateCallableBindingRoot(
             const selected_callable = selectFiniteCallableResult(
                 &artifact.comptime_plans,
                 lowered.callable_set_descriptors,
+                lowered.callable_set_runtime_encodings,
                 &lowered.lir_result.layouts,
                 result_plan,
                 ret_layout,
@@ -1525,6 +1526,7 @@ fn ensureCallableBindingInstanceRequest(
             const selected_callable = selectFiniteCallableResult(
                 &artifact.comptime_plans,
                 lowered_request.lowered.callable_set_descriptors,
+                lowered_request.lowered.callable_set_runtime_encodings,
                 &lowered_request.lowered.lir_result.layouts,
                 result_plan,
                 ret_layout,
@@ -2519,6 +2521,7 @@ const ComptimeGraphCloner = struct {
 fn selectFiniteCallableResult(
     plans: *const checked_artifact.CompileTimePlanStore,
     descriptors: []const repr.CanonicalCallableSetDescriptor,
+    encodings: []const lir.CheckedPipeline.CallableSetRuntimeEncoding,
     layouts: *const layout_mod.Store,
     result_plan_id: checked_artifact.CallableResultPlanId,
     layout_idx: layout_mod.Idx,
@@ -2535,6 +2538,8 @@ fn selectFiniteCallableResult(
 
     const result_layout = layouts.getLayout(layout_idx);
     const selected = selectFiniteCallableSetMember(
+        encodings,
+        finite.callable_set_key,
         layouts,
         layout_idx,
         result_layout,
@@ -3031,6 +3036,7 @@ fn persistConcreteFiniteAdapterAsSingletonWithContext(
                 .selected = selectFiniteCallableResult(
                     &artifact.comptime_plans,
                     lowered.callable_set_descriptors,
+                    lowered.callable_set_runtime_encodings,
                     &lowered.lir_result.layouts,
                     result_plan,
                     hidden_physical.layout_idx,
@@ -3843,6 +3849,7 @@ fn materializedFiniteCallableSetValue(
     const selected = selectFiniteCallableResult(
         &capture_builder.artifact.comptime_plans,
         capture_builder.callable_set_descriptors,
+        lowered.callable_set_runtime_encodings,
         &lowered.lir_result.layouts,
         result_plan,
         layout_idx,
@@ -5415,6 +5422,7 @@ const PrivateCaptureBuilder = struct {
                 const selected = selectFiniteCallableResult(
                     &self.artifact.comptime_plans,
                     self.callable_set_descriptors,
+                    self.lowered.callable_set_runtime_encodings,
                     self.layouts,
                     result_plan,
                     physical.layout_idx,
@@ -5802,37 +5810,52 @@ const SelectedFiniteCallableSetMember = struct {
 };
 
 fn selectFiniteCallableSetMember(
+    encodings: []const lir.CheckedPipeline.CallableSetRuntimeEncoding,
+    callable_set_key: canonical.CanonicalCallableSetKey,
     layouts: *const layout_mod.Store,
     layout_idx: layout_mod.Idx,
     layout: layout_mod.Layout,
     value: Value,
     members: []const checked_artifact.CallableResultMemberPlan,
 ) SelectedFiniteCallableSetMember {
+    const runtime_encoding = lir.CheckedPipeline.callableSetRuntimeEncodingForKey(encodings, callable_set_key) orelse {
+        compileTimeFinalizationInvariant("finite compile-time callable result runtime encoding was not preserved");
+    };
+
     if (layout.tag == .tag_union) {
         const info = layouts.getTagUnionInfo(layout);
         const raw_discriminant = info.data.readDiscriminant(value.ptr);
-        if (raw_discriminant >= members.len) {
-            compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded member count");
-        }
-        if (raw_discriminant > std.math.maxInt(canonical.CallableSetRuntimeDiscriminant)) {
+        if (raw_discriminant > std.math.maxInt(u16)) {
             compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded runtime encoding range");
         }
-        const discriminant: canonical.CallableSetRuntimeDiscriminant = @intCast(raw_discriminant);
-        const planned_member = members[@intCast(raw_discriminant)];
-        if (canonical.callableSetRuntimeDiscriminantForMember(planned_member.member) != discriminant) {
-            compileTimeFinalizationInvariant("finite compile-time callable result members were not in runtime-discriminant order");
+        const discriminant: u16 = @intCast(raw_discriminant);
+        const runtime_member = lir.CheckedPipeline.callableSetRuntimeMemberForDiscriminant(runtime_encoding, discriminant) orelse {
+            compileTimeFinalizationInvariant("finite compile-time callable result discriminant was not in runtime encoding");
+        };
+        if (@as(usize, runtime_member.variant_index) >= info.variants.len) {
+            compileTimeFinalizationInvariant("finite compile-time callable result variant index exceeded layout variants");
+        }
+        const payload_layout = info.variants.get(@intCast(runtime_member.variant_index)).payload_layout;
+        if (payload_layout != runtime_member.payload_layout) {
+            compileTimeFinalizationInvariant("finite compile-time callable result runtime encoding payload layout differed from layout store");
+        }
+        if (callableResultMember(members, runtime_member.member) == null) {
+            compileTimeFinalizationInvariant("finite compile-time callable result selected a member outside the result plan");
         }
         return .{
-            .member = planned_member.member,
-            .payload_layout = info.variants.get(@intCast(discriminant)).payload_layout,
+            .member = runtime_member.member,
+            .payload_layout = payload_layout,
         };
     }
 
     if (members.len != 1) {
         compileTimeFinalizationInvariant("multi-member finite compile-time callable result did not lower to tag-union layout");
     }
+    const runtime_member = lir.CheckedPipeline.callableSetRuntimeMember(runtime_encoding, members[0].member) orelse {
+        compileTimeFinalizationInvariant("singleton finite compile-time callable result member was not in runtime encoding");
+    };
     return .{
-        .member = members[0].member,
+        .member = runtime_member.member,
         .payload_layout = layout_idx,
     };
 }
@@ -6195,6 +6218,7 @@ const ComptimeReifier = struct {
                 const selected_callable = selectFiniteCallableResult(
                     self.plans,
                     self.callable_set_descriptors,
+                    (self.lowered orelse reifierInvariant("finite callable leaf reification requires lowered LIR context")).callable_set_runtime_encodings,
                     self.layouts,
                     result_plan,
                     layout_idx,

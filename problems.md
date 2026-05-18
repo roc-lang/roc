@@ -1,94 +1,134 @@
-# Problems: Late Guessing And Recovery Suspects
+# Problems: Remaining Late Guessing And Recovery
 
-This file tracks places that look similar to the callable/lambda issue we just fixed: a later compiler stage may be guessing, searching, or reconstructing information that an earlier stage knew directly.
+This file tracks places that still look like a later compiler stage is guessing,
+searching, or reconstructing information that an earlier stage either knew
+directly or should have published explicitly.
 
-The question for each problem is:
+The question for each entry is:
 
 > What is the most long-term ideal thing we should do here?
 
-## 1. Dev Backend `Num.abs_diff` Signedness Guess
+The standard is strict:
+
+- The stage that knows a fact directly should publish that fact.
+- Later stages should consume explicit facts, not recreate them.
+- Canonical keys are for identity checks and dedupe, not for finding the missing
+  payload that should have been carried.
+- Layouts describe runtime representation, not source semantics or call identity.
+- Backend and interpreter code should reject impossible LIR instead of picking a
+  default behavior.
+
+## 1. Static Data Callable-Set Capture Uses Raw Member Index
 
 Location:
 
-- `src/backend/dev/LirCodeGen.zig`
+- `src/compile/static_data_exports.zig`
+- `src/check/canonical_names.zig`
 
 Suspicion:
 
-The dev backend has an `inferAbsDiffInputLayout` helper. It receives a return layout and optional argument layout, then guesses the input signedness from the return type and whether either argument is a negative immediate.
+Static data materialization writes finite callable-set captures by converting
+`finite.selected_member` directly with `@intFromEnum`. The compiler now has
+central helpers for callable-set runtime encoding, but this path bypasses them.
 
 Risk:
 
-Signedness is semantic information. A backend should not infer it from a return type or literal shape.
+If callable-set member ids and runtime tag-union variant order ever diverge, this
+path will materialize the wrong payload layout and write the wrong discriminant.
 
-## 2. Checked-Type Payload Lookup From Type Keys During Dependency Finalization
+## 2. Nominal Backing Is Rediscovered By Name And Argument Keys
 
 Location:
 
-- `src/eval/compile_time_finalization.zig`
+- `src/mir/mono/specialize.zig`
 - `src/check/checked_artifact.zig`
 
 Suspicion:
 
-Finalization can receive a canonical requested type key and then search local/imported checked type stores to find a checked payload root.
+Mono materialization finds instantiated nominal backing types by searching the
+root artifact, imports, and relation artifacts for a matching nominal name plus
+argument keys. The nominal source payload or published nominal capability should
+give the exact backing payload instead.
 
 Risk:
 
-If an earlier phase had the checked payload root, finalization should consume it explicitly instead of rediscovering it by key.
+The consumer is reconstructing a payload relationship from names and keys. That
+creates another path where two independently equivalent keys can hide the fact
+that the exact payload identity was lost.
 
-## 3. Capture And Const Planning Recover Checked Payloads From Source Type Keys
+## 3. Record And Tag Source Children Are Recovered By Label Text
 
 Location:
 
-- `src/lir/checked_pipeline.zig`
+- `src/mir/lambda_solved/solve.zig`
+- `src/mir/lambda_solved/representation.zig`
+- related const-backed paths in `src/mir/lambda_solved/solve.zig`
 
 Suspicion:
 
-Capture-slot planning and const-graph planning call `CheckedTypeStore.rootForKey` from source type keys while building reification plans.
+Several source-child lookup paths compare record field labels and tag labels by
+text across canonical-name stores to find the checked child payload for a field
+or tag payload.
 
 Risk:
 
-This can recreate the same class of bug as callable descriptor member payload recovery: the producer knew the payload root, but the consumer finds it later by matching a key.
+The semantic fact wanted by the consumer is "this logical field/tag child maps
+to this checked source child." Repeated text matching is weaker than carrying
+that correspondence from the projection or import boundary.
 
-## 4. Private Capture Finalization Recovers Checked Payloads
+## 4. Imported Checked-Type Projection Still Selects Source Roots By Key
 
 Location:
 
-- `src/eval/compile_time_finalization.zig`
+- `src/mir/mono/specialize.zig`
+- `src/check/checked_artifact.zig`
+- `src/mir/concrete_source_type.zig`
 
 Suspicion:
 
-Private capture publication calls `rootForKey` for source types while producing const instances and capture refs.
+Some compile-time dependency publication paths have exact artifact payload ids,
+but still project imported checked types by searching the imported root table for
+a canonical key.
 
 Risk:
 
-Private capture plans may be missing explicit checked payload references that should have been published with the plan.
+Key-based dedupe in the target store is fine. Key-based source selection is the
+problem: it asks the compiler to find the payload again even though the exact
+source payload id is already available.
 
-## 5. `named_fn` Layout Sentinel And Backend Symbol Lookup
+## 5. Wasm Numeric Low-Level Lowering Uses Return Layout For Some Signedness
 
 Location:
 
-- `src/layout/layout.zig`
-- `src/interpreter_layout/layout.zig`
-- likely backend call lowering paths
+- `src/backend/wasm/WasmCodeGen.zig`
+- comparison point: `src/backend/dev/LirCodeGen.zig`
 
 Suspicion:
 
-`layout.Idx.named_fn` is a fake layout sentinel for call expressions whose function is resolved later by name.
+The Wasm backend now uses operand layout for comparisons, modulo, and
+`abs_diff`, but division and remainder still choose signed vs unsigned behavior
+from `ret_layout`.
 
 Risk:
 
-Resolved callable identity should travel as a procedure/function reference plus calling convention, not as a layout sentinel that implies later name lookup.
+For ordinary division the return layout usually matches the operand layout, so
+this may not currently fail. It is still the wrong owner for the information:
+signedness belongs to the operands.
 
-## 6. Callable-Set Member Selection By Runtime Discriminant
+## 6. LIR Interpreter Numeric Helpers Silently Default On Unsupported Layouts
 
 Location:
 
-- `src/eval/compile_time_finalization.zig`
+- `src/eval/interpreter.zig`
 
 Suspicion:
 
-Compile-time finalization selects a finite callable-set member by reading a runtime tag discriminant and mapping it to a member id.
+Some interpreter numeric helpers return default behavior for unsupported operand
+sizes. Examples include `evalCompare` returning equality for unknown sizes and
+shift/binop/widen helpers doing nothing for unknown sizes.
 
 Risk:
 
-This is probably legitimate value decoding, but only if the producer explicitly promised that representation order and member ids match. If that promise is implicit, it is another hidden recovery contract.
+The interpreter can accept invalid LIR and produce a plausible value instead of
+failing loudly. That makes later-stage bugs harder to find and can make the
+interpreter disagree with real backends.
