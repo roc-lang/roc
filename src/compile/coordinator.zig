@@ -563,6 +563,15 @@ pub const Coordinator = struct {
             self.gpa;
     }
 
+    /// Initialize a `Coordinator`.
+    ///
+    /// `compiler_version` is a cache-key discriminant — it is incorporated
+    /// into the keys used by `cache_manager` so that artifacts from
+    /// different compiler versions (or different consumer wrappers) stay
+    /// segregated. Embedders should pass a stable string that changes
+    /// whenever their consumer's compile semantics could change, e.g.
+    /// `"my-embedder@1.2.3+roc@" ++ build_options.compiler_version`.
+    /// Mismatching across runs causes cache misses, not corruption.
     pub fn init(
         gpa: Allocator,
         mode: Mode,
@@ -716,10 +725,14 @@ pub const Coordinator = struct {
     /// returns, the caller should call `start()` and `coordinatorLoop()`.
     ///
     /// Only relative paths (`./...`, `../...`) are supported for the platform
-    /// spec and non-platform packages. Callers that need URL pre-resolution
-    /// (downloading + caching) should call `compile.app_header.parseAppHeader`
-    /// themselves, resolve URLs to local paths, and register packages via
-    /// `ensurePackage` / `registerInlinePackage`.
+    /// spec and non-platform packages — URL specs return
+    /// `error.UnsupportedPlatformSpec` or `error.UnsupportedPackageSpec`.
+    /// Embedders that need URL pre-resolution (downloading + caching) should
+    /// call `compile.app_header.parseAppHeader` themselves, resolve URLs to
+    /// local paths through their own policy, and register packages via
+    /// `ensurePackage` / `registerInlinePackage`. See
+    /// `buildLirRuntimeImageWithCoordinator` in `src/cli/main.zig` for a
+    /// worked example of the URL-aware path.
     ///
     /// `arena` holds strings extracted from the header (qualifiers, specs).
     pub fn discoverAppFromPath(
@@ -980,13 +993,14 @@ pub const Coordinator = struct {
         return false;
     }
 
+    /// Finalize the build's executable artifacts (link app + platform, build
+    /// the platform-app relation, republish the root artifact).
+    ///
+    /// Must only be called after `coordinatorLoop` returns and after the
+    /// caller has confirmed `hasUserErrors() == false`. Returns
+    /// `error.HasUserErrors` if called while user-facing diagnostics exist.
     pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
-        if (self.hasUserErrors()) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts called after user-facing errors", .{});
-            }
-            unreachable;
-        }
+        if (self.hasUserErrors()) return error.HasUserErrors;
 
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
