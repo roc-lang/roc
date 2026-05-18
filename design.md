@@ -807,43 +807,41 @@ After row finalization, later stages do not contain:
 The shape of row-finalized construction separates evaluation from assembly:
 
 ```zig
-const RowShapeStore = struct {
-    records: InternStore(RecordShapeKey, RecordShapeId),
-    record_fields: Store(RecordFieldInfo),
-
-    tag_unions: InternStore(TagUnionShapeKey, TagUnionShapeId),
-    tags: Store(TagInfo),
-    tag_payloads: Store(TagPayloadInfo),
+const MonoRowStore = struct {
+    record_shapes: ArrayList(RecordShape),
+    record_fields: ArrayList(RecordField),
+    record_shape_fields: ArrayList(RecordFieldId),
+    tag_union_shapes: ArrayList(TagUnionShape),
+    tags: ArrayList(Tag),
+    tag_union_tags: ArrayList(TagId),
+    tag_payloads: ArrayList(TagPayload),
+    tag_payload_ids: ArrayList(TagPayloadId),
+    record_shape_by_key: StringHashMap(RecordShapeId),
+    tag_union_shape_by_key: StringHashMap(TagUnionShapeId),
 };
 
-const RecordShapeKey = struct {
-    fields: Span(RecordFieldLabelId),
+const RecordShape = struct {
+    fields: Span(RecordFieldId),
 };
 
-const RecordFieldInfo = struct {
-    owner: RecordShapeId,
+const RecordField = struct {
     label: RecordFieldLabelId,
     logical_index: u32,
 };
 
-const TagUnionShapeKey = struct {
-    tags: Span(TagShapeKey),
+const TagUnionShape = struct {
+    tags: Span(TagId),
 };
 
-const TagShapeKey = struct {
-    tag: TagLabelId,
-    payload_count: u32,
-};
-
-const TagInfo = struct {
-    owner: TagUnionShapeId,
+const Tag = struct {
     label: TagLabelId,
     logical_index: u32,
+    payloads: Span(TagPayloadId),
 };
 
-const TagPayloadInfo = struct {
+const TagPayload = struct {
     tag: TagId,
-    payload_index: u32,
+    logical_index: u32,
 };
 
 const RecordFieldEval = struct {
@@ -884,10 +882,11 @@ Expressions are lowered once from `eval_order`. `assembly_order` refers to
 already-lowered evaluation slots. A closure, allocation, call, box operation, or
 RC operand inside a record field or tag payload must not be evaluated twice.
 
-Record shape keys contain only canonical field labels in finalized logical
-field order. Tag-union shape keys contain only canonical tag labels in finalized
-logical tag order plus each tag's payload arity. Shape keys do not contain
-field types, payload types, expression ids, open tails, or per-use metadata.
+`MonoRow.Store` is the implementation-facing row-shape store. Its internal
+`record_shape_by_key` and `tag_union_shape_by_key` keys contain only canonical
+field labels in finalized logical field order, or canonical tag labels in
+finalized logical tag order plus each tag's payload arity. Shape keys do not
+contain field types, payload types, expression ids, open tails, or per-use metadata.
 Open row and tag tails are resolved or sealed at the extension edge before a row
 operation is exported; exported row-finalized operations name explicit closed
 shape ids. Duplicate labels, missing labels, unresolved row tails, unresolved
@@ -897,9 +896,10 @@ Row finalization rewrites all row-sensitive operations: record construction,
 field access, field update, record destructuring, tag construction, tag
 patterns, tag discriminant tests, and tag payload projections. The rewritten
 operation carries a finalized shape id plus the finalized field/tag/payload id.
-`RecordFieldInfo`, `TagInfo`, and `TagPayloadInfo` store owner and logical index
-metadata for ids within each shape. The specialization-local mono type store
-keeps the mono type for every finalized field and payload, and later
+`RecordField`, `Tag`, and `TagPayload` store logical index metadata for ids
+within each shape, with ownership provided by the containing `RecordShape` or
+`TagUnionShape` span. The specialization-local mono type store keeps the mono
+type for every finalized field and payload, and later
 representation edges connect those payload slots by explicit value flow. The
 same logical row shape can appear at multiple type instantiations, so lifting
 and later representation solving must not recover member types from source
@@ -1834,12 +1834,13 @@ boxed erased callable is never null. The allocation payload starts with a fixed
 erased-callable header; hidden capture bytes live inline after that header at
 fixed 16-byte alignment.
 
-The shared runtime ABI is in `src/builtins/erased_callable.zig`:
+The shared runtime ABI is exposed to generated glue with the `RocErasedCallable`
+names:
 
 ```zig
 pub const RocBox = ?*anyopaque;
 
-pub const ErasedCallableFn =
+pub const RocErasedCallableFn =
     *const fn (
         ops: *RocOps,
         ret: ?[*]u8,
@@ -1847,12 +1848,12 @@ pub const ErasedCallableFn =
         capture: ?[*]u8,
     ) callconv(.c) void;
 
-pub const ErasedCallableOnDrop =
+pub const RocErasedCallableOnDrop =
     *const fn (capture: ?[*]u8, ops: *RocOps) callconv(.c) void;
 
-pub const ErasedCallablePayload = extern struct {
-    callable_fn_ptr: ErasedCallableFn,
-    on_drop: ?ErasedCallableOnDrop,
+pub const RocErasedCallablePayload = extern struct {
+    callable_fn_ptr: RocErasedCallableFn,
+    on_drop: ?RocErasedCallableOnDrop,
 };
 
 pub const erased_callable_capture_alignment: u32 = 16;
@@ -1862,7 +1863,7 @@ pub const erased_callable_payload_alignment: u32 = 16;
 `args` points to a generated fixed-arity argument struct, or is null for arity
 0. `ret` points to caller-owned result storage, or is null for zero-sized
 results. `capture` is the fixed pointer after the payload header. Capture bytes
-are inline after the `ErasedCallablePayload` header and fixed alignment padding.
+are inline after the `RocErasedCallablePayload` header and fixed alignment padding.
 `callable_fn_ptr` is never null. There is no runtime discriminant, no `abi`
 pointer, no capture offset field, no flags field, no separate descriptor
 allocation, and no second pointer chase to a capture allocation created only for
@@ -2096,14 +2097,16 @@ A checked artifact owns the checked bodies and checked type payloads that later
 stages consume. Later stages do not read raw CIR arenas, checker-local type
 stores, parser identifiers, or mutable `ModuleEnv` internals.
 
-The checked type store is a target-independent graph of source type payloads:
+The checked type store is a target-independent graph of source type payloads.
+The implementation stores roots, schemes, payloads, and nominal declarations as
+separate artifact-owned tables:
 
 ```zig
 const CheckedTypeStore = struct {
-    nodes: Store(CheckedTypeNode),
     roots: Store(CheckedTypeRoot),
-    concrete_roots: Map(CanonicalTypeKey, CheckedTypeRoot),
-    schemes: Map(CanonicalTypeSchemeKey, CheckedTypeScheme),
+    schemes: Store(CheckedTypeScheme),
+    payloads: Store(CheckedTypePayload),
+    nominal_declarations: Store(CheckedNominalDeclaration),
 };
 
 const CheckedTypeScheme = struct {
@@ -2112,29 +2115,22 @@ const CheckedTypeScheme = struct {
 };
 ```
 
-Conceptually, checked type payloads are explicit nodes rather than canonical
-keys:
+Checked type payloads are explicit rows rather than canonical keys:
 
 ```zig
-const CheckedTypeNode = union(enum) {
-    primitive: PrimitiveTypeId,
-    function: CheckedFunctionType,
+const CheckedTypePayload = union(enum) {
+    pending,
+    flex: CheckedTypeVar,
+    rigid: CheckedTypeVar,
+    alias: CheckedAliasType,
     record: CheckedRecordType,
-    record_empty,
+    record_unbound: CheckedRecordType,
     tuple: CheckedTupleType,
-    tag_union: CheckedTagUnionType,
-    tag_union_empty,
-    transparent_alias: CheckedAliasType,
     nominal: CheckedNominalType,
-    opaque: CheckedOpaqueType,
-    box: CheckedTypeRoot,
-    list: CheckedTypeRoot,
-    open_var: CheckedOpenVar,
-    delayed_numeric: CheckedDelayedNumeric,
-    constrained: CheckedConstrainedVar,
-    generalized: CheckedGeneralizedVar,
-    placeholder: CheckedPlaceholder,
-    recursive_ref: CheckedTypeRoot,
+    function: CheckedFunctionType,
+    tag_union: CheckedTagUnionType,
+    empty_record,
+    empty_tag_union,
 };
 
 const CheckedFunctionType = struct {
@@ -2145,16 +2141,13 @@ const CheckedFunctionType = struct {
     needs_instantiation: bool,
 };
 
-const CheckedFunctionKind = union(enum) {
+const CheckedFunctionKind = enum {
     pure,
-    effectful: CheckedFunctionEffect,
-};
-
-const CheckerFunctionKind = union(enum) {
-    pure,
-    effectful: CheckedFunctionEffect,
+    effectful,
     unbound,
 };
+
+const CheckerFunctionKind = CheckedFunctionKind;
 
 const CheckedRecordType = struct {
     fields: Span(CheckedRecordField),
@@ -2179,11 +2172,6 @@ const CheckedNominalType = struct {
     representation: CheckedNominalRepresentationRef,
 };
 
-const CheckedOpaqueType = struct {
-    nominal: CanonicalNominalId,
-    marker: OpaqueRepresentationMarker,
-};
-
 const CheckedOpenVar = struct {
     id: CheckedTypeVarId,
     name: ?CanonicalTypeVarName,
@@ -2202,20 +2190,21 @@ const StaticDispatchConstraintTemplate = struct {
 };
 ```
 
-The exact node names may differ, but the payload categories and ownership do
-not. Function `needs_instantiation` records whether a function occurrence still
-contains generalized/open checked variables and therefore must be
-clone-instantiated before concrete use. Function `kind` is finalized before the
-checked artifact is published. The checker may use an internal unbound function
-kind while solving effects, but that state is not a post-check source type:
-unbound finalizes to pure, and effectful functions store their explicit
-`CheckedFunctionEffect`.
+`CheckedTypePayload` is the implementation-facing name for these rows. The
+payload table does not contain raw parser ids, raw checker vars, or source-name
+lookup handles. Function `needs_instantiation` records whether a function
+occurrence still contains generalized/open checked variables and therefore must
+be clone-instantiated before concrete use. Function `kind` is finalized before a
+checked-artifact payload is used as a post-check source type. The checker may use
+`.unbound` while solving effects, but artifact publication maps `.unbound` to
+`.pure` anywhere a finalized source type key or concrete source payload is
+published.
 
 ```zig
 fn finalized_function_kind(kind: CheckerFunctionKind) CheckedFunctionKind {
     return switch (kind) {
         .pure, .unbound => .pure,
-        .effectful => |effect| .{ .effectful = effect },
+        .effectful => .effectful,
     };
 }
 ```
@@ -2312,11 +2301,16 @@ Checked bodies are also artifact-owned:
 
 ```zig
 const CheckedBodyStore = struct {
-    bodies: Store(CheckedBody),
-    exprs: Store(CheckedExpr),
-    patterns: Store(CheckedPattern),
-    statements: Store(CheckedStatement),
-    string_literals: Span(StringBytes),
+    bodies: []CheckedBody,
+    exprs: []CheckedExpr,
+    patterns: []CheckedPattern,
+    statements: []CheckedStatement,
+    string_literals: []const []const u8,
+    pattern_binders: []CheckedPatternBinder,
+    pattern_binder_by_pattern: []?PatternBinderId,
+    expr_by_node: []?CheckedExprId,
+    pattern_by_node: []?CheckedPatternId,
+    statement_by_node: []?CheckedStatementId,
 };
 
 const CheckedBody = struct {
@@ -2345,7 +2339,9 @@ const CheckedStatement = struct {
 ```
 
 `CheckedExprData`, `CheckedPatternData`, and `CheckedStatementData` may remain
-CIR-like in shape, but they are checked-artifact records. Their semantic
+CIR-like in shape, but they are checked-artifact records. Pattern-binder rows and
+reverse node maps are artifact-boundary diagnostics/projection aids; after
+publication they are not semantic lookup authority. Their semantic
 payloads are canonical labels, checked body ids, checked expression ids,
 checked pattern ids, checked type ids, and ids into sealed artifact tables such
 as `ResolvedValueRefTable`, `StaticDispatchPlanTable`, and
@@ -2455,9 +2451,12 @@ Publication order is part of the design contract:
    artifact-owned `CheckedTypeStore` and `CheckedBodyStore` records.
 3. Build the checked method registry, normalized static dispatch plans, nested
    procedure-site table, and builder-form resolved value-reference table.
-4. Build checked procedure templates for source procedures, hosted wrappers,
-   intrinsic wrappers, entry wrappers, and other compiler-created checked
-   procedure bodies that do not depend on evaluated callable roots.
+4. Build checked procedure templates for source procedures, promoted callable
+   wrappers, intrinsic wrappers, entry wrappers, and other compiler-created
+   checked procedure bodies that do not depend on evaluated callable roots.
+   Hosted procedures are published through hosted procedure tables and explicit
+   target metadata; they are not a `CheckedProcedureBody` variant unless the
+   implementation adds such checked wrapper bodies explicitly.
 5. Build explicit root requests for concrete runtime, tool, test, REPL,
    development, and compile-time entrypoints. Generic exports are not root
    requests merely because they are exported.
@@ -2493,30 +2492,49 @@ const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
-    env: ModuleEnv,
+    direct_import_artifact_keys: Span(CheckedModuleArtifactKey),
+    module_env: ModuleEnvStorage,
     canonical_names: CanonicalNameStore,
     exports: ExportTable,
     checked_types: CheckedTypeStore,
     checked_bodies: CheckedBodyStore,
+    checked_const_bodies: CheckedConstBodyStore,
+    exported_procedure_templates: ExportedProcedureTemplateTable,
+    exported_procedure_bindings: ExportedProcedureBindingTable,
+    exported_const_templates: ExportedConstTemplateTable,
     provides_requires: ProvidesRequiresMetadata,
+    provided_exports: ProvidedExportTable,
     method_registry: MethodRegistry,
     static_dispatch_plans: StaticDispatchPlanTable,
     resolved_value_refs: ResolvedValueRefTable,
-    procedure_templates: CheckedProcedureTemplateTable,
+    nested_proc_sites: NestedProcSiteTable,
+    checked_procedure_templates: CheckedProcedureTemplateTable,
+    entry_wrappers: EntryWrapperTable,
+    intrinsic_wrappers: IntrinsicWrapperTable,
+    promoted_callable_wrappers: PromotedCallableWrapperTable,
+    promoted_callable_body_plans: PromotedCallableBodyPlanStore,
+    executable_type_payloads: ExecutableTypePayloadStore,
+    executable_value_transforms: ExecutableValueTransformPlanStore,
+    callable_set_descriptors: CallableSetDescriptorStore,
+    erased_fn_abis: ErasedFnAbiStore,
+    top_level_procedure_bindings: TopLevelProcedureBindingTable,
+    callable_eval_templates: CallableEvalTemplateTable,
     root_requests: RootRequestTable,
     hosted_procs: HostedProcTable,
     platform_required_declarations: PlatformRequiredDeclarationTable,
+    platform_requirement_relations: PlatformRequirementRelationTable,
     platform_required_bindings: PlatformRequiredBindingTable,
     interface_capabilities: ModuleInterfaceCapabilities,
-    top_level_values: TopLevelValueTable,
+    compile_time_roots: CompileTimeRootTable,
+    top_level_values: TopLevelValueStore,
+    comptime_plans: CompileTimePlanStore,
+    comptime_dependencies: CompileTimeDependencySummaryStore,
     promoted_procedures: PromotedProcedureTable,
-    compile_time_roots: ?ComptimeRootTable,
+    const_templates: ConstTemplateStore,
     comptime_values: CompileTimeValueStore,
     const_instances: ConstInstantiationStore,
     callable_binding_instances: CallableBindingInstantiationStore,
     semantic_instantiation_procedures: SemanticInstantiationProcedureTable,
-    callable_set_descriptors: CallableSetDescriptorStore,
-    platform_requirement_relations: PlatformRequirementRelationTable,
 };
 
 const CheckedProcedureTemplateTable = struct {
@@ -3139,15 +3157,13 @@ Conceptually:
 const CheckedStringLiteralId = enum(u32) { _ };
 
 const ProgramLiteralPool = struct {
-    owner: LoweringRunId,
-    literals: Span<ProgramLiteral>,
-    by_artifact_literal: Map<ArtifactStringLiteralRef, ProgramLiteralId>,
+    allocator: Allocator,
+    literals: ArrayList(ProgramLiteral),
+    by_bytes: StringHashMapUnmanaged(ProgramLiteralId),
 };
 
-const ProgramLiteral = union(enum) {
-    string: StringBytes,
-    crash_payload: StringBytes,
-    pattern_literal: StringBytes,
+const ProgramLiteral = struct {
+    bytes: []const u8,
 };
 ```
 
@@ -3158,16 +3174,18 @@ that checked body. It must not be exported as MIR, IR, LIR, cache-key, backend,
 interpreter, or runtime-image payload without first resolving to bytes through
 the owning checked body store.
 
-Mono creates the program literal pool. MIR stages and IR carry only
-`ProgramLiteralId` for lowered string, crash, and string-pattern payloads. They
-must not retain source literal ids or re-intern bytes independently. IR-to-LIR
-lowering interns every used `ProgramLiteralId` into `LirStore` exactly once for
-the final LIR program.
+Mono creates the program literal pool as a lowering-run byte-dedup table. MIR
+stages and IR carry only `ProgramLiteralId` for lowered string, crash, and
+string-pattern payloads. They must not retain source literal ids or re-intern
+bytes independently. IR-to-LIR lowering interns every used `ProgramLiteralId`
+into `LirStore` exactly once for the final LIR program. Artifact-literal to
+program-literal mapping is lowering-context state built while the owning
+checked body is available; it is not stored inside `ProgramLiteralPool`.
 The program pool is owned by the lowering run, not by parser/checker storage and
-not by final LIR. A checked artifact literal is copied or referenced through the
-artifact string table once when mono lowers it into the program pool. Later MIR,
-IR, LIR, ARC, backend, interpreter, and runtime-image stages do not read parser
-literal ids and do not independently intern source literal bytes.
+not by final LIR. A checked artifact literal is copied through the artifact
+string table once when mono lowers it into the program pool. Later MIR, IR, LIR,
+ARC, backend, interpreter, and runtime-image stages do not read parser literal
+ids and do not independently intern source literal bytes.
 
 The program literal pool covers every checked literal byte payload that
 survives checking: string expression literals, string interpolation segments,
@@ -3190,27 +3208,41 @@ Canonical names are interned by exact canonical bytes before they cross a
 checked artifact boundary:
 
 ```zig
-const CanonicalNameId = enum(u32) { _ };
-
 const CanonicalNameStore = struct {
-    names: InternMap([]const u8, CanonicalNameId),
+    module_names: ArrayList([]const u8),
+    module_name_by_text: StringHashMap(ModuleNameId),
+    type_names: ArrayList([]const u8),
+    type_name_by_text: StringHashMap(TypeNameId),
+    method_names: ArrayList([]const u8),
+    method_name_by_text: StringHashMap(MethodNameId),
+    record_field_labels: ArrayList([]const u8),
+    record_field_label_by_text: StringHashMap(RecordFieldLabelId),
+    tag_labels: ArrayList([]const u8),
+    tag_label_by_text: StringHashMap(TagLabelId),
+    export_names: ArrayList([]const u8),
+    export_name_by_text: StringHashMap(ExportNameId),
+    external_symbol_names: ArrayList([]const u8),
+    external_symbol_name_by_text: StringHashMap(ExternalSymbolNameId),
+    proc_bases: ArrayList(ProcBaseKey),
+    proc_base_by_key: StringHashMap(ProcBaseKeyRef),
 };
 
-const ModuleNameId = distinct CanonicalNameId;
-const TypeNameId = distinct CanonicalNameId;
-const RecordFieldLabelId = distinct CanonicalNameId;
-const TagLabelId = distinct CanonicalNameId;
-const MethodNameId = distinct CanonicalNameId;
-const ExportNameId = distinct CanonicalNameId;
-const ExternalSymbolNameId = distinct CanonicalNameId;
+const ModuleNameId = enum(u32) { _ };
+const TypeNameId = enum(u32) { _ };
+const RecordFieldLabelId = enum(u32) { _ };
+const TagLabelId = enum(u32) { _ };
+const MethodNameId = enum(u32) { _ };
+const ExportNameId = enum(u32) { _ };
+const ExternalSymbolNameId = enum(u32) { _ };
 ```
 
-`CanonicalNameId` values are dense, store-local ids. An id from an imported
-artifact's `CanonicalNameStore` is not comparable to an id in the lowering
-run's store or another artifact's store until it has been remapped through the
-central resolver/publisher APIs. The distinct wrappers prevent using a method
-name as a type name, a method name as a row label, a tag label as an export
-name, or an ABI symbol as a source-visible name.
+Canonical name ids are dense, store-local ids in their own domain-specific
+tables. An id from an imported artifact's `CanonicalNameStore` is not
+comparable to an id in the lowering run's store or another artifact's store
+until it has been remapped through the central resolver/publisher APIs. The
+distinct wrapper types prevent using a method name as a type name, a method name
+as a row label, a tag label as an export name, or an ABI symbol as a
+source-visible name.
 
 The byte sequence is the semantic spelling for the domain being keyed: record
 field labels use field-label bytes, tag labels use constructor-label bytes,
@@ -3513,30 +3545,39 @@ const ArtifactModuleInterfaceCapabilitiesRef = struct {
 };
 
 const ImportedModuleView = struct {
-    artifact_key: CheckedModuleArtifactKey,
-    module_identity: ModuleIdentity,
-    canonical_names: CanonicalNameView,
-    names: ArtifactNameResolver,
-    templates: ArtifactTemplateResolver,
-    exports: ExportTableView,
-    checked_bodies: CheckedBodyStoreView,
-    checked_types: CheckedTypeStoreView,
-    nominal_declarations: NominalDeclarationStoreView,
-    exported_procedure_templates: ExportedProcedureTemplateView,
-    exported_procedure_bindings: ExportedProcedureBindingView,
-    exported_const_templates: ExportedConstTemplateView,
-    top_level_values: TopLevelValueTableView,
-    method_entries: MethodRegistryView,
-    method_registry: MethodRegistryView,
-    hosted_entries: HostedProcTableView,
-    platform_entries: PlatformRequirementTableView,
+    key: CheckedModuleArtifactKey,
+    module_env: *const ModuleEnvStorage,
+    canonical_names: *const CanonicalNameStore,
+    exports: *const ExportTable,
+    checked_bodies: *const CheckedBodyStore,
+    checked_types: *const CheckedTypeStore,
+    checked_const_bodies: *const CheckedConstBodyStore,
+    checked_procedure_templates: *const CheckedProcedureTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+    intrinsic_wrappers: *const IntrinsicWrapperTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    nested_proc_sites: *const NestedProcSiteTable,
+    static_dispatch_plans: *const StaticDispatchPlanTable,
+    hosted_procs: *const HostedProcTable,
+    promoted_callable_wrappers: *const PromotedCallableWrapperTable,
+    promoted_callable_body_plans: *const PromotedCallableBodyPlanStore,
+    executable_type_payloads: *const ExecutableTypePayloadStore,
+    executable_value_transforms: *const ExecutableValueTransformPlanStore,
+    callable_set_descriptors: *const CallableSetDescriptorStore,
+    erased_fn_abis: *const ErasedFnAbiStore,
+    provided_exports: *const ProvidedExportTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    const_templates: *const ConstTemplateStore,
+    exported_procedure_templates: *const ExportedProcedureTemplateTable,
+    exported_procedure_bindings: *const ExportedProcedureBindingTable,
+    exported_const_templates: *const ExportedConstTemplateTable,
+    method_registry: *const MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
-    compile_time_values: CompileTimeValueStoreView,
-    compile_time_plans: CompileTimePlanStoreView,
-    const_instances: ConstInstantiationStoreView,
-    callable_binding_instances: CallableBindingInstantiationStoreView,
-    semantic_instantiation_procedures: SemanticInstantiationProcedureTableView,
-    callable_set_descriptors: CallableSetDescriptorStoreView,
+    compile_time_values: *const CompileTimeValueStore,
+    compile_time_plans: *const CompileTimePlanStore,
+    const_instances: *const ConstInstantiationStore,
+    callable_binding_instances: *const CallableBindingInstantiationStore,
+    semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
 };
 
 const ImportedProcedureBindingView = struct {
@@ -3637,13 +3678,18 @@ const ImportedTemplateClosureView = struct {
 };
 ```
 
-Every imported view is a read-only projection of the checked artifact. The view
-may narrow access to exports, checked bodies/types, exported procedure
-templates, exported procedure bindings, exported const templates, method
-registry rows, interface capabilities, compile-time value stores, const
-instantiation stores, callable binding instantiation stores, semantic
-instantiation procedures, and callable-set descriptors, but it must not expose
-mutable artifact storage or invent rows not present in the artifact.
+Every imported view is a read-only projection of the checked artifact. The
+implementation-facing view is a set of artifact-qualified table pointers plus
+the artifact key; helper APIs such as `ArtifactTemplateResolver` may be layered
+on top when a caller needs closure authorization, checked-type projection, or
+canonical-name remapping. Those helpers are behavior over the imported view, not
+a substitute artifact identity. The view may narrow access to exports, checked
+bodies/types, exported procedure templates, exported procedure bindings,
+exported const templates, method registry rows, interface capabilities,
+compile-time value stores, const instantiation stores, callable binding
+instantiation stores, semantic instantiation procedures, and callable-set
+descriptors, but it must not expose mutable artifact storage or invent rows not
+present in the artifact.
 
 Every imported closure reference is artifact-qualified by construction. A
 `local_id` has no meaning without the `CheckedModuleArtifactKey` that owns the
@@ -4269,11 +4315,6 @@ const AppSpecificPlatformRootArtifact = struct {
     platform_roots: Span<RootRequestId>,
 };
 
-const PlatformForClauseSubstitutionTable = struct {
-    relation: PlatformAppRelationKey,
-    rows: Span(PlatformForClauseSubstitution),
-};
-
 const PlatformForClauseSubstitution = struct {
     requirement: PlatformRequiredDeclarationId,
     platform_alias_name: TypeNameId,
@@ -4301,11 +4342,13 @@ platform requirements by name.
 
 For-clause substitutions are publication-time data. If a platform declaration
 introduces type variables or row variables that are filled by the selected app,
-the relation artifact publishes the substitution rows that connect platform
-variables to app payloads and requested payload copies. Post-check lowering
-uses those rows when instantiating platform-required procedures, platform
-required constants, hosted wrappers, and glue schemas. It does not reopen the
-relation unifier.
+publication applies `PlatformForClauseSubstitution` rows while building the
+relation artifact's requested payload copies and checked relation rows. The
+implementation does not need to persist a separate substitution table when every
+post-check consumer can use the sealed `PlatformRequirementRelationTable` and
+`PlatformRequiredBindingTable` rows directly. If a future stage needs the rows
+after publication, they must be published explicitly instead of reconstructed by
+reopening relation typing.
 
 The substitution row is built from explicit platform requirement data. A
 `[Alias : rigid]` for-clause records the platform alias spelling, the rigid
@@ -4555,51 +4598,49 @@ Runtime-image publication creates a target-specific viewable image after ARC
 insertion:
 
 ```zig
-const LirRuntimeImageHeader = extern struct {
+const Header = extern struct {
     magic: u32,
     format_version: u32,
     image_size: u64,
     target_usize: u8,
-    byte_order: RuntimeByteOrder,
+    padding: [7]u8,
     root_procs: ArrayRef(LirProcSpecId),
     platform_entrypoints: ArrayRef(PlatformEntrypointImage),
-    lir_store: LirStoreImage,
+    store: LirStoreImage,
     layouts: LayoutStoreImage,
-    literal_pool: ProgramLiteralPoolImage,
-    hosted_table: HostedProcTableImage,
 };
 
 const ArrayRef = extern struct {
     offset: u64,
-    len: u32,
-    capacity: u32,
+    len: u64,
+    capacity: u64,
 };
 
-const LirRuntimeImageView = struct {
-    header: LirRuntimeImageHeader,
+const ProgramView = struct {
+    header: Header,
     root_proc_ids: RuntimeSlice(LirProcSpecId),
     platform_entrypoints: RuntimeSlice(PlatformEntrypointImage),
     store: LirStoreView,
     layouts: CommittedLayoutStoreView,
-    literal_pool: ProgramLiteralPoolView,
-    hosted_table: HostedProcTableView,
 };
 ```
 
-The field names may differ, but the image is offset-based and shareable. Child
-processes map the image and construct views over it. They do not deserialize
-compiler semantic structures, allocate checked artifacts, or receive CIR. Header
-validation checks magic, format version, target pointer width, byte order, slice
-bounds, alignment, and root proc ids before execution.
+`Header`, `ArrayRef`, and `ProgramView` are the implementation-facing names. The
+image is offset-based and shareable. Child processes map the image and construct
+views over it. They do not deserialize compiler semantic structures, allocate
+checked artifacts, or receive CIR. Header validation checks magic, format
+version, target pointer width, slice bounds, alignment, and root proc ids before
+execution. Literal-pool, hosted-table, or extra platform images may be added as
+explicit future header slices if runtime execution needs them; until then they
+are not implied by the runtime image contract.
 
 Runtime-image validation treats the published bytes as an object graph of
 offset-addressed slices. Validation checks header magic, version, target id,
-compiler artifact hash when present, target pointer width, byte order, slice
-bounds, slice alignment, root proc ids, hosted bindings, platform root mappings,
-literal-pool ranges, layout indexes, procedure indexes, statement successors,
-malformed RC data, and static data relocations before execution. Views are
-zero-copy: a valid child-side view is a set of typed slices into the mapped
-bytes, not a deserialized copy.
+compiler artifact hash when present, target pointer width, slice bounds, slice
+alignment, root proc ids, platform root mappings, layout indexes, procedure
+indexes, statement successors, malformed RC data, and any explicitly published
+extra image slices before execution. Views are zero-copy: a valid child-side
+view is a set of typed slices into the mapped bytes, not a deserialized copy.
 
 The parent owns runtime-image construction. The child owns only the mapped arena
 view and execution state required by the interpreter/backend. Child-side views
@@ -4618,7 +4659,7 @@ const RuntimeImageArena = struct {
 
 const LocalRuntimeImageView = struct {
     arena: RuntimeImageArena,
-    header: *const LirRuntimeImageHeader,
+    header: *const Header,
     image_slices: RuntimeImageSliceTable,
     literal_pool: ProgramLiteralPoolView,
     root_proc_ids: Span(LirProcSpecId),
@@ -4669,7 +4710,7 @@ uses an embedded image only when the compiler artifact hash in the image header
 matches the compiler/runtime that will execute it. A mismatch is an
 infrastructure error, not permission to deserialize checked artifacts.
 Embedded and file-backed interpreter images preserve the same view-oriented
-contract: the embedded bytes become a `LirRuntimeImageView` before execution,
+contract: the embedded bytes become a `ProgramView` before execution,
 and the interpreter side still performs no semantic lowering, root discovery,
 or source reconstruction. Embedded-image design must not dictate or slow the
 `roc run` shared-memory IPC path.
@@ -4769,50 +4810,46 @@ pub const LowerResourceError = std.mem.Allocator.Error;
 
 pub fn lowerArtifactsToLir(
     allocator: Allocator,
-    root_artifact: CheckedModuleArtifact,
-    imports: ImportedModuleViewSet,
-    lowering_view: LoweringModuleView,
+    artifacts: ArtifactSet,
     roots: RootRequestSet,
-    relations: RelationArtifactSet,
     target: TargetConfig,
-    metadata_sink: ?*CompileTimeLoweringMetadata,
 ) LowerResourceError!LoweredProgram;
 
+pub const ArtifactSet = struct {
+    root: LoweringModuleView,
+    imports: []const ImportedModuleView,
+};
+
+pub const RootRequestSet = struct {
+    requests: []const RootRequest,
+    compile_time_requests: []const CompileTimeEvaluationRequest,
+    purpose: RootPurpose,
+    compile_time_plan_sink: ?*CompileTimePlanStore,
+    compile_time_artifact_sink: ?*CheckedModuleArtifact,
+};
+
+pub const TargetConfig = struct {
+    target_usize: TargetUsize,
+    artifact_state: ArtifactState,
+};
+
 pub const LoweredProgram = struct {
-    mono: ?MonoProgramDebugRef,
-    row_finalized: ?RowFinalizedDebugRef,
-    lifted: ?LiftedProgramDebugRef,
-    lambda_solved: ?LambdaSolvedDebugRef,
-    executable: ?ExecutableProgramDebugRef,
-    ir: IrProgram,
-    lir: LirProgram,
-    arc_inserted_lir: LirProgram,
-    runtime_image: ?LirRuntimeImage,
-    callable_set_descriptors: []const LoweredCallableSetDescriptor,
-    callable_set_member_payloads: []const LoweredCallableSetMemberPayloads,
+    lir_result: LirLoweringResult,
+    main_proc: ?LirProcSpecId,
+    target_usize: TargetUsize,
+    runtime_value_schemas: RuntimeValueSchemaStore,
+    compile_time_payloads: CompileTimePayloadStore,
+    callable_set_descriptors: []const CanonicalCallableSetDescriptor,
     callable_set_runtime_encodings: []const CallableSetRuntimeEncoding,
+    callable_set_member_payloads: []const LoweredCallableSetMemberPayload,
+    erased_callable_code_map: []const LoweredErasedCallableCodeEntry,
 };
 
-pub const LoweredCallableSetDescriptor = struct {
-    key: CanonicalCallableSetKey,
-    members: []const LoweredCallableSetMember,
-};
-
-pub const LoweredCallableSetMember = struct {
-    member: CallableSetMemberId,
-    proc_value: ProcedureCallableRef,
-    source_proc: MirProcedureRef,
-    published_proc_value: ?ProcedureCallableRef,
-    published_source_proc: ?MirProcedureRef,
-    capture_slots: []const CallableSetCaptureSlot,
-    capture_shape_key: CaptureShapeKey,
-};
-
-pub const LoweredCallableSetMemberPayloads = struct {
+pub const LoweredCallableSetMemberPayload = struct {
     callable_set_key: CanonicalCallableSetKey,
     member: CallableSetMemberId,
-    member_proc_source_fn_ty_payload: CheckedTypePayloadRef,
-    member_lifted_owner_source_fn_ty_payload: ?CheckedTypePayloadRef,
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
 };
 
 pub const CallableSetRuntimeEncoding = struct {
@@ -4828,24 +4865,25 @@ pub const CallableSetRuntimeEncodingMember = struct {
     payload_layout: PhysicalLayoutId,
     payload_exec_key: ?CanonicalExecValueTypeKey,
 };
-
-pub const CompileTimeLoweringMetadata = struct {
-    prepared_stage_outputs: PreparedStageOutputStore,
-    dependency_summaries: CompileTimeDependencySummaryStore,
-    materialization_requests: ConstMaterializationRequestStore,
-    erased_callable_code_map: LoweredErasedCallableCodeMap,
-};
 ```
 
-`LoweredCallableSetDescriptor` is semantic lowering data: which callable members
-exist, which procedure/callable refs they target, and which capture slots they
-own. It is not the runtime representation of a callable-set value.
+The exported `LoweredProgram` is the concrete post-check lowering product for
+the current target. It owns the ARC-inserted LIR result, runtime schema store,
+compile-time payloads needed by checked finalization, runtime callable-set
+descriptor copies, callable-set runtime encodings, callable-set member payload
+refs, and the lowered erased callable code entries for this LIR program. Debug
+stage references are optional tooling data and are not part of the semantic
+public API unless an implementation publishes them explicitly. The exact
+exported helper names may differ, but the error type is resource-only.
+
+`CanonicalCallableSetDescriptor` is semantic lowering data: which callable
+members exist, which procedure/callable refs they target, and which capture
+slots they own. It is not the runtime representation of a callable-set value.
 `CallableSetRuntimeEncoding` is physical representation data for one lowered
 program and target layout store. It is the only lowered-program output that may
 answer "which discriminant, variant slot, and payload layout represents this
 callable-set member in memory?"
 
-The exact exported names may differ, but the error type is resource-only.
 `IOError`, `ObjectEmissionError`, `RuntimeImagePublicationError`, and
 `ProcessExecutionError` belong to outer command/runtime wrapper APIs that call
 semantic lowering and then publish artifacts, invoke tools, or execute images.
@@ -4854,29 +4892,27 @@ missing static-dispatch plans, missing compile-time values, and missing
 capabilities are not public `lowerArtifactsToLir` errors. They are either
 reported during checking finalization or are compiler bugs after publication.
 
-Public callers pass checked artifacts, import/lowering views, explicit roots,
-relation artifacts, and target config. Compile-time lowering inside checking
-finalization may pass a metadata sink so prepared MIR/IR/LIR work and
-dependency metadata can be reused under exact keys.
+Public callers pass a root `LoweringModuleView`, imported module views,
+explicit root requests, compile-time evaluation requests when needed, and target
+config. Compile-time lowering inside checking finalization passes
+`compile_time_plan_sink` and `compile_time_artifact_sink` through
+`RootRequestSet`; those sinks are the only way semantic compile-time artifacts
+are filled during lowering.
 
 `LoweredProgram.callable_set_descriptors` is owned runtime lowering output for
 the current LIR program and interpreter run. It is not the checked artifact's
-persisted callable-set descriptor store. Runtime descriptor members carry the
-lowering-run identities used by this exact program, `proc_value` and
-`source_proc`, because those identities can name lifted, local, or synthetic
-procedures that are valid only in the current lowering run. When an artifact
-identity also exists, the member carries optional `published_proc_value` and
-`published_source_proc`; those are the only identities that may cross a
-persistence boundary.
+persisted callable-set descriptor store. The runtime slice is a deep copy of the
+canonical descriptor rows selected for this exact lowering run. Members may name
+lifted, local, or synthetic procedures that are valid only in the current
+lowering run; artifact publication stores only artifact-safe descriptor rows.
 
 The clone from lambda-solved lowering into `LoweredProgram` deep-copies every
-member field, including optional published identities. The LIR interpreter and
+descriptor and member field needed by the interpreter. The LIR interpreter and
 compile-time result decoder consume this runtime descriptor table when reading
 finite callable values, erased finite-set adapters, and interpreted callable
-captures from the current LIR result. Checked artifacts never persist
-lowering-run-only identities, and a checked-artifact persisted descriptor is
-not a substitute for the runtime descriptor table while interpreting the
-current lowered program.
+captures from the current LIR result. A checked-artifact persisted descriptor is
+not a substitute for the runtime descriptor table while interpreting the current
+lowered program.
 
 During checking finalization, `LoweredProgram.callable_set_member_payloads`
 is the finalization-ready companion to the runtime descriptor table. It maps
@@ -4892,16 +4928,16 @@ dropped the solved MIR program. If a runtime descriptor member lacks its
 finalization payload record, the producer is incomplete and finalization must
 report a compiler invariant violation.
 
-When `metadata_sink` is present, lowering records prepared work and dependency
-summaries so later runtime emission can reuse exact-key outputs. The sink
-records prepared work only; it does not mark procedures or constants as final
-binary roots.
+When compile-time sinks are present, lowering records prepared plans and fills
+the checked artifact under exact keys. A sink records or fills only the
+explicitly requested compile-time data; it does not mark procedures or constants
+as final binary roots.
 
-`CompileTimeLoweringMetadata.erased_callable_code_map` is local lowering
-metadata for checking finalization. It is not checked-artifact cache data,
-backend policy input, or serialized transport. Lowering builds the map while
-executable MIR procedures are assigned LIR procedure ids. Each entry records
-the LIR proc id, erased callable code ref, source function type, executable
+`LoweredProgram.erased_callable_code_map` is local lowering metadata for this
+LIR program. It is not checked-artifact cache data, backend policy input, or
+serialized transport. Lowering builds the entries while executable MIR
+procedures are assigned LIR procedure ids. Each entry records the LIR proc id,
+erased callable code ref, source function type, executable
 argument keys, executable return key, capture shape, and deterministic object
 symbol. Static data emission and erased callable result decoding consume only
 validated entries from this map. They must not recover erased callable code by
@@ -4976,7 +5012,6 @@ const NestedProcSiteId = enum(u32) { _ };
 const CheckedProcedureBody = union(enum) {
     checked_body: CheckedBodyId,
     promoted_callable_wrapper: PromotedCallableWrapperId,
-    hosted_wrapper: HostedWrapperId,
     intrinsic_wrapper: IntrinsicWrapperId,
     entry_wrapper: EntryWrapperId,
 };
@@ -4995,6 +5030,7 @@ const CheckedProcedureTemplate = struct {
 };
 
 const CheckedProcedureTemplateRef = struct {
+    artifact: CheckedModuleArtifactKey,
     proc_base: ProcBaseKeyRef,
     template: CheckedProcedureTemplateId,
 };
@@ -5011,7 +5047,9 @@ procedure-site rows, and target metadata. The checked variant of
 `ProcedureTemplateRef` points at `CheckedProcedureTemplateRef`, and
 `MonoSpecializationKey` requests one concrete specialization of a procedure
 template. Promoted callable results become compiler-created checked wrapper
-templates in this table before publication. A promoted callable procedure value
+templates in this table before publication. Hosted procedures remain hosted
+procedure table entries plus explicit target metadata unless the compiler has
+created an actual checked wrapper body for them. A promoted callable procedure value
 without both a checked template row and a `PromotedProcedureTable` row is a
 compiler bug. After artifact publication, lowering must not read raw CIR
 expression ids, raw type variables, parser ids, unchecked syntax pointers,
@@ -5066,7 +5104,7 @@ const CanonicalNodeRef = union(enum) {
 
 The same recursion binder and backref rules are used by
 `MonoSpecializationKey`, `ExecutableSpecializationKey`,
-`CanonicalCallableSetKey`, `CaptureShapeKey`, `ErasedCallSigKey`,
+`CanonicalCallableSetKey`, `CaptureShapeKey`, `ErasedFnSigKey`,
 `ErasedAdapterKey`, `BoxPayloadCapabilityKey`, boxed payload representation
 plan keys, and executable layout-publication keys. Procedure refs are encoded
 as `ProcBaseKeyRef`, not raw symbols. Capture components are encoded in
@@ -5193,7 +5231,7 @@ const SyntheticOrigin = union(enum) {
     erased_adapter: struct {
         source_fn_ty: CanonicalTypeKey,
         callable_set_key: CanonicalCallableSetKey,
-        erased_call_sig_key: ErasedCallSigKey,
+        erased_fn_sig_key: ErasedFnSigKey,
         capture_shape_key: CaptureShapeKey,
     },
     bridge: struct {
@@ -5565,14 +5603,28 @@ Conceptually:
 
 ```zig
 const MethodOwner = union(enum) {
-    nominal: NominalOwnerKey,
-    primitive: PrimitiveOwner,
-    list,
-    box,
+    nominal: NominalTypeKey,
+    builtin: BuiltinOwner,
 };
 
-const NominalOwnerKey = struct {
-    nominal_type: NominalTypeKey,
+const BuiltinOwner = enum {
+    list,
+    box,
+    bool,
+    str,
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+    f32,
+    f64,
+    dec,
 };
 
 const MethodKey = struct {
@@ -5580,38 +5632,29 @@ const MethodKey = struct {
     method: MethodNameId,
 };
 
-const MethodDefRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    procedure: CheckedProcedureTemplateId,
-};
-
-const HostedProcRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    host_symbol: ExternalSymbolNameId,
-    dispatch_index: u32,
-    representation_abi: ProcRepresentationAbi,
-    call_boundary_rc_template: CallBoundaryRcTemplate,
-};
-
-const MethodTarget = union(enum) {
-    user_proc: MethodDefRef,
-    hosted_proc: HostedProcRef,
-    intrinsic: IntrinsicMethod,
+const MethodTarget = struct {
+    module_idx: u32,
+    def_idx: CheckedDefId,
+    proc: ProcedureValueRef,
+    template: ?ProcedureTemplateRef,
+    callable_ty: CheckedTypeId,
 };
 ```
 
 `MethodOwner` is semantic source type identity, not expression shape or display
 text. Nominal owners use the canonical nominal type key from the defining
-artifact. Primitive, `List`, and `Box` owners are explicit builtin owner cases.
-Transparent aliases and type-variable aliases resolve to a `MethodOwner` before
-lookup. `MethodKey.method` is a canonical `MethodNameId`, not a raw identifier
-id.
+artifact. Primitive, `List`, `Box`, `Bool`, `Str`, and numeric owners are
+explicit `BuiltinOwner` cases. Transparent aliases and type-variable aliases
+resolve to a `MethodOwner` before lookup. `MethodKey.method` is a canonical
+`MethodNameId`, not a raw identifier id.
 
-`MethodTarget` is a mono MIR input contract only. It must not appear in lifted
-MIR, lambda-solved MIR, executable MIR, IR, or LIR. Hosted, platform, and
-intrinsic method entries are normalized to explicit procedure targets with
-checked callable types and call-boundary metadata before mono consumes the
-registry.
+`MethodTarget` is a mono MIR input contract only. It names the resolved checked
+procedure value, optional procedure template, and checked callable type selected
+by the registry. It must not appear in lifted MIR, lambda-solved MIR, executable
+MIR, IR, or LIR. Hosted, platform, and intrinsic method-like operations are
+normalized before mono to either explicit procedure targets or separate
+hosted/intrinsic dispatch records with checked callable types and call-boundary
+metadata.
 
 For every procedure-backed target, the registry's checked callable type is the
 same checked root as the published procedure template's callable root. The
@@ -5850,17 +5893,13 @@ const ProcBoundaryExecutablePayloads = struct {
 
 const ProcRepresentationInstance = struct {
     proc: MirProcedureRef,
-    template: ProcRepresentationTemplateRef,
-    provisional_key: ProvisionalProcRepresentationInstanceKey,
-    owner: ProcedureInstantiationOwner,
     executable_specialization_key: ExecutableSpecializationKey,
     solve_session: RepresentationSolveSessionId,
     value_store: ValueInfoStoreId,
     public_roots: ProcPublicValueRoots,
-    capture_slots: Span(CaptureSlotInstance),
     boundary_payloads: ?ProcBoundaryExecutablePayloads,
     boundary_provenance: Span(BoxErasureProvenance),
-    state: ProcRepresentationBuildState,
+    materialized: bool,
 };
 ```
 
@@ -5903,12 +5942,16 @@ descriptor-member procedure value target: repeated occurrences selecting the
 same descriptor member may share that target instance, while their
 occurrence-local construction plans, captures, and transforms remain separate.
 
-`ProcRepresentationBuildState` is per instance and builder-only. It is distinct
-from `RepresentationSolveSession.state`, which describes the solve session as a
-whole. Exported lambda-solved MIR contains only sealed procedure representation
-instances, sealed solve sessions, sealed value stores, and solved
-representation groups. Executable MIR input verification rejects any unsealed
-instance or value metadata; release builds treat that state as unreachable.
+`ProcRepresentationBuildState`, `ProvisionalProcRepresentationInstanceKey`, and
+`ProcedureInstantiationOwner` are builder-only data. They are distinct from the
+sealed `ProcRepresentationInstance`, which contains the procedure identity,
+executable specialization key, solve session, value store, public roots,
+optional boundary payload owner, boundary provenance, and whether the instance
+is materialized for executable body emission. Exported lambda-solved MIR
+contains only sealed procedure representation instances, sealed solve sessions,
+sealed value stores, and solved representation groups. Executable MIR input
+verification rejects any unsealed instance or value metadata; release builds
+treat that state as unreachable.
 
 Generalized procedure templates are never executable inputs. A concrete use
 clone-instantiates the checked procedure template into one
@@ -6067,7 +6110,7 @@ const CallBoundaryErasureRequirement = struct {
 
 const ErasedCallBoundaryErasureRequirement = struct {
     call_site: CallSiteInfoId,
-    sig_key: ErasedCallSigKey,
+    sig_key: ErasedFnSigKey,
     arg_index: u32,
     caller_arg_root: RepRootId,
     abi_arg_exec_key: CanonicalExecValueTypeKey,
@@ -6122,25 +6165,27 @@ Erased callable representation requires an explicit `BoxBoundaryId`:
 
 ```zig
 const BoxBoundary = struct {
-    direction: BoxErasureDirection,
-    input: ExprId,
-    box_root: RepRootId,
-    payload_root: RepRootId,
-    box_ty: ConcreteSourceTypeRef,
-    payload_source_ty: ConcreteSourceTypeRef,
-    payload_boundary_ty: ConcreteSourceTypeRef,
-    payload_plan: BoxPayloadRepresentationPlanId,
+    box_ty: CanonicalTypeKey,
+    box_ty_payload: ?ConcreteSourceTypeRef,
+    payload_source_ty: CanonicalTypeKey,
+    payload_source_ty_payload: ?ConcreteSourceTypeRef,
+    payload_boundary_ty: CanonicalTypeKey,
+    payload_boundary_ty_payload: ?ConcreteSourceTypeRef,
+    direction: BoxBoundaryDirection,
+    source_root: RepRootId,
+    boundary_root: RepRootId,
+    payload_plan: BoxPayloadRepresentationPlan,
 };
 ```
 
-For boxing, `input` is the payload expression, `box_root` is the produced box,
-and `payload_root` is the payload being boxed. For unboxing, `input` is the
-boxed expression, `box_root` is the consumed box, and `payload_root` is the
-unboxed result. `box_ty` must be exactly `Box(payload_boundary_ty)`.
-`payload_source_ty` is the source payload type before erased-payload rewriting.
-`payload_boundary_ty` is the explicit erased representation of the boxed
-payload, and `payload_plan` records the representation requirement for that
-payload.
+For boxing, `source_root` is the payload being boxed and `boundary_root` is the
+produced box boundary. For unboxing, `source_root` is the consumed box and
+`boundary_root` is the unboxed payload boundary. `box_ty` is the canonical
+source key for `Box(payload_boundary_ty)`, with payload refs present when the
+current artifact/session owns concrete source payloads. `payload_source_ty` is
+the source payload type before erased-payload rewriting. `payload_boundary_ty`
+is the explicit erased representation of the boxed payload, and `payload_plan`
+records the representation requirement for that payload.
 
 The `BoxBoundaryId` is local to one representation store. Compile-time values
 and serialized artifacts store stable erased callable provenance, not local
@@ -6198,17 +6243,35 @@ Lambda-solved MIR owns an explicit representation store:
 
 ```zig
 const RepresentationStore = struct {
-    roots: Map(RepRootId, RepVarId),
-    vars: Store(RepresentationVar),
-    edges: Store(RepresentationEdge),
-    requirements: Store(RepresentationRequirement),
-    groups: Store(SolvedRepresentationGroup),
-    solved_child_roots: Map(SolvedChildKey, RepRootId),
-    group_erasure_provenance:
-        Map(RepresentationGroupId, NonEmptySpan(BoxErasureProvenance)),
+    roots_len: u32,
+    groups_len: u32,
+    root_groups: []RepresentationGroupId,
+    callable_group_emissions: []?CallableValueEmissionPlanId,
+    group_erasure_provenance: [][]const BoxErasureProvenance,
+    root_kinds: HashMap(RepRootId, RepresentationRootKind),
+    root_type_infos: HashMap(RepRootId, RepresentationRootTypeInfo),
+    solved_structural_child_roots: HashMap(SolvedStructuralChildKey, RepRootId),
+    solved_structural_child_roots_published: bool,
+    representation_edges: ArrayList(RepresentationEdge),
+    representation_requirements: ArrayList(RepresentationRequirement),
+    callable_emission_plans: []CallableValueEmissionPlan,
+    finite_erased_adapter_demands: []FiniteErasedAdapterDemand,
+    callable_construction_plans: []CallableSetConstructionPlan,
+    callable_set_descriptors: []const CanonicalCallableSetDescriptor,
+    session_executable_type_payloads: SessionExecutableTypePayloadStore,
+    erased_fn_abis: ErasedFnAbiStore,
+    box_payload_plans: []BoxPayloadRepresentationPlan,
+    box_boundaries: []BoxBoundary,
+    capture_boundaries: []CaptureBoundaryInfo,
+    value_transform_boundaries: []const ValueTransformBoundary,
+    consumer_use_plans: ArrayList(ConsumerUsePlan),
+    transform_endpoint_scopes: ArrayList(TransformEndpointScope),
+    transform_endpoint_paths: ArrayList(Span(TransformEndpointPathStep)),
+    transform_endpoint_path_steps: ArrayList(TransformEndpointPathStep),
+    session_value_transforms: SessionExecutableValueTransformStore,
 };
 
-const RepRootId = union(enum) {
+const RepresentationRootKind = union(enum) {
     expr: ExprId,
     binder: BinderId,
     pattern_binder: PatternBinderId,
@@ -6287,6 +6350,12 @@ const BoxErasureRequirement = struct {
     provenance: BoxErasureProvenance,
 };
 ```
+
+`RepRootId` is a dense root id. Its semantic case lives in
+`RepresentationStore.root_kinds`, and its source/executable payload data lives in
+`root_type_infos`. This keeps root identity stable while allowing the store to
+publish compact group arrays. The conceptual root cases above are
+`RepresentationRootKind` values, not separate tagged root ids.
 
 Every expression result, binder, pattern binder, procedure parameter,
 procedure return, capture slot, callable requested-function occurrence,
@@ -6443,7 +6512,7 @@ const PersistedErasedCallableCodePlan = union(enum) {
 const PersistedFiniteSetAdapterCodePlan = struct {
     adapter_key: ErasedAdapterKey,
     member_targets: NonEmptySpan(ExecutableSpecializationKey),
-    sig: ErasedCallSigKey,
+    sig: ErasedFnSigKey,
     members: Span<PersistedFiniteErasedAdapterMember>,
 };
 
@@ -6485,7 +6554,7 @@ Finite-erased adapter identity is the full erased adapter key:
 const ErasedAdapterKey = struct {
     source_fn_ty: ConcreteSourceTypeRef,
     callable_set_key: CanonicalCallableSetKey,
-    erased_call_sig_key: ErasedCallSigKey,
+    erased_fn_sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
 };
 ```
@@ -6494,7 +6563,7 @@ No shorter identity is valid. Source function type plus callable-set key is not
 enough, because the same callable set can be adapted through different erased
 ABIs or hidden capture shapes. Executable lowering reserves the adapter under
 the full key, validates descriptor member order against the callable-set key,
-validates erased ABI equality against `erased_call_sig_key`, and validates
+validates erased ABI equality against `erased_fn_sig_key`, and validates
 capture schema agreement against `capture_shape_key`.
 
 Descriptor order validates the adapter member table; it is not used to recover
@@ -6542,48 +6611,46 @@ on a non-`Box(T)` root is a compiler bug.
 Box payload erasure is computed as a graph, not a tree:
 
 ```zig
-const BoxPayloadRepresentationPlan = struct {
-    root_payload: ConcreteSourceTypeRef,
-    active_payload_to_plan_id: Map<CanonicalTypeKey, BoxPayloadPlanId>,
-    completed_payload_to_plan_id: Map<CanonicalTypeKey, BoxPayloadPlanId>,
-    nodes: Span(BoxPayloadPlanNode),
+const BoxPayloadRepresentationPlan = union(enum) {
+    unchanged,
+    function_erased: struct {
+        source_fn_ty: CanonicalTypeKey,
+        sig_key: ErasedFnSigKey,
+    },
+    record: Span(BoxPayloadFieldPlan),
+    tag_union: Span(BoxPayloadTagPlan),
+    tuple: Span(BoxPayloadTupleElemPlan),
+    list: BoxPayloadRepresentationPlanId,
+    nested_box: BoxPayloadRepresentationPlanId,
+    nominal: NominalPayloadRepresentation,
+    recursive_ref: BoxPayloadRepresentationPlanId,
 };
 
-const BoxPayloadPlanNode = union(enum) {
-    primitive,
-    record: BoxPayloadRecordPlan,
-    tuple: BoxPayloadTuplePlan,
-    tag_union: BoxPayloadTagUnionPlan,
-    list: BoxPayloadListPlan,
-    box: BoxPayloadBoxPlan,
-    function: FunctionPayloadRepresentation,
-    nominal: BoxPayloadNominalPlan,
-    recursive_ref: BoxPayloadPlanId,
+const BoxPayloadFieldPlan = struct {
+    field: RecordFieldId,
+    plan: BoxPayloadRepresentationPlanId,
 };
 
-const BoxPayloadBoxPlan = struct {
-    boundary: ?BoxBoundaryId,
-    payload_plan: BoxPayloadPlanId,
+const BoxPayloadTupleElemPlan = struct {
+    index: u32,
+    plan: BoxPayloadRepresentationPlanId,
 };
 
-const FunctionPayloadRepresentation = struct {
-    args: Span<BoxPayloadPlanId>,
-    ret: BoxPayloadPlanId,
-    callable: CallableBoxPlan,
-    erased_call_sig_key: ErasedCallSigKey,
+const BoxPayloadTagPlan = struct {
+    tag: TagId,
+    payloads: Span(BoxPayloadTagPayloadPlan),
 };
 
-const CallableBoxPlan = union(enum) {
-    already_erased: AlreadyErasedCallablePlan,
-    proc_value_to_erased: ProcValueErasePlan,
-    finite_set_to_erased_adapter: ErasedAdapterKey,
+const BoxPayloadTagPayloadPlan = struct {
+    payload: TagPayloadId,
+    plan: BoxPayloadRepresentationPlanId,
 };
 
 const ProcValueErasePlan = struct {
     source_value: ValueInfoId,
     proc_value: ProcedureCallableRef,
     target_instance: ProcRepresentationInstanceId,
-    erased_call_sig_key: ErasedCallSigKey,
+    erased_fn_sig_key: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
     executable_specialization_key: ExecutableSpecializationKey,
     adapter_arg_transforms: Span(ValueTransformBoundaryId),
@@ -6593,18 +6660,19 @@ const ProcValueErasePlan = struct {
 };
 ```
 
-`active_payload_to_plan_id` reserves nodes before children are lowered so
-recursive boxed payloads can refer back to an in-progress node through
-`recursive_ref`. `completed_payload_to_plan_id` interns finished payload plans.
-Materializing-leaf detection is part of the graph: scalar leaves, static data
-leaves, finite callable leaves, already-erased callable leaves, and recursive
-refs are distinguished explicitly. A function slot recursively transforms every
+`RepresentationStore.box_payload_plans` owns the graph nodes, and
+`BoxPayloadRepresentationPlanId` values form the edges. The builder reserves a
+plan id before filling recursive children so boxed payloads can refer back
+through `recursive_ref`. Materializing-leaf detection is explicit: unchanged
+leaves, finite callable leaves, already-erased callable leaves, direct
+procedure-value erasure, finite adapters, nominal payload modes, and recursive
+refs are distinguished by the plan or by the callable emission plan that reaches
+the `function_erased` node. A function slot recursively transforms every
 fixed-arity argument and return payload inside the explicit `Box(T)` payload,
-then chooses one callable representation: already-erased pass-through/retype,
-direct procedure-value erasure, or finite-set erased adapter. A boxed function
-slot is never an opaque leaf and never becomes a tree-shaped closure record by
-inspection. `ProcValueErasePlan` is only the `proc_value_to_erased` callable
-case; it is not the whole function payload node.
+then validates a callable representation selected by the solved emission data. A
+boxed function slot is never an opaque leaf and never becomes a tree-shaped
+closure record by inspection. `ProcValueErasePlan` is only the direct
+procedure-value erasure case; it is not the whole function payload node.
 
 `ProcValueErasePlan` is a boundary-local obligation for one explicit
 `proc_value` occurrence. `source_value` names that occurrence. `proc_value`
@@ -6679,14 +6747,14 @@ differing source function type requires this explicit transform plan first.
 
 Immediate erased `call_value` is narrower. It consumes the callee through raw
 ABI endpoints and does not create a retyped value. In that case
-`ErasedCallableCallPlan.sig` names the erased callable signature whose ABI is
-called, while `CallSiteInfo.requested_source_fn_ty` records the checked
+`ErasedCallableCallPlan.sig` names the erased callable specialization whose
+`call` boundary ABI is invoked, while `CallSiteInfo.requested_source_fn_ty` records the checked
 source-level call view. Those source-function identities may differ only when
 the erased ABI is identical and the call site carries an explicit transparent
 alias, transparent nominal, or platform/app relation proof. Executable MIR
 verifies the erased ABI, raw argument consumer-use endpoints, raw result
 transform, and proof data. It must not reject an immediate call merely because
-`sig.source_fn_ty` differs from `CallSiteInfo.requested_source_fn_ty`, and it
+`sig.call.source_fn_ty` differs from `CallSiteInfo.requested_source_fn_ty`, and it
 must not generalize that exception to materialized erased values.
 
 Erased callable ABI keys are owned by a store:
@@ -6720,7 +6788,7 @@ each fixed-arity argument is packed, how the result is written/read, and how
 the hidden capture handle is passed. A hosted owner is present only when the
 host boundary itself owns the ABI obligation. Checked artifacts own published
 ABI stores; lambda-solved solve sessions may own session-local ABI stores for
-runtime root uses and adapters. A later stage that holds `ErasedCallSigKey.abi`
+runtime root uses and adapters. A later stage that holds `ErasedFnSigKey.call.abi`
 resolves it through the explicit store for the owning artifact or solve
 session. Every `arg_exec_keys` entry and the `ret_exec_key` must have a
 matching executable type payload in that same semantic boundary's executable
@@ -6898,12 +6966,18 @@ descriptor store is append-only after publication, but builder-time replacement
 before sealing is required so stale transient descriptors do not become
 semantic data.
 
-Erased call signatures and capture shapes are also canonical keys:
+Erased call boundary identity and erased code/capture specialization identity
+are separate keys:
 
 ```zig
-const ErasedCallSigKey = struct {
+const ErasedCallBoundaryKey = struct {
     source_fn_ty: ConcreteSourceTypeRef,
     abi: ErasedFnAbiKey,
+};
+
+const ErasedFnSigKey = struct {
+    call: ErasedCallBoundaryKey,
+    capture_ty: ?CanonicalExecValueTypeKey,
 };
 
 const CaptureShapeKey = struct {
@@ -6922,11 +6996,13 @@ offsets, generated symbols, backend calling-convention handles, runtime
 function pointers, interpreter procedure ids, ARC behavior, or object-file
 section data.
 
-`ErasedCallSigKey` is exactly the source function type plus the erased function
-ABI key. Capture type, capture shape, wrapper code, layouts, runtime pointers,
-interpreter ids, and object symbols are materialized-value data. They live in
-boxed-erased callable value records, capture materialization plans, lowered code
-maps, or backend images, not in the erased call signature key.
+`ErasedCallBoundaryKey` is the call ABI identity: source function type plus
+erased function ABI key. It is the key used to validate `call_value_erased`
+argument packing and result unpacking. `ErasedFnSigKey` is the implementation
+name for an erased function specialization that may also include the hidden
+capture executable type needed to materialize code or payload records. Long-term,
+call dispatch must compare call-boundary identity, while boxed-erased value
+materialization and code maps may compare the fuller `ErasedFnSigKey`.
 
 Because the erased call signature is not a hidden-capture layout key, executable
 payload publication must not recover hidden captures by looking up the erased
@@ -7004,7 +7080,7 @@ const ValueInfo = struct {
 const ConstBackedValueInfo = struct {
     const_instance: ConstInstanceRef,
     schema: ComptimeSchemaId,
-    value: ComptimeValueNodeRef,
+    value: ComptimeValueRef,
 };
 
 const BindingInfo = struct {
@@ -7054,7 +7130,7 @@ const AlreadyErasedCapturePlan = union(enum) {
 };
 
 const AlreadyErasedCallablePlan = struct {
-    call_sig: ErasedCallSigKey,
+    call_sig: ErasedFnSigKey,
     capture_shape_key: CaptureShapeKey,
     capture: AlreadyErasedCapturePlan,
     provenance: NonEmptySpan(BoxErasureProvenance),
@@ -7074,7 +7150,7 @@ const CaptureBoundaryOwner = union(enum) {
         emission_plan: CallableValueEmissionPlanId,
         source_value: ValueInfoId,
         proc_value: ProcedureCallableRef,
-        erased_call_sig_key: ErasedCallSigKey,
+        erased_fn_sig_key: ErasedFnSigKey,
     },
 };
 
@@ -7249,24 +7325,24 @@ Call sites publish full call metadata:
 
 ```zig
 const CallSiteInfo = struct {
-    expr: ExprId,
-    result: ValueInfoId,
     callee: ?ValueInfoId,
     args: Span(ValueInfoId),
-    arg_exprs: Span(ExprId),
+    result: ValueInfoId,
     requested_fn_root: RepRootId,
-    requested_source_fn_ty: ConcreteSourceTypeRef,
-    dispatch: CallDispatchInfo,
+    requested_source_fn_ty: CanonicalTypeKey,
+    dispatch: ?CallSiteDispatch,
+    source_match_branch: ?SourceMatchBranchRef,
+    representation_edges_resolved: bool,
     arg_transforms: Span<ValueTransformBoundaryId>,
-    arg_consumer_uses: Span<ConsumerUsePlan>,
+    arg_consumer_uses: Span<ConsumerUsePlanId>,
     result_transform: ?ValueTransformBoundaryId,
 };
 
-const CallDispatchInfo = union(enum) {
-    direct_proc: CallProcExecutablePlan,
-    finite_callable_set: CallValueFiniteDispatchPlan,
-    erased_callable: ErasedCallableCallPlan,
-    low_level: LowLevelValueFlowSignatureId,
+const CallSiteDispatch = union(enum) {
+    call_proc: ProcRepresentationInstanceId,
+    call_value_finite: CallValueFiniteDispatchPlanId,
+    call_value_erased: ErasedFnSigKey,
+    pending_comptime_dependency_call,
 };
 
 const CallValueFiniteDispatchBranch = struct {
@@ -7281,44 +7357,41 @@ const CallValueFiniteDispatchPlan = struct {
     branches: Span<CallValueFiniteDispatchBranch>,
 };
 
-const ErasedCallableCallPlan = struct {
-    callable_payload: ValueInfoId,
-    sig: ErasedCallSigKey,
-    arg_payloads: Span<ErasedAbiArgPayloadId>,
-    result_payload: ErasedAbiResultPayloadId,
-};
 ```
 
 Finite-callable branch plans carry branch-local argument transforms and result
-transforms. Erased calls pack arguments through the exact erased ABI payloads,
-call the payload's `callable_fn_ptr`, and unpack the result through the exact
-result payload. They never inspect capture layout at the call site.
+transforms through the `CallValueFiniteDispatchPlan` table. Erased calls pack
+arguments through the exact erased ABI payloads named by
+`call_value_erased.call.abi`, call the payload's `callable_fn_ptr`, and unpack
+the result through the exact result payload. They never inspect capture layout at
+the call site.
 
-`arg_exprs` are the lowered expression ids from the call expression that owns
-the `CallSiteInfo`. Call-argument finalization consumes those explicit ids; it
-does not scan the enclosing body to find arguments after the fact. For
-`call_proc`, `callee` is null because the target is the procedure identity in
-the call node. For `call_value`, `callee` names the function value occurrence.
-`requested_source_fn_ty` is the exact canonical fixed-arity Roc function type
-requested by this call expression, and `requested_fn_root` is the
+For `call_proc`, `callee` is null because the target is the procedure identity
+in the call dispatch. For `call_value`, `callee` names the function value
+occurrence. `requested_source_fn_ty` is the exact canonical fixed-arity Roc
+function type requested by this call expression, and `requested_fn_root` is the
 representation root whose solved callable child determines the dispatch plan.
-`arg_consumer_uses` are the authority for `call_proc` and erased-call
-arguments. Finite-call branches consume per-branch arg/result transforms from
-already evaluated call values to `target_instance` parameter endpoints and from
-the branch procedure return to `CallSiteInfo.result`. Finite call arguments are
-evaluated once before `callable_match`; branch-specific transforms must not
-duplicate argument evaluation. A shared contextual argument consumer-use is
-allowed only when an earlier stage explicitly publishes the proof that every
-branch endpoint for that argument agrees. `result_transform` is mandatory for
-call forms that produce a raw result endpoint and only absent for forms whose
-lowering has no raw-result boundary.
+When imported or relation-projected calls need payload data, the concrete source
+payload is carried by the surrounding dependency, callable-result, or boundary
+record; `CallSiteInfo` itself stores the canonical key. `arg_consumer_uses` are
+the authority for `call_proc` and erased-call arguments. Finite-call branches
+consume per-branch arg/result transforms from already evaluated call values to
+`target_instance` parameter endpoints and from the branch procedure return to
+`CallSiteInfo.result`. Finite call arguments are evaluated once before
+`callable_match`; branch-specific transforms must not duplicate argument
+evaluation. A shared contextual argument consumer-use is allowed only when an
+earlier stage explicitly publishes the proof that every branch endpoint for that
+argument agrees. `result_transform` is mandatory for call forms that produce a
+raw result endpoint and only absent for forms whose lowering has no raw-result
+boundary.
 
-For `erased_callable`, `dispatch.sig` is the callee payload signature whose ABI
-is invoked. `requested_source_fn_ty` remains the fixed-arity Roc function type
+For `call_value_erased`, the dispatch key is the callee payload specialization
+whose call boundary ABI is invoked. `requested_source_fn_ty` remains the
+fixed-arity Roc function type
 accepted by checking for this call expression. The two may differ only for
 transparent same-ABI aliases or relation-projected views that carry an explicit
 proof. The call finalizer validates raw argument consumer uses and the raw result
-transform against `dispatch.sig`; it does not materialize a same-ABI retyped
+transform against `dispatch.call`; it does not materialize a same-ABI retyped
 callee value. If the callee is used again as a stored, returned, or passed value
 under the requested source type, that separate value occurrence still needs an
 `AlreadyErasedCallableTransformPlan.same_abi_retype` boundary.
@@ -7703,9 +7776,7 @@ Value-transform boundaries are explicit:
 
 ```zig
 const ValueTransformBoundary = struct {
-    id: ValueTransformBoundaryId,
     kind: ValueTransformBoundaryKind,
-    owner: ValueTransformOwner,
     from_value: ValueInfoId,
     to_value: ValueInfoId,
     from_endpoint: SessionExecutableValueEndpoint,
@@ -7714,7 +7785,10 @@ const ValueTransformBoundary = struct {
 };
 
 const ValueTransformBoundaryKind = union(enum) {
-    identity,
+    value_alias: struct {
+        source: ValueInfoId,
+        result: ValueInfoId,
+    },
     call_arg: struct { call: CallSiteInfoId, arg_index: u32 },
     call_result: CallSiteInfoId,
     callable_match_branch_arg: struct {
@@ -7735,22 +7809,21 @@ const ValueTransformBoundaryKind = union(enum) {
         if_expr: ExprId,
         branch: enum { then_, else_ },
     },
-    return_value: ReturnInfoId,
+    return_value: ProcedureBoundaryId,
     capture_value: CaptureBoundaryId,
     mutable_join: MutableJoinId,
     loop_phi: LoopPhiId,
     aggregate_existing_value: AggregateBoundaryId,
     projection_result: ProjectionInfoId,
     consumer_use: ConsumerUsePlanId,
-    boxed_payload,
-    erased_capture,
 };
 ```
 
-Identity transforms are still records when a boundary exists. Owners identify
-the call site, capture, aggregate construction, projection, consumer use,
-return, branch, source-match alternative, mutable join, or loop phi that required
-the transform. Exact boundary kind identity is semantic authority for
+Identity transforms are still records when a boundary exists. The boundary kind
+identifies the call site, capture, aggregate construction, projection, consumer
+use, return boundary, branch, source-match alternative, mutable join, loop phi,
+erased proc-value adapter slot, or finite-erased adapter slot that required the
+transform. Exact boundary kind identity is semantic authority for
 verification and diagnostics. Later stages must not collapse source-match
 alternatives, callable-match members, loop phis, mutable joins, or aggregate
 boundaries into generic endpoint comparisons. Raw call argument and raw call
@@ -7870,20 +7943,16 @@ const SessionExecutableTypePayloadEntry = struct {
 const SessionExecutableTypePayload = union(enum) {
     pending,
     primitive: ExecutablePrimitive,
-    record: SessionExecutableRecordPayload,
+    record: Span(SessionExecutableRecordFieldPayload),
     tuple: Span(SessionExecutableTupleElemPayload),
-    tag_union: SessionExecutableTagUnionPayload,
+    tag_union: Span(SessionExecutableTagVariantPayload),
     list: SessionExecutableTypePayloadChild,
     box: SessionExecutableTypePayloadChild,
     nominal: SessionExecutableNominalPayload,
     callable_set: SessionExecutableCallableSetPayload,
-    erased_callable_slot: SessionExecutableErasedFnPayload,
+    erased_fn: SessionExecutableErasedFnPayload,
+    vacant_callable_slot,
     recursive_ref: SessionExecutableTypePayloadRef,
-};
-
-const SessionExecutableRecordPayload = struct {
-    shape: RecordShapeKey,
-    fields: Span(SessionExecutableRecordFieldPayload),
 };
 
 const SessionExecutableRecordFieldPayload = struct {
@@ -7896,11 +7965,6 @@ const SessionExecutableTupleElemPayload = struct {
     index: u32,
     ty: SessionExecutableTypePayloadRef,
     key: CanonicalExecValueTypeKey,
-};
-
-const SessionExecutableTagUnionPayload = struct {
-    shape: TagUnionShapeKey,
-    variants: Span(SessionExecutableTagVariantPayload),
 };
 
 const SessionExecutableTagVariantPayload = struct {
@@ -7932,7 +7996,7 @@ const SessionExecutableCallableSetMemberPayload = struct {
 };
 
 const SessionExecutableErasedFnPayload = struct {
-    call_sig: ErasedCallSigKey,
+    call_sig: ErasedFnSigKey,
 };
 ```
 
@@ -8193,7 +8257,7 @@ const CanonicalExecValueTypeKey = union(enum) {
     box: CanonicalExecValueTypeKey,
     nominal: NominalExecKey,
     callable_set: CanonicalCallableSetKey,
-    erased_callable_slot: ErasedCallSigKey,
+    erased_fn: ErasedFnSigKey,
     vacant_callable_slot: CanonicalTypeKey,
 };
 ```
@@ -8323,88 +8387,44 @@ Source `match` lowering publishes decision plans separate from callable-set
 matching:
 
 ```zig
-const SourceMatchDecisionPlan = struct {
-    scrutinees: Span(ValueRef),
-    alternatives: Span(SourceMatchAlternative),
-    result_join: MatchResultJoin,
-};
-
-const SourceMatchAlternative = struct {
-    pattern_paths: Span(PatternPathDecision),
-    guard: ?GuardDecision,
-    representative_binders: Span(BinderRewrite),
-    reachability: AlternativeReachability,
-};
-
-const SourceMatch = struct {
-    id: SourceMatchId,
-    scrutinees: Span(ValueInfoId),
-    materialized_paths: Span(MaterializedPatternPathValue),
-    plan: PatternDecisionPlan,
-    result_join: MatchResultJoin,
-};
-
-const PatternDecisionPlan = struct {
-    nodes: Span(DecisionNode),
-    edges: Span(DecisionEdge),
-    leaves: Span(DecisionLeaf),
-    path_values: Span(PatternPathValuePlan),
-    bindings: Span(PatternBinding),
-};
-
 const DecisionNode = union(enum) {
-    tag_test: TagTestNode,
-    union_id_test: UnionIdTestNode,
-    byte_union_test: ByteUnionTestNode,
-    int_literal_test: IntLiteralTestNode,
-    decimal_literal_test: DecimalLiteralTestNode,
-    float_literal_test: FloatLiteralTestNode,
-    string_literal_test: StringLiteralTestNode,
-    list_length_test: ListLengthTestNode,
-    guard: GuardDecision,
-    degenerate: DegenerateDecisionNode,
-};
-
-const DecisionEdge = struct {
-    from: DecisionNodeId,
-    test: PatternTest,
-    to: DecisionNodeOrLeaf,
+    leaf: DecisionLeafId,
+    decision_test: DecisionTestNode,
 };
 
 const DecisionTestNode = struct {
-    path: PatternPathValuePlanId,
-    test: PatternTest,
+    path_value: PatternPathValuePlanId,
+    edges: Span(DecisionEdge),
+    default: ?DecisionNodeId,
+};
+
+const DecisionEdge = struct {
+    pattern_test: PatternTest,
+    next: DecisionNodeId,
 };
 
 const PatternTest = union(enum) {
-    tag: FinalizedTagId,
-    byte_union_tag: FinalizedTagId,
-    int_literal: IntPatternLiteralId,
-    float_literal: FloatPatternLiteralId,
-    decimal_literal: DecimalPatternLiteralId,
+    tag: struct {
+        union_shape: TagUnionShapeId,
+        tag: TagId,
+    },
+    int_literal: i128,
+    float_f32_literal: f32,
+    float_f64_literal: f64,
+    decimal_literal: i128,
     str_literal: ProgramLiteralId,
     list_len_exact: u32,
     list_len_at_least: u32,
-    guard: GuardDecisionId,
+    guard: BoolCondition,
 };
 
 const DecisionLeaf = struct {
-    alternative: SourceMatchAlternativeId,
-    selected_pattern: CheckedMatchBranchPatternId,
-    reachability: AlternativeReachability,
+    branch: BranchId,
+    degenerate: bool,
+    guard: ?BoolCondition,
+    body: ExprId,
+    guard_miss: ?DecisionNodeId,
     bindings: Span(PatternBindingId),
-    terminal: DecisionLeafTerminal,
-    result: SourceBranchResult,
-};
-
-const SourceBranchResult = union(enum) {
-    returns: struct {
-        branch_result: ExecutableValueRef,
-        result_transform: ExecutableValueTransformRef,
-        final_result: ExecutableValueRef,
-    },
-    no_return,
-    degenerate_runtime_error,
 };
 
 const PatternPathValuePlan = struct {
@@ -8657,11 +8677,11 @@ representative binders, evaluates guards in the guard environment, and assigns
 the shared match result exactly once. A degenerate leaf emits the checked
 runtime-error path immediately and does not materialize branch binders or lower
 the branch body.
-Every returning leaf assigns exactly one value to the shared result: the
-`SourceBranchResult.returns.final_result` produced by applying the mandatory
-result transform to the branch-local result. `no_return` leaves and degenerate
-runtime-error leaves have no result transform and do not constrain the shared
-result. Branch-local layouts and branch-local return types must not escape the
+Every returning leaf assigns exactly one value to the shared result by applying
+the mandatory branch-result transform recorded in the surrounding join metadata
+to the branch-local result. Non-returning leaves and degenerate runtime-error
+leaves have no result transform and do not constrain the shared result.
+Branch-local layouts and branch-local return types must not escape the
 `SourceMatch` node.
 IR consumes `SourceMatch.materialized_paths` and `MatchScrutinee.tmp` records.
 It must not reinterpret executable pattern syntax or synthesize projections
@@ -9172,21 +9192,24 @@ promoted procedures or erased wrappers.
 Callable binding instantiations are stored explicitly:
 
 ```zig
-const CallableBindingInstantiationStoreRef = struct {
-    owner: CheckedModuleArtifactKey,
-};
-
 const CallableBindingInstanceId = enum(u32) { _ };
 
 const CallableBindingInstanceRef = struct {
-    store: CallableBindingInstantiationStoreRef,
+    owner: CheckedModuleArtifactKey,
     key: CallableBindingInstantiationKey,
     instance: CallableBindingInstanceId,
 };
 
 const CallableBindingInstantiationStore = struct {
     owner: CheckedModuleArtifactKey,
-    rows: Map(CallableBindingInstantiationKey, CallableBindingInstantiationState),
+    instances: ArrayList(CallableBindingInstantiationRecord),
+    by_key: HashMap(ConstKeyHash, CallableBindingInstanceId),
+};
+
+const CallableBindingInstantiationRecord = struct {
+    id: CallableBindingInstanceId,
+    key: CallableBindingInstantiationKey,
+    state: CallableBindingInstantiationState,
 };
 
 const CallableBindingInstantiationState = union(enum) {
@@ -9197,13 +9220,10 @@ const CallableBindingInstantiationState = union(enum) {
 
 const CallableBindingInstance = struct {
     key: CallableBindingInstantiationKey,
-    owner: CheckedModuleArtifactKey,
-    body: CallableBindingInstanceBody,
     dependency_summary: ComptimeProcDependencySummaryRef,
-    final_callable: ProcedureCallableRef,
-    private_comptime_root: ?ExecutableSpecializationKey,
-    promotion_plan: ?CallablePromotionPlanId,
-    promotion_output: CallablePromotionOutput,
+    proc_value: ProcedureCallableRef,
+    body: CallableBindingInstanceBody,
+    generated_procedures: Span(SemanticInstantiationProcedureRef),
 };
 
 const CallableBindingInstanceBody = union(enum) {
@@ -9235,20 +9255,21 @@ roots, fake runtime closure allocations, or fake alias records. Evaluated
 instances point at the private compile-time executable root that produced the
 callable value and record the concrete `CallableResultPlan`, optional
 `CallablePromotionPlan`, and `CallablePromotionOutput`. A sealed instance names
-its final `ProcedureCallableRef`, concrete dependency summary, optional
-promotion plan, promotion output, and owner artifact. Later stages do not
+its final `ProcedureCallableRef` as `proc_value`, concrete dependency summary,
+body form, generated semantic-instantiation procedures, and owner artifact
+through the `CallableBindingInstanceRef.owner`. Later stages do not
 reinterpret the original expression to decide whether the callable was direct
 or evaluated. The requesting artifact owns imported generic callable binding
 instances; instantiating an imported callable eval template must not mutate the
 exporting artifact or rerun already-published imported roots.
 
-`CallableBindingInstanceRef` is store-qualified because producer binding
-identity and requesting store identity are separate. Imported generic callable
-bindings use templates owned by the exporting artifact, but the concrete
-instance row is owned by the artifact that requested the concrete source
-function type. Runnable lowering consumes sealed store-qualified refs; it never
-uses unqualified local row ids and never mutates the producer artifact to add a
-consumer-owned instance.
+`CallableBindingInstanceRef` carries the requesting artifact owner directly
+because producer binding identity and requesting store identity are separate.
+Imported generic callable bindings use templates owned by the exporting
+artifact, but the concrete instance row is owned by the artifact that requested
+the concrete source function type. Runnable lowering consumes sealed
+owner-qualified refs; it never uses unqualified local row ids and never mutates
+the producer artifact to add a consumer-owned instance.
 
 Generic constants use either a value-graph template or an eval template:
 
@@ -9680,7 +9701,7 @@ const TopLevelValueKind = union(enum) {
 };
 
 const TopLevelValueEntry = struct {
-    name: CanonicalNameId,
+    name: ExportNameId,
     source_ty: ConcreteSourceTypeRef,
     kind: TopLevelValueKind,
 };
@@ -9856,14 +9877,10 @@ const ConstInstantiationRequest = struct {
     consumer_endpoint_ty: ConcreteSourceTypeRef,
 };
 
-const ConstInstantiationStoreRef = struct {
-    owner: CheckedModuleArtifactKey,
-};
-
 const ConstInstanceId = enum(u32) { _ };
 
 const ConstInstanceRef = struct {
-    store: ConstInstantiationStoreRef,
+    owner: CheckedModuleArtifactKey,
     key: ConstInstantiationKey,
     instance: ConstInstanceId,
 };
@@ -9875,10 +9892,8 @@ const ConstInstantiationState = union(enum) {
 };
 
 const ConstInstance = struct {
-    key: ConstInstantiationKey,
-    producer_source_ty: ConcreteSourceTypeRef,
     schema: ComptimeSchemaId,
-    value: ComptimeValueNodeRef,
+    value: ComptimeValueId,
     dependency_summary: ?ComptimeDependencySummaryRef,
     reification_plan: ?ConstGraphReificationPlanRef,
     generated_procedures: Span<SemanticInstantiationProcedureRef>,
@@ -9886,20 +9901,27 @@ const ConstInstance = struct {
 
 const ConstInstantiationStore = struct {
     owner: CheckedModuleArtifactKey,
-    instances: Map(ConstInstantiationKey, ConstInstantiationState),
+    instances: ArrayList(ConstInstantiationRecord),
+    by_key: HashMap(ConstKeyHash, ConstInstanceId),
+};
+
+const ConstInstantiationRecord = struct {
+    id: ConstInstanceId,
+    key: ConstInstantiationKey,
+    state: ConstInstantiationState,
 };
 ```
 
 The const template key identifies reusable checked semantic material. The
 concrete payload identifies one instantiation. A consumer endpoint may request a
-narrower or bridged view of a wider stored producer value. The producer type is
-kept on the const instance; consumers project or bridge through explicit
-materialization records instead of mutating the stored value graph.
-`ConstInstanceRef` is store-qualified for the same reason as callable binding
-instances: the `ConstRef` producer may live in another artifact, while the
-concrete instance store is owned by the requesting artifact. Runnable lowering
-consumes sealed `ConstInstanceRef` records and must not address concrete const
-instances by unqualified local ids or by mutating the producer artifact.
+narrower or bridged view of a wider stored producer value. Consumers project or
+bridge through explicit materialization records instead of mutating the stored
+value graph.
+`ConstInstanceRef.owner` is the concrete instance-store owner. The `ConstRef`
+producer may live in another artifact, while the concrete instance store is owned
+by the requesting artifact. Runnable lowering consumes sealed owner-qualified
+`ConstInstanceRef` records and must not address concrete const instances by
+unqualified local ids or by mutating the producer artifact.
 When available, dependency summaries and reification plans are part of the
 final evaluated instance. They are not recomputed by scanning value graphs
 after evaluation. `generated_procedures` are concrete semantic-instantiation
@@ -10025,7 +10047,7 @@ const FiniteCallableMaterialization = union(enum) {
 
 const ErasedCallableMaterialization = struct {
     leaf: ErasedCallableLeafInstance,
-    call_sig: ErasedCallSigKey,
+    call_sig: ErasedFnSigKey,
     code: ErasedCallableCodeMaterializationPlan,
     capture: ErasedCaptureExecutableMaterializationPlan,
 };
@@ -10180,14 +10202,14 @@ const ErasedComptimeCapture = union(enum) {
 
 const ComptimeErasedCallable = struct {
     source_fn_ty: ConcreteSourceTypeRef,
-    call_sig: ErasedCallSigKey,
+    call_sig: ErasedFnSigKey,
     code: ErasedCallableCodeRef,
     capture: ErasedComptimeCapture,
     provenance: NonEmptySpan(BoxErasureProvenance),
 };
 
 const CaptureValue = union(enum) {
-    serializable_leaf: ComptimeValueNodeRef,
+    serializable_leaf: ComptimeValueRef,
     callable_leaf: ComptimeCallableId,
     record: Span(CaptureValueId),
     tuple: Span(CaptureValueId),
@@ -10201,7 +10223,7 @@ const CaptureValue = union(enum) {
 A finite compile-time callable records the callable-set key, selected member,
 and compiler-owned capture graph ids/values for exactly the value that
 interpretation produced. An erased compile-time callable records the
-`ErasedCallSigKey`, concrete erased code ref, compiler-owned erased capture
+`ErasedFnSigKey`, concrete erased code ref, compiler-owned erased capture
 value, and non-empty provenance. These are compiler-owned logical values. They
 are not runtime pointers, heap closures, global initializers, top-level thunks,
 or interpreter handles.
@@ -10269,15 +10291,15 @@ const ErasedCallableResultCodePlan = union(enum) {
         capture: ErasedCaptureReificationPlan,
     },
     read_from_interpreted_erased_value: struct {
-        sig: ErasedCallSigKey,
-        value_node: ComptimeValueNodeRef,
+        sig: ErasedFnSigKey,
+        value_node: ComptimeValueRef,
     },
 };
 
 const ErasedCallableResultPlan = struct {
     source_fn_ty: ConcreteSourceTypeRef,
     source_fn_ty_payload: CheckedTypePayloadRef,
-    call_sig: ErasedCallSigKey,
+    call_sig: ErasedFnSigKey,
     provenance: NonEmptySpan(BoxErasureProvenance),
     code_plan: ErasedCallableResultCodePlan,
     capture: ErasedCaptureReificationPlan,
@@ -10554,7 +10576,7 @@ const ErasedPromotedWrapperBodyPlan = struct {
     source_fn_ty: ConcreteSourceTypeRef,
     params: Span(PromotedWrapperParam),
     executable_signature: ErasedPromotedProcedureExecutableSignature,
-    call_sig: ErasedCallSigKey,
+    call_sig: ErasedFnSigKey,
     code: SealedErasedCallableCode,
     capture: ErasedCaptureExecutableMaterializationPlan,
     arg_transforms: Span(PublishedExecutableValueTransformRef),
@@ -10721,26 +10743,29 @@ names:
 
 ```zig
 const ComptimeValueId = enum(u32) { _ };
-const ComptimeValueNodeRef = ComptimeValueId;
+const ComptimeValueRef = ComptimeValueId;
 
 const CallableLeafInstance = union(enum) {
     finite: FiniteCallableLeafInstance,
     erased_boxed_callable: ErasedCallableLeafInstance,
 };
 
-const ComptimeValueNode = union(enum) {
-    scalar: ComptimeScalarValue,
-    string: ComptimeStringValue,
+const ComptimeValue = union(enum) {
+    pending,
+    zst,
+    int_bytes: IntBytes,
+    f32: f32,
+    f64: f64,
+    dec: RocDec,
+    str: []u8,
     list: Span(ComptimeValueId),
     box: ComptimeBoxValue,
     tuple: Span(ComptimeValueId),
-    record: Span(ComptimeRecordFieldValue),
-    tag_union: ComptimeTagValue,
-    transparent_alias: ComptimeAliasValue,
+    record: Span(ComptimeValueId),
+    tag_union: ComptimeVariantValue,
+    alias: ComptimeAliasValue,
     nominal: ComptimeNominalValue,
-    callable_leaf_template: CallableLeafTemplate,
-    callable_leaf_instance: CallableLeafInstance,
-    recursive_ref: ComptimeValueNodeRef,
+    callable: CallableLeafInstance,
 };
 
 const ComptimeScalarValue = union(enum) {
@@ -10755,28 +10780,28 @@ const ComptimeStringValue = struct {
 };
 
 const ComptimeBoxValue = struct {
-    child: ComptimeValueNodeRef,
+    child: ComptimeValueRef,
     boundary: ?ErasedCallableBoundary,
 };
 
 const ComptimeRecordFieldValue = struct {
     name: RecordFieldLabelId,
-    value: ComptimeValueNodeRef,
+    value: ComptimeValueRef,
 };
 
 const ComptimeTagValue = struct {
     tag: TagLabelId,
-    payloads: Span(ComptimeValueNodeRef),
+    payloads: Span(ComptimeValueRef),
 };
 
 const ComptimeAliasValue = struct {
     alias: CanonicalAliasId,
-    backing: ComptimeValueNodeRef,
+    backing: ComptimeValueRef,
 };
 
 const ComptimeNominalValue = struct {
     nominal: CanonicalNominalId,
-    backing: ComptimeValueNodeRef,
+    backing: ComptimeValueRef,
 };
 
 const ComptimeSchema = union(enum) {
@@ -10805,14 +10830,13 @@ const ComptimeWrappedSchema = struct {
 };
 ```
 
-`callable_leaf_template` is target-independent template data used by generic
-const graphs and private capture graphs before a concrete request exists. Under
-a concrete `ConstInstantiationRequest` or `CallableBindingInstantiationRequest`
-it becomes a `CallableLeafInstance`, whose finite or erased form names the
-sealed procedure value, erased callable value, capture graph, and source
-function type chosen for that request. Target-independent value nodes do not
-store layouts, LIR ids, runtime pointers, object symbols, target ABI payloads,
-or interpreter allocation addresses.
+Target-independent callable leaf templates live in generic const graph and
+private capture plan data before a concrete request exists. A sealed
+`ComptimeValue.callable` stores only a concrete `CallableLeafInstance`, whose
+finite or erased form names the sealed procedure value, erased callable value,
+capture graph, and source function type chosen for that request. Compile-time
+value rows do not store layouts, LIR ids, runtime pointers, object symbols,
+target ABI payloads, or interpreter allocation addresses.
 
 `ComptimeFieldSchema.name`, `ComptimeVariantSchema.name`, and
 `ComptimeWrappedSchema.type_name` are artifact-local canonical-name ids. Before
@@ -10971,7 +10995,7 @@ const PureConstInstanceRef = struct {
 
 const PureComptimeValueRef = struct {
     schema: ComptimeSchemaId,
-    value: ComptimeValueNodeRef,
+    value: ComptimeValueRef,
     no_reachable_callable_slots: NoReachableCallableSlotsProof,
 };
 
@@ -11125,18 +11149,14 @@ direct erased wrapper or finite erased adapter named by the sealed code record.
 It must not synthesize an adapter from source syntax, descriptor order, function
 type, or object data.
 
-LIR lowering publishes a lowered erased callable code map:
+LIR lowering publishes lowered erased callable code entries:
 
 ```zig
-const LoweredErasedCallableCodeMap = struct {
-    entries: Span(LoweredErasedCallableCodeEntry),
-};
-
 const LoweredErasedCallableCodeEntry = struct {
     code: ErasedCallableCodeRef,
     lir_proc: LirProcSpecId,
     source_fn_ty: ConcreteSourceTypeRef,
-    erased_sig: ErasedCallSigKey,
+    erased_sig: ErasedFnSigKey,
     exec_arg_tys: Span(CanonicalExecValueTypeKey),
     exec_ret_ty: CanonicalExecValueTypeKey,
     capture_shape: CaptureShapeKey,
@@ -11144,16 +11164,18 @@ const LoweredErasedCallableCodeEntry = struct {
 };
 ```
 
-Static data emission consumes this map to emit relocations to already-lowered
-procedure symbols. If a sealed erased callable code ref is absent from the map,
-static emission takes the invariant path. It does not create a wrapper, choose a
+`LoweredProgram.erased_callable_code_map` is an owned slice of
+`LoweredErasedCallableCodeEntry` for the current LIR program. Static data
+emission consumes this slice to emit relocations to already-lowered procedure
+symbols. If a sealed erased callable code ref is absent from the slice, static
+emission takes the invariant path. It does not create a wrapper, choose a
 procedure by name, or inspect callable-set descriptors to recover member
 targets.
 
 Each map entry validates against the erased signature that requested it. The
 source function type, executable argument keys, executable return key, capture
 shape, and lowered LIR procedure ABI must agree with the sealed
-`ErasedCallSigKey`. Static data emission consumes only validated map entries.
+`ErasedFnSigKey`. Static data emission consumes only validated map entries.
 
 Every LIR procedure that can be referenced from readonly data receives a
 deterministic local text symbol derived from its already-published LIR procedure
@@ -11291,7 +11313,7 @@ const SealedErasedCallableValue = struct {
 const ErasedCallableBoundary = struct {
     source_fn_ty: ConcreteSourceTypeRef,
     checked_fn_root: CheckedTypePayloadRef,
-    call_sig: ErasedCallSigKey,
+    call_sig: ErasedFnSigKey,
     provenance: NonEmptySpan(BoxErasureProvenance),
 };
 
@@ -11341,8 +11363,8 @@ capture, and provenance. Parallel fields are forbidden because they can combine
 a boundary from one occurrence with code or capture data from another.
 
 Debug verification rejects empty provenance, `local_box_boundary` provenance in
-a sealed artifact value, `boundary.call_sig.source_fn_ty` disagreement with the
-boundary source type, finite adapter keys that disagree with the boundary
+a sealed artifact value, `boundary.call_sig.call.source_fn_ty` disagreement with
+the boundary source type, finite adapter keys that disagree with the boundary
 signature, member target requested-function mismatches, member executable
 arg/return mismatches against the erased ABI, branch transforms that disagree
 with the sealed member, and capture materialization whose finite callable-set
@@ -11370,7 +11392,7 @@ that has not been finalized into a sealed already-erased capture plan.
 Rehydrating a const-backed `ErasedCallableLeafInstance` imports all sealed
 metadata into the current lambda-solved session atomically:
 
-1. Import the erased ABI payload named by `sealed.boundary.call_sig.abi` from
+1. Import the erased ABI payload named by `sealed.boundary.call_sig.call.abi` from
    the owner artifact's `ErasedFnAbiStore`.
 2. Import the executable endpoint payload for the erased return key and every
    erased argument key into the current `SessionExecutableTypePayloadStore`.
@@ -11574,7 +11596,9 @@ Debug-only verifiers assert stage invariants:
 - method diagnostics use published method identifier subregions
 - resolved value refs are sealed, scoped to their owning artifact, and never
   builder-only after publication
-- `ErasedCallSigKey` contains only `source_fn_ty` and `ErasedFnAbiKey`
+- `ErasedCallBoundaryKey` contains only `source_fn_ty` and `ErasedFnAbiKey`;
+  `ErasedFnSigKey` may additionally carry capture executable type for
+  materialized code/capture specialization
 - erased callable ABI keys validate arity, arg/result payloads, capture ABI,
   and hosted ownership consistently across wrappers, interpreters, and glue
 - every erased callable value has non-empty `BoxErasureProvenance`
@@ -11777,16 +11801,15 @@ Structural tests cover every type-state boundary:
   for empty capture schema and fully instantiated source function type, captured
   member promotion/materialization behavior, and no runtime pointer, global
   thunk, or heap closure representation
-- store-qualified instance-ref tests for `CallableBindingInstantiationStoreRef`,
-  `CallableBindingInstanceRef`, `ConstInstantiationStoreRef`,
-  `ConstInstanceRef`, requester-owned imported generic const/callable
-  instances, sealed runnable consumption, and rejection of unqualified local ids
-  or producer-artifact mutation
+- owner-qualified instance-ref tests for `CallableBindingInstanceRef`,
+  `ConstInstanceRef`, requester-owned imported generic const/callable instances,
+  sealed runnable consumption, and rejection of unqualified local ids or
+  producer-artifact mutation
 - promoted wrapper stage-owner tests for `PromotedWrapperStageOwner`,
   `mono_finite` versus `executable_erased` publication, allowed fill/seal
   stage, payload-family authority, and rejection of ownership changes based on
   wrapper syntax, body shape, erased ABI, or generated symbols
-- canonical name store tests for `CanonicalNameId`, domain wrappers such as
+- canonical name store tests for domain-specific stores and ids such as
   `ModuleNameId`, `TypeNameId`, `RecordFieldLabelId`, `TagLabelId`,
   `MethodNameId`, `ExportNameId`, and `ExternalSymbolNameId`, remapping by
   canonical bytes, imported/exported names, row and tag labels, method names,
@@ -11828,10 +11851,10 @@ Structural tests cover every type-state boundary:
   nominal construction, backing reinterpretation, direction-sensitive expected
   endpoints, transparent nominal backing cases, and rejection of syntax/name or
   layout-derived nominal identity
-- boxed function payload tests for `FunctionPayloadRepresentation`, recursive
-  argument and return payload transformation, `CallableBoxPlan.already_erased`,
-  `proc_value_to_erased`, `finite_set_to_erased_adapter`, nested boxed
-  functions, and verifier failures for opaque function leaves inside `Box(T)`
+- boxed function payload tests for `BoxPayloadRepresentationPlan.function_erased`,
+  recursive argument and return payload transformation, already-erased emission,
+  `ProcValueErasePlan`, finite-set erased adapters, nested boxed functions, and
+  verifier failures for opaque function leaves inside `Box(T)`
 - callable-result member target tests for
   `CallableResultMemberTargetPlan.artifact_owned`,
   `member_proc_relative`, lifted/local member procedures, proc-base filling,
@@ -11868,9 +11891,8 @@ Structural tests cover every type-state boundary:
   reuse one completed executable type graph, while active-recursion roots still
   break recursive descent
 - full `CallSiteInfo` tests for direct calls, finite value calls, erased value
-  calls, `arg_exprs` ownership, `requested_fn_root`,
-  `requested_source_fn_ty`, result transforms, and generic builtin calls such
-  as `List.concat`
+  calls, `requested_fn_root`, `requested_source_fn_ty`, argument consumer-use
+  ids, result transforms, and generic builtin calls such as `List.concat`
 - finite-erased adapter demand tests for `member_targets`, non-empty
   provenance, all descriptor members reserved before transform finalization,
   and distinct adapter procedures for distinct `ErasedAdapterPayloadOwner`
@@ -11884,9 +11906,9 @@ Structural tests cover every type-state boundary:
 - static data tests for object-section selection, readonly relocations,
   `REFCOUNT_STATIC_DATA`, uniqueness falsehood, no helper metadata writes on
   static allocations, and exact static allocation prefix offsets
-- lowered erased callable code map tests for metadata-sink publication, static
-  data relocation use, interpreted erased callable result decoding, missing
-  map-entry invariant failure, and validation against erased signatures
+- lowered erased callable code-entry tests for `LoweredProgram` publication,
+  static data relocation use, interpreted erased callable result decoding,
+  missing entry invariant failure, and validation against erased signatures
 - platform required constant tests for callable-field required constants,
   pre-runtime-summary concretization, relation artifact propagation through all
   finalizers, and rejection of import/provides/source scanning for relation
@@ -11896,15 +11918,14 @@ Structural tests cover every type-state boundary:
   rigid roots, checked body payload replacement, root/procedure/template/glue
   publication, relation artifact propagation, and rejection of source/import
   scanning recovery
-- checked type store tests for `record_empty`, `tag_union_empty`,
-  `recursive_ref`, concrete root lookup, scheme lookup, and rejection of
+- checked type store tests for `empty_record`, `empty_tag_union`, concrete root
+  lookup, scheme lookup, and rejection of
   foreign artifact-local checked type ids
 - checked artifact publication and cache keys
-- `CheckedTypeNode` payload preservation for primitives, functions, records,
-  tuples, tag unions, aliases, nominals, opaques, boxes, lists, open vars,
-  delayed numerics, constrained vars, generalized vars, and placeholders,
-  including `CheckedOpenVar.constraints`, function `needs_instantiation`,
-  alias/nominal backing fields, opaque markers, and extension tails
+- `CheckedTypePayload` preservation for functions, records, `record_unbound`,
+  tuples, tag unions, aliases, nominals, `empty_record`, `empty_tag_union`, flex
+  and rigid variables, function `needs_instantiation`, alias/nominal backing
+  fields, and extension tails
 - `CanonicalTypeKey` and `CanonicalTypeSchemeKey` normalization: flattened
   record/tag extension chains, sorted explicit labels, preserved open tails,
   preserved tag payload order, wrapper/constraint/generalized-variable
@@ -11962,19 +11983,20 @@ Structural tests cover every type-state boundary:
 - representation shape tests for all `RepresentationShape` merge cases,
   recursive placeholders, stable backrefs, opaque/imported/hosted capability
   handling, and tag construction against the full row-finalized union shape
-- exact `ErasedCallSigKey` shape: `source_fn_ty` plus `ErasedFnAbiKey`, with
-  capture type, capture shape, wrapper code, layout ids, runtime pointers, and
-  object symbols rejected as key fields
+- erased signature tests that distinguish `ErasedCallBoundaryKey`
+  (`source_fn_ty` plus `ErasedFnAbiKey`) from `ErasedFnSigKey` code/capture
+  specialization; layouts, runtime pointers, wrapper symbols, and object symbols
+  are rejected as key fields
 - `ErasedFnAbiStore` equality and validation for artifact/session stores,
   interned key versus payload separation, fixed arity, argument executable
   keys, return executable key, arg/result ABI payloads, hidden capture argument
   ABI, hosted owner, and same source type with different ABI keys
-- boxed payload erasure graphs with `active_payload_to_plan_id`,
-  `completed_payload_to_plan_id`, `recursive_ref`, materializing-leaf
-  detection, function slots, `CallableBoxPlan`, and `ProcValueErasePlan`
-- box boundary tests for box/unbox direction, input expression, box root,
-  payload root, box type, payload source type, payload boundary type, recursive
-  boxed payload plans, and verifier failures for malformed boundaries
+- boxed payload erasure graphs with reserved `BoxPayloadRepresentationPlanId`
+  nodes, `recursive_ref`, materializing-leaf detection, `function_erased` slots,
+  nominal payload modes, and `ProcValueErasePlan`
+- box boundary tests for box/unbox direction, `source_root`, `boundary_root`,
+  box type, payload source type, payload boundary type, recursive boxed payload
+  plans, and verifier failures for malformed boundaries
 - proc-value erasure tests for `source_value`, `target_instance`,
   `executable_specialization_key`, adapter arg transforms, capture transforms,
   no-capture values, zero-sized captures, captured procedures, and erased
@@ -12114,17 +12136,17 @@ Structural tests cover every type-state boundary:
   discriminants are read from committed layouts, boxed tag-union payloads are
   unboxed before reading, inconsistent physical layouts for multi-tag logical
   shapes are rejected, and Bool stays on the ordinary tag-union path
-- source-match decision plan records: `SourceMatch`, `PatternDecisionPlan`,
-  `DecisionNode`, `DecisionEdge`, `DecisionLeaf`, `PatternPathValuePlan`,
+- source-match decision plan records: executable `DecisionNode`,
+  `DecisionTestNode`, `DecisionEdge`, `DecisionLeaf`, `PatternPathValuePlan`,
   `RecordRestProjection`, and `PatternBinding`
 - `MatchScrutinee`, `MaterializedPatternPathValue`,
   `AlternativeBinderRemap`, `PatternBindingTransform`, explicit
-  `DecisionEdge.test`, and IR consumption of `SourceMatch.materialized_paths`
+  `DecisionEdge.pattern_test`, and IR consumption of executable match path values
 - source-match record tests for `DecisionTestNode`, `PatternPathStep`,
   `RecordRestProjectedField`, list element/rest probes, optional record-field
-  defaults, `SourceBranchResult.returning`, `SourceBranchResult.no_return`,
-  `SourceBranchResult.degenerate_runtime_error`, and IR consumption of
-  decision-plan records without reinterpreting executable pattern syntax
+  defaults, returning leaves, non-returning leaves, degenerate runtime-error
+  leaves, and IR consumption of decision-plan records without reinterpreting
+  executable pattern syntax
 - pattern path materialization for record rest, list rest, opaque/newtype
   payloads, guard ordering, path-local temp cache limits, and mandatory binder
   transforms
@@ -12149,15 +12171,14 @@ Structural tests cover every type-state boundary:
   summaries, closures, relation artifacts, interface capabilities, and remaps
 - artifact-owned checked body/type stores and source type payloads
 - public `lowerArtifactsToLir` API shape, resource-only error type, explicit
-  roots, relation artifacts, target config, `LoweredProgram`, and
-  `CompileTimeLoweringMetadata`
+  roots, artifact/import sets, target config, `RootRequestSet` compile-time
+  sinks, and `LoweredProgram`
 - lowered callable-set descriptor and runtime encoding tests for
   `LoweredProgram.callable_set_descriptors`,
   `LoweredProgram.callable_set_runtime_encodings`, descriptor versus encoding
-  separation, optional published identities, deep cloning of
-  `published_proc_value` and `published_source_proc`, decoding through the
-  published encoding inverse map, and rejection of raw member-id/discriminant
-  casts
+  separation, deep cloning of every selected canonical descriptor member,
+  finalization member-payload projection, decoding through the published
+  encoding inverse map, and rejection of raw member-id/discriminant casts
 - `CallableSetDescriptorStore` tests for append-only publication, duplicate-key
   semantic equality, singleton key stability, publication from every reachable
   descriptor source, and rejection of session-local ids in published keys
@@ -12444,11 +12465,11 @@ Structural tests cover every type-state boundary:
 - mono constraint-preserving clone-instantiation before final closure
 - mono constructor lowering from checked expression type, not singleton tag
   syntax
-- row-finalized shape-store fixtures for `RowShapeStore`, `RecordShapeKey`,
-  `TagUnionShapeKey`, `RecordInit`, `TagInit`, record/tag shape interning,
+- row-finalized shape-store fixtures for `MonoRow.Store`, `RecordShape`,
+  `TagUnionShape`, `RecordInit`, `TagInit`, record/tag shape interning,
   finalized ids on every row operation, keys containing only labels and payload
-  arity, logical indexes stored in `RecordFieldInfo`, `TagInfo`, and
-  `TagPayloadInfo`, payload types kept in mono/representation data, duplicate
+  arity, logical indexes stored in `RecordField`, `Tag`, and
+  `TagPayload`, payload types kept in mono/representation data, duplicate
   label verifier failures, unresolved row/tag-tail verifier failures, open tails
   absent from exported row operation keys, and no later field/tag name lookup
 - lifted capture slots, capture args, capture refs, and direct-call metadata
@@ -12485,9 +12506,9 @@ Structural tests cover every type-state boundary:
 - `ValueFlowGraphBuilder` state and publication order, including return
   value-flow edge publication before transform finalization
 - canonical callable-set descriptor member ordering, capture-slot ordering,
-  forbidden descriptor fields, `ErasedCallSigKey`, and `CaptureShapeKey`
+  forbidden descriptor fields, `ErasedFnSigKey`, and `CaptureShapeKey`
 - full `ErasedAdapterKey` identity `{ source_fn_ty, callable_set_key,
-  erased_call_sig_key, capture_shape_key }` with descriptor-order, erased-ABI,
+  erased_fn_sig_key, capture_shape_key }` with descriptor-order, erased-ABI,
   and capture-shape validation
 - procedure boundary executable payload publication for params, returns, and
   capture slots
@@ -12711,7 +12732,7 @@ Structural tests cover every type-state boundary:
   `PromotedCallablePathKey`, `PrivateCapturePathKey`, result-plan retention,
   requester-owned imported/generic promotions, and path provenance that is not
   procedure identity
-- `ComptimeValueNode` logical values, callable leaf templates/instances, sealed
+- `ComptimeValue` logical values, callable leaf templates/instances, sealed
   erased callable values, `ComptimeScalarValue`, `ComptimeStringValue`,
   `ComptimeBoxValue`, `ComptimeRecordFieldValue`, `ComptimeTagValue`,
   `ComptimeAliasValue`, `ComptimeNominalValue`, template-vs-instance callable
@@ -12812,9 +12833,8 @@ Structural tests cover every type-state boundary:
   offset lookup by logical field index, tag payload extraction by committed tag
   and payload indices, small-string copying, display-name normalization, and
   compiler-generated runtime schema extension before IR/LIR
-- runtime image tests for `LirRuntimeImageHeader`, `ArrayRef`,
-  `LirStoreImage`, `LayoutStoreImage`, `ProgramLiteralPoolImage`,
-  `HostedProcTableImage`, full child-side validation, zero-copy views,
+- runtime image tests for `Header`, `ArrayRef`, `ProgramView`, LIR store and
+  layout slices, full child-side validation, zero-copy views,
   interpreter-owned runtime arena allocation boundaries, and result reification
   before arena discard
 
@@ -12883,7 +12903,7 @@ Behavioral tests cover:
 - boxed erased callables whose captures contain another boxed erased callable
 - direct `proc_value` with captures crossing an explicit `Box(T)` boundary,
   including `ProcValueErasePlan`, erased executable specialization reservation,
-  exact `ErasedCallSigKey`, and target capture-slot endpoint transforms
+  exact `ErasedFnSigKey`, and target capture-slot endpoint transforms
 - callable-capturing closure fixtures where the lifted body erases a captured
   callable, so callable-set construction applies a capture transform to the
   selected target `procedure_capture` endpoint before building the payload
@@ -12945,13 +12965,13 @@ Behavioral tests cover:
   checking; otherwise checking reports the problem before artifact publication.
 - invalid executable-input verifier tests for unresolved callable variables,
   generalized variables, function-typed executable runtime values that did not
-  collapse to `callable_set` or `erased_callable_slot`, and
+  collapse to `callable_set` or `erased_fn`, and
   `vacant_callable_slot` payloads used as actual callable values.
-- erased callable slot ABI tests proving `ErasedCallSigKey` equality is exactly
-  `source_fn_ty + ErasedFnAbiKey`: materialized capture differences do not split
-  slot identity, different `ErasedFnAbiKey` payloads do not merge, and corrupt
-  `ErasedFnAbi.key` versus payload mismatches fail the first debug verifier that
-  consumes the ABI store.
+- erased callable slot ABI tests proving `ErasedCallBoundaryKey` equality is
+  exactly `source_fn_ty + ErasedFnAbiKey`: materialized capture differences do
+  not split call slot identity, different `ErasedFnAbiKey` payloads do not
+  merge, and corrupt `ErasedFnAbi.key` versus payload mismatches fail the first
+  debug verifier that consumes the ABI store.
 - nested source `match` over tags, records, tuples, lists, literals, guards, and
   multi-scrutinee patterns
 - source `match` alternatives that bind the same source name through different
@@ -13090,3 +13110,24 @@ sentinel/default values that can be reported as real results
 
 If a change seems to require one of these patterns, stop and revisit the
 producer boundary that should have published the required data.
+    erased_proc_value_adapter_arg: struct {
+        emission_plan: CallableValueEmissionPlanId,
+        source_value: ValueInfoId,
+        proc_value: ProcedureCallableRef,
+        erased_fn_sig_key: ErasedFnSigKey,
+        index: u32,
+    },
+    erased_finite_adapter_arg: struct {
+        adapter: ErasedAdapterKey,
+        member: CallableSetMemberRef,
+        index: u32,
+    },
+    erased_finite_adapter_capture: struct {
+        adapter: ErasedAdapterKey,
+        member: CallableSetMemberRef,
+        slot: u32,
+    },
+    erased_finite_adapter_result: struct {
+        adapter: ErasedAdapterKey,
+        member: CallableSetMemberRef,
+    },

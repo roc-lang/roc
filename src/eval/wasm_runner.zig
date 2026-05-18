@@ -779,7 +779,7 @@ fn hostRocDbg(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     if (args_ptr + 8 > buffer.len) return;
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
-    if (msg_ptr + msg_len <= buffer.len) debugPrint("[dbg] {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    if (msg_ptr + msg_len > buffer.len) return;
 }
 
 fn hostRocExpectFailed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -788,7 +788,7 @@ fn hostRocExpectFailed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: 
     if (args_ptr + 8 > buffer.len) return;
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
-    if (msg_ptr + msg_len <= buffer.len) debugPrint("Expect failed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    if (msg_ptr + msg_len > buffer.len) return;
     wasm_crash_state = .crashed;
 }
 
@@ -798,7 +798,7 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     if (args_ptr + 8 > buffer.len) return;
     const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
     const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
-    if (msg_ptr + msg_len <= buffer.len) debugPrint("Roc crashed: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    if (msg_ptr + msg_len > buffer.len) return;
     wasm_crash_state = .crashed;
 }
 
