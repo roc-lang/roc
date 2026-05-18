@@ -1299,7 +1299,6 @@ pub const Coordinator = struct {
 
     /// Main coordinator loop - unified for single and multi-threaded modes
     pub fn coordinatorLoop(self: *Coordinator) !void {
-        var iterations_without_progress: usize = 0;
         while (!self.isComplete()) {
             var made_progress = false;
 
@@ -1327,62 +1326,58 @@ pub const Coordinator = struct {
                 }
             }
 
-            if (made_progress) {
-                iterations_without_progress = 0;
-            } else {
-                iterations_without_progress += 1;
-                if (iterations_without_progress > 1000) {
-                    if (comptime !threading.is_freestanding) {
-                        const task_count = self.task_channel.len();
-                        std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
-                            self.total_remaining,
-                            task_count,
-                            self.inflight.load(.acquire),
-                        });
-                        // Print package/module states with detailed diagnostics
-                        var pkg_it = self.packages.iterator();
-                        while (pkg_it.next()) |entry| {
-                            const pkg = entry.value_ptr.*;
-                            std.debug.print("  Package {s}: remaining={}, modules={}\n", .{
-                                pkg.name,
-                                pkg.remaining_modules,
-                                pkg.modules.items.len,
-                            });
-                            for (pkg.modules.items, 0..) |mod, i| {
-                                std.debug.print("    Module {}: {s} phase=.{s} ext_imports={}\n", .{
-                                    i,
-                                    mod.name,
-                                    @tagName(mod.phase),
-                                    mod.external_imports.items.len,
-                                });
-                                // For non-Done modules, print additional diagnostics
-                                if (mod.phase != .Done) {
-                                    // Print local imports and their status
-                                    if (mod.imports.items.len > 0) {
-                                        std.debug.print("      local_imports ({}):", .{mod.imports.items.len});
-                                        for (mod.imports.items) |imp_id| {
-                                            if (pkg.getModule(imp_id)) |imp_mod| {
-                                                std.debug.print(" {s}(.{s})", .{ imp_mod.name, @tagName(imp_mod.phase) });
-                                            } else {
-                                                std.debug.print(" <invalid id={}>", .{imp_id});
-                                            }
-                                        }
-                                        std.debug.print("\n", .{});
-                                    }
-                                    // Print external imports and their readiness
-                                    if (mod.external_imports.items.len > 0) {
-                                        std.debug.print("      ext_imports ({}):", .{mod.external_imports.items.len});
-                                        for (mod.external_imports.items) |ext_name| {
-                                            const ready = self.isExternalReady(pkg.name, ext_name);
-                                            std.debug.print(" {s}(ready={})", .{ ext_name, ready });
-                                        }
-                                        std.debug.print("\n", .{});
-                                    }
-                                }
+            if (!made_progress and self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty()) {
+                self.dumpBlockedCoordinatorState();
+                @panic("Coordinator cannot make progress");
+            }
+        }
+    }
+
+    fn dumpBlockedCoordinatorState(self: *Coordinator) void {
+        if (comptime threading.is_freestanding) return;
+
+        const task_count = self.task_channel.len();
+        std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
+            self.total_remaining,
+            task_count,
+            self.inflight.load(.acquire),
+        });
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            std.debug.print("  Package {s}: remaining={}, modules={}\n", .{
+                pkg.name,
+                pkg.remaining_modules,
+                pkg.modules.items.len,
+            });
+            for (pkg.modules.items, 0..) |mod, i| {
+                std.debug.print("    Module {}: {s} phase=.{s} ext_imports={}\n", .{
+                    i,
+                    mod.name,
+                    @tagName(mod.phase),
+                    mod.external_imports.items.len,
+                });
+                if (mod.phase != .Done) {
+                    if (mod.imports.items.len > 0) {
+                        std.debug.print("      local_imports ({}):", .{mod.imports.items.len});
+                        for (mod.imports.items) |imp_id| {
+                            if (pkg.getModule(imp_id)) |imp_mod| {
+                                std.debug.print(" {s}(.{s})", .{ imp_mod.name, @tagName(imp_mod.phase) });
+                            } else {
+                                std.debug.print(" <invalid id={}>", .{imp_id});
                             }
                         }
+                        std.debug.print("\n", .{});
                     }
-                    @panic("Coordinator stuck in infinite loop");
+                    if (mod.external_imports.items.len > 0) {
+                        std.debug.print("      ext_imports ({}):", .{mod.external_imports.items.len});
+                        for (mod.external_imports.items) |ext_name| {
+                            const ready = self.isExternalReady(pkg.name, ext_name);
+                            std.debug.print(" {s}(ready={})", .{ ext_name, ready });
+                        }
+                        std.debug.print("\n", .{});
+                    }
                 }
             }
         }

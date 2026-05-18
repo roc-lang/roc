@@ -389,11 +389,14 @@ pub fn run(
         ) orelse continue;
         const template_ref = try name_resolver.procedureTemplateRef(seed.template);
         const template_lookup = checkedTemplateForKey(input, template_ref, seed.imported_closure);
+        const root_template_types = checkedTypesForKey(input, template_lookup.artifact) orelse {
+            invariantViolation("mono root specialization template artifact checked types were unavailable");
+        };
         var root_type_instantiator = TypeInstantiator.init(
             allocator,
             input,
             &program,
-            template_lookup.checked_types,
+            root_template_types,
             &name_resolver,
             template_lookup.artifact,
         );
@@ -433,13 +436,16 @@ pub fn run(
         queue.markLowering(key);
         const reserved = queue.requested.get(key) orelse unreachable;
         const template_lookup = checkedTemplateForKey(input, key.template, reserved.imported_closure);
-        if (executableSyntheticProcForReserved(key, reserved, template_lookup)) |synthetic| {
+        if (executableSyntheticProcForReserved(input, key, reserved, template_lookup)) |synthetic| {
             try reserveExecutableSyntheticProcDependencies(allocator, input, &program, &queue, template_lookup.artifact, synthetic);
             try program.addExecutableSyntheticProc(synthetic);
             queue.markLowered(key);
             continue;
         }
-        var type_instantiator = TypeInstantiator.init(allocator, input, &program, template_lookup.checked_types, &name_resolver, template_lookup.artifact);
+        const current_template_types = checkedTypesForKey(input, template_lookup.artifact) orelse {
+            invariantViolation("mono specialization template artifact checked types were unavailable");
+        };
+        var type_instantiator = TypeInstantiator.init(allocator, input, &program, current_template_types, &name_resolver, template_lookup.artifact);
         defer type_instantiator.deinit();
         try type_instantiator.buildFromRequest(template_lookup.template.checked_fn_root, reserved.requested_fn_ty, reserved.allow_return_widening);
         const fn_ty = try type_instantiator.lowerTemplateType(template_lookup.template.checked_fn_root);
@@ -1144,6 +1150,7 @@ fn topLevelValueRefEql(
 }
 
 fn executableSyntheticProcForReserved(
+    input: Input,
     key: canonical.MonoSpecializationKey,
     reserved: ReservedMonoProc,
     template_lookup: CheckedTemplateLookup,
@@ -1157,11 +1164,14 @@ fn executableSyntheticProcForReserved(
                     if (!std.mem.eql(u8, &erased.sealed.boundary.source_fn_ty.bytes, &key.requested_mono_fn_ty.bytes)) {
                         invariantViolation("erased promoted callable wrapper source function type disagrees with mono specialization request");
                     }
+                    const current_checked_types = checkedTypesForKey(input, template_lookup.artifact) orelse {
+                        invariantViolation("mono synthetic executable procedure referenced unavailable checked types");
+                    };
                     break :erased_blk mir_ids.ExecutableSyntheticProc{
                         .artifact = template_lookup.artifact,
                         .source_proc = mirProcedureRefFromReserved(reserved),
                         .template = key.template,
-                        .signature = executableSyntheticSignatureForErased(template_lookup.checked_types, erased),
+                        .signature = executableSyntheticSignatureForErased(current_checked_types, erased),
                         .executable_type_payloads = template_lookup.executable_type_payloads,
                         .executable_value_transforms = template_lookup.executable_value_transforms,
                         .comptime_plans = template_lookup.comptime_plans,
@@ -1748,15 +1758,15 @@ fn reserveComptimeDependencySummaryDependencies(
 
     for (summary.concrete_values) |value| {
         switch (value) {
-            .const_instance => |key| {
-                const ref = constInstanceForKey(input, owner, key) orelse {
+            .const_instance => |request| {
+                const ref = constInstanceForKey(input, owner, request.key) orelse {
                     debug.invariant(false, "mono dependency reservation invariant violated: dependency summary referenced an unsealed constant instance");
                     unreachable;
                 };
                 try reserveConstInstanceRefDependencies(input, program, queue, state, ref);
             },
-            .callable_binding_instance => |key| {
-                const ref = callableBindingInstanceForKey(input, owner, key) orelse {
+            .callable_binding_instance => |request| {
+                const ref = callableBindingInstanceForKey(input, owner, request.key) orelse {
                     debug.invariant(false, "mono dependency reservation invariant violated: dependency summary referenced an unsealed callable binding instance");
                     unreachable;
                 };
@@ -2157,7 +2167,7 @@ const TypeInstantiator = struct {
             self.allocator,
             self.input,
             self.program,
-            self.template_types,
+            self.templateTypes(),
             self.name_resolver,
             self.template_artifact,
         );
@@ -2621,10 +2631,18 @@ const TypeInstantiator = struct {
                 .needs_instantiation = false,
             } },
             .empty_record => .empty_record,
-            .tag_union => |tag_union| .{ .tag_union = .{
-                .tags = try self.materializeTemplateTags(tag_union.tags),
-                .ext = try self.materializeTemplateTagUnionExt(tag_union.ext),
-            } },
+            .tag_union => |tag_union| blk: {
+                const tags = try self.materializeTemplateTags(tag_union.tags);
+                errdefer {
+                    for (tags) |tag| self.allocator.free(tag.args);
+                    self.allocator.free(tags);
+                }
+                const ext = try self.materializeTemplateTagUnionExt(tag_union.ext);
+                break :blk .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = ext,
+                } };
+            },
             .empty_tag_union => .empty_tag_union,
         };
     }
@@ -3033,7 +3051,7 @@ const TypeInstantiator = struct {
                 .module_name = try self.name_resolver.moduleName(self.template_artifact, nominal.origin_module),
                 .type_name = try self.name_resolver.typeName(self.template_artifact, nominal.name),
             },
-            .source_ty = self.template_types.roots[@intFromEnum(id)].key,
+            .source_ty = self.templateRootKey(id),
             .is_opaque = nominal.is_opaque,
             .args = try self.lowerTemplateTypeIds(nominal.args),
             .backing = try self.lowerTemplateType(nominal.backing),
@@ -3971,9 +3989,23 @@ const TypeInstantiator = struct {
     }
 
     fn templatePayload(self: *const TypeInstantiator, id: checked_artifact.CheckedTypeId) checked_artifact.CheckedTypePayload {
+        const template_types = self.templateTypes();
         const raw = @intFromEnum(id);
-        if (raw >= self.template_types.payloads.len) invariantViolation("mono specialization template type id was outside published payloads");
-        return self.template_types.payloads[raw];
+        if (raw >= template_types.payloads.len) invariantViolation("mono specialization template type id was outside published payloads");
+        return template_types.payloads[raw];
+    }
+
+    fn templateRootKey(self: *const TypeInstantiator, id: checked_artifact.CheckedTypeId) canonical.CanonicalTypeKey {
+        const template_types = self.templateTypes();
+        const raw = @intFromEnum(id);
+        if (raw >= template_types.roots.len) invariantViolation("mono specialization template type id was outside published roots");
+        return template_types.roots[raw].key;
+    }
+
+    fn templateTypes(self: *const TypeInstantiator) checked_artifact.CheckedTypeStoreView {
+        return checkedTypesForKey(self.input, self.template_artifact) orelse {
+            invariantViolation("mono specialization template artifact checked types were unavailable");
+        };
     }
 
     fn resolveConcreteRef(
@@ -5821,7 +5853,7 @@ const BodyLowerer = struct {
         reason: MonoSpecializationReason,
     ) Allocator.Error!canonical.MirProcedureRef {
         const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
-        const payload_key = checkedTypeKey(self.template_lookup.checked_types, finite.member_proc_source_fn_ty_payload);
+        const payload_key = checkedTypeKey(self.templateCheckedTypes(), finite.member_proc_source_fn_ty_payload);
         if (!std.mem.eql(u8, &payload_key.bytes, &finite.member_proc.source_fn_ty.bytes)) {
             invariantViolation("promoted callable wrapper member source type payload disagrees with member procedure");
         }
@@ -5865,13 +5897,13 @@ const BodyLowerer = struct {
         reason: MonoSpecializationReason,
     ) Allocator.Error!canonical.MirProcedureRef {
         const owner_key = lifted.owner_mono_specialization;
-        const owner_requested_key = checkedTypeKey(self.template_lookup.checked_types, owner_source_fn_ty_payload);
+        const owner_requested_key = checkedTypeKey(self.templateCheckedTypes(), owner_source_fn_ty_payload);
         if (!std.mem.eql(u8, &owner_requested_key.bytes, &owner_key.requested_mono_fn_ty.bytes)) {
             invariantViolation("promoted callable wrapper lifted owner source type payload disagrees with owner specialization");
         }
         const owner_requested_fn_ty = try self.program.concrete_source_types.registerArtifactRoot(
             self.template_lookup.artifact,
-            self.template_lookup.checked_types,
+            self.templateCheckedTypes(),
             owner_source_fn_ty_payload,
         );
         const owner_reserved_key = self.program.concrete_source_types.key(owner_requested_fn_ty);
@@ -6000,18 +6032,11 @@ const BodyLowerer = struct {
             debug.invariant(false, "mono body lowering invariant violated: private capture artifact was not available");
             unreachable;
         };
-        const scheme = checkedTypeSchemeForKey(checked_types, capture.source_scheme) orelse {
-            debug.invariant(false, "mono body lowering invariant violated: private capture source scheme was not available");
-            unreachable;
-        };
-        if (scheme.generalized_vars.len != 0) {
-            invariantViolation("mono body lowering reached generalized private capture without a concrete instantiation");
-        }
-        const root_index: usize = @intFromEnum(scheme.root);
+        const root_index: usize = @intFromEnum(capture.source_ty_payload);
         if (root_index >= checked_types.roots.len) {
-            invariantViolation("private capture source scheme root is outside checked type roots");
+            invariantViolation("private capture source type payload is outside checked type roots");
         }
-        return try self.lowerPrivateCaptureNode(capture.artifact, capture.node, scheme.root);
+        return try self.lowerPrivateCaptureNode(capture.artifact, capture.node, capture.source_ty_payload);
     }
 
     fn lowerPrivateCaptureNode(
@@ -6806,23 +6831,39 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!ConcreteTypeInfo {
+        const fn_ref = try self.concreteFunctionRef(source_fn) orelse
+            invariantViolation("mono body lowering expected requested procedure type to be a function");
+        return try self.concreteFunctionReturnType(fn_ref);
+    }
+
+    fn concreteFunctionRef(
+        self: *BodyLowerer,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
         var current = source_fn;
         while (true) {
             switch (self.type_instantiator.concretePayload(current)) {
-                .alias => |alias| {
-                    current = try self.type_instantiator.concreteAliasBackingRef(current, alias);
-                },
-                .function => |function| {
-                    const ret_ref = try self.type_instantiator.concreteChildRef(current, function.ret);
-                    return .{
-                        .ty = try self.type_instantiator.lowerConcreteRef(ret_ref),
-                        .source_ty = self.program.concrete_source_types.key(ret_ref),
-                        .source_ref = ret_ref,
-                    };
-                },
-                else => invariantViolation("mono body lowering expected requested procedure type to be a function"),
+                .alias => |alias| current = try self.type_instantiator.concreteAliasBackingRef(current, alias),
+                .function => return current,
+                else => return null,
             }
         }
+    }
+
+    fn concreteFunctionReturnType(
+        self: *BodyLowerer,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteTypeInfo {
+        const function = switch (self.type_instantiator.concretePayload(source_fn)) {
+            .function => |function| function,
+            else => invariantViolation("mono body lowering expected concrete function source type"),
+        };
+        const ret_ref = try self.type_instantiator.concreteChildRef(source_fn, function.ret);
+        return .{
+            .ty = try self.type_instantiator.lowerConcreteRef(ret_ref),
+            .source_ty = self.program.concrete_source_types.key(ret_ref),
+            .source_ref = ret_ref,
+        };
     }
 
     fn concreteTypeInfoForChecked(
@@ -7415,8 +7456,8 @@ const BodyLowerer = struct {
                 if (try self.summaryPendingLocalRootForProcedureUse(proc_use, requested_fn_ty)) |root| {
                     break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_local_root = root });
                 }
-                if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, requested_fn_ty)) |key| {
-                    break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_callable_instance = key });
+                if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, requested_fn_ty)) |request| {
+                    break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_callable_instance = request });
                 }
                 const callable = try self.procedureCallableForUse(proc_use, requested_fn_ty);
                 break :proc_value_blk try self.program.ast.addExpr(ty, .{ .proc_value = .{
@@ -7432,8 +7473,8 @@ const BodyLowerer = struct {
                 if (try self.summaryPendingLocalRootForProcedureUse(proc_use, requested_fn_ty)) |root| {
                     break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_local_root = root });
                 }
-                if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, requested_fn_ty)) |key| {
-                    break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_callable_instance = key });
+                if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, requested_fn_ty)) |request| {
+                    break :proc_value_blk try self.program.ast.addExpr(ty, .{ .pending_callable_instance = request });
                 }
                 const callable = try self.procedureCallableForUse(proc_use, requested_fn_ty);
                 break :proc_value_blk try self.program.ast.addExpr(ty, .{ .proc_value = .{
@@ -7508,7 +7549,7 @@ const BodyLowerer = struct {
             self.allocator,
             self.input,
             self.program,
-            self.type_instantiator.template_types,
+            self.type_instantiator.templateTypes(),
             self.name_resolver,
             self.type_instantiator.template_artifact,
         );
@@ -7631,7 +7672,14 @@ const BodyLowerer = struct {
                     } else {
                         try self.recordConcreteConstDependencyType(concrete_ref);
                     }
-                    return try self.program.ast.addExpr(expected.ty, .{ .const_ref = key });
+                    return try self.program.ast.addExpr(expected.ty, .{ .const_ref = .{
+                        .key = key,
+                        .requested_source_ty_payload = try self.checkedPayloadForConcreteSummaryType(
+                            concrete_ref,
+                            requested_key,
+                            "mono dependency-summary constant request payload key disagrees with requested type",
+                        ),
+                    } });
                 },
                 .runnable => {
                     debug.invariant(false, "mono body lowering invariant violated: constant use had no sealed concrete instance in the requesting artifact");
@@ -7686,6 +7734,46 @@ const BodyLowerer = struct {
             invariantViolation("compile-time dependency summary constant use had no mutable checked artifact sink");
         };
         try self.program.concrete_dependency_type_projections.append(self.allocator, .{ .concrete_ref = concrete_ref });
+    }
+
+    fn checkedPayloadForConcreteSummaryType(
+        self: *BodyLowerer,
+        concrete_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        expected_key: canonical.CanonicalTypeKey,
+        comptime mismatch_message: []const u8,
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const artifact_sink = self.input.checking_artifact_sink orelse {
+            invariantViolation("compile-time dependency summary requested a checked type payload without a mutable checked artifact sink");
+        };
+
+        const local_root = try self.type_instantiator.materializeConcreteRef(concrete_ref);
+        const local_view = self.program.concrete_source_types.localView();
+        const root_index = @intFromEnum(local_root);
+        if (root_index >= local_view.roots.len) {
+            invariantViolation("compile-time dependency summary materialized type payload outside local type view");
+        }
+        if (!std.meta.eql(local_view.roots[root_index].key.bytes, expected_key.bytes)) {
+            invariantViolation(mismatch_message);
+        }
+
+        var dependency_views = try inputDependencyViews(self.allocator, self.input);
+        defer dependency_views.deinit(self.allocator);
+
+        var projector = checked_artifact.CheckedTypeProjector.init(self.allocator, artifact_sink, dependency_views.views);
+        defer projector.deinit();
+
+        const projected = try projector.projectCheckedTypeViewRootWithNames(
+            local_view,
+            &self.program.canonical_names,
+            local_root,
+        );
+        const projected_index = @intFromEnum(projected);
+        if (projected_index >= artifact_sink.checked_types.roots.len or
+            !std.meta.eql(artifact_sink.checked_types.roots[projected_index].key.bytes, expected_key.bytes))
+        {
+            invariantViolation("compile-time dependency summary projected checked payload key disagrees with requested type");
+        }
+        return projected;
     }
 
     fn lowerList(
@@ -8465,6 +8553,29 @@ const BodyLowerer = struct {
         };
     }
 
+    fn instantiateConcreteCallType(
+        self: *BodyLowerer,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+        args: []const checked_artifact.CheckedExprId,
+        expected_ret: ?ConcreteTypeInfo,
+    ) Allocator.Error!CallInstantiationInfo {
+        const function_ref = try self.concreteFunctionRef(source_fn) orelse
+            invariantViolation("mono body lowering expected concrete callee type to be a function");
+        try self.bindKnownConcreteCallArgumentTypes(function_ref, args);
+        if (expected_ret) |ret| {
+            const function_ret = try self.concreteFunctionReturnType(function_ref);
+            try self.type_instantiator.unifyConcreteRefs(function_ret.source_ref, ret.source_ref);
+        }
+        const concrete_fn = self.type_instantiator.resolveConcreteRef(function_ref);
+        const func_ty = try self.type_instantiator.lowerConcreteRef(concrete_fn);
+        return .{
+            .concrete_fn = concrete_fn,
+            .func_ty = func_ty,
+            .requested_source_fn_ty = self.program.concrete_source_types.key(concrete_fn),
+            .ret_ty = try self.returnTypeFromConcreteFunction(concrete_fn),
+        };
+    }
+
     fn callResultTypeInFreshInstantiation(
         self: *BodyLowerer,
         source_fn_ty: checked_artifact.CheckedTypeId,
@@ -8479,6 +8590,9 @@ const BodyLowerer = struct {
         self.type_instantiator = &call_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
+        if (try self.knownConcreteFunctionTypeForExpr(func)) |callee_fn| {
+            return (try self.instantiateConcreteCallType(callee_fn.source_ref, args, expected_ret)).ret_ty;
+        }
         try self.bindKnownCallCalleeType(source_fn_ty, func);
         return (try self.instantiateCallType(source_fn_ty, args, expected_ret)).ret_ty;
     }
@@ -8496,20 +8610,18 @@ const BodyLowerer = struct {
         self.type_instantiator = &call_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
-        const source_fn_ty_payload = self.callSourceFnPayload(call.func, call.source_fn_ty_payload);
-        try self.bindKnownCallCalleeType(source_fn_ty_payload, call.func);
-        const instantiated = try self.instantiateCallType(source_fn_ty_payload, call.args, expected);
-        if (!self.program.types.equalIds(instantiated.ret_ty.ty, expected.ty)) {
-            invariantViolation("mono body lowering call result type disagreed with concrete expected type");
-        }
-
         if (self.procedureUseForExpr(call.func)) |proc_use| {
+            const source_fn_ty_payload = self.callSourceFnPayload(call.func, call.source_fn_ty_payload);
+            const instantiated = try self.instantiateCallType(source_fn_ty_payload, call.args, expected);
+            if (!self.program.types.equalIds(instantiated.ret_ty.ty, expected.ty)) {
+                invariantViolation("mono body lowering call result type disagreed with concrete expected type");
+            }
             const args = try self.lowerCallArgs(call.args, instantiated.concrete_fn);
             if (try self.summaryPendingLocalRootForProcedureUse(proc_use, instantiated.concrete_fn)) |root| {
                 return try self.lowerPendingLocalRootCall(expected, root, args);
             }
-            if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, instantiated.concrete_fn)) |key| {
-                return try self.lowerPendingCallableInstanceCall(expected, key, args);
+            if (try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, instantiated.concrete_fn)) |request| {
+                return try self.lowerPendingCallableInstanceCall(expected, request, args);
             }
             const proc = try self.reserveProcedureUseForConcrete(proc_use, instantiated.concrete_fn, .{ .call_proc = call_expr });
             return try self.program.ast.addExpr(expected.ty, .{ .call_proc = .{
@@ -8520,6 +8632,11 @@ const BodyLowerer = struct {
             } });
         }
         if (try self.localProcUseForExpr(call.func)) |local_proc| {
+            const source_fn_ty_payload = self.callSourceFnPayload(call.func, call.source_fn_ty_payload);
+            const instantiated = try self.instantiateCallType(source_fn_ty_payload, call.args, expected);
+            if (!self.program.types.equalIds(instantiated.ret_ty.ty, expected.ty)) {
+                invariantViolation("mono body lowering call result type disagreed with concrete expected type");
+            }
             const symbol = try self.ensureLocalProcInstanceForConcrete(local_proc.binder, instantiated.concrete_fn);
             const func = try self.program.ast.addExpr(instantiated.func_ty, .{ .var_ = symbol });
             const args = try self.lowerCallArgs(call.args, instantiated.concrete_fn);
@@ -8529,6 +8646,17 @@ const BodyLowerer = struct {
                 .requested_fn_ty = instantiated.func_ty,
                 .requested_source_fn_ty = instantiated.requested_source_fn_ty,
             } });
+        }
+
+        const instantiated = if (try self.knownConcreteFunctionTypeForExpr(call.func)) |callee_fn|
+            try self.instantiateConcreteCallType(callee_fn.source_ref, call.args, expected)
+        else blk: {
+            const source_fn_ty_payload = self.callSourceFnPayload(call.func, call.source_fn_ty_payload);
+            try self.bindKnownCallCalleeType(source_fn_ty_payload, call.func);
+            break :blk try self.instantiateCallType(source_fn_ty_payload, call.args, expected);
+        };
+        if (!self.program.types.equalIds(instantiated.ret_ty.ty, expected.ty)) {
+            invariantViolation("mono body lowering call result type disagreed with concrete expected type");
         }
 
         const func_info = ConcreteTypeInfo{
@@ -8561,13 +8689,42 @@ const BodyLowerer = struct {
         }
     }
 
+    fn bindKnownConcreteCallArgumentTypes(
+        self: *BodyLowerer,
+        source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
+        args: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!void {
+        const param_infos = try self.paramTypesFromConcreteFunction(source_fn);
+        defer if (param_infos.len > 0) self.allocator.free(param_infos);
+        if (param_infos.len != args.len) invariantViolation("mono body lowering call argument count disagreed with concrete function type");
+        for (args, param_infos) |arg, param_info| {
+            const arg_ty = (try self.publishedConcreteResultTypeForExpr(arg)) orelse continue;
+            try self.type_instantiator.unifyConcreteRefs(param_info.source_ref, arg_ty.source_ref);
+        }
+    }
+
     fn bindKnownCallCalleeType(
         self: *BodyLowerer,
         source_fn_ty: checked_artifact.CheckedTypeId,
         func: checked_artifact.CheckedExprId,
     ) Allocator.Error!void {
-        const callee_ty = (try self.knownConcreteResultTypeForExpr(func)) orelse return;
+        if (!self.checkedTypeIsFunction(source_fn_ty)) return;
+        const callee_ty = (try self.knownConcreteFunctionTypeForExpr(func)) orelse return;
         try self.type_instantiator.unifyTemplateWithConcrete(source_fn_ty, callee_ty.source_ref);
+    }
+
+    fn checkedTypeIsFunction(
+        self: *BodyLowerer,
+        checked_ty: checked_artifact.CheckedTypeId,
+    ) bool {
+        var current = checked_ty;
+        while (true) {
+            switch (self.type_instantiator.templatePayload(current)) {
+                .alias => |alias| current = alias.backing,
+                .function => return true,
+                else => return false,
+            }
+        }
     }
 
     fn templateFunctionArgTypes(
@@ -8588,12 +8745,40 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         expr_id: checked_artifact.CheckedExprId,
     ) Allocator.Error!?ConcreteTypeInfo {
-        if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
-        if (try self.concreteTypeForConstLookupExpr(expr_id)) |const_ty| return const_ty;
+        if (try self.publishedConcreteResultTypeForExpr(expr_id)) |published| return published;
         if (try self.exprPublishesMonoConcreteType(expr_id)) {
             return try self.concreteResultTypeForExpr(expr_id, self.checkedExpr(expr_id).ty);
         }
         return null;
+    }
+
+    fn publishedConcreteResultTypeForExpr(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!?ConcreteTypeInfo {
+        const expr = self.checkedExpr(expr_id);
+        if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
+        if (try self.concreteTypeForConstLookupExpr(expr_id)) |const_ty| return const_ty;
+        return switch (expr.data) {
+            .field_access => |access| blk: {
+                const receiver = (try self.publishedConcreteResultTypeForExpr(access.receiver)) orelse break :blk null;
+                break :blk try self.concreteRecordFieldInfo(receiver.source_ref, try self.recordFieldLabel(access.field_name));
+            },
+            else => null,
+        };
+    }
+
+    fn knownConcreteFunctionTypeForExpr(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!?ConcreteTypeInfo {
+        const known = (try self.publishedConcreteResultTypeForExpr(expr_id)) orelse return null;
+        const function_ref = try self.concreteFunctionRef(known.source_ref) orelse return null;
+        return .{
+            .ty = try self.type_instantiator.lowerConcreteRef(function_ref),
+            .source_ty = self.program.concrete_source_types.key(function_ref),
+            .source_ref = function_ref,
+        };
     }
 
     fn exprPublishesMonoConcreteType(
@@ -8848,7 +9033,7 @@ const BodyLowerer = struct {
             self.allocator,
             self.input,
             self.program,
-            self.type_instantiator.template_types,
+            self.type_instantiator.templateTypes(),
             self.name_resolver,
             self.type_instantiator.template_artifact,
         );
@@ -9989,6 +10174,12 @@ const BodyLowerer = struct {
         return self.template_lookup.checked_bodies.bodies[raw];
     }
 
+    fn templateCheckedTypes(self: *const BodyLowerer) checked_artifact.CheckedTypeStoreView {
+        return checkedTypesForKey(self.input, self.template_lookup.artifact) orelse {
+            invariantViolation("mono body lowering template artifact checked types were unavailable");
+        };
+    }
+
     fn checkedExpr(self: *const BodyLowerer, id: checked_artifact.CheckedExprId) checked_artifact.CheckedExpr {
         const raw = @intFromEnum(id);
         if (raw >= self.template_lookup.checked_bodies.exprs.len) invariantViolation("mono body lowering received expr id outside checked body store");
@@ -10150,7 +10341,7 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         use: checked_artifact.ProcedureUseTemplate,
         requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
-    ) Allocator.Error!?checked_artifact.CallableBindingInstantiationKey {
+    ) Allocator.Error!?checked_artifact.CallableBindingInstantiationRequest {
         if (self.input.mode != .comptime_dependency_summary) return null;
 
         const requested_key = self.program.concrete_source_types.key(requested_fn_ty);
@@ -10158,7 +10349,14 @@ const BodyLowerer = struct {
         if (callableBindingInstanceForKey(self.input, self.input.root.artifact.key, key) != null) {
             return null;
         }
-        return key;
+        return .{
+            .key = key,
+            .requested_source_fn_ty_payload = try self.checkedPayloadForConcreteSummaryType(
+                requested_fn_ty,
+                requested_key,
+                "mono dependency-summary callable request payload key disagrees with requested function type",
+            ),
+        };
     }
 
     fn callableBindingInstantiationKeyForProcedureUse(
@@ -10284,10 +10482,10 @@ const BodyLowerer = struct {
     fn lowerPendingCallableInstanceCall(
         self: *BodyLowerer,
         expected: ConcreteTypeInfo,
-        key: checked_artifact.CallableBindingInstantiationKey,
+        request: checked_artifact.CallableBindingInstantiationRequest,
         args: Ast.Span(Ast.ExprId),
     ) Allocator.Error!Ast.ExprId {
-        const pending = try self.program.ast.addExprWithSource(expected.ty, expected.source_ty, .{ .pending_callable_instance = key });
+        const pending = try self.program.ast.addExprWithSource(expected.ty, expected.source_ty, .{ .pending_callable_instance = request });
         const arg_exprs = self.program.ast.sliceExprSpan(args);
         if (arg_exprs.len == 0) return pending;
 

@@ -11,6 +11,7 @@ const Layout = @import("layout.zig");
 
 const Allocator = std.mem.Allocator;
 const Exec = mir.Executable;
+const ConstructionBridge = Exec.ConstructionBridge;
 const repr = mir.LambdaSolved.Representation;
 
 /// Public `LowerResourceError` declaration.
@@ -59,6 +60,22 @@ pub const Program = struct {
 pub const RequestedLayout = struct {
     key: repr.CanonicalExecValueTypeKey,
     layout: Ast.LayoutRef,
+};
+
+const IrBridgeSink = struct {
+    store: *Ast.Store,
+
+    pub const BridgeId = Ast.BridgePlanId;
+    pub const BridgeSpan = Ast.Span(Ast.BridgePlanId);
+    pub const BridgePlan = Ast.BridgePlan;
+
+    pub fn addBridgePlan(self: *IrBridgeSink, plan: BridgePlan) Allocator.Error!BridgeId {
+        return try self.store.addBridgePlan(plan);
+    }
+
+    pub fn addBridgePlanSpan(self: *IrBridgeSink, ids: []const BridgeId) Allocator.Error!BridgeSpan {
+        return try self.store.addBridgePlanSpan(ids);
+    }
 };
 
 /// Public `fromExecutable` function.
@@ -265,14 +282,13 @@ const IrBuilder = struct {
             .access => |access| blk: {
                 const record = try self.lowerExpr(access.record, stmts);
                 const field = self.input.row_shapes.recordField(access.field);
-                const direct = try self.output.store.addBridgePlan(.direct);
                 break :blk try self.bindExpr(
                     expr.value,
                     try self.layoutForType(expr.ty),
                     .{ .get_struct_field = .{
                         .record = record,
                         .field_index = @intCast(field.logical_index),
-                        .field_bridge_plan = direct,
+                        .field_bridge_plan = try self.constructionSlotBridge(expr.ty, expr.ty),
                     } },
                     stmts,
                 );
@@ -299,11 +315,10 @@ const IrBuilder = struct {
             },
             .tuple_access => |access| blk: {
                 const tuple = try self.lowerExpr(access.tuple, stmts);
-                const direct = try self.output.store.addBridgePlan(.direct);
                 break :blk try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_struct_field = .{
                     .record = tuple,
                     .field_index = @intCast(access.elem_index),
-                    .field_bridge_plan = direct,
+                    .field_bridge_plan = try self.constructionSlotBridge(expr.ty, expr.ty),
                 } }, stmts);
             },
             .tag_payload => |payload| try self.lowerTagPayload(expr, payload, stmts),
@@ -462,7 +477,7 @@ const IrBuilder = struct {
 
         const payload_bridge = if (payload != null) try self.output.store.addBridgePlan(.direct) else null;
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .make_union = .{
-            .discriminant = @intCast(@intFromEnum(callable.member.member_index)),
+            .discriminant = repr.callableSetRuntimeDiscriminantForMember(callable.member.member_index),
             .payload = payload,
             .payload_bridge_plan = payload_bridge,
         } }, stmts);
@@ -628,9 +643,9 @@ const IrBuilder = struct {
             .{ .get_union_id = .{
                 .value = callee,
                 .source = if (branch_ids.len == 1)
-                    .{ .known_singleton = @intCast(@intFromEnum(branch_ids[0].member.member_index)) }
+                    .{ .known_singleton = repr.callableSetRuntimeDiscriminantForMember(branch_ids[0].member.member_index) }
                 else
-                    .runtime_callable_set,
+                    .{ .runtime_callable_set = callable_match.callable_set_key },
             } },
             stmts,
         );
@@ -644,7 +659,7 @@ const IrBuilder = struct {
                 irInvariant("IR lowering callable_match branch points at a different callable set");
             }
             branches[i] = .{
-                .value = @intCast(@intFromEnum(branch.member.member_index)),
+                .value = repr.callableSetRuntimeDiscriminantForMember(branch.member.member_index),
                 .block = try self.lowerCallableMatchBranchBlock(branch, callee),
             };
         }
@@ -683,7 +698,7 @@ const IrBuilder = struct {
                 .bind = payload,
                 .expr = try self.output.store.addExpr(.{ .get_union_struct = .{
                     .value = callee,
-                    .tag_discriminant = @intCast(@intFromEnum(branch.member.member_index)),
+                    .tag_discriminant = repr.callableSetRuntimeDiscriminantForMember(branch.member.member_index),
                 } }),
             } }));
             try self.pushValueBinding(payload_ref, payload, &saved);
@@ -1178,7 +1193,7 @@ const IrBuilder = struct {
                 break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
                     .record = parent,
                     .field_index = @intCast(self.input.row_shapes.tagPayload(payload.payload).logical_index),
-                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                    .field_bridge_plan = try self.constructionSlotBridge(plan.ty, plan.ty),
                 } }, stmts);
             },
             .record_field => |field| blk: {
@@ -1186,7 +1201,7 @@ const IrBuilder = struct {
                 break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
                     .record = parent,
                     .field_index = @intCast(self.input.row_shapes.recordField(field.field).logical_index),
-                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                    .field_bridge_plan = try self.constructionSlotBridge(plan.ty, plan.ty),
                 } }, stmts);
             },
             .record_rest => |projection| try self.materializeRecordRestPatternPath(plan.ty, projection, scrutinee_values, path_values, stmts),
@@ -1195,7 +1210,7 @@ const IrBuilder = struct {
                 break :blk try self.bindAnonymous(try self.layoutForType(plan.ty), .{ .get_struct_field = .{
                     .record = parent,
                     .field_index = @intCast(field.field),
-                    .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                    .field_bridge_plan = try self.constructionSlotBridge(plan.ty, plan.ty),
                 } }, stmts);
             },
             .list_element => |element| try self.materializeListElementPatternPath(plan.ty, element, scrutinee_values, path_values, stmts),
@@ -1240,7 +1255,7 @@ const IrBuilder = struct {
             fields[index] = try self.bindAnonymous(try self.layoutForType(field.ty), .{ .get_struct_field = .{
                 .record = parent,
                 .field_index = @intCast(self.input.row_shapes.recordField(field.source_field).logical_index),
-                .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                .field_bridge_plan = try self.constructionSlotBridge(field.ty, field.ty),
             } }, stmts);
             seen[index] = true;
         }
@@ -1461,14 +1476,13 @@ const IrBuilder = struct {
                 const child_pats = self.input.ast.pat_ids.items[items.start..][0..items.len];
                 for (child_pats, 0..) |child_pat_id, i| {
                     const child_pat = self.input.ast.pats.items[@intFromEnum(child_pat_id)];
-                    const direct = try self.output.store.addBridgePlan(.direct);
                     const child_value = try self.bindExpr(
                         self.freshInternalValueRef(),
                         try self.layoutForType(child_pat.ty),
                         .{ .get_struct_field = .{
                             .record = value,
                             .field_index = @intCast(i),
-                            .field_bridge_plan = direct,
+                            .field_bridge_plan = try self.constructionSlotBridge(child_pat.ty, child_pat.ty),
                         } },
                         stmts,
                     );
@@ -1481,14 +1495,13 @@ const IrBuilder = struct {
                 for (field_patterns) |field_pattern| {
                     const child_pat = self.input.ast.pats.items[@intFromEnum(field_pattern.pattern)];
                     const field = self.input.row_shapes.recordField(field_pattern.field);
-                    const direct = try self.output.store.addBridgePlan(.direct);
                     const child_value = try self.bindExpr(
                         self.freshInternalValueRef(),
                         try self.layoutForType(child_pat.ty),
                         .{ .get_struct_field = .{
                             .record = value,
                             .field_index = @intCast(field.logical_index),
-                            .field_bridge_plan = direct,
+                            .field_bridge_plan = try self.constructionSlotBridge(child_pat.ty, child_pat.ty),
                         } },
                         stmts,
                     );
@@ -1522,7 +1535,7 @@ const IrBuilder = struct {
                             .{ .get_struct_field = .{
                                 .record = payload_record,
                                 .field_index = @intCast(payload.logical_index),
-                                .field_bridge_plan = try self.output.store.addBridgePlan(.direct),
+                                .field_bridge_plan = try self.constructionSlotBridge(child_pat.ty, child_pat.ty),
                             } },
                             stmts,
                         );
@@ -1810,11 +1823,10 @@ const IrBuilder = struct {
             .value = tag_union,
             .tag_discriminant = @intCast(tag_info.logical_index),
         } }, stmts);
-        const direct = try self.output.store.addBridgePlan(.direct);
         return try self.bindExpr(expr.value, try self.layoutForType(expr.ty), .{ .get_struct_field = .{
             .record = payload_struct,
             .field_index = @intCast(payload_info.logical_index),
-            .field_bridge_plan = direct,
+            .field_bridge_plan = try self.constructionSlotBridge(expr.ty, expr.ty),
         } }, stmts);
     }
 
@@ -1895,6 +1907,21 @@ const IrBuilder = struct {
             lowered[i] = try self.lowerBridgePlan(bridge_id);
         }
         return try self.output.store.addBridgePlanSpan(lowered);
+    }
+
+    fn constructionSlotBridge(
+        self: *IrBuilder,
+        source_ty: Exec.Type.TypeId,
+        target_ty: Exec.Type.TypeId,
+    ) LowerResourceError!Ast.BridgePlanId {
+        var sink = IrBridgeSink{ .store = &self.output.store };
+        var planner = ConstructionBridge.Planner(IrBridgeSink).init(
+            self.allocator,
+            &self.input.types,
+            &self.input.row_shapes,
+            &sink,
+        );
+        return try planner.constructionSlotBridge(source_ty, target_ty);
     }
 
     fn bindExpr(
@@ -2112,7 +2139,7 @@ const IrBuilder = struct {
         @memset(seen, false);
 
         for (callable_set.members) |member| {
-            const index: usize = @intCast(@intFromEnum(member.member));
+            const index = repr.callableSetRuntimeIndexForMember(member.member);
             if (index >= callable_set.members.len) irInvariant("IR lowering callable-set member index exceeded member count");
             if (seen[index]) irInvariant("IR lowering callable-set type saw duplicate member index");
             variants[index] = if (member.payload_ty) |payload_ty| try self.layoutForType(payload_ty) else .{ .canonical = .zst };

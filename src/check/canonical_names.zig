@@ -151,6 +151,8 @@ pub const ProcedureCallableRef = struct {
 pub const BoxBoundaryId = enum(u32) { _ };
 /// Public `CallableSetMemberId` declaration.
 pub const CallableSetMemberId = enum(u32) { _ };
+/// Runtime tag discriminant used to encode finite callable-set values.
+pub const CallableSetRuntimeDiscriminant = u16;
 
 /// The only valid member id for a callable set that has exactly one member.
 /// This is not a placeholder or default; it is the semantic index of the sole
@@ -158,6 +160,49 @@ pub const CallableSetMemberId = enum(u32) { _ };
 pub fn onlyCallableSetMemberId() CallableSetMemberId {
     const only_member_index: u32 = 0;
     return @enumFromInt(only_member_index);
+}
+
+/// Convert a callable-set member id to its runtime tag-union discriminant.
+///
+/// The runtime encoding for finite callable sets is intentionally explicit:
+/// dense member ids are the discriminants used in callable-set layouts, value
+/// construction, callable matches, and compile-time result decoding.
+pub fn callableSetRuntimeDiscriminantForMember(member: CallableSetMemberId) CallableSetRuntimeDiscriminant {
+    const raw = @intFromEnum(member);
+    if (raw > std.math.maxInt(CallableSetRuntimeDiscriminant)) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "callable-set runtime encoding invariant violated: member id {d} does not fit in runtime discriminant",
+                .{raw},
+            );
+        }
+        unreachable;
+    }
+    return @intCast(raw);
+}
+
+/// Convert a callable-set member id to the runtime-variant array index.
+pub fn callableSetRuntimeIndexForMember(member: CallableSetMemberId) usize {
+    return @intCast(callableSetRuntimeDiscriminantForMember(member));
+}
+
+/// Convert a runtime tag-union discriminant back to its callable-set member id.
+pub fn callableSetMemberForRuntimeDiscriminant(discriminant: CallableSetRuntimeDiscriminant) CallableSetMemberId {
+    return @enumFromInt(@as(u32, discriminant));
+}
+
+/// Convert a dense runtime-variant array index to its callable-set member id.
+pub fn callableSetMemberForRuntimeIndex(index: usize) CallableSetMemberId {
+    if (index > std.math.maxInt(CallableSetRuntimeDiscriminant)) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "callable-set runtime encoding invariant violated: runtime index {d} does not fit in runtime discriminant",
+                .{index},
+            );
+        }
+        unreachable;
+    }
+    return callableSetMemberForRuntimeDiscriminant(@intCast(index));
 }
 
 /// Public `CanonicalCallableSetKey` declaration.

@@ -128,30 +128,34 @@ fn finalize(
         };
         artifact.compile_time_roots.fillPayload(root.id, payload);
         switch (root.kind) {
-            .constant => try evaluateConstantRoot(
-                allocator,
-                artifact,
-                &interpreter,
-                &lowered_request.lowered,
-                root,
-                lowered_request.lir_root,
-                switch (payload) {
-                    .const_graph => |plan| plan,
-                    else => compileTimeFinalizationInvariant("constant root did not publish a const graph plan"),
-                },
-            ),
-            .callable_binding => try evaluateCallableBindingRoot(
-                allocator,
-                artifact,
-                &interpreter,
-                &lowered_request.lowered,
-                root,
-                lowered_request.lir_root,
-                switch (payload) {
-                    .callable_result => |plan| plan,
-                    else => compileTimeFinalizationInvariant("callable root did not publish a callable result plan"),
-                },
-            ),
+            .constant => {
+                try evaluateConstantRoot(
+                    allocator,
+                    artifact,
+                    &interpreter,
+                    &lowered_request.lowered,
+                    root,
+                    lowered_request.lir_root,
+                    switch (payload) {
+                        .const_graph => |plan| plan,
+                        else => compileTimeFinalizationInvariant("constant root did not publish a const graph plan"),
+                    },
+                );
+            },
+            .callable_binding => {
+                try evaluateCallableBindingRoot(
+                    allocator,
+                    artifact,
+                    &interpreter,
+                    &lowered_request.lowered,
+                    root,
+                    lowered_request.lir_root,
+                    switch (payload) {
+                        .callable_result => |plan| plan,
+                        else => compileTimeFinalizationInvariant("callable root did not publish a callable result plan"),
+                    },
+                );
+            },
             .expect => {},
         }
     }
@@ -251,15 +255,13 @@ fn constInstantiationRequestForUse(
     dependency_views: []const checked_artifact.ImportedModuleView,
     const_use: checked_artifact.ConstUseTemplate,
 ) Allocator.Error!checked_artifact.ConstInstantiationRequest {
-    const key = if (try concreteConstProducerKeyForRef(
+    const concrete_producer = try concreteConstProducerForRef(
         allocator,
         artifact,
         dependency_views,
         const_use.const_ref,
-    )) |producer_key|
-        producer_key
-    else
-        const_use.requested_source_ty_template;
+    );
+    const key = if (concrete_producer) |producer| producer.key else const_use.requested_source_ty_template;
 
     const instance_key = checked_artifact.ConstInstantiationKey{
         .const_ref = const_use.const_ref,
@@ -267,48 +269,42 @@ fn constInstantiationRequestForUse(
     };
     return .{
         .key = instance_key,
-        .requested_source_ty_payload = try constInstantiationPayloadForKey(
-            allocator,
-            artifact,
-            dependency_views,
-            const_use,
-            instance_key,
-        ),
+        .requested_source_ty_payload = if (concrete_producer) |producer|
+            producer.payload
+        else
+            const_use.requested_source_ty_payload orelse {
+                compileTimeFinalizationInvariant("constant use had no requested source type payload");
+            },
     };
 }
 
-fn concreteConstProducerKeyForRef(
+const ConcreteConstProducerPayload = struct {
+    key: canonical.CanonicalTypeKey,
+    payload: checked_artifact.CheckedTypeId,
+};
+
+fn concreteConstProducerForRef(
     allocator: Allocator,
-    artifact: *const checked_artifact.CheckedModuleArtifact,
+    artifact: *checked_artifact.CheckedModuleArtifact,
     dependency_views: []const checked_artifact.ImportedModuleView,
     ref: checked_artifact.ConstRef,
-) Allocator.Error!?canonical.CanonicalTypeKey {
+) Allocator.Error!?ConcreteConstProducerPayload {
     const source = constTemplateSourceForRef(artifact, dependency_views, ref);
     const scheme = source.checked_types.schemeForKey(ref.source_scheme) orelse {
         compileTimeFinalizationInvariant("constant use referenced a missing producer source scheme");
     };
     if (!try source.checked_types.isConcreteConstProducerScheme(allocator, scheme.root)) return null;
-    return source.checked_types.rootKey(scheme.root);
-}
-
-fn constInstantiationPayloadForKey(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    dependency_views: []const checked_artifact.ImportedModuleView,
-    const_use: checked_artifact.ConstUseTemplate,
-    key: checked_artifact.ConstInstantiationKey,
-) Allocator.Error!checked_artifact.CheckedTypeId {
-    if (std.meta.eql(key.requested_source_ty.bytes, const_use.requested_source_ty_template.bytes)) {
-        return const_use.requested_source_ty_payload orelse {
-            compileTimeFinalizationInvariant("constant use had no requested source type payload");
-        };
-    }
-    return try checkedTypePayloadForConstInstanceDependency(
-        allocator,
-        artifact,
-        dependency_views,
-        key,
+    var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact, dependency_views);
+    defer projector.deinit();
+    const payload = try projector.projectCheckedTypeViewRootWithNames(
+        source.checked_types,
+        source.canonical_names,
+        scheme.root,
     );
+    return .{
+        .key = source.checked_types.rootKey(scheme.root),
+        .payload = payload,
+    };
 }
 
 fn publishAlreadyEvaluatedConstantRoot(
@@ -658,7 +654,7 @@ fn verifyUnselectedLocalRootDependencyCoveredByConcreteUse(
             };
             for (summary.concrete_values) |value| {
                 switch (value) {
-                    .const_instance => |key| if (constRefEql(key.const_ref, const_ref)) return,
+                    .const_instance => |request| if (constRefEql(request.key.const_ref, const_ref)) return,
                     .callable_binding_instance,
                     .procedure_callable,
                     .procedure_callable_with_payloads,
@@ -683,7 +679,7 @@ fn verifyUnselectedLocalRootDependencyCoveredByConcreteUse(
             };
             for (summary.concrete_values) |value| {
                 switch (value) {
-                    .callable_binding_instance => |key| if (checked_artifact.procedureBindingRefEql(key.binding, binding)) return,
+                    .callable_binding_instance => |request| if (checked_artifact.procedureBindingRefEql(request.key.binding, binding)) return,
                     .const_instance,
                     .procedure_callable,
                     .procedure_callable_with_payloads,
@@ -1354,8 +1350,7 @@ fn ensureConcreteDependencyValue(
     value: checked_artifact.ComptimeConcreteValueUse,
 ) anyerror!void {
     switch (value) {
-        .const_instance => |key| {
-            const requested_source_ty_payload = try checkedTypePayloadForConstInstanceDependency(allocator, artifact, dependency_views, key);
+        .const_instance => |request| {
             _ = try ensureConstInstanceRequest(
                 allocator,
                 artifact,
@@ -1363,14 +1358,10 @@ fn ensureConcreteDependencyValue(
                 lowering_imports,
                 relation_artifacts,
                 runtime_env,
-                .{
-                    .key = key,
-                    .requested_source_ty_payload = requested_source_ty_payload,
-                },
+                request,
             );
         },
-        .callable_binding_instance => |key| {
-            const requested_source_fn_ty_payload = try checkedTypePayloadForCallableBindingDependency(allocator, artifact, dependency_views, key);
+        .callable_binding_instance => |request| {
             _ = try ensureCallableBindingInstanceRequest(
                 allocator,
                 artifact,
@@ -1378,89 +1369,13 @@ fn ensureConcreteDependencyValue(
                 lowering_imports,
                 relation_artifacts,
                 runtime_env,
-                .{
-                    .key = key,
-                    .requested_source_fn_ty_payload = requested_source_fn_ty_payload,
-                },
+                request,
             );
         },
         .procedure_callable,
         .procedure_callable_with_payloads,
         => {},
     }
-}
-
-fn checkedTypePayloadForConstInstanceDependency(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    import_views: []const checked_artifact.ImportedModuleView,
-    key: checked_artifact.ConstInstantiationKey,
-) Allocator.Error!checked_artifact.CheckedTypeId {
-    if (artifact.checked_types.rootForKey(key.requested_source_ty)) |root| return root;
-
-    var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact, import_views);
-    defer projector.deinit();
-
-    if (!std.meta.eql(key.const_ref.artifact.bytes, artifact.key.bytes)) {
-        for (import_views) |imported| {
-            if (!std.meta.eql(imported.key.bytes, key.const_ref.artifact.bytes)) continue;
-            if (try projector.projectImportedCheckedTypeForKey(imported, key.requested_source_ty)) |projected| {
-                return projected;
-            }
-            break;
-        }
-    }
-
-    for (import_views) |imported| {
-        if (try projector.projectImportedCheckedTypeForKey(imported, key.requested_source_ty)) |projected| {
-            return projected;
-        }
-    }
-
-    compileTimeFinalizationInvariant("concrete dependency const instance requested type has no checked payload");
-}
-
-fn checkedTypePayloadForCallableBindingDependency(
-    allocator: Allocator,
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    dependency_views: []const checked_artifact.ImportedModuleView,
-    key: checked_artifact.CallableBindingInstantiationKey,
-) Allocator.Error!checked_artifact.CheckedTypeId {
-    if (artifact.checked_types.rootForKey(key.requested_source_fn_ty)) |root| return root;
-
-    var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact, dependency_views);
-    defer projector.deinit();
-
-    if (artifactKeyForCallableBinding(key.binding)) |producer| {
-        if (!std.meta.eql(producer.bytes, artifact.key.bytes)) {
-            for (dependency_views) |view| {
-                if (!std.meta.eql(view.key.bytes, producer.bytes)) continue;
-                if (try projector.projectImportedCheckedTypeForKey(view, key.requested_source_fn_ty)) |projected| {
-                    return projected;
-                }
-                break;
-            }
-        }
-    }
-
-    for (dependency_views) |view| {
-        if (try projector.projectImportedCheckedTypeForKey(view, key.requested_source_fn_ty)) |projected| {
-            return projected;
-        }
-    }
-
-    compileTimeFinalizationInvariant("concrete dependency callable instance requested function type has no checked payload");
-}
-
-fn artifactKeyForCallableBinding(binding: checked_artifact.ProcedureBindingRef) ?checked_artifact.CheckedModuleArtifactKey {
-    return switch (binding) {
-        .top_level => |top_level| top_level.artifact,
-        .imported => |imported| imported.artifact,
-        .platform_required => |required| required.artifact,
-        .hosted,
-        .promoted,
-        => null,
-    };
 }
 
 fn dependencySummaryForCompileTimeRequest(
@@ -1972,7 +1887,7 @@ const ConcreteDependencyCollector = struct {
         self: *ConcreteDependencyCollector,
         instance: checked_artifact.ConstInstanceRef,
     ) Allocator.Error!void {
-        try self.concrete.append(self.allocator, .{ .const_instance = instance.key });
+        try self.concrete.append(self.allocator, .{ .const_instance = self.artifact.const_instances.requestForRef(instance) });
     }
 
     fn appendSummary(
@@ -2078,18 +1993,20 @@ const ConcreteDependencyCollector = struct {
 
         switch (self.artifact.comptime_plans.captureSlot(slot_id)) {
             .pending => compileTimeFinalizationInvariant("concrete dependency collection reached pending capture slot plan"),
-            .serializable_leaf => |leaf| try self.collectConstGraph(leaf.reification_plan),
-            .callable_leaf => |result_plan| try self.collectCallableResult(result_plan),
-            .callable_schema => {},
-            .record => |fields| for (fields) |field| try self.collectCaptureSlot(field.value),
-            .tuple => |items| for (items) |item| try self.collectCaptureSlot(item.value),
-            .tag_union => |variants| for (variants) |variant| {
-                for (variant.payloads) |payload| try self.collectCaptureSlot(payload.value);
+            .sealed => |node| switch (node.kind) {
+                .serializable_leaf => |leaf| try self.collectConstGraph(leaf.reification_plan),
+                .callable_leaf => |result_plan| try self.collectCallableResult(result_plan),
+                .callable_schema => {},
+                .record => |fields| for (fields) |field| try self.collectCaptureSlot(field.value),
+                .tuple => |items| for (items) |item| try self.collectCaptureSlot(item.value),
+                .tag_union => |variants| for (variants) |variant| {
+                    for (variant.payloads) |payload| try self.collectCaptureSlot(payload.value);
+                },
+                .list => |list| try self.collectCaptureSlot(list.elem),
+                .box => |payload| try self.collectCaptureSlot(payload),
+                .nominal => |nominal| try self.collectCaptureSlot(nominal.backing),
+                .recursive_ref => |ref| try self.collectCaptureSlot(ref),
             },
-            .list => |list| try self.collectCaptureSlot(list.elem),
-            .box => |payload| try self.collectCaptureSlot(payload),
-            .nominal => |nominal| try self.collectCaptureSlot(nominal.backing),
-            .recursive_ref => |ref| try self.collectCaptureSlot(ref),
         }
     }
 
@@ -2215,6 +2132,7 @@ const ConcreteDependencyCollector = struct {
 const ConstTemplateSource = struct {
     template: checked_artifact.ConstTemplate,
     checked_types: checked_artifact.CheckedTypeStoreView,
+    canonical_names: ?*const canonical.CanonicalNameStore,
     values: *const checked_artifact.CompileTimeValueStore,
     plans: *const checked_artifact.CompileTimePlanStore,
     dependencies: checked_artifact.ComptimeDependencySummaryStoreView,
@@ -2229,6 +2147,7 @@ fn constTemplateSourceForRef(
         return .{
             .template = artifact.const_templates.get(ref),
             .checked_types = artifact.checked_types.view(),
+            .canonical_names = &artifact.canonical_names,
             .values = &artifact.comptime_values,
             .plans = &artifact.comptime_plans,
             .dependencies = artifact.comptime_dependencies.view(),
@@ -2239,6 +2158,7 @@ fn constTemplateSourceForRef(
         return .{
             .template = view.const_templates.get(ref),
             .checked_types = view.checked_types,
+            .canonical_names = view.canonical_names,
             .values = view.comptime_values,
             .plans = view.comptime_plans,
             .dependencies = view.comptime_dependencies,
@@ -3298,6 +3218,7 @@ fn selectNoHiddenCaptureSingletonFiniteAdapter(
     return try selectFiniteAdapterFromPublishedDescriptor(
         allocator,
         artifact,
+        lowered,
         adapter,
         erased,
         descriptor,
@@ -3367,6 +3288,7 @@ fn materializedFiniteCallableSetValueForNode(
 fn selectFiniteAdapterFromPublishedDescriptor(
     allocator: Allocator,
     artifact: *checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
     adapter: canonical.ErasedAdapterKey,
     erased: checked_artifact.ErasedCallableResultPlan,
     descriptor: *const repr.CanonicalCallableSetDescriptor,
@@ -3387,6 +3309,7 @@ fn selectFiniteAdapterFromPublishedDescriptor(
         .members = try callableResultMembersFromDescriptor(
             allocator,
             artifact,
+            lowered,
             erased,
             descriptor,
             original_targets,
@@ -3422,6 +3345,7 @@ fn selectFiniteAdapterFromPublishedDescriptor(
 fn callableResultMembersFromDescriptor(
     allocator: Allocator,
     artifact: *const checked_artifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
     erased: checked_artifact.ErasedCallableResultPlan,
     descriptor: *const repr.CanonicalCallableSetDescriptor,
     original_targets: []const canonical.ExecutableSpecializationKey,
@@ -3439,11 +3363,41 @@ fn callableResultMembersFromDescriptor(
         }
         var member_proc = descriptor_member.published_proc_value orelse descriptor_member.proc_value;
         member_proc.source_fn_ty = erased.source_fn_ty;
+        const member_payloads = loweredCallableSetMemberPayload(
+            lowered.callable_set_member_payloads,
+            descriptor.key,
+            descriptor_member.member,
+        ) orelse {
+            compileTimeFinalizationInvariant("persisted finite erased adapter descriptor member had no lowered checked payload record");
+        };
+        _ = checkedResultPlanSourcePayload(
+            artifact,
+            member_payloads.member_proc_source_fn_ty_payload,
+            descriptor_member.proc_value.source_fn_ty,
+        );
+        const lifted_owner_source_fn_ty_payload: ?checked_artifact.CheckedTypeId = switch (member_proc.template) {
+            .lifted => |lifted| blk: {
+                const payload = member_payloads.member_lifted_owner_source_fn_ty_payload orelse {
+                    compileTimeFinalizationInvariant("lifted no-hidden-capture finite adapter member had no lowered owner source type payload");
+                };
+                break :blk checkedResultPlanSourcePayload(
+                    artifact,
+                    payload,
+                    lifted.owner_mono_specialization.requested_mono_fn_ty,
+                );
+            },
+            .checked, .synthetic => blk: {
+                if (member_payloads.member_lifted_owner_source_fn_ty_payload != null) {
+                    compileTimeFinalizationInvariant("non-lifted no-hidden-capture finite adapter member carried lowered owner source type payload");
+                }
+                break :blk null;
+            },
+        };
         members[i] = .{
             .member = descriptor_member.member,
             .member_proc = member_proc,
             .member_proc_source_fn_ty_payload = checked_fn_root,
-            .member_lifted_owner_source_fn_ty_payload = try checkedPayloadForLiftedMemberOwnerIfNeeded(artifact, member_proc),
+            .member_lifted_owner_source_fn_ty_payload = lifted_owner_source_fn_ty_payload,
             .target = try memberTargetPlanFromExecutableKey(allocator, target_key, erased.source_fn_ty),
             .capture_slots = &.{},
         };
@@ -3544,20 +3498,6 @@ fn callableResultMembersFromPersistedDescriptor(
         initialized += 1;
     }
     return members;
-}
-
-fn checkedPayloadForLiftedMemberOwnerIfNeeded(
-    artifact: *const checked_artifact.CheckedModuleArtifact,
-    member_proc: canonical.ProcedureCallableRef,
-) Allocator.Error!?checked_artifact.CheckedTypeId {
-    return switch (member_proc.template) {
-        .lifted => |lifted| artifact.checked_types.rootForKey(lifted.owner_mono_specialization.requested_mono_fn_ty) orelse {
-            compileTimeFinalizationInvariant("lifted no-hidden-capture finite adapter member owner type has no checked payload");
-        },
-        .checked,
-        .synthetic,
-        => null,
-    };
 }
 
 fn memberTargetPlanFromExecutableKey(
@@ -4369,10 +4309,6 @@ fn validateLoweredErasedCallableCodeEntry(
     erased: checked_artifact.ErasedCallableResultPlan,
     entry: lir.CheckedPipeline.LoweredErasedCallableCodeEntry,
 ) void {
-    if (!repr.captureShapeKeyEql(entry.capture_shape_key, erased.executable_signature_payloads.capture_shape_key)) {
-        compileTimeFinalizationInvariant("interpreted erased callable capture shape differs from result plan");
-    }
-
     const abi = artifact.erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
         compileTimeFinalizationInvariant("interpreted erased callable result references missing erased ABI");
     };
@@ -4390,6 +4326,9 @@ fn validateLoweredErasedCallableCodeEntry(
 
     switch (entry.code) {
         .direct_proc_value => |direct| {
+            if (!repr.captureShapeKeyEql(entry.capture_shape_key, erased.executable_signature_payloads.capture_shape_key)) {
+                compileTimeFinalizationInvariant("interpreted direct erased callable capture shape differs from result plan");
+            }
             if (!repr.captureShapeKeyEql(direct.capture_shape_key, entry.capture_shape_key)) {
                 compileTimeFinalizationInvariant("interpreted direct erased code capture shape differs from lowered entry");
             }
@@ -4400,14 +4339,6 @@ fn validateLoweredErasedCallableCodeEntry(
             }
             if (!canonical.erasedFnAbiKeyEql(adapter.erased_fn_sig_key.abi, erased.sig_key.abi)) {
                 compileTimeFinalizationInvariant("interpreted finite-set adapter erased ABI differs from result plan");
-            }
-            if ((adapter.erased_fn_sig_key.capture_ty == null) != (erased.sig_key.capture_ty == null)) {
-                compileTimeFinalizationInvariant("interpreted finite-set adapter hidden capture presence differs from result plan");
-            }
-            if (adapter.erased_fn_sig_key.capture_ty) |adapter_capture| {
-                if (!repr.canonicalExecValueTypeKeyEql(adapter_capture, erased.sig_key.capture_ty.?)) {
-                    compileTimeFinalizationInvariant("interpreted finite-set adapter hidden capture key differs from result plan");
-                }
             }
             if (!repr.captureShapeKeyEql(adapter.capture_shape_key, entry.capture_shape_key)) {
                 compileTimeFinalizationInvariant("interpreted finite-set adapter capture shape differs from lowered entry");
@@ -5108,13 +5039,10 @@ const PrivateCaptureBuilder = struct {
         physical: PhysicalValue,
         capture_index: u32,
     ) Allocator.Error!checked_artifact.PrivateCaptureRef {
-        const checked_root = self.artifact.checked_types.rootForKey(source_ty) orelse {
-            compileTimeFinalizationInvariant("private capture source type was not published in checked type store");
-        };
-        const source_scheme = try self.artifact.checked_types.ensureSchemeForRoot(self.allocator, checked_root);
+        const node = self.capturePlanNode(plan_id);
         const owner = self.owner orelse compileTimeFinalizationInvariant("private capture ref construction requires a promoted procedure owner");
         if (@import("builtin").mode == .Debug) {
-            self.verifyTopLevelCapturePlanSource(plan_id, source_ty);
+            self.verifyTopLevelCapturePlanSource(node, source_ty);
         }
         return .{
             .artifact = self.artifact.key,
@@ -5123,22 +5051,30 @@ const PrivateCaptureBuilder = struct {
                 .capture_index = capture_index,
             },
             .node = try self.captureNode(plan_id, physical),
-            .source_scheme = source_scheme,
+            .source_ty_payload = node.source_ty_payload,
+        };
+    }
+
+    fn capturePlanNode(
+        self: *PrivateCaptureBuilder,
+        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+    ) checked_artifact.CaptureSlotReificationNode {
+        return switch (self.artifact.comptime_plans.captureSlot(plan_id)) {
+            .pending => compileTimeFinalizationInvariant("private capture reached pending capture plan"),
+            .sealed => |node| node,
         };
     }
 
     fn verifyTopLevelCapturePlanSource(
         self: *PrivateCaptureBuilder,
-        plan_id: checked_artifact.CaptureSlotReificationPlanId,
+        node: checked_artifact.CaptureSlotReificationNode,
         source_ty: canonical.CanonicalTypeKey,
     ) void {
-        const plan = self.artifact.comptime_plans.captureSlot(plan_id);
-        switch (plan) {
-            .serializable_leaf => |leaf| {
-                if (!std.meta.eql(leaf.requested_source_ty.bytes, source_ty.bytes)) {
-                    compileTimeFinalizationInvariant("private capture serializable leaf source type disagrees with descriptor capture slot");
-                }
-            },
+        if (!std.meta.eql(node.source_ty.bytes, source_ty.bytes)) {
+            compileTimeFinalizationInvariant("private capture source type disagrees with descriptor capture slot");
+        }
+        switch (node.kind) {
+            .serializable_leaf => {},
             .callable_leaf => |result_plan| switch (self.artifact.comptime_plans.callableResult(result_plan)) {
                 .finite => |finite| {
                     if (!std.meta.eql(finite.source_fn_ty.bytes, source_ty.bytes)) {
@@ -5151,12 +5087,9 @@ const PrivateCaptureBuilder = struct {
                     }
                 },
             },
-            .callable_schema => |schema| {
-                if (!std.meta.eql(schema.bytes, source_ty.bytes)) {
-                    compileTimeFinalizationInvariant("private capture callable schema source type disagrees with descriptor capture slot");
-                }
+            .callable_schema => |schema| if (!std.meta.eql(schema.bytes, source_ty.bytes)) {
+                compileTimeFinalizationInvariant("private capture callable schema source type disagrees with descriptor capture slot");
             },
-            .pending,
             .record,
             .tuple,
             .tag_union,
@@ -5204,10 +5137,9 @@ const PrivateCaptureBuilder = struct {
         plan_id: checked_artifact.CaptureSlotReificationPlanId,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.PrivateCaptureNode {
-        const plan = self.artifact.comptime_plans.captureSlot(plan_id);
-        return switch (plan) {
-            .pending => compileTimeFinalizationInvariant("private capture reification reached pending capture plan"),
-            .serializable_leaf => |leaf| .{ .const_instance_leaf = try self.serializableLeaf(leaf, physical) },
+        const node = self.capturePlanNode(plan_id);
+        return switch (node.kind) {
+            .serializable_leaf => |leaf| .{ .const_instance_leaf = try self.serializableLeaf(node, leaf, physical) },
             .callable_leaf => |result_plan| .{ .finite_callable_leaf = try self.callableLeaf(result_plan, physical) },
             .callable_schema => compileTimeFinalizationInvariant("private capture reification reached callable schema without a value"),
             .record => |fields| .{ .record = try self.record(fields, physical) },
@@ -5271,10 +5203,9 @@ const PrivateCaptureBuilder = struct {
         plan_id: checked_artifact.CaptureSlotReificationPlanId,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
-        const plan = self.artifact.comptime_plans.captureSlot(plan_id);
-        return switch (plan) {
-            .pending => compileTimeFinalizationInvariant("erased capture executable materialization reached pending capture plan"),
-            .serializable_leaf => |leaf| try self.executableSerializableLeaf(leaf, physical),
+        const node = self.capturePlanNode(plan_id);
+        return switch (node.kind) {
+            .serializable_leaf => |leaf| try self.executableSerializableLeaf(node, leaf, physical),
             .callable_leaf => |result_plan| try self.executableCallableLeaf(result_plan, physical),
             .callable_schema => compileTimeFinalizationInvariant("erased capture materialization reached callable schema without a value"),
             .record => |fields| .{ .record = try self.executableRecord(fields, physical) },
@@ -5319,6 +5250,7 @@ const PrivateCaptureBuilder = struct {
 
     fn serializableLeaf(
         self: *PrivateCaptureBuilder,
+        node: checked_artifact.CaptureSlotReificationNode,
         leaf: checked_artifact.SerializableCaptureLeafPlan,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.PrivateCaptureConstLeaf {
@@ -5331,7 +5263,7 @@ const PrivateCaptureBuilder = struct {
             self.artifact.key,
             owner,
             capture_index,
-            leaf.source_scheme,
+            node.source_scheme,
         );
 
         var leaf_dependencies = ConcreteDependencyCollector.init(self.allocator, self.artifact, self.lowered);
@@ -5359,19 +5291,16 @@ const PrivateCaptureBuilder = struct {
             .value = reified.value,
         });
 
-        const requested_source_ty_payload = self.artifact.checked_types.rootForKey(leaf.requested_source_ty) orelse {
-            compileTimeFinalizationInvariant("serializable private capture leaf requested type has no checked payload");
-        };
         const instance_ref = try self.artifact.const_instances.reserveRequest(self.allocator, &self.artifact.checked_types, .{
             .key = .{
                 .const_ref = const_ref,
-                .requested_source_ty = leaf.requested_source_ty,
+                .requested_source_ty = node.source_ty,
             },
-            .requested_source_ty_payload = requested_source_ty_payload,
+            .requested_source_ty_payload = node.source_ty_payload,
         });
         const instance_key = checked_artifact.ConstInstantiationKey{
             .const_ref = const_ref,
-            .requested_source_ty = leaf.requested_source_ty,
+            .requested_source_ty = node.source_ty,
         };
         self.artifact.const_instances.fill(instance_ref, .{
             .schema = reified.schema,
@@ -5389,7 +5318,7 @@ const PrivateCaptureBuilder = struct {
         return .{
             .const_ref = const_ref,
             .const_instance = instance_ref,
-            .requested_source_ty = leaf.requested_source_ty,
+            .requested_source_ty = node.source_ty,
             .schema = reified.schema,
             .mode = if (try constGraphContainsCallableSlots(
                 self.allocator,
@@ -5404,6 +5333,7 @@ const PrivateCaptureBuilder = struct {
 
     fn executableSerializableLeaf(
         self: *PrivateCaptureBuilder,
+        node: checked_artifact.CaptureSlotReificationNode,
         leaf: checked_artifact.SerializableCaptureLeafPlan,
         physical: PhysicalValue,
     ) Allocator.Error!checked_artifact.ErasedCaptureExecutableMaterializationNode {
@@ -5435,25 +5365,22 @@ const PrivateCaptureBuilder = struct {
                 self.artifact.key,
                 owner,
                 capture_index,
-                leaf.source_scheme,
+                node.source_scheme,
             );
             self.artifact.const_templates.fillValueGraph(const_ref, .{
                 .schema = reified.schema,
                 .value = reified.value,
             });
-            const requested_source_ty_payload = self.artifact.checked_types.rootForKey(leaf.requested_source_ty) orelse {
-                compileTimeFinalizationInvariant("executable private capture leaf requested type has no checked payload");
-            };
             const instance_ref = try self.artifact.const_instances.reserveRequest(self.allocator, &self.artifact.checked_types, .{
                 .key = .{
                     .const_ref = const_ref,
-                    .requested_source_ty = leaf.requested_source_ty,
+                    .requested_source_ty = node.source_ty,
                 },
-                .requested_source_ty_payload = requested_source_ty_payload,
+                .requested_source_ty_payload = node.source_ty_payload,
             });
             const instance_key = checked_artifact.ConstInstantiationKey{
                 .const_ref = const_ref,
-                .requested_source_ty = leaf.requested_source_ty,
+                .requested_source_ty = node.source_ty,
             };
             self.artifact.const_instances.fill(instance_ref, .{
                 .schema = reified.schema,
@@ -5883,12 +5810,20 @@ fn selectFiniteCallableSetMember(
 ) SelectedFiniteCallableSetMember {
     if (layout.tag == .tag_union) {
         const info = layouts.getTagUnionInfo(layout);
-        const discriminant = info.data.readDiscriminant(value.ptr);
-        if (discriminant >= members.len) {
+        const raw_discriminant = info.data.readDiscriminant(value.ptr);
+        if (raw_discriminant >= members.len) {
             compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded member count");
         }
+        if (raw_discriminant > std.math.maxInt(canonical.CallableSetRuntimeDiscriminant)) {
+            compileTimeFinalizationInvariant("finite compile-time callable result discriminant exceeded runtime encoding range");
+        }
+        const discriminant: canonical.CallableSetRuntimeDiscriminant = @intCast(raw_discriminant);
+        const planned_member = members[@intCast(raw_discriminant)];
+        if (canonical.callableSetRuntimeDiscriminantForMember(planned_member.member) != discriminant) {
+            compileTimeFinalizationInvariant("finite compile-time callable result members were not in runtime-discriminant order");
+        }
         return .{
-            .member = @enumFromInt(discriminant),
+            .member = planned_member.member,
             .payload_layout = info.variants.get(@intCast(discriminant)).payload_layout,
         };
     }
@@ -5928,6 +5863,19 @@ fn runtimeCallableSetMember(
 ) ?*const repr.CanonicalCallableSetMember {
     for (descriptor.members) |*member| {
         if (member.member == member_id) return member;
+    }
+    return null;
+}
+
+fn loweredCallableSetMemberPayload(
+    payloads: []const lir.CheckedPipeline.LoweredCallableSetMemberPayload,
+    callable_set_key: check.CanonicalNames.CanonicalCallableSetKey,
+    member_id: check.CanonicalNames.CallableSetMemberId,
+) ?lir.CheckedPipeline.LoweredCallableSetMemberPayload {
+    for (payloads) |payload| {
+        if (payload.member == member_id and mir.LambdaSolved.Representation.callableSetKeyEql(payload.callable_set_key, callable_set_key)) {
+            return payload;
+        }
     }
     return null;
 }

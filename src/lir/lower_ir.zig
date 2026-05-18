@@ -580,7 +580,8 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
-            .runtime_tag_union, .runtime_callable_set => {},
+            .runtime_tag_union => {},
+            .runtime_callable_set => |_| {},
         }
         const source = try self.lowerVar(union_id.value);
         const source_layout = self.store.getLocal(source).layout_idx;

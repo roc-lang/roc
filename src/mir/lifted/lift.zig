@@ -134,8 +134,10 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
         .input = &input.program.ast,
         .output = &program.ast,
         .local_procs = std.AutoHashMap(Symbol, LocalProcInfo).init(allocator),
+        .lifted_closures = std.AutoHashMap(LiftedClosureKey, LocalProcInfo).init(allocator),
         .capture_proc_symbols = std.AutoHashMap(Symbol, void).init(allocator),
         .capture_slots = std.AutoHashMap(Symbol, u32).init(allocator),
+        .active_binder_symbols = std.AutoHashMap(u32, Symbol).init(allocator),
     };
     defer lifter.deinit();
 
@@ -169,6 +171,11 @@ const LocalProcInfo = struct {
     capture_slots: Ast.Span(Ast.CaptureSlot),
 };
 
+const LiftedClosureKey = struct {
+    template: canonical.LiftedProcedureTemplateRef,
+    source_fn_ty: canonical.CanonicalTypeKey,
+};
+
 const PreviousLocalProc = struct {
     symbol: Symbol,
     previous: ?LocalProcInfo,
@@ -188,6 +195,11 @@ const BoundRestore = struct {
 const CaptureSlotRestore = struct {
     symbol: Symbol,
     slot: ?u32,
+};
+
+const ActiveBinderRestore = struct {
+    binder_idx: u32,
+    previous: ?Symbol,
 };
 
 const LoweredProcBody = struct {
@@ -240,15 +252,19 @@ const BodyLifter = struct {
     input: *const MonoRow.Ast.Store,
     output: *Ast.Store,
     local_procs: std.AutoHashMap(Symbol, LocalProcInfo),
+    lifted_closures: std.AutoHashMap(LiftedClosureKey, LocalProcInfo),
     capture_proc_symbols: std.AutoHashMap(Symbol, void),
     capture_slots: std.AutoHashMap(Symbol, u32),
+    active_binder_symbols: std.AutoHashMap(u32, Symbol),
     current_direct_calls: ?*std.ArrayList(canonical.MirProcedureRef) = null,
     owner_key: canonical.MonoSpecializationKey = undefined,
     next_order: u32 = 0,
 
     fn deinit(self: *BodyLifter) void {
+        self.active_binder_symbols.deinit();
         self.capture_slots.deinit();
         self.capture_proc_symbols.deinit();
+        self.lifted_closures.deinit();
         self.local_procs.deinit();
     }
 
@@ -256,6 +272,47 @@ const BodyLifter = struct {
         const order = ProcOrderKey{ .ordinal = self.next_order };
         self.next_order += 1;
         return order;
+    }
+
+    fn checkedBinderForSymbol(self: *const BodyLifter, symbol: Symbol) ?u32 {
+        const entry = self.program.symbols.get(symbol);
+        return switch (entry.origin) {
+            .checked_pattern_binder => |binder| binder.binder_idx,
+            else => null,
+        };
+    }
+
+    fn pushActiveBinderSymbol(
+        self: *BodyLifter,
+        symbol: Symbol,
+        restorations: *std.ArrayList(ActiveBinderRestore),
+    ) Allocator.Error!void {
+        const binder_idx = self.checkedBinderForSymbol(symbol) orelse return;
+        const previous = try self.active_binder_symbols.fetchPut(binder_idx, symbol);
+        try restorations.append(self.allocator, .{
+            .binder_idx = binder_idx,
+            .previous = if (previous) |entry| entry.value else null,
+        });
+    }
+
+    fn activeEquivalentSymbol(self: *const BodyLifter, symbol: Symbol) ?Symbol {
+        const binder_idx = self.checkedBinderForSymbol(symbol) orelse return null;
+        const active = self.active_binder_symbols.get(binder_idx) orelse return null;
+        if (active == symbol) return null;
+        return active;
+    }
+
+    fn restoreActiveBinderSymbols(self: *BodyLifter, restorations: []const ActiveBinderRestore) void {
+        var i = restorations.len;
+        while (i > 0) {
+            i -= 1;
+            const restore = restorations[i];
+            if (restore.previous) |previous| {
+                self.active_binder_symbols.put(restore.binder_idx, previous) catch unreachable;
+            } else {
+                _ = self.active_binder_symbols.remove(restore.binder_idx);
+            }
+        }
     }
 
     fn lowerDef(
@@ -267,11 +324,22 @@ const BodyLifter = struct {
             .proc = def.proc,
             .debug_name = def.debug_name,
             .value = switch (def.value) {
-                .fn_ => |fn_| .{ .fn_ = .{
-                    .args = try self.lowerTypedSymbolSpan(fn_.args),
-                    .captures = Ast.Span(Ast.CaptureSlot).empty(),
-                    .body = try self.lowerExpr(fn_.body),
-                } },
+                .fn_ => |fn_| blk: {
+                    const args = try self.lowerTypedSymbolSpan(fn_.args);
+                    var active_binders = std.ArrayList(ActiveBinderRestore).empty;
+                    defer active_binders.deinit(self.allocator);
+                    errdefer self.restoreActiveBinderSymbols(active_binders.items);
+                    for (self.output.sliceTypedSymbolSpan(args)) |arg| {
+                        try self.pushActiveBinderSymbol(arg.symbol, &active_binders);
+                    }
+                    const body = try self.lowerExpr(fn_.body);
+                    self.restoreActiveBinderSymbols(active_binders.items);
+                    break :blk .{ .fn_ = .{
+                        .args = args,
+                        .captures = Ast.Span(Ast.CaptureSlot).empty(),
+                        .body = body,
+                    } };
+                },
                 .hosted_fn => |hosted| .{ .hosted_fn = .{
                     .proc = hosted.proc,
                     .args = try self.lowerTypedSymbolSpan(hosted.args),
@@ -460,13 +528,14 @@ const BodyLifter = struct {
         const capture_args = try self.allocator.alloc(Ast.CaptureArg, slots.len);
         defer self.allocator.free(capture_args);
         for (slots, 0..) |slot, i| {
-            const expr = if (self.capture_slots.get(slot.source_symbol)) |captured_slot|
+            const source_symbol = self.activeEquivalentSymbol(slot.source_symbol) orelse slot.source_symbol;
+            const expr = if (self.capture_slots.get(source_symbol)) |captured_slot|
                 try self.output.addExpr(slot.ty, slot.source_ty, .{ .capture_ref = captured_slot })
             else
-                try self.output.addExpr(slot.ty, slot.source_ty, .{ .var_ = slot.source_symbol });
+                try self.output.addExpr(slot.ty, slot.source_ty, .{ .var_ = source_symbol });
             capture_args[i] = .{
                 .slot = slot.index,
-                .symbol = slot.source_symbol,
+                .symbol = source_symbol,
                 .expr = expr,
             };
         }
@@ -598,10 +667,20 @@ const BodyLifter = struct {
         args: MonoRow.Ast.Span(MonoRow.Ast.TypedSymbol),
         body: MonoRow.Ast.ExprId,
     ) Allocator.Error!LocalProcInfo {
+        const closure_key = LiftedClosureKey{
+            .template = .{
+                .owner_mono_specialization = self.owner_key,
+                .site = site,
+            },
+            .source_fn_ty = source_fn_ty,
+        };
+        if (self.lifted_closures.get(closure_key)) |existing| return existing;
+
         const lowered_args = try self.lowerTypedSymbolSpan(args);
         const captures = try self.captureSlotsForBody(args, body);
         const info = try self.reserveLiftedProc(source_symbol, site, source_fn_ty, fn_ty, lowered_args, captures);
         try self.lowerLiftedProcBody(info, body);
+        try self.lifted_closures.put(closure_key, info);
         return info;
     }
 
@@ -669,6 +748,16 @@ const BodyLifter = struct {
             });
         }
 
+        var active_binders = std.ArrayList(ActiveBinderRestore).empty;
+        defer active_binders.deinit(self.allocator);
+        errdefer self.restoreActiveBinderSymbols(active_binders.items);
+        for (self.output.sliceTypedSymbolSpan(info.args)) |arg| {
+            try self.pushActiveBinderSymbol(arg.symbol, &active_binders);
+        }
+        for (slots) |slot| {
+            try self.pushActiveBinderSymbol(slot.source_symbol, &active_binders);
+        }
+
         const lowered_body = try self.lowerExpr(body);
 
         const def = try self.output.addDef(.{
@@ -687,6 +776,7 @@ const BodyLifter = struct {
             .direct_calls = try self.appendDirectCallSpan(direct_calls.items),
         });
 
+        self.restoreActiveBinderSymbols(active_binders.items);
         restoreCaptureSlotList(self, previous_slots.items);
     }
 

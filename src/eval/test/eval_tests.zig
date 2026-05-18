@@ -2513,6 +2513,26 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "42" },
     },
     .{ .name = "inspect: List.fold builtin sum", .source = "List.fold([1, 2, 3], 0, |acc, item| acc + item)", .expected = .{ .inspect_str = "6.0" } },
+    .{
+        .name = "inspect: List.iter folds builtin iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter()
+        \\    Iter.fold(iter, 0.I64, |acc, item| acc + item)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "inspect: List.iter maps builtin iterator",
+        .source =
+        \\{
+        \\    iter = Iter.map([10.I64, 20].iter(), |item| item + 1)
+        \\    Iter.fold(iter, 0.I64, |acc, item| acc + item)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "32" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },

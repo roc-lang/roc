@@ -242,10 +242,27 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
 /// Insert a string at a specific slot (internal helper).
 fn insertAt(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8, slot: u64) std.mem.Allocator.Error!Idx {
     const new_offset: Idx = @enumFromInt(self.bytes.len());
+    const existing_bytes = self.bytes.items.items;
+    const existing_start = @intFromPtr(existing_bytes.ptr);
+    const string_start = @intFromPtr(string.ptr);
+    const string_offset: ?usize = if (string_start >= existing_start) offset: {
+        const offset = string_start - existing_start;
+        if (offset <= existing_bytes.len and string.len <= existing_bytes.len - offset) {
+            break :offset offset;
+        }
+        break :offset null;
+    } else null;
+
+    const stable_string = if (string_offset) |offset| stable: {
+        // Callers may intern slices returned by getText. Preserve the offset
+        // before growing bytes so reallocation cannot invalidate the source.
+        try self.bytes.items.ensureUnusedCapacity(gpa, string.len + 1);
+        break :stable self.bytes.items.items[offset..][0..string.len];
+    } else string;
 
     {
         const expected_start = self.bytes.items.items.len;
-        const range = try self.bytes.appendSlice(gpa, string);
+        const range = try self.bytes.appendSlice(gpa, stable_string);
         assertAppendRange(expected_start, @intCast(string.len), range);
     }
     {
@@ -259,6 +276,69 @@ fn insertAt(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const 
     self.entry_count += 1;
 
     return new_offset;
+}
+
+const PoisonOnFreeBumpAllocator = struct {
+    buffer: []u8,
+    end: usize = 0,
+
+    fn init(buffer: []u8) PoisonOnFreeBumpAllocator {
+        return .{ .buffer = buffer };
+    }
+
+    fn allocator(self: *PoisonOnFreeBumpAllocator) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = std.mem.Allocator.noResize,
+                .remap = std.mem.Allocator.noRemap,
+                .free = free,
+            },
+        };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
+        const self: *PoisonOnFreeBumpAllocator = @ptrCast(@alignCast(ctx));
+        const align_bytes = alignment.toByteUnits();
+        const adjustment = std.mem.alignPointerOffset(self.buffer.ptr + self.end, align_bytes) orelse return null;
+        const start = self.end + adjustment;
+        const end = start + len;
+        if (end > self.buffer.len) return null;
+        self.end = end;
+        return self.buffer.ptr + start;
+    }
+
+    fn free(_: *anyopaque, memory: []u8, _: std.mem.Alignment, _: usize) void {
+        @memset(memory, 0xAA);
+    }
+};
+
+test "SmallStringInterner can insert text borrowed from its own bytes after growth" {
+    var buffer: [4096]u8 align(@alignOf(usize)) = undefined;
+    var bump = PoisonOnFreeBumpAllocator.init(buffer[0..]);
+    const gpa = bump.allocator();
+
+    var interner = try SmallStringInterner.initCapacity(gpa, 64);
+    defer interner.deinit(gpa);
+
+    const source_idx = try interner.insert(gpa, "Builtin.Num.U8");
+    const borrowed_len = "Num.U8".len;
+
+    var filler_number: usize = 0;
+    while (interner.bytes.items.capacity - interner.bytes.items.items.len >= borrowed_len + 1) : (filler_number += 1) {
+        var filler_buffer: [64]u8 = undefined;
+        const filler = try std.fmt.bufPrint(&filler_buffer, "filler_{d}", .{filler_number});
+        const filler_idx = try interner.insert(gpa, filler);
+        try std.testing.expectEqualStrings(filler, interner.getText(filler_idx));
+    }
+
+    const source_text = interner.getText(source_idx);
+    const borrowed = source_text["Builtin.".len..];
+    const borrowed_idx = try interner.insert(gpa, borrowed);
+
+    try std.testing.expectEqualStrings("Num.U8", interner.getText(borrowed_idx));
+    try std.testing.expectEqualStrings("Builtin.Num.U8", interner.getText(source_idx));
 }
 
 /// Check if a string is already interned in this interner, used for generating unique names.

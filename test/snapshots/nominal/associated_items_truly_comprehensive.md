@@ -483,9 +483,9 @@ UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
-CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
-CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
+CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
+CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -534,15 +534,15 @@ The unused variable is declared here:
 
 
 **CIRCULAR VALUE DEFINITION**
-The value `associated_items_truly_comprehensive.D3_Pattern2.val1` is part of a recursive non-function definition cycle.
+The value `associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3` is part of a recursive non-function definition cycle.
 
 Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
 
-**associated_items_truly_comprehensive.md:173:5:173:9:**
+**associated_items_truly_comprehensive.md:167:13:167:17:**
 ```roc
-    val1 = D3_Pattern2.L2.val2 + 5              # Forward ref to L2 val (qualified)
+            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
 ```
-    ^^^^
+            ^^^^
 
 
 **CIRCULAR VALUE DEFINITION**
@@ -558,15 +558,15 @@ Only functions can be recursive. Non-function top-level values must be fully com
 
 
 **CIRCULAR VALUE DEFINITION**
-The value `associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3` is part of a recursive non-function definition cycle.
+The value `associated_items_truly_comprehensive.D3_Pattern2.val1` is part of a recursive non-function definition cycle.
 
 Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
 
-**associated_items_truly_comprehensive.md:167:13:167:17:**
+**associated_items_truly_comprehensive.md:173:5:173:9:**
 ```roc
-            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
+    val1 = D3_Pattern2.L2.val2 + 5              # Forward ref to L2 val (qualified)
 ```
-            ^^^^
+    ^^^^
 
 
 # TOKENS

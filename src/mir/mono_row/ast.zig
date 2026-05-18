@@ -174,8 +174,8 @@ pub const Expr = struct {
         bool_lit: bool,
         str_lit: ProgramLiteralId,
         const_instance: checked_artifact.ConstInstanceRef,
-        const_ref: checked_artifact.ConstInstantiationKey,
-        pending_callable_instance: checked_artifact.CallableBindingInstantiationKey,
+        const_ref: checked_artifact.ConstInstantiationRequest,
+        pending_callable_instance: checked_artifact.CallableBindingInstantiationRequest,
         pending_local_root: checked_artifact.ComptimeRootId,
         tag: struct {
             union_shape: TagUnionShapeId,
