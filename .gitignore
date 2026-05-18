@@ -154,7 +154,7 @@ kcov-output/
 src/snapshots/**/*.html
 
 # Local claude-code settings
-.claude/settings.local.json
+.claude/
 
 *.bak
 kcov-output/
