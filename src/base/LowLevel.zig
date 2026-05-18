@@ -56,6 +56,7 @@ pub const LowLevel = enum {
     list_drop_at,
     list_sublist,
     list_set,
+    list_replace_unsafe,
     list_prepend,
     list_first,
     list_last,
@@ -528,7 +529,9 @@ pub const LowLevel = enum {
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
-            .list_set => RcEffect.runtimeUniqueness(argMask(&.{0})),
+            .list_set,
+            .list_replace_unsafe,
+            => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
 

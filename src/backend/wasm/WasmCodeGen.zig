@@ -7393,6 +7393,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListDropAt(args, ll.ret_layout);
         },
 
+        .list_replace_unsafe => {
+            // TODO: implement list_replace_unsafe for wasm.
+            // For now emit a WASM trap so the compiler still produces a module —
+            // only calls that actually exercise List.replace at runtime will fail
+            // (with `unreachable executed`), instead of crashing the compiler.
+            self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        },
+
         // List element access operations (no heap allocation needed)
         .list_first => {
             const ls = self.getLayoutStore();
