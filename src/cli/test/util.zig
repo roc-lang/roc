@@ -3,13 +3,6 @@
 const std = @import("std");
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
-fn currentProcessIdForPath() u64 {
-    if (@import("builtin").os.tag == .windows) {
-        return std.os.windows.GetCurrentProcessId();
-    }
-    return @intCast(std.c.getpid());
-}
-
 /// Absolute cache directory paths reserved for a single CLI test subprocess.
 pub const IsolatedCacheDirs = struct {
     roc_cache_dir: []u8,
@@ -41,13 +34,12 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheD
 
     try std.fs.cwd().makePath(cache_base_rel);
 
-    const process_id = currentProcessIdForPath();
-
     while (true) {
         const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}-{d}", .{
+        const random = std.crypto.random.int(u64);
+        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x}-{d}", .{
             @as(u64, @intCast(std.time.nanoTimestamp())),
-            process_id,
+            random,
             cache_dir_id,
         });
         defer allocator.free(cache_leaf);
