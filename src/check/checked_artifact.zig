@@ -312,6 +312,17 @@ pub const PublishImportArtifact = struct {
     view: ImportedModuleView,
 };
 
+/// Checked artifacts that must be available to consume this module's public API.
+/// This is semantic visibility, not lexical import visibility.
+pub const PublicApiDependencies = struct {
+    artifacts: []const CheckedModuleArtifactKey = &.{},
+
+    pub fn deinit(self: *PublicApiDependencies, allocator: Allocator) void {
+        allocator.free(self.artifacts);
+        self.* = .{};
+    }
+};
+
 /// Public `PublishInputs` declaration.
 pub const PublishInputs = struct {
     module_env_storage: ModuleEnvStorage,
@@ -14136,6 +14147,364 @@ fn appendClosureArtifactKey(
     try keys.append(allocator, key);
 }
 
+fn collectPublicApiDependencies(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *const canonical.CanonicalNameStore,
+    module_identity: ModuleIdentity,
+    artifact_key: CheckedModuleArtifactKey,
+    exported_defs: []const CIR.Def.Idx,
+    checked_type_publication: *const CheckedTypePublication,
+    checked_types: *const CheckedTypeStore,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    exported_procedure_templates: *const ExportedProcedureTemplateTable,
+    exported_procedure_bindings: *const ExportedProcedureBindingTable,
+    exported_const_templates: *const ExportedConstTemplateTable,
+) Allocator.Error!PublicApiDependencies {
+    var keys = std.ArrayList(CheckedModuleArtifactKey).empty;
+    errdefer keys.deinit(allocator);
+
+    var active_types = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer active_types.deinit();
+
+    for (exported_defs) |def_idx| {
+        const root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse {
+            checkedArtifactInvariant("exported def type root was not published", .{});
+        };
+        try appendPublicApiTypeDependencies(
+            allocator,
+            names,
+            module_identity,
+            artifact_key,
+            checked_types,
+            root,
+            &active_types,
+            imports,
+            available_artifacts,
+            &keys,
+        );
+    }
+
+    try appendExposedTypeDeclarationPublicApiDependencies(
+        allocator,
+        module,
+        names,
+        module_identity,
+        artifact_key,
+        checked_type_publication,
+        checked_types,
+        imports,
+        available_artifacts,
+        &active_types,
+        &keys,
+    );
+
+    try appendExportedClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, exported_procedure_templates.*);
+    for (exported_procedure_bindings.bindings) |binding| {
+        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, binding.template_closure);
+    }
+    for (exported_const_templates.templates) |template| {
+        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, template.template_closure);
+    }
+
+    return .{ .artifacts = try keys.toOwnedSlice(allocator) };
+}
+
+fn appendExposedTypeDeclarationPublicApiDependencies(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *const canonical.CanonicalNameStore,
+    module_identity: ModuleIdentity,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_type_publication: *const CheckedTypePublication,
+    checked_types: *const CheckedTypeStore,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    active_types: *std.AutoHashMap(CheckedTypeId, void),
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+    var exposed_iter = module_env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        if (entry.node_idx == 0) continue;
+        const raw_node_idx: u32 = entry.node_idx;
+        if (raw_node_idx >= module.nodeCount()) {
+            checkedArtifactInvariant("exposed type item points at out-of-range node", .{});
+        }
+
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isStatementNodeTag(module.nodeTag(node_idx))) continue;
+
+        const statement_idx: CIR.Statement.Idx = @enumFromInt(raw_node_idx);
+        switch (module.getStatement(statement_idx)) {
+            .s_alias_decl, .s_nominal_decl => {
+                const root = checked_type_publication.rootForSourceVar(module, ModuleEnv.varFrom(statement_idx)) orelse {
+                    checkedArtifactInvariant("exposed type declaration root was not published", .{});
+                };
+                try appendPublicApiTypeDependencies(
+                    allocator,
+                    names,
+                    module_identity,
+                    artifact_key,
+                    checked_types,
+                    root,
+                    active_types,
+                    imports,
+                    available_artifacts,
+                    keys,
+                );
+            },
+            else => {},
+        }
+    }
+}
+
+fn appendPublicApiTypeDependencies(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    module_identity: ModuleIdentity,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+) Allocator.Error!void {
+    const index: usize = @intFromEnum(root);
+    if (index >= checked_types.payloads.len) {
+        checkedArtifactInvariant("public API dependency scan referenced a missing checked type payload", .{});
+    }
+    if (active.contains(root)) return;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    switch (checked_types.payloads[index]) {
+        .pending => checkedArtifactInvariant("public API dependency scan reached pending checked type payload", .{}),
+        .empty_record, .empty_tag_union => {},
+        .flex => |flex| try appendPublicApiConstraintDependencies(
+            allocator,
+            names,
+            module_identity,
+            artifact_key,
+            checked_types,
+            flex.constraints,
+            active,
+            imports,
+            available_artifacts,
+            keys,
+        ),
+        .rigid => |rigid| try appendPublicApiConstraintDependencies(
+            allocator,
+            names,
+            module_identity,
+            artifact_key,
+            checked_types,
+            rigid.constraints,
+            active,
+            imports,
+            available_artifacts,
+            keys,
+        ),
+        .alias => |alias| {
+            try appendPublicApiModuleDependency(
+                allocator,
+                names,
+                module_identity,
+                artifact_key,
+                alias.origin_module,
+                imports,
+                available_artifacts,
+                keys,
+            );
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, alias.backing, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, alias.args, active, imports, available_artifacts, keys);
+        },
+        .nominal => |nominal| {
+            try appendPublicApiModuleDependency(
+                allocator,
+                names,
+                module_identity,
+                artifact_key,
+                nominal.origin_module,
+                imports,
+                available_artifacts,
+                keys,
+            );
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, nominal.backing, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, nominal.args, active, imports, available_artifacts, keys);
+        },
+        .record => |record| {
+            for (record.fields) |field| {
+                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys);
+            }
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, record.ext, active, imports, available_artifacts, keys);
+        },
+        .record_unbound => |fields| {
+            for (fields) |field| {
+                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys);
+            }
+        },
+        .tuple => |items| try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, items, active, imports, available_artifacts, keys),
+        .function => |function| {
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, function.args, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, function.ret, active, imports, available_artifacts, keys);
+        },
+        .tag_union => |tag_union| {
+            for (tag_union.tags) |tag| {
+                try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, tag.args, active, imports, available_artifacts, keys);
+            }
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, tag_union.ext, active, imports, available_artifacts, keys);
+        },
+    }
+}
+
+fn appendPublicApiConstraintDependencies(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    module_identity: ModuleIdentity,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    constraints: []const CheckedStaticDispatchConstraint,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+) Allocator.Error!void {
+    for (constraints) |constraint| {
+        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, constraint.fn_ty, active, imports, available_artifacts, keys);
+    }
+}
+
+fn appendPublicApiTypeDependencyRange(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    module_identity: ModuleIdentity,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    roots: []const CheckedTypeId,
+    active: *std.AutoHashMap(CheckedTypeId, void),
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+) Allocator.Error!void {
+    for (roots) |child| {
+        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, child, active, imports, available_artifacts, keys);
+    }
+}
+
+fn appendPublicApiModuleDependency(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    module_identity: ModuleIdentity,
+    artifact_key: CheckedModuleArtifactKey,
+    origin_module: canonical.ModuleNameId,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+) Allocator.Error!void {
+    const origin_name = names.moduleNameText(origin_module);
+    if (isSelfPublicApiModuleName(names, module_identity, origin_name)) return;
+    if (Ident.textEql(origin_name, "Builtin")) return;
+
+    const view = publicApiDependencyViewByModuleName(origin_name, imports, available_artifacts) orelse {
+        checkedArtifactInvariant("public API dependency scan could not find checked artifact for module {s}", .{origin_name});
+    };
+    try appendPublicApiDependencyView(allocator, artifact_key, keys, view);
+}
+
+fn isSelfPublicApiModuleName(
+    names: *const canonical.CanonicalNameStore,
+    module_identity: ModuleIdentity,
+    origin_name: []const u8,
+) bool {
+    return Ident.textEql(origin_name, names.moduleNameText(module_identity.module_name)) or
+        Ident.textEql(origin_name, names.moduleNameText(module_identity.display_module_name)) or
+        Ident.textEql(origin_name, names.moduleNameText(module_identity.qualified_module_name));
+}
+
+fn publicApiDependencyViewByModuleName(
+    module_name: []const u8,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+) ?ImportedModuleView {
+    for (imports) |import_artifact| {
+        if (importedViewModuleNameMatches(import_artifact.view, module_name)) return import_artifact.view;
+    }
+    for (available_artifacts) |view| {
+        if (importedViewModuleNameMatches(view, module_name)) return view;
+    }
+    return null;
+}
+
+fn importedViewModuleNameMatches(view: ImportedModuleView, module_name: []const u8) bool {
+    return Ident.textEql(module_name, view.canonical_names.moduleNameText(view.module_identity.module_name)) or
+        Ident.textEql(module_name, view.canonical_names.moduleNameText(view.module_identity.display_module_name)) or
+        Ident.textEql(module_name, view.canonical_names.moduleNameText(view.module_identity.qualified_module_name));
+}
+
+fn appendPublicApiDependencyView(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    view: ImportedModuleView,
+) Allocator.Error!void {
+    if (checkedArtifactKeyEql(view.key, artifact_key)) return;
+    try appendClosureArtifactKey(allocator, keys, view.key);
+    for (view.public_api_dependencies.artifacts) |dependency| {
+        if (checkedArtifactKeyEql(dependency, artifact_key)) continue;
+        try appendClosureArtifactKey(allocator, keys, dependency);
+    }
+}
+
+fn appendExportedClosurePublicApiDependencies(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    exported_procedure_templates: ExportedProcedureTemplateTable,
+) Allocator.Error!void {
+    for (exported_procedure_templates.templates) |template| {
+        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, keys, template.template_closure);
+    }
+}
+
+fn appendTemplateClosurePublicApiDependencies(
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    closure: ImportedTemplateClosureView,
+) Allocator.Error!void {
+    var closure_keys = std.ArrayList(CheckedModuleArtifactKey).empty;
+    defer closure_keys.deinit(allocator);
+    try appendImportedTemplateClosureArtifactKeys(allocator, &closure_keys, closure);
+    for (closure_keys.items) |key| {
+        if (checkedArtifactKeyEql(key, artifact_key)) continue;
+        const view = publicApiDependencyViewByKey(key, imports, available_artifacts) orelse {
+            checkedArtifactInvariant("public API closure dependency scan could not find checked artifact for referenced key", .{});
+        };
+        try appendPublicApiDependencyView(allocator, artifact_key, keys, view);
+    }
+}
+
+fn publicApiDependencyViewByKey(
+    key: CheckedModuleArtifactKey,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+) ?ImportedModuleView {
+    for (imports) |import_artifact| {
+        if (checkedArtifactKeyEql(import_artifact.key, key)) return import_artifact.view;
+    }
+    for (available_artifacts) |view| {
+        if (checkedArtifactKeyEql(view.key, key)) return view;
+    }
+    return null;
+}
+
 /// Public `ExportedProcedureTemplate` declaration.
 pub const ExportedProcedureTemplate = struct {
     export_name: ?canonical.ExportNameId,
@@ -16694,6 +17063,7 @@ pub const CheckedModuleArtifact = struct {
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
     direct_import_artifact_keys: []CheckedModuleArtifactKey = &.{},
+    public_api_dependencies: PublicApiDependencies = .{},
     module_env: ModuleEnvStorage,
     exports: ExportTable,
     checked_types: CheckedTypeStore = .{},
@@ -16930,6 +17300,7 @@ pub const CheckedModuleArtifact = struct {
         self.checked_bodies.deinit(allocator);
         self.checked_types.deinit(allocator);
         self.exports.deinit(allocator);
+        self.public_api_dependencies.deinit(allocator);
         allocator.free(self.direct_import_artifact_keys);
         self.checking_context_identity.deinit(allocator);
         self.canonical_names.deinit();
@@ -17515,6 +17886,7 @@ pub const ImportedModuleView = struct {
     canonical_names: *const canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     direct_import_artifact_keys: []const CheckedModuleArtifactKey = &.{},
+    public_api_dependencies: PublicApiDependencies = .{},
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
@@ -17565,6 +17937,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .canonical_names = &artifact.canonical_names,
         .module_identity = artifact.module_identity,
         .direct_import_artifact_keys = artifact.direct_import_artifact_keys,
+        .public_api_dependencies = artifact.public_api_dependencies,
         .exports = artifact.exports.view(),
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
@@ -19084,12 +19457,30 @@ pub fn publishFromTypedModule(
     );
     errdefer interface_capabilities.deinit(allocator);
 
+    var public_api_dependencies = try collectPublicApiDependencies(
+        allocator,
+        module,
+        &canonical_names,
+        module_identity,
+        artifact_key,
+        exports,
+        &checked_type_publication,
+        checked_types,
+        inputs.imports,
+        inputs.available_artifacts,
+        &exported_procedure_templates,
+        &exported_procedure_bindings,
+        &exported_const_templates,
+    );
+    errdefer public_api_dependencies.deinit(allocator);
+
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
         .canonical_names = canonical_names,
         .module_identity = module_identity,
         .checking_context_identity = checking_context_identity,
         .direct_import_artifact_keys = direct_import_artifact_keys,
+        .public_api_dependencies = public_api_dependencies,
         .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
         .checked_types = checked_types.*,

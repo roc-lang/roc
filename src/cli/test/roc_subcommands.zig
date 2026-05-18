@@ -544,6 +544,34 @@ test "roc test/str/app.roc runs successfully (dev)" {
     try testRocRunsSuccessfully("--opt=dev", "test/str/app.roc");
 }
 
+test "roc run test/str/app_static_24_byte_string.roc does not panic" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // The minimized app makes the host fail its string assertion after codegen,
+    // but direct `roc file.roc` must not panic before the host runs.
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/str/app_static_24_byte_string.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    const did_panic = result.term == .Signal or
+        (result.term == .Exited and result.term.Exited == 134) or
+        std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "reached unreachable code") != null;
+
+    if (did_panic) {
+        std.debug.print("roc direct run panicked\nterm: {}\nstdout: {s}\nstderr: {s}\n", .{
+            result.term,
+            result.stdout,
+            result.stderr,
+        });
+    }
+
+    try testing.expect(!did_panic);
+}
+
 // roc build tests
 
 test "roc build creates executable from test/int/app.roc (interpreter)" {
