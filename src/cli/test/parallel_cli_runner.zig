@@ -481,6 +481,7 @@ const Pool = harness.ProcessPool(CliTestSpec, TestResult, .{
     .stabilizeResult = &stabilizeResult,
     .getName = &getTestName,
     .use_process_groups = true,
+    .windows_persistent_workers = false,
 });
 
 // Output

@@ -415,6 +415,10 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         /// Runners that enforce finer-grained timeouts inside the child use
         /// this to let the child serialize its attributed timeout result.
         timeout_report_grace_ms: u64 = 0,
+        /// On Windows, reuse child runner processes across tests. Disable this
+        /// for runners whose tests need a fresh runner process per spec, so
+        /// each logical test has one process boundary and one result frame.
+        windows_persistent_workers: bool = true,
         /// Called from the parent thread right before launching each test.
         /// Use for "RUN <name>" logging — keeps it coherent across N workers.
         onTestStarted: ?*const fn (Spec) void = null,
@@ -729,7 +733,11 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             template: []const []const u8,
         ) void {
             if (comptime builtin.os.tag != .windows) {
-                runSequential(specs, results, gpa);
+                runSequential(specs, results, gpa, timeout_ms);
+                return;
+            }
+            if (!cfg.windows_persistent_workers) {
+                runChildPoolSingleShot(specs, results, max_children, timeout_ms, gpa, template);
                 return;
             }
 
@@ -771,6 +779,59 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
             state.watchdog_done.store(true, .release);
             if (watchdog) |wd| wd.join();
+        }
+
+        const SingleShotChildPoolState = struct {
+            next_test: std.atomic.Value(usize),
+            template: []const []const u8,
+            timeout_ms: u64,
+            gpa: Allocator,
+            specs: []const Spec,
+            results: []Result,
+        };
+
+        fn runChildPoolSingleShot(
+            specs: []const Spec,
+            results: []Result,
+            max_children: usize,
+            timeout_ms: u64,
+            gpa: Allocator,
+            template: []const []const u8,
+        ) void {
+            var state = SingleShotChildPoolState{
+                .next_test = std.atomic.Value(usize).init(0),
+                .template = template,
+                .timeout_ms = timeout_ms,
+                .gpa = gpa,
+                .specs = specs,
+                .results = results,
+            };
+
+            const threads = gpa.alloc(std.Thread, max_children) catch return;
+            defer gpa.free(threads);
+
+            var spawned: usize = 0;
+            for (threads) |*t| {
+                t.* = std.Thread.spawn(.{}, singleShotWorkerThread, .{&state}) catch break;
+                spawned += 1;
+            }
+
+            for (threads[0..spawned]) |t| t.join();
+        }
+
+        fn singleShotWorkerThread(state: *SingleShotChildPoolState) void {
+            while (true) {
+                const idx = state.next_test.fetchAdd(1, .monotonic);
+                if (idx >= state.specs.len) return;
+
+                if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
+
+                state.results[idx] = switch (spawnSingleWorker(state.gpa, state.template, idx, &.{}, state.timeout_ms)) {
+                    .ok => |result| result,
+                    .timed_out => cfg.timeout_result,
+                    .crashed => cfg.default_result,
+                };
+            }
         }
 
         /// One persistent Child per worker thread. Spawns once in
