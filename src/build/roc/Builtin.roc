@@ -566,6 +566,22 @@ Builtin :: [].{
 			{ list, value: new_value }
 		}
 
+		## Updates the element at the given index by applying a function to it.
+		##
+		## If the index is outside the bounds of the list, returns the original
+		## list unmodified.
+		## ```roc
+		## expect [10, 20, 30].update(1, |x| x + 5) == [10, 25, 30]
+		##
+		## expect [10, 20, 30].update(5, |x| x + 5) == [10, 20, 30]
+		## ```
+		update : List(a), U64, (a -> a) -> List(a)
+		update = |list, index, func| if index < List.len(list) {
+			list_replace_unsafe(list, index, func(list_get_unsafe(list, index))).list
+		} else {
+			list
+		}
+
 		## Exchanges the elements at the two given indices.
 		##
 		## If either index is outside the bounds of the list, or both indices are
