@@ -489,6 +489,14 @@ Builtin :: [].{
 			list_append_unsafe(reserved, item)
 		}
 
+		## Add a single element to the beginning of a list.
+		## ```roc
+		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
+		##
+		## expect [].prepend(0) == [0]
+		## ```
+		prepend : List(a), a -> List(a)
+
 		## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 		## ```roc
 		## expect [1, 2, 3].first() == Ok(1)
@@ -513,6 +521,49 @@ Builtin :: [].{
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
 			Try.Err(OutOfBounds)
+		}
+
+		## Alias for [List.get], enabling the future `list[index]` subscript operator.
+		## Returns an element from a list at the given index.
+		##
+		## Returns `Err OutOfBounds` if the given index exceeds the List's length
+		## ```roc
+		## expect ["bird", "lizard"].subscript(0) == Ok("bird")
+		## expect ["bird", "lizard"].subscript(5) == Err(OutOfBounds)
+		## ```
+		subscript : List(item), U64 -> Try(item, [OutOfBounds, ..])
+		subscript = |list, index| List.get(list, index)
+
+		## Replaces the element at the given index with a new value.
+		##
+		## If the index is outside the bounds of the list, returns the original
+		## list unmodified.
+		## ```roc
+		## expect [10, 20, 30].set(1, 99) == [10, 99, 30]
+		##
+		## expect [10, 20, 30].set(5, 99) == [10, 20, 30]
+		## ```
+		set : List(a), U64, a -> List(a)
+		set = |list, index, value| if index < List.len(list) {
+			list_set_unsafe(list, index, value)
+		} else {
+			list
+		}
+
+		## Replaces the element at the given index, returning both the updated list
+		## and the value that was replaced.
+		##
+		## If the index is outside the bounds of the list, returns the original list
+		## along with the input value (as if the replacement happened at a no-op slot).
+		## ```roc
+		## expect [10, 20, 30].replace(1, 99) == { list: [10, 99, 30], value: 20 }
+		## expect [10, 20, 30].replace(5, 99) == { list: [10, 20, 30], value: 99 }
+		## ```
+		replace : List(a), U64, a -> { list : List(a), value : a }
+		replace = |list, index, new_value| if index < List.len(list) {
+			list_replace_unsafe(list, index, new_value)
+		} else {
+			{ list, value: new_value }
 		}
 
 		## Returns the reversed list.
@@ -7367,6 +7418,13 @@ list_get_unsafe : List(item), U64 -> item
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
+
+# Implemented by the compiler, does not perform bounds checks
+list_set_unsafe : List(item), U64, item -> List(item)
+
+# Implemented by the compiler, does not perform bounds checks.
+# Returns the new list paired with the value that was replaced.
+list_replace_unsafe : List(item), U64, item -> { list : List(item), value : item }
 
 # Implemented by the compiler, ensures at least spare additional elements of capacity
 list_reserve : List(item), U64 -> List(item)
