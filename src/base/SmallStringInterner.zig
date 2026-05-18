@@ -242,10 +242,17 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
 /// Insert a string at a specific slot (internal helper).
 fn insertAt(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8, slot: u64) std.mem.Allocator.Error!Idx {
     const new_offset: Idx = @enumFromInt(self.bytes.len());
+    const source_offset = self.offsetInBytes(string);
+
+    try self.bytes.items.ensureUnusedCapacity(gpa, string.len + 1);
+    const stable_string = if (source_offset) |offset|
+        self.bytes.items.items[offset..][0..string.len]
+    else
+        string;
 
     {
         const expected_start = self.bytes.items.items.len;
-        const range = try self.bytes.appendSlice(gpa, string);
+        const range = try self.bytes.appendSlice(gpa, stable_string);
         assertAppendRange(expected_start, @intCast(string.len), range);
     }
     {
@@ -259,6 +266,25 @@ fn insertAt(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const 
     self.entry_count += 1;
 
     return new_offset;
+}
+
+fn offsetInBytes(self: *const SmallStringInterner, string: []const u8) ?usize {
+    if (string.len == 0) return null;
+
+    const bytes_slice = self.bytes.items.items;
+    if (bytes_slice.len == 0) return null;
+
+    const bytes_start = @intFromPtr(bytes_slice.ptr);
+    const bytes_end = bytes_start + bytes_slice.len;
+    const string_start = @intFromPtr(string.ptr);
+
+    if (string_start < bytes_start) return null;
+    if (string_start > bytes_end) return null;
+
+    const bytes_remaining = bytes_end - string_start;
+    if (string.len > bytes_remaining) return null;
+
+    return string_start - bytes_start;
 }
 
 /// Check if a string is already interned in this interner, used for generating unique names.
@@ -684,6 +710,25 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
             try std.testing.expectEqualStrings(expected_str, actual_str);
         }
     }
+}
+
+test "SmallStringInterner insert accepts a slice borrowed from the same interner" {
+    const gpa = std.testing.allocator;
+
+    var interner = try SmallStringInterner.initCapacity(gpa, 1);
+    defer interner.deinit(gpa);
+
+    const original_idx = try interner.insert(gpa, "Builtin.Iter.item");
+
+    // Force the next string append to grow the byte buffer. The borrowed
+    // substring below must remain usable even if insertion reallocates.
+    interner.bytes.items.shrinkAndFree(gpa, interner.bytes.items.items.len);
+
+    const original_text = interner.getText(original_idx);
+    const borrowed = original_text["Builtin.".len..];
+
+    const borrowed_idx = try interner.insert(gpa, borrowed);
+    try std.testing.expectEqualStrings("Iter.item", interner.getText(borrowed_idx));
 }
 
 // TODO: CompactWriter doesn't support serializing multiple independent structures
