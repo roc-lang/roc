@@ -3837,17 +3837,14 @@ pub const Interpreter = struct {
                 const list_field_off = if (f0_is_list) f0_offset else f1_offset;
                 const value_field_off = if (f0_is_list) f1_offset else f0_offset;
                 const list_field_layout = if (f0_is_list) f0_layout else f1_layout;
-                const value_field_layout = if (f0_is_list) f1_layout else f0_layout;
 
                 const val = try self.alloc(ll.ret_layout);
 
                 if (info.width == 0) {
-                    // ZST element: list is unchanged, value is just zst sentinel.
+                    // ZST element: list is unchanged, value field is zero-sized so we don't write to it.
                     const source_list = self.valueToRocListForLayout(args[0], arg_layout);
                     const list_val_inner = try self.rocListToValue(canonicalZstList(source_list.len()), list_field_layout);
                     @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], list_val_inner.ptr[0..@sizeOf(RocList)]);
-                    // value field for ZST is zero-sized; nothing to write.
-                    _ = value_field_layout;
                     break :blk val;
                 }
 
@@ -3883,7 +3880,6 @@ pub const Interpreter = struct {
                 // Write the resulting list into the list field of the record.
                 const list_val_inner = try self.rocListToValue(result_list, list_field_layout);
                 @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], list_val_inner.ptr[0..@sizeOf(RocList)]);
-                _ = value_field_layout;
 
                 break :blk val;
             },
