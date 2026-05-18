@@ -15,9 +15,49 @@ match ... {
 }
 ~~~
 # EXPECTED
+TYPE MISMATCH - pattern_alternatives_mixed.md:2:2:2:3
+TYPE MISMATCH - pattern_alternatives_mixed.md:2:6:2:7
 TYPE MISMATCH - pattern_alternatives_mixed.md:2:10:2:11
 TYPE MISMATCH - pattern_alternatives_mixed.md:1:1:1:1
 # PROBLEMS
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**pattern_alternatives_mixed.md:2:2:2:3:**
+```roc
+	1 | 2 | 3 => "small numbers"
+```
+	^
+
+The type was determined to be non-numeric here:
+**pattern_alternatives_mixed.md:3:2:3:9:**
+```roc
+	"hello" | "world" => "greetings"
+```
+	^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**pattern_alternatives_mixed.md:2:6:2:7:**
+```roc
+	1 | 2 | 3 => "small numbers"
+```
+	    ^
+
+The type was determined to be non-numeric here:
+**pattern_alternatives_mixed.md:3:2:3:9:**
+```roc
+	"hello" | "world" => "greetings"
+```
+	^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
 **pattern_alternatives_mixed.md:2:10:2:11:**

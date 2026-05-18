@@ -12,8 +12,28 @@ match color {
 }
 ~~~
 # EXPECTED
+TYPE MISMATCH - basic_tag_union.md:2:9:2:10
 TYPE MISMATCH - basic_tag_union.md:3:10:3:11
 # PROBLEMS
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**basic_tag_union.md:2:9:2:10:**
+```roc
+	Red => 1
+```
+	       ^
+
+The type was determined to be non-numeric here:
+**basic_tag_union.md:4:11:4:14:**
+```roc
+	Green => "3"
+```
+	         ^^^
+
+Other code expects this to have the type:
+
+    Str
+
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
 **basic_tag_union.md:3:10:3:11:**

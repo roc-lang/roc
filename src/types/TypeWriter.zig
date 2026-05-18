@@ -915,7 +915,7 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) std.mem.Allocator.Error!void {
     for (self.static_dispatch_constraints.items) |item| {
-        if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
+        if (self.isDisplayedStaticDispatchConstraintDuplicate(item, dispatcher_var, constraint_to_add)) {
             return;
         }
     }
@@ -923,6 +923,24 @@ fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constr
         .dispatcher_var = dispatcher_var,
         .constraint = constraint_to_add,
     });
+}
+
+fn isDisplayedStaticDispatchConstraintDuplicate(
+    self: *const TypeWriter,
+    existing: ConstraintWithDispatcher,
+    dispatcher_var: Var,
+    constraint_to_add: types_mod.StaticDispatchConstraint,
+) bool {
+    const existing_dispatcher = self.types.resolveVar(existing.dispatcher_var).var_;
+    const new_dispatcher = self.types.resolveVar(dispatcher_var).var_;
+    if (existing_dispatcher != new_dispatcher) return false;
+    if (existing.constraint.fn_name != constraint_to_add.fn_name) return false;
+
+    if (existing.constraint.origin == .from_numeral and constraint_to_add.origin == .from_numeral) {
+        return true;
+    }
+
+    return existing.constraint.fn_var == constraint_to_add.fn_var;
 }
 
 /// Generate a name for a flex var that may appear multiple times in the type
