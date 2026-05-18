@@ -164,11 +164,16 @@ pub const LayoutStoreImage = extern struct {
     }
 };
 
-/// Fill the reserved runtime-image header in the existing shared-memory mapping.
+/// Fill the reserved runtime-image header in a contiguous buffer.
 ///
-/// `lowered` must already have been allocated with the shared-memory allocator
-/// associated with `base_ptr`; this function only installs offset metadata.
-pub fn fillHeaderInSharedMemory(
+/// `lowered` must already have been allocated from an allocator that owns
+/// the buffer at `base_ptr` (the buffer must contain every pointer reachable
+/// from `lowered`). This function only installs offset metadata — it does not
+/// copy data.
+///
+/// This is the IPC-agnostic variant. Use it for in-process embedders that
+/// place the runtime image in a plain arena instead of shared memory.
+pub fn fillHeaderInBuffer(
     header: *Header,
     base_ptr: [*]align(1) const u8,
     image_size: usize,
@@ -186,6 +191,23 @@ pub fn fillHeaderInSharedMemory(
         .store = try LirStoreImage.fromStore(base_ptr, image_size, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &lowered.layouts),
     };
+}
+
+/// Fill the reserved runtime-image header in the existing shared-memory mapping.
+///
+/// `lowered` must already have been allocated with the shared-memory allocator
+/// associated with `base_ptr`; this function only installs offset metadata.
+///
+/// Thin wrapper over `fillHeaderInBuffer` — kept for naming clarity at IPC sites.
+pub fn fillHeaderInSharedMemory(
+    header: *Header,
+    base_ptr: [*]align(1) const u8,
+    image_size: usize,
+    lowered: *const LowerIr.Result,
+    target_usize: base.target.TargetUsize,
+    platform_entrypoints: []const PlatformEntrypoint,
+) ImageError!void {
+    return fillHeaderInBuffer(header, base_ptr, image_size, lowered, target_usize, platform_entrypoints);
 }
 
 /// View an ARC-inserted LIR program in place from mapped shared memory.
