@@ -6428,7 +6428,7 @@ const BodyLowerer = struct {
                     else => invariantViolation("mono body lowering expected checked closure to reference a lambda body"),
                 }
             },
-            .hosted_lambda => |hosted| try self.lowerHostedDef(reserved, fn_ty, hosted.symbol_name, hosted.args),
+            .hosted_lambda => |hosted| try self.lowerHostedDef(reserved, hosted.symbol_name, hosted.args),
             .anno_only => invariantViolation("mono body lowering reached annotation-only procedure body without checked backing expression"),
             else => invariantViolation("mono body lowering expected a checked procedure body to be a lambda-like expression"),
         };
@@ -6437,11 +6437,11 @@ const BodyLowerer = struct {
     fn lowerHostedDef(
         self: *BodyLowerer,
         reserved: ReservedMonoProc,
-        fn_ty: Type.TypeId,
         symbol_name: canonical.ExternalSymbolNameId,
         arg_patterns: []const checked_artifact.CheckedPatternId,
     ) Allocator.Error!Ast.DefId {
         const args = try self.lowerParamSpanFromFunction(arg_patterns, reserved.requested_fn_ty);
+        const ret_info = try self.returnTypeFromConcreteFunction(reserved.requested_fn_ty);
         const hosted = try self.hostedProcForReserved(reserved.proc.proc, symbol_name);
         return try self.program.ast.addDef(.{
             .proc = mirProcedureRefFromReserved(reserved),
@@ -6449,17 +6449,10 @@ const BodyLowerer = struct {
             .value = .{ .hosted_fn = .{
                 .proc = reserved.proc.proc,
                 .args = args,
-                .ret_ty = self.functionReturnType(fn_ty),
+                .ret_ty = ret_info.ty,
                 .hosted = hosted,
             } },
         });
-    }
-
-    fn functionReturnType(self: *const BodyLowerer, fn_ty: Type.TypeId) Type.TypeId {
-        return switch (self.program.types.getTypePreservingNominal(fn_ty)) {
-            .func => |func| func.ret,
-            else => invariantViolation("mono body lowering expected hosted procedure type to be a function"),
-        };
     }
 
     fn hostedProcForReserved(
