@@ -57,6 +57,7 @@ pub const LowLevel = enum {
     list_sublist,
     list_set,
     list_replace_unsafe,
+    list_swap,
     list_prepend,
     list_first,
     list_last,
@@ -531,6 +532,7 @@ pub const LowLevel = enum {
 
             .list_set,
             .list_replace_unsafe,
+            .list_swap,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),

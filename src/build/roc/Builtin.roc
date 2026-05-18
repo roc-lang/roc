@@ -566,6 +566,17 @@ Builtin :: [].{
 			{ list, value: new_value }
 		}
 
+		## Exchanges the elements at the two given indices.
+		##
+		## If either index is outside the bounds of the list, or both indices are
+		## equal, returns the list unchanged.
+		## ```roc
+		## expect [10, 20, 30, 40].swap(0, 3) == [40, 20, 30, 10]
+		##
+		## expect [10, 20, 30].swap(0, 5) == [10, 20, 30]
+		## ```
+		swap : List(a), U64, U64 -> List(a)
+
 		## Returns the reversed list.
 		## ```roc
 		## expect [1, 2, 3].rev() == [3, 2, 1]

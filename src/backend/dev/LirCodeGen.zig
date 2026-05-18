@@ -172,6 +172,7 @@ pub const BuiltinFn = enum {
     list_incref,
     list_drop_at,
     list_replace,
+    list_swap,
     list_reserve,
     list_release_excess_capacity,
     list_decref_str,
@@ -266,6 +267,7 @@ pub const BuiltinFn = enum {
             .list_incref => "roc_builtins_list_incref",
             .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
+            .list_swap => "roc_builtins_list_swap",
             .list_reserve => "roc_builtins_list_reserve",
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
             .list_decref_str => "roc_builtins_list_decref_str",
@@ -2864,6 +2866,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
+                    }
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
+                .list_swap => {
+                    // list_swap(list, index_1, index_2) -> List
+                    if (args.len != 3) unreachable;
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_1_loc = try self.emitValueLocal(args[1]);
+                    const index_2_loc = try self.emitValueLocal(args[2]);
+
+                    const ls = self.layout_store;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_swap.builtin_list_abi", ll.ret_layout);
+
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const index_1_off = try self.ensureOnStack(index_1_loc, 8);
+                    const index_2_off = try self.ensureOnStack(index_2_loc, 8);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_swap);
+                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+
+                    {
+                        // wrapListSwap(out, list_bytes, list_len, list_cap, alignment, element_width, index_1, index_2, elements_refcounted, element_incref, element_decref, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addMemArg(base_reg, index_1_off);
+                        try builder.addMemArg(base_reg, index_2_off);
+                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try builder.addRegArg(roc_ops_reg);
+
+                        try self.callBuiltin(&builder, fn_addr, .list_swap);
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };

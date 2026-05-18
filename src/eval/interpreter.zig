@@ -3709,6 +3709,39 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_swap => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    // ZST elements: swap is a no-op on observable contents; length unchanged.
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listSwap(
+                    list_val,
+                    info.alignment,
+                    info.width,
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    builtins.utils.UpdateMode.Immutable,
+                    &builtins.list.copy_fallback,
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
             .list_sublist => blk: {
                 if (args.len != 2 or ll.arg_layouts.len != 2) {
                     return self.runtimeError("list_sublist expected 2 arguments");

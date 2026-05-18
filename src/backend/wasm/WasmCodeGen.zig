@@ -7401,6 +7401,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
 
+        .list_swap => {
+            // TODO: implement list_swap for wasm.
+            // Same approach as list_replace_unsafe: emit a runtime trap so compilation
+            // succeeds for programs that don't actually call List.swap.
+            self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        },
+
         // List element access operations (no heap allocation needed)
         .list_first => {
             const ls = self.getLayoutStore();
