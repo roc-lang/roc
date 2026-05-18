@@ -2731,6 +2731,25 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
         test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
 
+        // test-subcommands: echo platform (headerless app) tests
+        const echo_tests = b.addTest(.{
+            .name = "echo_tests",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/echo_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_echo_tests = b.addRunArtifact(echo_tests);
+        if (run_args.len != 0) {
+            run_echo_tests.addArgs(run_args);
+        }
+        run_echo_tests.step.dependOn(&install.step);
+        run_echo_tests.step.dependOn(build_test_hosts_step);
+        test_subcommands_step.dependOn(&run_echo_tests.step);
+
         // test-glue: glue command integration tests
         const glue_test = b.addTest(.{
             .name = "glue_test",
