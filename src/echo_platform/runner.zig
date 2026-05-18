@@ -139,19 +139,36 @@ pub fn runEcho(opts: RunOptions) !u8 {
     build_env.filesystem = echo_ctx.io();
 
     build_env.discoverDependencies(opts.paths.app_abs) catch |err| {
-        emitDiagnostics(&build_env, diag, allocator);
+        _ = emitDiagnostics(&build_env, diag, allocator);
         diag.step("discoverDependencies", err);
         return err;
     };
     build_env.compileDiscovered() catch |err| {
-        emitDiagnostics(&build_env, diag, allocator);
+        _ = emitDiagnostics(&build_env, diag, allocator);
         diag.step("compileDiscovered", err);
         return err;
     };
 
-    emitDiagnostics(&build_env, diag, allocator);
+    // Bail before lowering if canonicalization or type-checking produced
+    // blocking-severity reports (e.g. `module_not_found`, `undefined_variable`).
+    // The CIR contains runtime_error placeholder nodes in that state, and
+    // mono lowering asserts they don't appear as runtime values — proceeding
+    // would trap. The reports themselves are the user-facing output.
+    if (emitDiagnostics(&build_env, diag, allocator)) {
+        return error.CompilationFailed;
+    }
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    // Defense in depth: even with no blocking reports, the artifact may be
+    // missing in some unexpected state. Bail cleanly instead of trapping in
+    // the asserting variant (compile_build.zig:executableRootCheckedArtifact).
+    const root_semantic = build_env.getExecutableRootSemanticData() orelse {
+        diag.step("executableRootCheckedArtifact", error.CompilationFailed);
+        return error.CompilationFailed;
+    };
+    const root_artifact = root_semantic.checked_artifact orelse {
+        diag.step("executableRootCheckedArtifact", error.CompilationFailed);
+        return error.CompilationFailed;
+    };
 
     const import_views = build_env.collectImportedArtifactViews(allocator, root_artifact) catch |err| {
         diag.step("collectImportedArtifactViews", err);
@@ -270,15 +287,23 @@ fn runEchoView(
     return result_buf[0];
 }
 
-fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) void {
-    const drained = build_env.drainReports() catch return;
+/// Drain BuildEnv reports through `diag` and return true if any
+/// had `runtime_error` or `fatal` severity (i.e. compile-blocking).
+fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) bool {
+    const drained = build_env.drainReports() catch return false;
     defer build_env.freeDrainedReports(drained);
 
+    var has_blocking_error = false;
     for (drained) |mod| {
         for (mod.reports) |*report| {
+            switch (report.severity) {
+                .runtime_error, .fatal => has_blocking_error = true,
+                .info, .warning => {},
+            }
             diag.emitReport(gpa, report);
         }
     }
+    return has_blocking_error;
 }
 
 // --- Echo I/O context ---

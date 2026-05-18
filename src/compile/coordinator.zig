@@ -2053,8 +2053,12 @@ pub const Coordinator = struct {
 
         for (mod.imports.items) |imp_id| {
             const imp = pkg.getModule(imp_id).?;
-            const env = imp.moduleEnv() orelse
-                std.debug.panic("compile.coordinator.buildCanonicalizeImports missing local env for {s}", .{imp.name});
+            // Skip imports whose module env is missing (e.g. the source file
+            // wasn't found during discovery). Canonicalize will emit a
+            // `module_not_found` diagnostic for the unresolved name — see
+            // src/canonicalize/can.zig where it checks `explicit_module_envs`.
+            // Mirrors the `orelse continue` handling for external_imports below.
+            const env = imp.moduleEnv() orelse continue;
             try imports.append(self.gpa, .{
                 .import_name = imp.name,
                 .module_env = env,
