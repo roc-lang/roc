@@ -25,7 +25,7 @@ It has the type:
 
     U8
 
-But I expected it to be:
+But you are trying to use it as:
 
     Str
 
@@ -67,11 +67,7 @@ NO CHANGE
 			(ty-lookup (name "U8") (builtin))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-string
-			(e-literal (string "value: "))
-			(e-lookup-local
-				(p-assign (ident "x")))
-			(e-literal (string "")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

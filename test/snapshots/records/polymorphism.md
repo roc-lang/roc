@@ -26,7 +26,7 @@ This **to_str** method is being called on a value whose type doesn't have that m
 
 The value's type, which does not have a method named **to_str**, is:
 
-    { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, .._others], second: [False, .._others2] } }
+    { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, ..], second: [False, ..] } }
       where [
         a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
@@ -78,13 +78,13 @@ EndOfFile,
 				(e-ident (raw "make_pair"))
 				(e-tag (raw "True"))
 				(e-tag (raw "False"))))
-		(e-field-access
-			(e-record
-				(field (field "pair1"))
-				(field (field "pair2"))
-				(field (field "pair3")))
-			(e-apply
-				(e-ident (raw "to_str"))))))
+		(e-method-call (method ".to_str")
+			(receiver
+				(e-record
+					(field (field "pair1"))
+					(field (field "pair2"))
+					(field (field "pair3"))))
+			(args))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -115,7 +115,7 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(s-let
 		(p-assign (ident "pair1"))
-		(e-call
+		(e-call (constraint-fn-var 66)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-num (value "1"))
@@ -123,7 +123,7 @@ EndOfFile,
 				(e-literal (string "a")))))
 	(s-let
 		(p-assign (ident "pair2"))
-		(e-call
+		(e-call (constraint-fn-var 87)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-string
@@ -131,12 +131,12 @@ EndOfFile,
 			(e-num (value "42"))))
 	(s-let
 		(p-assign (ident "pair3"))
-		(e-call
+		(e-call (constraint-fn-var 94)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
 			(e-tag (name "False"))))
-	(e-dot-access (field "to_str")
+	(e-dispatch-call (method "to_str") (constraint-fn-var 96)
 		(receiver
 			(e-record
 				(fields

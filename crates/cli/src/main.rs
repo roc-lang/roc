@@ -102,7 +102,7 @@ fn main() -> io::Result<()> {
                     false,
                 )
             } else {
-                eprintln!("What .roc file do you want to build? Specify it at the end of the `roc run` command.");
+                eprintln!("What .roc file do you want to build? Specify it at the end of the `roc dev` command.");
 
                 Ok(1)
             }

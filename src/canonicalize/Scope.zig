@@ -292,7 +292,10 @@ pub fn introduceTypeDecl(
             .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
             .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
             .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
-            .external_nominal => TypeIntroduceResult{ .nominal_type_redeclared = type_decl },
+            .external_nominal => blk: {
+                try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = type_decl });
+                break :blk TypeIntroduceResult{ .success = {} };
+            },
         };
     }
 
@@ -328,7 +331,14 @@ pub fn introduceTypeDeclWithKind(
             .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
             .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
             .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
-            .external_nominal => TypeIntroduceResult{ .nominal_type_redeclared = type_decl },
+            .external_nominal => blk: {
+                const binding = if (is_alias)
+                    TypeBinding{ .local_alias = type_decl }
+                else
+                    TypeBinding{ .local_nominal = type_decl };
+                try scope.type_bindings.put(gpa, name, binding);
+                break :blk TypeIntroduceResult{ .success = {} };
+            },
         };
     }
 
@@ -395,10 +405,10 @@ pub fn introduceTypeVar(
     type_var_anno: CIR.TypeAnno.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?CIR.TypeAnno.Idx,
 ) std.mem.Allocator.Error!TypeVarIntroduceResult {
-    // Check if already exists in current scope by comparing text content
+    // Check if already exists in current scope.
     var iter = scope.type_vars.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name.eql(entry.key_ptr.*)) {
             // Type variable already exists in this scope
             return TypeVarIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
@@ -421,10 +431,10 @@ pub fn introduceTypeVar(
 
 /// Lookup a type variable in the scope hierarchy
 pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
-    // Search by comparing text content, not identifier index
+    // Search by identifier equality.
     var iter = scope.type_vars.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name.eql(entry.key_ptr.*)) {
             return TypeVarLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -433,10 +443,10 @@ pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
 
 /// Look up a type variable alias in this scope (for static dispatch on type vars)
 pub fn lookupTypeVarAlias(scope: *const Scope, name: Ident.Idx) TypeVarAliasLookupResult {
-    // Search by comparing .idx values (integer index into string interner)
+    // Search by identifier equality.
     var iter = scope.type_var_aliases.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name.eql(entry.key_ptr.*)) {
             return TypeVarAliasLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -453,10 +463,10 @@ pub fn introduceTypeVarAlias(
     statement_idx: CIR.Statement.Idx,
     parent_lookup_fn: ?*const fn (Ident.Idx) ?TypeVarAliasBinding,
 ) std.mem.Allocator.Error!TypeVarAliasIntroduceResult {
-    // Check if already exists in current scope by comparing text content
+    // Check if already exists in current scope.
     var iter = scope.type_var_aliases.iterator();
     while (iter.next()) |entry| {
-        if (alias_name.idx == entry.key_ptr.idx) {
+        if (alias_name.eql(entry.key_ptr.*)) {
             // Type var alias already exists in this scope
             return TypeVarAliasIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
@@ -485,10 +495,10 @@ pub fn introduceTypeVarAlias(
 
 /// Look up a module alias in this scope
 pub fn lookupModuleAlias(scope: *const Scope, name: Ident.Idx) ModuleAliasLookupResult {
-    // Search by comparing .idx values (integer index into string interner)
+    // Search by identifier equality.
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name.eql(entry.key_ptr.*)) {
             return ModuleAliasLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -504,10 +514,10 @@ pub fn introduceModuleAlias(
     is_package_qualified: bool,
     parent_lookup_fn: ?fn (Ident.Idx) ?ModuleAliasInfo,
 ) std.mem.Allocator.Error!ModuleAliasIntroduceResult {
-    // Check if already exists in current scope by comparing text content
+    // Check if already exists in current scope.
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
-        if (alias_name.idx == entry.key_ptr.idx) {
+        if (alias_name.eql(entry.key_ptr.*)) {
             // Module alias already exists in this scope
             return ModuleAliasIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }
@@ -535,10 +545,10 @@ pub fn introduceModuleAlias(
 
 /// Look up an exposed item in this scope
 pub fn lookupExposedItem(scope: *const Scope, name: Ident.Idx) ExposedItemLookupResult {
-    // Search by comparing text content, not identifier index
+    // Search by identifier equality.
     var iter = scope.exposed_items.iterator();
     while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
+        if (name.eql(entry.key_ptr.*)) {
             return ExposedItemLookupResult{ .found = entry.value_ptr.* };
         }
     }
@@ -553,10 +563,10 @@ pub fn introduceExposedItem(
     item_info: ExposedItemInfo,
     parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
 ) std.mem.Allocator.Error!ExposedItemIntroduceResult {
-    // Check if already exists in current scope by comparing text content
+    // Check if already exists in current scope.
     var iter = scope.exposed_items.iterator();
     while (iter.next()) |entry| {
-        if (item_name.idx == entry.key_ptr.idx) {
+        if (item_name.eql(entry.key_ptr.*)) {
             // Exposed item already exists in this scope
             return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
         }

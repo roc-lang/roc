@@ -97,6 +97,21 @@ pub const Expr = union(enum) {
         value: CIR.SmallDecValue,
         has_suffix: bool, // If the value had a `dec` suffix
     },
+    /// An integer literal with explicit type annotation: `123.U64`
+    /// The type_name stores the type identifier (e.g., "U64", "I32")
+    /// Type checking constrains it through `from_numeral`; lowering uses the solved expr type.
+    e_typed_int: struct {
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    },
+    /// A fractional literal with explicit type annotation: `3.14.Dec`
+    /// The type_name stores the type identifier (e.g., "Dec", "F64")
+    /// Type checking constrains it through `from_numeral`; lowering uses the solved expr type.
+    /// The value is stored as scaled i128 (like Dec, scaled by 10^18).
+    e_typed_frac: struct {
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
     // for example if it was split across multiple lines
@@ -107,6 +122,10 @@ pub const Expr = union(enum) {
     // An interpolated string contains one or more non-string_segment's in the span
     e_str: struct {
         span: Expr.Span,
+    },
+    /// A bytes literal (List(U8)) from a file import
+    e_bytes_literal: struct {
+        literal: StringLiteral.Idx,
     },
     /// Lookup defined in this module
     /// ```roc
@@ -181,6 +200,7 @@ pub const Expr = union(enum) {
         func: Expr.Idx,
         args: Expr.Span,
         called_via: CalledVia,
+        constraint_fn_var: ?TypeVar = null,
     },
     /// Record literal with zero or more fields.
     /// Records are Roc's primary data structure for grouping related values.
@@ -301,21 +321,80 @@ pub const Expr = union(enum) {
     /// !True           # Unary not on literal
     /// ```
     e_unary_not: UnaryNot,
-    /// Dot access expression that represents field access or method calls.
-    /// The exact meaning is determined after type inference based on the receiver's type:
-    /// - Record field access: `person.name`
-    /// - Static Dispatch (method-style) call: `list.map(fn)` (semantically this is equal to `List.map(list, fn)`)
+    /// Field access expression.
     ///
     /// ```roc
-    /// person.name         # Record field access
-    /// list.len()          # Static Dispatch
-    /// list.map(|x| x)     # Static Dispatch version of above
+    /// person.name
     /// ```
-    e_dot_access: struct {
-        receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
-        field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
-        field_name_region: base.Region, // Region of just the field/method name for error reporting
-        args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
+    e_field_access: struct {
+        receiver: Expr.Idx,
+        field_name: Ident.Idx,
+        field_name_region: base.Region,
+    },
+    /// Method call expression.
+    ///
+    /// ```roc
+    /// list.map(transform)
+    /// ```
+    e_method_call: struct {
+        receiver: Expr.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+    },
+    e_dispatch_call: struct {
+        receiver: Expr.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+        constraint_fn_var: TypeVar,
+    },
+    /// Structural equality chosen explicitly by the checker.
+    ///
+    /// This is not method dispatch. It represents the semantic case where
+    /// equality is satisfied structurally rather than via a user-defined
+    /// `is_eq` method.
+    e_structural_eq: struct {
+        lhs: Expr.Idx,
+        rhs: Expr.Idx,
+        negated: bool,
+    },
+    e_method_eq: struct {
+        lhs: Expr.Idx,
+        rhs: Expr.Idx,
+        negated: bool,
+        constraint_fn_var: types.Var,
+    },
+    /// Method call expression rooted in a type-var alias namespace.
+    ///
+    /// ```roc
+    /// Fmt : fmt
+    /// Fmt.decode_str(format, source)
+    /// ```
+    e_type_method_call: struct {
+        type_var_alias_stmt: CIR.Statement.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+    },
+    e_type_dispatch_call: struct {
+        type_var_alias_stmt: CIR.Statement.Idx,
+        method_name: Ident.Idx,
+        method_name_region: base.Region,
+        args: Expr.Span,
+        constraint_fn_var: TypeVar,
+    },
+    /// Tuple element access by numeric index.
+    /// Accesses an element of a tuple using dot notation with a numeric index.
+    ///
+    /// ```roc
+    /// point.0       # Access first element
+    /// coords.1      # Access second element
+    /// (1, 2, 3).2   # Access third element of inline tuple
+    /// ```
+    e_tuple_access: struct {
+        tuple: Expr.Idx, // The tuple expression being accessed
+        elem_index: u32, // The 0-based index of the element to access
     },
     /// Runtime error expression that crashes when executed.
     /// These are inserted during canonicalization when the compiler encounters
@@ -376,7 +455,10 @@ pub const Expr = union(enum) {
     /// ```roc
     /// foo : {} -> {}
     /// ```
-    e_anno_only: struct {},
+    e_anno_only: struct {
+        /// The identifier being defined (extracted from the pattern to avoid cross-module node index issues)
+        ident: Ident.Idx,
+    },
 
     /// Early return expression that exits the enclosing function with a value.
     /// This is used when `return` appears as the final expression in a block.
@@ -390,29 +472,17 @@ pub const Expr = union(enum) {
     /// ```
     e_return: struct {
         expr: Expr.Idx,
-    },
+        /// The lambda this return belongs to (for type unification).
+        lambda: Expr.Idx,
+        /// Context indicating where this return came from.
+        context: ReturnContext,
 
-    /// Type variable dispatch expression for calling methods on type variable aliases.
-    /// This is created when the user writes `Thing.method(args)` inside a function body
-    /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
-    ///
-    /// The actual function to call is resolved during monomorphization once the type variable
-    /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
-    /// then `Thing.len(x)` becomes `List.len(x)`.
-    ///
-    /// ```roc
-    /// # Static dispatch: method is resolved based on concrete type at monomorphization time
-    /// call_default = |thing|
-    ///     Thing : thing
-    ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
-    /// ```
-    e_type_var_dispatch: struct {
-        /// Reference to the s_type_var_alias statement that introduced this type alias
-        type_var_alias_stmt: CIR.Statement.Idx,
-        /// The method name being called (e.g., "default" in Thing.default())
-        method_name: Ident.Idx,
-        /// Arguments to the method call (may be empty for no-arg methods)
-        args: Expr.Span,
+        pub const ReturnContext = enum(u8) {
+            /// Explicit `return` expression
+            return_expr,
+            /// `?` suffix operator (try operator) desugaring
+            try_suffix,
+        };
     },
 
     /// For expression that iterates over a list and executes a body for each element.
@@ -438,9 +508,7 @@ pub const Expr = union(enum) {
     /// ```
     e_hosted_lambda: struct {
         symbol_name: base.Ident.Idx,
-        index: u32, // Index into RocOps.hosted_fns (assigned during canonicalization)
         args: CIR.Pattern.Span,
-        body: Expr.Idx,
     },
 
     /// A low-level builtin operation.
@@ -449,705 +517,15 @@ pub const Expr = union(enum) {
     /// it's expected to be implemented by the backend rather than being an error.
     /// It behaves like e_lambda in that it has parameters and a body (which crashes when evaluated).
     ///
-    /// ```roc
-    /// # Str.is_empty is a low-level operation
-    /// is_empty : Str -> Bool
-    /// ```
-    e_low_level_lambda: struct {
+    /// Run a low-level builtin operation with the given argument expressions.
+    /// This is a leaf expression that appears as the body of a normal e_lambda.
+    /// The args are e_lookup_local expressions referencing the enclosing lambda's params.
+    e_run_low_level: struct {
         op: LowLevel,
-        args: CIR.Pattern.Span,
-        body: Expr.Idx,
+        args: Expr.Span,
     },
 
-    /// Low-level builtin operations that are implemented by the compiler backend.
-    pub const LowLevel = enum {
-        // String operations
-        str_is_empty,
-        str_is_eq,
-        str_concat,
-        str_contains,
-        str_trim,
-        str_trim_start,
-        str_trim_end,
-        str_caseless_ascii_equals,
-        str_with_ascii_lowercased,
-        str_with_ascii_uppercased,
-        str_starts_with,
-        str_ends_with,
-        str_repeat,
-        str_with_prefix,
-        str_drop_prefix,
-        str_drop_suffix,
-        str_count_utf8_bytes,
-        str_with_capacity,
-        str_reserve,
-        str_release_excess_capacity,
-        str_to_utf8,
-        str_from_utf8_lossy,
-        str_from_utf8,
-        str_split_on,
-        str_join_with,
-        str_inspekt,
-
-        // Numeric to_str operations
-        u8_to_str,
-        i8_to_str,
-        u16_to_str,
-        i16_to_str,
-        u32_to_str,
-        i32_to_str,
-        u64_to_str,
-        i64_to_str,
-        u128_to_str,
-        i128_to_str,
-        dec_to_str,
-        f32_to_str,
-        f64_to_str,
-
-        // List operations
-        list_len,
-        list_is_empty,
-        list_get_unsafe,
-        list_append_unsafe,
-        list_concat,
-        list_with_capacity,
-        list_sort_with,
-        list_drop_at,
-        list_sublist,
-        list_append,
-
-        // Set operations
-        // set_is_empty,
-
-        // Bool operations
-        bool_is_eq,
-
-        // Numeric type checking operations
-        num_is_zero, // All numeric types
-        num_is_negative, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
-        num_is_positive, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
-
-        // Numeric comparison operations
-        num_is_eq, // All integer types + Dec (NOT F32/F64 due to float imprecision)
-        num_is_gt, // All numeric types
-        num_is_gte, // All numeric types
-        num_is_lt, // All numeric types
-        num_is_lte, // All numeric types
-
-        // Numeric arithmetic operations
-        num_negate, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
-        num_abs, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
-        num_abs_diff, // All numeric types (signed returns unsigned counterpart)
-        num_plus, // All numeric types
-        num_minus, // All numeric types
-        num_times, // All numeric types
-        num_div_by, // All numeric types
-        num_div_trunc_by, // All numeric types
-        num_rem_by, // All numeric types
-        num_mod_by, // Integer types only: U8, I8, U16, I16, U32, I32, U64, I64, U128, I128
-
-        // Bitwise shift operations (integer types only)
-        num_shift_left_by, // Int a, U8 -> Int a
-        num_shift_right_by, // Int a, U8 -> Int a (arithmetic shift for signed, logical for unsigned)
-        num_shift_right_zf_by, // Int a, U8 -> Int a (zero-fill/logical shift)
-
-        // Numeric parsing operations
-        num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
-        num_from_str, // Parse Str -> Try(num, [BadNumStr])
-
-        // Numeric conversion operations (U8)
-        u8_to_i8_wrap, // U8 -> I8 (wrapping)
-        u8_to_i8_try, // U8 -> Try(I8, [OutOfRange])
-        u8_to_i16, // U8 -> I16 (safe)
-        u8_to_i32, // U8 -> I32 (safe)
-        u8_to_i64, // U8 -> I64 (safe)
-        u8_to_i128, // U8 -> I128 (safe)
-        u8_to_u16, // U8 -> U16 (safe)
-        u8_to_u32, // U8 -> U32 (safe)
-        u8_to_u64, // U8 -> U64 (safe)
-        u8_to_u128, // U8 -> U128 (safe)
-        u8_to_f32, // U8 -> F32 (safe)
-        u8_to_f64, // U8 -> F64 (safe)
-        u8_to_dec, // U8 -> Dec (safe)
-
-        // Numeric conversion operations (I8)
-        i8_to_i16, // I8 -> I16 (safe)
-        i8_to_i32, // I8 -> I32 (safe)
-        i8_to_i64, // I8 -> I64 (safe)
-        i8_to_i128, // I8 -> I128 (safe)
-        i8_to_u8_wrap, // I8 -> U8 (wrapping)
-        i8_to_u8_try, // I8 -> Try(U8, [OutOfRange])
-        i8_to_u16_wrap, // I8 -> U16 (wrapping)
-        i8_to_u16_try, // I8 -> Try(U16, [OutOfRange])
-        i8_to_u32_wrap, // I8 -> U32 (wrapping)
-        i8_to_u32_try, // I8 -> Try(U32, [OutOfRange])
-        i8_to_u64_wrap, // I8 -> U64 (wrapping)
-        i8_to_u64_try, // I8 -> Try(U64, [OutOfRange])
-        i8_to_u128_wrap, // I8 -> U128 (wrapping)
-        i8_to_u128_try, // I8 -> Try(U128, [OutOfRange])
-        i8_to_f32, // I8 -> F32 (safe)
-        i8_to_f64, // I8 -> F64 (safe)
-        i8_to_dec, // I8 -> Dec (safe)
-
-        // Numeric conversion operations (U16)
-        u16_to_i8_wrap, // U16 -> I8 (wrapping)
-        u16_to_i8_try, // U16 -> Try(I8, [OutOfRange])
-        u16_to_i16_wrap, // U16 -> I16 (wrapping)
-        u16_to_i16_try, // U16 -> Try(I16, [OutOfRange])
-        u16_to_i32, // U16 -> I32 (safe)
-        u16_to_i64, // U16 -> I64 (safe)
-        u16_to_i128, // U16 -> I128 (safe)
-        u16_to_u8_wrap, // U16 -> U8 (wrapping)
-        u16_to_u8_try, // U16 -> Try(U8, [OutOfRange])
-        u16_to_u32, // U16 -> U32 (safe)
-        u16_to_u64, // U16 -> U64 (safe)
-        u16_to_u128, // U16 -> U128 (safe)
-        u16_to_f32, // U16 -> F32 (safe)
-        u16_to_f64, // U16 -> F64 (safe)
-        u16_to_dec, // U16 -> Dec (safe)
-
-        // Numeric conversion operations (I16)
-        i16_to_i8_wrap, // I16 -> I8 (wrapping)
-        i16_to_i8_try, // I16 -> Try(I8, [OutOfRange])
-        i16_to_i32, // I16 -> I32 (safe)
-        i16_to_i64, // I16 -> I64 (safe)
-        i16_to_i128, // I16 -> I128 (safe)
-        i16_to_u8_wrap, // I16 -> U8 (wrapping)
-        i16_to_u8_try, // I16 -> Try(U8, [OutOfRange])
-        i16_to_u16_wrap, // I16 -> U16 (wrapping)
-        i16_to_u16_try, // I16 -> Try(U16, [OutOfRange])
-        i16_to_u32_wrap, // I16 -> U32 (wrapping)
-        i16_to_u32_try, // I16 -> Try(U32, [OutOfRange])
-        i16_to_u64_wrap, // I16 -> U64 (wrapping)
-        i16_to_u64_try, // I16 -> Try(U64, [OutOfRange])
-        i16_to_u128_wrap, // I16 -> U128 (wrapping)
-        i16_to_u128_try, // I16 -> Try(U128, [OutOfRange])
-        i16_to_f32, // I16 -> F32 (safe)
-        i16_to_f64, // I16 -> F64 (safe)
-        i16_to_dec, // I16 -> Dec (safe)
-
-        // Numeric conversion operations (U32)
-        u32_to_i8_wrap, // U32 -> I8 (wrapping)
-        u32_to_i8_try, // U32 -> Try(I8, [OutOfRange])
-        u32_to_i16_wrap, // U32 -> I16 (wrapping)
-        u32_to_i16_try, // U32 -> Try(I16, [OutOfRange])
-        u32_to_i32_wrap, // U32 -> I32 (wrapping)
-        u32_to_i32_try, // U32 -> Try(I32, [OutOfRange])
-        u32_to_i64, // U32 -> I64 (safe)
-        u32_to_i128, // U32 -> I128 (safe)
-        u32_to_u8_wrap, // U32 -> U8 (wrapping)
-        u32_to_u8_try, // U32 -> Try(U8, [OutOfRange])
-        u32_to_u16_wrap, // U32 -> U16 (wrapping)
-        u32_to_u16_try, // U32 -> Try(U16, [OutOfRange])
-        u32_to_u64, // U32 -> U64 (safe)
-        u32_to_u128, // U32 -> U128 (safe)
-        u32_to_f32, // U32 -> F32 (safe)
-        u32_to_f64, // U32 -> F64 (safe)
-        u32_to_dec, // U32 -> Dec (safe)
-
-        // Numeric conversion operations (I32)
-        i32_to_i8_wrap, // I32 -> I8 (wrapping)
-        i32_to_i8_try, // I32 -> Try(I8, [OutOfRange])
-        i32_to_i16_wrap, // I32 -> I16 (wrapping)
-        i32_to_i16_try, // I32 -> Try(I16, [OutOfRange])
-        i32_to_i64, // I32 -> I64 (safe)
-        i32_to_i128, // I32 -> I128 (safe)
-        i32_to_u8_wrap, // I32 -> U8 (wrapping)
-        i32_to_u8_try, // I32 -> Try(U8, [OutOfRange])
-        i32_to_u16_wrap, // I32 -> U16 (wrapping)
-        i32_to_u16_try, // I32 -> Try(U16, [OutOfRange])
-        i32_to_u32_wrap, // I32 -> U32 (wrapping)
-        i32_to_u32_try, // I32 -> Try(U32, [OutOfRange])
-        i32_to_u64_wrap, // I32 -> U64 (wrapping)
-        i32_to_u64_try, // I32 -> Try(U64, [OutOfRange])
-        i32_to_u128_wrap, // I32 -> U128 (wrapping)
-        i32_to_u128_try, // I32 -> Try(U128, [OutOfRange])
-        i32_to_f32, // I32 -> F32 (safe)
-        i32_to_f64, // I32 -> F64 (safe)
-        i32_to_dec, // I32 -> Dec (safe)
-
-        // Numeric conversion operations (U64)
-        u64_to_i8_wrap, // U64 -> I8 (wrapping)
-        u64_to_i8_try, // U64 -> Try(I8, [OutOfRange])
-        u64_to_i16_wrap, // U64 -> I16 (wrapping)
-        u64_to_i16_try, // U64 -> Try(I16, [OutOfRange])
-        u64_to_i32_wrap, // U64 -> I32 (wrapping)
-        u64_to_i32_try, // U64 -> Try(I32, [OutOfRange])
-        u64_to_i64_wrap, // U64 -> I64 (wrapping)
-        u64_to_i64_try, // U64 -> Try(I64, [OutOfRange])
-        u64_to_i128, // U64 -> I128 (safe)
-        u64_to_u8_wrap, // U64 -> U8 (wrapping)
-        u64_to_u8_try, // U64 -> Try(U8, [OutOfRange])
-        u64_to_u16_wrap, // U64 -> U16 (wrapping)
-        u64_to_u16_try, // U64 -> Try(U16, [OutOfRange])
-        u64_to_u32_wrap, // U64 -> U32 (wrapping)
-        u64_to_u32_try, // U64 -> Try(U32, [OutOfRange])
-        u64_to_u128, // U64 -> U128 (safe)
-        u64_to_f32, // U64 -> F32 (safe)
-        u64_to_f64, // U64 -> F64 (safe)
-        u64_to_dec, // U64 -> Dec (safe)
-
-        // Numeric conversion operations (I64)
-        i64_to_i8_wrap, // I64 -> I8 (wrapping)
-        i64_to_i8_try, // I64 -> Try(I8, [OutOfRange])
-        i64_to_i16_wrap, // I64 -> I16 (wrapping)
-        i64_to_i16_try, // I64 -> Try(I16, [OutOfRange])
-        i64_to_i32_wrap, // I64 -> I32 (wrapping)
-        i64_to_i32_try, // I64 -> Try(I32, [OutOfRange])
-        i64_to_i128, // I64 -> I128 (safe)
-        i64_to_u8_wrap, // I64 -> U8 (wrapping)
-        i64_to_u8_try, // I64 -> Try(U8, [OutOfRange])
-        i64_to_u16_wrap, // I64 -> U16 (wrapping)
-        i64_to_u16_try, // I64 -> Try(U16, [OutOfRange])
-        i64_to_u32_wrap, // I64 -> U32 (wrapping)
-        i64_to_u32_try, // I64 -> Try(U32, [OutOfRange])
-        i64_to_u64_wrap, // I64 -> U64 (wrapping)
-        i64_to_u64_try, // I64 -> Try(U64, [OutOfRange])
-        i64_to_u128_wrap, // I64 -> U128 (wrapping)
-        i64_to_u128_try, // I64 -> Try(U128, [OutOfRange])
-        i64_to_f32, // I64 -> F32 (safe)
-        i64_to_f64, // I64 -> F64 (safe)
-        i64_to_dec, // I64 -> Dec (safe)
-
-        // Numeric conversion operations (U128)
-        u128_to_i8_wrap, // U128 -> I8 (wrapping)
-        u128_to_i8_try, // U128 -> Try(I8, [OutOfRange])
-        u128_to_i16_wrap, // U128 -> I16 (wrapping)
-        u128_to_i16_try, // U128 -> Try(I16, [OutOfRange])
-        u128_to_i32_wrap, // U128 -> I32 (wrapping)
-        u128_to_i32_try, // U128 -> Try(I32, [OutOfRange])
-        u128_to_i64_wrap, // U128 -> I64 (wrapping)
-        u128_to_i64_try, // U128 -> Try(I64, [OutOfRange])
-        u128_to_i128_wrap, // U128 -> I128 (wrapping)
-        u128_to_i128_try, // U128 -> Try(I128, [OutOfRange])
-        u128_to_u8_wrap, // U128 -> U8 (wrapping)
-        u128_to_u8_try, // U128 -> Try(U8, [OutOfRange])
-        u128_to_u16_wrap, // U128 -> U16 (wrapping)
-        u128_to_u16_try, // U128 -> Try(U16, [OutOfRange])
-        u128_to_u32_wrap, // U128 -> U32 (wrapping)
-        u128_to_u32_try, // U128 -> Try(U32, [OutOfRange])
-        u128_to_u64_wrap, // U128 -> U64 (wrapping)
-        u128_to_u64_try, // U128 -> Try(U64, [OutOfRange])
-        u128_to_f32, // U128 -> F32 (safe)
-        u128_to_f64, // U128 -> F64 (safe)
-        u128_to_dec_try_unsafe, // U128 -> { success: Bool, val: Dec }
-
-        // Numeric conversion operations (I128)
-        i128_to_i8_wrap, // I128 -> I8 (wrapping)
-        i128_to_i8_try, // I128 -> Try(I8, [OutOfRange])
-        i128_to_i16_wrap, // I128 -> I16 (wrapping)
-        i128_to_i16_try, // I128 -> Try(I16, [OutOfRange])
-        i128_to_i32_wrap, // I128 -> I32 (wrapping)
-        i128_to_i32_try, // I128 -> Try(I32, [OutOfRange])
-        i128_to_i64_wrap, // I128 -> I64 (wrapping)
-        i128_to_i64_try, // I128 -> Try(I64, [OutOfRange])
-        i128_to_u8_wrap, // I128 -> U8 (wrapping)
-        i128_to_u8_try, // I128 -> Try(U8, [OutOfRange])
-        i128_to_u16_wrap, // I128 -> U16 (wrapping)
-        i128_to_u16_try, // I128 -> Try(U16, [OutOfRange])
-        i128_to_u32_wrap, // I128 -> U32 (wrapping)
-        i128_to_u32_try, // I128 -> Try(U32, [OutOfRange])
-        i128_to_u64_wrap, // I128 -> U64 (wrapping)
-        i128_to_u64_try, // I128 -> Try(U64, [OutOfRange])
-        i128_to_u128_wrap, // I128 -> U128 (wrapping)
-        i128_to_u128_try, // I128 -> Try(U128, [OutOfRange])
-        i128_to_f32, // I128 -> F32 (safe)
-        i128_to_f64, // I128 -> F64 (safe)
-        i128_to_dec_try_unsafe, // I128 -> { success: Bool, val: Dec }
-
-        // Numeric conversion operations (F32)
-        f32_to_i8_trunc, // F32 -> I8 (truncating)
-        f32_to_i8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I8 }
-        f32_to_i16_trunc, // F32 -> I16 (truncating)
-        f32_to_i16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I16 }
-        f32_to_i32_trunc, // F32 -> I32 (truncating)
-        f32_to_i32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I32 }
-        f32_to_i64_trunc, // F32 -> I64 (truncating)
-        f32_to_i64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I64 }
-        f32_to_i128_trunc, // F32 -> I128 (truncating)
-        f32_to_i128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I128 }
-        f32_to_u8_trunc, // F32 -> U8 (truncating)
-        f32_to_u8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U8 }
-        f32_to_u16_trunc, // F32 -> U16 (truncating)
-        f32_to_u16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U16 }
-        f32_to_u32_trunc, // F32 -> U32 (truncating)
-        f32_to_u32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U32 }
-        f32_to_u64_trunc, // F32 -> U64 (truncating)
-        f32_to_u64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U64 }
-        f32_to_u128_trunc, // F32 -> U128 (truncating)
-        f32_to_u128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U128 }
-        f32_to_f64, // F32 -> F64 (safe widening)
-
-        // Numeric conversion operations (F64)
-        f64_to_i8_trunc, // F64 -> I8 (truncating)
-        f64_to_i8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I8 }
-        f64_to_i16_trunc, // F64 -> I16 (truncating)
-        f64_to_i16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I16 }
-        f64_to_i32_trunc, // F64 -> I32 (truncating)
-        f64_to_i32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I32 }
-        f64_to_i64_trunc, // F64 -> I64 (truncating)
-        f64_to_i64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I64 }
-        f64_to_i128_trunc, // F64 -> I128 (truncating)
-        f64_to_i128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I128 }
-        f64_to_u8_trunc, // F64 -> U8 (truncating)
-        f64_to_u8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U8 }
-        f64_to_u16_trunc, // F64 -> U16 (truncating)
-        f64_to_u16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U16 }
-        f64_to_u32_trunc, // F64 -> U32 (truncating)
-        f64_to_u32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U32 }
-        f64_to_u64_trunc, // F64 -> U64 (truncating)
-        f64_to_u64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U64 }
-        f64_to_u128_trunc, // F64 -> U128 (truncating)
-        f64_to_u128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U128 }
-        f64_to_f32_wrap, // F64 -> F32 (lossy narrowing)
-        f64_to_f32_try_unsafe, // F64 -> { success: Bool, val: F32 }
-
-        // Numeric conversion operations (Dec)
-        dec_to_i8_trunc, // Dec -> I8 (truncating)
-        dec_to_i8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I8 }
-        dec_to_i16_trunc, // Dec -> I16 (truncating)
-        dec_to_i16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I16 }
-        dec_to_i32_trunc, // Dec -> I32 (truncating)
-        dec_to_i32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I32 }
-        dec_to_i64_trunc, // Dec -> I64 (truncating)
-        dec_to_i64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I64 }
-        dec_to_i128_trunc, // Dec -> I128 (truncating)
-        dec_to_i128_try_unsafe, // Dec -> { is_int: Bool, val: I128 } - always in range
-        dec_to_u8_trunc, // Dec -> U8 (truncating)
-        dec_to_u8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U8 }
-        dec_to_u16_trunc, // Dec -> U16 (truncating)
-        dec_to_u16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U16 }
-        dec_to_u32_trunc, // Dec -> U32 (truncating)
-        dec_to_u32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U32 }
-        dec_to_u64_trunc, // Dec -> U64 (truncating)
-        dec_to_u64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U64 }
-        dec_to_u128_trunc, // Dec -> U128 (truncating)
-        dec_to_u128_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U128 }
-        dec_to_f32_wrap, // Dec -> F32 (lossy narrowing)
-        dec_to_f32_try_unsafe, // Dec -> { success: Bool, val: F32 }
-        dec_to_f64, // Dec -> F64 (lossy conversion)
-
-        /// Ownership semantics for each argument of a low-level operation.
-        /// See src/builtins/OWNERSHIP.md for detailed documentation.
-        pub const ArgOwnership = enum {
-            /// Function reads argument without affecting refcount. Caller retains ownership.
-            /// Interpreter should decref after call.
-            borrow,
-            /// Function takes ownership of argument. Caller loses access.
-            /// Interpreter should NOT decref after call.
-            consume,
-        };
-
-        /// Returns the ownership semantics for each argument of this low-level operation.
-        /// The returned slice has one entry per argument.
-        ///
-        /// Important: DO NOT ADD an else branch to this switch statement
-        /// we expect a compile error if a new case is added and ownership semantics are not defined here.
-        pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
-            return switch (self) {
-                // String operations - borrowing (read-only)
-                .str_is_empty, .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
-
-                // String operations - consuming (take ownership)
-                .str_concat => &.{ .consume, .borrow }, // first consumed, second borrowed
-                .str_trim, .str_trim_start, .str_trim_end => &.{.consume},
-                .str_with_ascii_lowercased, .str_with_ascii_uppercased => &.{.consume},
-                .str_repeat => &.{ .borrow, .borrow }, // string borrowed, count is value type
-                .str_with_prefix => &.{ .consume, .borrow },
-                .str_with_capacity => &.{.borrow}, // capacity is value type
-                .str_reserve => &.{ .consume, .borrow },
-                .str_release_excess_capacity => &.{.consume},
-                .str_join_with => &.{ .consume, .borrow }, // list consumed, separator borrowed
-
-                // String operations - borrowing with seamless slice result (incref internally)
-                .str_split_on => &.{ .borrow, .borrow },
-                .str_to_utf8 => &.{.borrow},
-                .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
-
-                // String parsing - list consumed
-                .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
-
-                // Str.inspect - borrows the value to render it
-                .str_inspekt => &.{.borrow},
-
-                // Numeric to_str - value types (no ownership)
-                .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
-
-                // List operations - borrowing
-                .list_len, .list_is_empty, .list_get_unsafe => &.{.borrow},
-
-                // List operations - consuming
-                .list_concat => &.{ .consume, .consume },
-                .list_with_capacity => &.{.borrow}, // capacity is value type
-                .list_sort_with => &.{.consume},
-                .list_append_unsafe => &.{.consume},
-                .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
-                .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
-                .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
-
-                // Bool operations - value types
-                .bool_is_eq => &.{ .borrow, .borrow },
-
-                // Numeric operations - all value types (no heap allocation)
-                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs => &.{.borrow},
-                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => &.{ .borrow, .borrow },
-
-                // Numeric parsing - string borrowed
-                .num_from_numeral => &.{.borrow},
-                .num_from_str => &.{.borrow},
-
-                // All numeric conversions are value types (no heap allocation).
-                // Explicitly listed to get compile errors when new LowLevel variants are added.
-                .u8_to_i8_wrap,
-                .u8_to_i8_try,
-                .u8_to_i16,
-                .u8_to_i32,
-                .u8_to_i64,
-                .u8_to_i128,
-                .u8_to_u16,
-                .u8_to_u32,
-                .u8_to_u64,
-                .u8_to_u128,
-                .u8_to_f32,
-                .u8_to_f64,
-                .u8_to_dec,
-                .i8_to_i16,
-                .i8_to_i32,
-                .i8_to_i64,
-                .i8_to_i128,
-                .i8_to_u8_wrap,
-                .i8_to_u8_try,
-                .i8_to_u16_wrap,
-                .i8_to_u16_try,
-                .i8_to_u32_wrap,
-                .i8_to_u32_try,
-                .i8_to_u64_wrap,
-                .i8_to_u64_try,
-                .i8_to_u128_wrap,
-                .i8_to_u128_try,
-                .i8_to_f32,
-                .i8_to_f64,
-                .i8_to_dec,
-                .u16_to_i8_wrap,
-                .u16_to_i8_try,
-                .u16_to_i16_wrap,
-                .u16_to_i16_try,
-                .u16_to_i32,
-                .u16_to_i64,
-                .u16_to_i128,
-                .u16_to_u8_wrap,
-                .u16_to_u8_try,
-                .u16_to_u32,
-                .u16_to_u64,
-                .u16_to_u128,
-                .u16_to_f32,
-                .u16_to_f64,
-                .u16_to_dec,
-                .i16_to_i8_wrap,
-                .i16_to_i8_try,
-                .i16_to_i32,
-                .i16_to_i64,
-                .i16_to_i128,
-                .i16_to_u8_wrap,
-                .i16_to_u8_try,
-                .i16_to_u16_wrap,
-                .i16_to_u16_try,
-                .i16_to_u32_wrap,
-                .i16_to_u32_try,
-                .i16_to_u64_wrap,
-                .i16_to_u64_try,
-                .i16_to_u128_wrap,
-                .i16_to_u128_try,
-                .i16_to_f32,
-                .i16_to_f64,
-                .i16_to_dec,
-                .u32_to_i8_wrap,
-                .u32_to_i8_try,
-                .u32_to_i16_wrap,
-                .u32_to_i16_try,
-                .u32_to_i32_wrap,
-                .u32_to_i32_try,
-                .u32_to_i64,
-                .u32_to_i128,
-                .u32_to_u8_wrap,
-                .u32_to_u8_try,
-                .u32_to_u16_wrap,
-                .u32_to_u16_try,
-                .u32_to_u64,
-                .u32_to_u128,
-                .u32_to_f32,
-                .u32_to_f64,
-                .u32_to_dec,
-                .i32_to_i8_wrap,
-                .i32_to_i8_try,
-                .i32_to_i16_wrap,
-                .i32_to_i16_try,
-                .i32_to_i64,
-                .i32_to_i128,
-                .i32_to_u8_wrap,
-                .i32_to_u8_try,
-                .i32_to_u16_wrap,
-                .i32_to_u16_try,
-                .i32_to_u32_wrap,
-                .i32_to_u32_try,
-                .i32_to_u64_wrap,
-                .i32_to_u64_try,
-                .i32_to_u128_wrap,
-                .i32_to_u128_try,
-                .i32_to_f32,
-                .i32_to_f64,
-                .i32_to_dec,
-                .u64_to_i8_wrap,
-                .u64_to_i8_try,
-                .u64_to_i16_wrap,
-                .u64_to_i16_try,
-                .u64_to_i32_wrap,
-                .u64_to_i32_try,
-                .u64_to_i64_wrap,
-                .u64_to_i64_try,
-                .u64_to_i128,
-                .u64_to_u8_wrap,
-                .u64_to_u8_try,
-                .u64_to_u16_wrap,
-                .u64_to_u16_try,
-                .u64_to_u32_wrap,
-                .u64_to_u32_try,
-                .u64_to_u128,
-                .u64_to_f32,
-                .u64_to_f64,
-                .u64_to_dec,
-                .i64_to_i8_wrap,
-                .i64_to_i8_try,
-                .i64_to_i16_wrap,
-                .i64_to_i16_try,
-                .i64_to_i32_wrap,
-                .i64_to_i32_try,
-                .i64_to_i128,
-                .i64_to_u8_wrap,
-                .i64_to_u8_try,
-                .i64_to_u16_wrap,
-                .i64_to_u16_try,
-                .i64_to_u32_wrap,
-                .i64_to_u32_try,
-                .i64_to_u64_wrap,
-                .i64_to_u64_try,
-                .i64_to_u128_wrap,
-                .i64_to_u128_try,
-                .i64_to_f32,
-                .i64_to_f64,
-                .i64_to_dec,
-                .u128_to_i8_wrap,
-                .u128_to_i8_try,
-                .u128_to_i16_wrap,
-                .u128_to_i16_try,
-                .u128_to_i32_wrap,
-                .u128_to_i32_try,
-                .u128_to_i64_wrap,
-                .u128_to_i64_try,
-                .u128_to_i128_wrap,
-                .u128_to_i128_try,
-                .u128_to_u8_wrap,
-                .u128_to_u8_try,
-                .u128_to_u16_wrap,
-                .u128_to_u16_try,
-                .u128_to_u32_wrap,
-                .u128_to_u32_try,
-                .u128_to_u64_wrap,
-                .u128_to_u64_try,
-                .u128_to_f32,
-                .u128_to_f64,
-                .u128_to_dec_try_unsafe,
-                .i128_to_i8_wrap,
-                .i128_to_i8_try,
-                .i128_to_i16_wrap,
-                .i128_to_i16_try,
-                .i128_to_i32_wrap,
-                .i128_to_i32_try,
-                .i128_to_i64_wrap,
-                .i128_to_i64_try,
-                .i128_to_u8_wrap,
-                .i128_to_u8_try,
-                .i128_to_u16_wrap,
-                .i128_to_u16_try,
-                .i128_to_u32_wrap,
-                .i128_to_u32_try,
-                .i128_to_u64_wrap,
-                .i128_to_u64_try,
-                .i128_to_u128_wrap,
-                .i128_to_u128_try,
-                .i128_to_f32,
-                .i128_to_f64,
-                .i128_to_dec_try_unsafe,
-                .f32_to_i8_trunc,
-                .f32_to_i8_try_unsafe,
-                .f32_to_i16_trunc,
-                .f32_to_i16_try_unsafe,
-                .f32_to_i32_trunc,
-                .f32_to_i32_try_unsafe,
-                .f32_to_i64_trunc,
-                .f32_to_i64_try_unsafe,
-                .f32_to_i128_trunc,
-                .f32_to_i128_try_unsafe,
-                .f32_to_u8_trunc,
-                .f32_to_u8_try_unsafe,
-                .f32_to_u16_trunc,
-                .f32_to_u16_try_unsafe,
-                .f32_to_u32_trunc,
-                .f32_to_u32_try_unsafe,
-                .f32_to_u64_trunc,
-                .f32_to_u64_try_unsafe,
-                .f32_to_u128_trunc,
-                .f32_to_u128_try_unsafe,
-                .f32_to_f64,
-                .f64_to_i8_trunc,
-                .f64_to_i8_try_unsafe,
-                .f64_to_i16_trunc,
-                .f64_to_i16_try_unsafe,
-                .f64_to_i32_trunc,
-                .f64_to_i32_try_unsafe,
-                .f64_to_i64_trunc,
-                .f64_to_i64_try_unsafe,
-                .f64_to_i128_trunc,
-                .f64_to_i128_try_unsafe,
-                .f64_to_u8_trunc,
-                .f64_to_u8_try_unsafe,
-                .f64_to_u16_trunc,
-                .f64_to_u16_try_unsafe,
-                .f64_to_u32_trunc,
-                .f64_to_u32_try_unsafe,
-                .f64_to_u64_trunc,
-                .f64_to_u64_try_unsafe,
-                .f64_to_u128_trunc,
-                .f64_to_u128_try_unsafe,
-                .f64_to_f32_wrap,
-                .f64_to_f32_try_unsafe,
-                .dec_to_i8_trunc,
-                .dec_to_i8_try_unsafe,
-                .dec_to_i16_trunc,
-                .dec_to_i16_try_unsafe,
-                .dec_to_i32_trunc,
-                .dec_to_i32_try_unsafe,
-                .dec_to_i64_trunc,
-                .dec_to_i64_try_unsafe,
-                .dec_to_i128_trunc,
-                .dec_to_i128_try_unsafe,
-                .dec_to_u8_trunc,
-                .dec_to_u8_try_unsafe,
-                .dec_to_u16_trunc,
-                .dec_to_u16_try_unsafe,
-                .dec_to_u32_trunc,
-                .dec_to_u32_try_unsafe,
-                .dec_to_u64_trunc,
-                .dec_to_u64_try_unsafe,
-                .dec_to_u128_trunc,
-                .dec_to_u128_try_unsafe,
-                .dec_to_f32_wrap,
-                .dec_to_f32_try_unsafe,
-                .dec_to_f64,
-                => &.{.borrow},
-            };
-        }
-    };
+    pub const LowLevel = base.LowLevel;
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: DataSpan };
@@ -1282,13 +660,8 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (e.value == 0)
-                    "0.0"
-                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f32_to_str(&value_buf, e.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1300,13 +673,8 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (e.value == 0)
-                    "0.0"
-                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, e.value);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1318,14 +686,9 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (dec_value_f64 == 0)
-                    "0.0"
-                else if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{dec_value_f64}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
+                const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, 18);
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, dec_value_f64);
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -1349,14 +712,41 @@ pub const Expr = union(enum) {
                 const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.value.denominator_power_of_ten));
                 const value_f64 = numerator_f64 / denominator_f64;
 
-                var value_buf: [512]u8 = undefined;
-                const value_str = if (value_f64 == 0)
-                    "0.0"
-                else if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
-                    std.fmt.bufPrint(&value_buf, "{e}", .{value_f64}) catch "fmt_error"
-                else
-                    std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";
+                var value_buf: [400]u8 = undefined;
+                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, value_f64);
                 try tree.pushStringPair("value", value_str);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_typed_int => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-int");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
+                try tree.pushStringPair("value", value_str);
+
+                const type_name = ir.getIdent(e.type_name);
+                try tree.pushStringPair("type", type_name);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_typed_frac => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-frac");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
+                try tree.pushStringPair("value", value_str);
+
+                const type_name = ir.getIdent(e.type_name);
+                try tree.pushStringPair("type", type_name);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -1369,6 +759,20 @@ pub const Expr = union(enum) {
 
                 const value = ir.getString(e.literal);
                 try tree.pushStringPair("string", value);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_bytes_literal => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-bytes-literal");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                const value = ir.getString(e.literal);
+                const len_str = try std.fmt.allocPrint(ir.gpa, "{d}", .{value.len});
+                defer ir.gpa.free(len_str);
+                try tree.pushStringPair("len", len_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -1527,6 +931,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-call");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                if (c.constraint_fn_var) |constraint_fn_var| {
+                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                }
                 const attrs = tree.beginNode();
 
                 const all_exprs = ir.store.exprSlice(c.args);
@@ -1754,9 +1161,9 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_dot_access => |e| {
+            .e_field_access => |e| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-dot-access");
+                try tree.pushStaticAtom("e-field-access");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("field", ir.getIdentText(e.field_name));
@@ -1768,15 +1175,155 @@ pub const Expr = union(enum) {
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
 
-                if (e.args) |args| {
-                    const args_begin = tree.beginNode();
-                    try tree.pushStaticAtom("args");
-                    const args_attrs = tree.beginNode();
-                    for (ir.store.exprSlice(args)) |arg_idx| {
-                        try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
-                    }
-                    try tree.endNode(args_begin, args_attrs);
+                try tree.endNode(begin, attrs);
+            },
+            .e_method_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-method-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                const attrs = tree.beginNode();
+
+                const receiver_begin = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
+                try tree.endNode(receiver_begin, receiver_attrs);
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_dispatch_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-dispatch-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                const attrs = tree.beginNode();
+
+                const receiver_begin = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
+                try tree.endNode(receiver_begin, receiver_attrs);
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_structural_eq => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-structural-eq");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("negated", if (e.negated) "true" else "false");
+                const attrs = tree.beginNode();
+
+                const lhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("lhs");
+                const lhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
+                try tree.endNode(lhs_begin, lhs_attrs);
+
+                const rhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("rhs");
+                const rhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
+                try tree.endNode(rhs_begin, rhs_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_method_eq => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-method-eq");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("negated", if (e.negated) "true" else "false");
+                const attrs = tree.beginNode();
+
+                const lhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("lhs");
+                const lhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
+                try tree.endNode(lhs_begin, lhs_attrs);
+
+                const rhs_begin = tree.beginNode();
+                try tree.pushStaticAtom("rhs");
+                const rhs_attrs = tree.beginNode();
+                try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
+                try tree.endNode(rhs_begin, rhs_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_method_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-method-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                const attrs = tree.beginNode();
+
+                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_dispatch_call => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-dispatch-call");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("method", ir.getIdentText(e.method_name));
+                try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_tuple_access => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-tuple-access");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                // Push the index as an attribute
+                var buf: [16]u8 = undefined;
+                const index_str = std.fmt.bufPrint(&buf, "{d}", .{e.elem_index}) catch "?";
+                try tree.pushStringPair("index", index_str);
+                const attrs = tree.beginNode();
+
+                // Push the tuple expression
+                try ir.store.getExpr(e.tuple).pushToSExprTree(ir, tree, e.tuple);
 
                 try tree.endNode(begin, attrs);
             },
@@ -1828,25 +1375,23 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .e_low_level_lambda => |low_level| {
+            .e_run_low_level => |run_ll| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-low-level-lambda");
-                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(low_level.op)});
+                try tree.pushStaticAtom("e-run-low-level");
+                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(run_ll.op)});
                 defer ir.gpa.free(op_name);
                 try tree.pushStringPair("op", op_name);
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                const args_begin = tree.beginNode();
+                const run_args_begin = tree.beginNode();
                 try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (ir.store.slicePatterns(low_level.args)) |arg_idx| {
-                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                const run_args_attrs = tree.beginNode();
+                for (ir.store.exprSlice(run_ll.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
-                try tree.endNode(args_begin, args_attrs);
-
-                try ir.store.getExpr(low_level.body).pushToSExprTree(ir, tree, low_level.body);
+                try tree.endNode(run_args_begin, run_args_attrs);
 
                 try tree.endNode(begin, attrs);
             },
@@ -1891,25 +1436,6 @@ pub const Expr = union(enum) {
 
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
-
-                try tree.endNode(begin, attrs);
-            },
-            .e_type_var_dispatch => |tvd| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-type-var-dispatch");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                // Add method name
-                const method_text = ir.getIdent(tvd.method_name);
-                try tree.pushStringPair("method", method_text);
-
-                const attrs = tree.beginNode();
-
-                // Add arguments if any
-                for (ir.store.exprSlice(tvd.args)) |arg_idx| {
-                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
-                }
 
                 try tree.endNode(begin, attrs);
             },

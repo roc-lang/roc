@@ -13,35 +13,59 @@ const can = @import("can");
 const types = @import("types");
 const reporting = @import("reporting");
 const check = @import("check");
-const builtins = @import("builtins");
 const compile = @import("compile");
+const lir = @import("lir");
+const layout = @import("layout");
+const backend = @import("backend");
 const fmt = @import("fmt");
-const repl = @import("repl");
 const eval_mod = @import("eval");
+const docs_mod = @import("docs");
 const tracy = @import("tracy");
+const sljmp = @import("sljmp");
 
-const Repl = repl.Repl;
-const CrashContext = eval_mod.CrashContext;
+/// Custom panic handler that enables catching Zig panics (e.g., `unreachable` in
+/// the dev backend) during snapshot testing. When `panic_jmp` is set, longjmps back
+/// to the saved point instead of aborting; otherwise falls through to the default handler.
+pub const panic = std.debug.FullPanic(panicHandler);
+
+threadlocal var panic_jmp: ?*sljmp.JmpBuf = null;
+threadlocal var panic_msg: ?[]const u8 = null;
+/// Set by signal handlers (SIGALRM/SIGSEGV) when a longjmp interrupts an
+/// allocation.  Once true the GPA mutex is permanently locked and any
+/// alloc/free through it will deadlock, so all further GPA use must be
+/// skipped for the rest of this thread's lifetime.
+threadlocal var gpa_poisoned: bool = false;
+
+fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
+    if (panic_jmp) |jmp| {
+        panic_msg = msg;
+        if (verbose_log) {
+            std.debug.print("  PANIC STACK: {s}\n", .{msg});
+            if (ret_addr) |addr| {
+                std.debug.print("  return address: 0x{x}\n", .{addr});
+            }
+            std.debug.dumpCurrentStackTrace(ret_addr);
+        }
+        panic_jmp = null; // prevent re-entry
+        sljmp.longjmp(jmp, 1);
+    }
+    // No protection active — use default behavior.
+    std.debug.defaultPanic(msg, @returnAddress());
+}
+
+const roc_target = @import("roc_target");
+const Allocators = base.Allocators;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
 const Can = can.Can;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocOps = builtins.host_abi.RocOps;
-const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
-const LambdaLifter = @import("LambdaLifter.zig");
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
-const CacheModule = compile.CacheModule;
+const single_module = compile.single_module;
 const AST = parse.AST;
 const Report = reporting.Report;
-const types_problem_mod = check.problem;
 const parallel = base.parallel;
 
 var verbose_log: bool = false;
@@ -399,15 +423,17 @@ fn generateAllReports(
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
+        var report_builder = check.ReportBuilder.init(
             allocator,
             module_env,
             can_ir,
             &solver.snapshots,
+            &solver.problems,
             snapshot_path,
             empty_modules,
             &solver.import_mapping,
-        );
+            &solver.regions,
+        ) catch continue;
         defer report_builder.deinit();
 
         const report = report_builder.build(problem) catch |err| {
@@ -495,7 +521,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
 }
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{
-    .backing_allocator = std.heap.c_allocator,
+    .backing_allocator = std.heap.page_allocator,
 };
 
 /// cli entrypoint for snapshot tool
@@ -598,8 +624,8 @@ pub fn main() !void {
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
-                \\  --check-expected     Validate that EXPECTED sections match PROBLEMS sections
-                \\  --update-expected    Update EXPECTED sections based on PROBLEMS sections
+                \\  --check-expected     Validate that EXPECTED/DEV OUTPUT sections match actual output
+                \\  --update-expected    Update EXPECTED/DEV OUTPUT sections with actual output
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
                 \\
                 \\Arguments:
@@ -647,6 +673,9 @@ pub fn main() !void {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
+    const cwd = try std.process.getCwdAlloc(gpa);
+    defer gpa.free(cwd);
+
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
         .generate_html = generate_html,
@@ -656,6 +685,7 @@ pub fn main() !void {
         .linecol_mode = linecol_mode,
         .builtin_module = builtin_modules_ptr.builtin_module.env,
         .builtin_indices = builtin_modules_ptr.builtin_indices,
+        .cwd = cwd,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -700,6 +730,9 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
+    const cwd = try std.process.getCwdAlloc(gpa);
+    defer gpa.free(cwd);
+
     const config = Config{
         .maybe_fuzz_corpus_path = null,
         .generate_html = false,
@@ -708,6 +741,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .disable_updates = true,
         .builtin_module = builtin_modules_ptr.builtin_module.env,
         .builtin_indices = builtin_modules_ptr.builtin_indices,
+        .cwd = cwd,
     };
     const snapshots_dir = "test/snapshots";
     var work_list = WorkList.init(gpa);
@@ -719,23 +753,8 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     }
     try collectWorkItems(gpa, snapshots_dir, &work_list);
 
-    var fail_count: usize = 0;
-
-    for (work_list.items) |work_item| {
-        const success = switch (work_item.kind) {
-            .snapshot_file => processSnapshotFile(gpa, work_item.path, &config) catch false,
-            .multi_file_snapshot => blk: {
-                const res = processMultiFileSnapshot(gpa, work_item.path, &config) catch {
-                    break :blk false;
-                };
-                break :blk res;
-            },
-        };
-        if (!success) {
-            fail_count += 1;
-        }
-    }
-    return fail_count == 0;
+    const result = try processWorkItems(gpa, work_list, 0, false, &config);
+    return result.failed == 0;
 }
 
 /// Check if a file has a valid snapshot extension
@@ -753,7 +772,7 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
     if (std.mem.endsWith(u8, path, "_package")) return .package;
     if (std.mem.endsWith(u8, path, "_platform")) return .platform;
     if (std.mem.endsWith(u8, path, "_app")) return .app;
-    return .file; // fallback, shouldn't happen if isMultiFileSnapshot was checked first
+    return .file; // unreachable if isMultiFileSnapshot was checked first
 }
 
 fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) !bool {
@@ -893,37 +912,30 @@ fn processSnapshotContent(
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
+    // Skip snapshots marked with skip=true in META
+    if (content.meta.skip) {
+        log("Skipping snapshot (skip=true): {s}", .{output_path});
+        return true;
+    }
+
     // Handle REPL snapshots separately
     if (content.meta.node_type == .repl) {
         return processReplSnapshot(allocator, content, output_path, config);
     }
 
+    // Handle dev_object snapshots separately (multi-file, cross-compilation)
+    if (content.meta.node_type == .dev_object) {
+        return processDevObjectSnapshot(allocator, content, output_path, config);
+    }
+
+    // Handle docs snapshots separately (multi-file, doc extraction)
+    if (content.meta.node_type == .docs) {
+        return processDocsSnapshot(allocator, content, output_path, config);
+    }
+
     // Process the content through the compilation pipeline
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-
-    var module_env = try ModuleEnv.init(allocator, content.source);
-    defer module_env.deinit();
-
-    // Calculate line starts for source location tracking
-    try module_env.common.calcLineStarts(allocator);
-
-    // Parse the source code based on node type
-    var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env.common, allocator),
-        .mono => try parse.parse(&module_env.common, allocator), // mono tests are headerless type modules
-        .header => try parse.parseHeader(&module_env.common, allocator),
-        .expr => try parse.parseExpr(&module_env.common, allocator),
-        .statement => try parse.parseStatement(&module_env.common, allocator),
-        .package => try parse.parse(&module_env.common, allocator),
-        .platform => try parse.parse(&module_env.common, allocator),
-        .app => try parse.parse(&module_env.common, allocator),
-        .repl => unreachable, // Handled above
-        .snippet => try parse.parse(&module_env.common, allocator),
-    };
-    defer parse_ast.deinit(allocator);
-
-    parse_ast.store.emptyScratch();
 
     // Extract module name from custom filename if provided, otherwise from output path
     const module_name = if (content.meta.filename) |custom_filename|
@@ -939,8 +951,34 @@ fn processSnapshotContent(
         else
             basename;
     };
-    var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(module_name);
+
+    // Map snapshot node type to parse mode
+    const parse_mode: single_module.ParseMode = switch (content.meta.node_type) {
+        .file, .mono, .package, .platform, .app, .snippet => .file,
+        .expr => .expr,
+        .statement => .statement,
+        .header => .header,
+        .repl, .dev_object, .docs => unreachable, // Handled above
+    };
+
+    // Create ModuleEnv (caller manages memory)
+    var module_env = try single_module.ModuleEnv.init(allocator, content.source);
+    defer module_env.deinit();
+    var can_ir = &module_env;
+
+    // Create allocators for parsing
+    var allocators: single_module.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    // Parse using the unified compile_module interface
+    const parse_ast = try single_module.parseSingleModule(
+        &allocators,
+        can_ir,
+        parse_mode,
+        .{ .module_name = module_name },
+    );
+    defer parse_ast.deinit();
 
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
@@ -959,14 +997,14 @@ fn processSnapshotContent(
         },
         .snippet, .mono => {
             // Snippet and mono tests are full modules
-            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-            defer module_envs.deinit();
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            if (config.builtin_module) |builtin_env| {
-                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-            }
-
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+                .builtin_types = .{
+                    .builtin_module_env = builtin_env,
+                    .builtin_indices = config.builtin_indices,
+                },
+            });
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -975,15 +1013,14 @@ fn processSnapshotContent(
         },
         .expr, .statement => {
             // Expr and statement tests use different canonicalization methods
-            // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
-            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-            defer module_envs.deinit();
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
-            if (config.builtin_module) |builtin_env| {
-                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-            }
-
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+                .builtin_types = .{
+                    .builtin_module_env = builtin_env,
+                    .builtin_indices = config.builtin_indices,
+                },
+            });
             defer czer.deinit();
 
             switch (content.meta.node_type) {
@@ -1003,8 +1040,11 @@ fn processSnapshotContent(
                 },
                 else => unreachable,
             }
+            if (content.meta.include_canonicalize_diagnostics) {
+                try can_ir.publishScratchDiagnostics();
+            }
         },
-        .repl => unreachable, // Handled above
+        .repl, .dev_object, .docs => unreachable, // Handled above
     }
 
     // Assert that everything is in-sync
@@ -1016,7 +1056,7 @@ fn processSnapshotContent(
     // don't call canonicalizeFile.
     const needs_evaluation_order = switch (content.meta.node_type) {
         .expr, .statement, .mono => true,
-        .file, .package, .platform, .app, .snippet, .repl, .header => false,
+        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object, .docs => false,
     };
 
     if (needs_evaluation_order and can_ir.evaluation_order == null) {
@@ -1074,6 +1114,9 @@ fn processSnapshotContent(
         if (config.builtin_module) |builtin_env| {
             try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
         }
+        can_ir.imports.clearResolvedModules();
+        can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+        can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         var checker = try Check.init(
             allocator,
@@ -1084,7 +1127,7 @@ fn processSnapshotContent(
             &can_ir.store.regions,
             builtin_ctx,
         );
-        _ = try checker.checkExprRepl(expr_idx.idx);
+        try checker.checkExprRepl(expr_idx.idx);
         module_envs_for_repl_expr = module_envs; // Keep alive
         break :blk checker;
     } else switch (content.meta.node_type) {
@@ -1104,13 +1147,16 @@ fn processSnapshotContent(
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+                &allocators,
                 allocator,
                 can_ir,
-                &parse_ast,
+                parse_ast,
                 builtin_env,
                 config.builtin_indices,
                 imported_envs_for_file,
                 &module_envs_for_file.?,
+                std.fs.path.dirname(output_path),
+                if (content.meta.include_module_validation_diagnostics) .checking else .none,
             );
             break :blk checker;
         },
@@ -1122,6 +1168,9 @@ fn processSnapshotContent(
             if (config.builtin_module) |builtin_env| {
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
+            can_ir.imports.clearResolvedModules();
+            can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+            can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
             var checker = try Check.init(
                 allocator,
@@ -1136,215 +1185,12 @@ fn processSnapshotContent(
             module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
         },
-        .repl => unreachable, // Should never reach here - repl is handled earlier
+        .repl, .dev_object, .docs => unreachable, // Should never reach here - handled earlier
     };
     defer solver.deinit();
 
     // Assert that we have regions for every type variable
     solver.debugAssertArraysInSync();
-
-    // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
-    {
-        // Generate original S-expression for comparison
-        var original_tree = SExprTree.init(allocator);
-        defer original_tree.deinit();
-        try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
-
-        var original_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any(), .skip_linecol);
-
-        // Create arena for serialization
-        var cache_arena = std.heap.ArenaAllocator.init(allocator);
-        defer cache_arena.deinit();
-
-        // Create and serialize MmapCache
-        const cache_data = try CacheModule.create(allocator, cache_arena.allocator(), &module_env, can_ir, 0, 0);
-        defer allocator.free(cache_data);
-
-        // Deserialize back
-        var loaded_cache = try CacheModule.fromMappedMemory(cache_data);
-
-        // Create arena for restore operation to handle temporary allocations
-        var restore_arena = std.heap.ArenaAllocator.init(allocator);
-        defer restore_arena.deinit();
-
-        // Restore ModuleEnv
-        const restored_env = try loaded_cache.restore(restore_arena.allocator(), module_name, content.source);
-        // Note: restored_env points to data within the cache, so we don't free it
-
-        // Generate S-expression from restored ModuleEnv
-        var restored_tree = SExprTree.init(allocator);
-        defer restored_tree.deinit();
-        try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
-
-        var restored_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any(), .skip_linecol);
-
-        // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
-            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
-            std.log.err("Original and restored CIR S-expressions don't match!", .{});
-            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
-            return error.CacheRoundTripValidationFailed;
-        }
-    }
-
-    // Run closure transformation for mono tests
-    // This transforms closures to tags and generates dispatch match expressions
-    var has_closure_transforms = false;
-
-    // Lambda lifting storage - will be populated if we have closures
-    var lifter: ?LambdaLifter = null;
-    defer {
-        if (lifter) |*l| l.deinit();
-    }
-
-    if (content.meta.node_type == .mono) {
-        const ClosureTransformer = can.ClosureTransformer;
-        var transformer = ClosureTransformer.init(allocator, can_ir);
-        defer transformer.deinit();
-
-        // First pass: mark all top-level patterns
-        // Top-level constants don't need to be captured since they're always in scope
-        const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-        for (defs) |def_idx| {
-            const def = can_ir.store.getDef(def_idx);
-            try transformer.markTopLevel(def.pattern);
-        }
-
-        // Second pass: transform all top-level definitions
-        for (defs) |def_idx| {
-            const def = can_ir.store.getDef(def_idx);
-
-            // Get name hint from pattern
-            const pattern = can_ir.store.getPattern(def.pattern);
-            const name_hint: ?base.Ident.Idx = switch (pattern) {
-                .assign => |a| a.ident,
-                else => null,
-            };
-
-            // Transform the definition expression
-            const old_expr = def.expr;
-            const result = try transformer.transformExprWithLambdaSet(def.expr, name_hint);
-
-            // If the expression changed, compute the correct type for the new expression
-            // based on its structure (e.g., tag union for closure transforms)
-            // Note: We don't modify the pattern's type here to avoid breaking type unification.
-            // Instead, the type will be computed from the expression in generateMonoSection.
-            if (old_expr != result.expr) {
-                _ = try computeTransformedExprType(can_ir, result.expr);
-            }
-
-            // Track the lambda set for this pattern
-            if (result.lambda_set) |lambda_set| {
-                try transformer.pattern_lambda_sets.put(def.pattern, lambda_set);
-                has_closure_transforms = true;
-            }
-
-            // If the expression is a lambda with a return set, track what it returns when called
-            // This allows propagating closure information through calls to this lambda
-            if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
-                // Clone the return set to avoid double-free issues
-                const cloned = try return_set.clone(allocator);
-                try transformer.pattern_lambda_return_sets.put(def.pattern, cloned);
-            }
-
-            // Update the definition to use the transformed expression
-            can_ir.store.setDefExpr(def_idx, result.expr);
-        }
-
-        // Also check if any closures were transformed (even nested inside pure lambdas)
-        // This is important because nested closures may not produce a lambda_set at the top level
-        has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
-
-        // Validate that all lambda sets have been fully resolved.
-        // Any remaining unspecialized closures indicate a failure to resolve static dispatch implementations.
-        const validation_result = transformer.validateAllResolved();
-        if (!validation_result.is_valid) {
-            // Log the validation failure
-            if (validation_result.first_error) |err| {
-                std.log.err("Lambda set validation failed: {d} unresolved closures. First error: {s}", .{
-                    validation_result.unresolved_count,
-                    @tagName(err.kind),
-                });
-            } else {
-                std.log.err("Lambda set validation failed: {d} unresolved closures", .{
-                    validation_result.unresolved_count,
-                });
-            }
-            return error.UnresolvedLambdaSets;
-        }
-
-        // Phase 4 & 5: Lambda lifting - extract closures to top-level function definitions
-        // After the ClosureTransformer has identified all closures, use LambdaLifter
-        // to create lifted function definitions for each one.
-        const has_any_closures = transformer.closures.count() > 0 or
-            transformer.pattern_lambda_sets.count() > 0;
-
-        if (has_any_closures) {
-            lifter = LambdaLifter.init(allocator, can_ir, &transformer.top_level_patterns);
-
-            // Iterate over all transformed closures (closures with captures)
-            var closure_iter = transformer.closures.iterator();
-            while (closure_iter.next()) |entry| {
-                const closure_idx = entry.key_ptr.*;
-                const closure_info = entry.value_ptr.*;
-
-                // Lift this closure to a top-level function
-                try lifter.?.liftClosure(closure_idx, closure_info.tag_name);
-            }
-
-            // Also lift closures from pattern_lambda_sets (pure lambdas converted to tags)
-            var lambda_set_iter = transformer.pattern_lambda_sets.iterator();
-            while (lambda_set_iter.next()) |entry| {
-                const lambda_set = entry.value_ptr;
-                for (lambda_set.closures.items) |closure_info| {
-                    // Check if this closure was already lifted via transformer.closures
-                    // (closures with captures are in both places)
-                    var already_lifted = false;
-                    var check_iter = transformer.closures.iterator();
-                    while (check_iter.next()) |check_entry| {
-                        if (check_entry.value_ptr.tag_name == closure_info.tag_name) {
-                            already_lifted = true;
-                            break;
-                        }
-                    }
-
-                    if (!already_lifted) {
-                        // Lift this pure lambda using the info-based method
-                        try lifter.?.liftFromInfo(closure_info);
-                    }
-                }
-            }
-        }
-    }
-
-    // Run constant folding for mono tests (skip if we have closure transformations)
-    // This evaluates expressions at compile time and folds results back into the CIR.
-    // We skip this when closures have been transformed because the comptime evaluator
-    // doesn't yet know how to handle the closure tag format.
-    if (content.meta.node_type == .mono and !has_closure_transforms) {
-        if (config.builtin_module) |builtin_env| {
-            const BuiltinTypes = eval_mod.BuiltinTypes;
-            const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
-            const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
-            const imported_envs: []const *const ModuleEnv = builtin_modules.items;
-            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping);
-            defer comptime_evaluator.deinit();
-
-            // First evaluate any top-level defs
-            _ = try comptime_evaluator.evalAll();
-
-            // Then evaluate and fold the standalone expression if present
-            if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
-                _ = try comptime_evaluator.evalAndFoldExpr(expr_idx);
-            }
-        }
-    }
 
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
@@ -1363,7 +1209,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, &parse_ast, can_ir, &solver, output_path, &module_env);
+    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, &solver, output_path, can_ir);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1379,22 +1225,21 @@ fn processSnapshotContent(
 
     if (content.meta.node_type == .mono) {
         // Mono tests: MONO and FORMATTED come right after SOURCE
-        const lifted_funcs = if (lifter) |l| l.getLiftedFunctions() else &[_]LambdaLifter.LiftedFunction{};
-        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config, lifted_funcs);
-        try generateFormattedSection(&output, &content, &parse_ast);
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config);
+        try generateFormattedSection(&output, &content, parse_ast);
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
-        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
-        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
+        try generateTokensSection(&output, parse_ast, &content, can_ir, config.linecol_mode);
+        try generateParseSection(&output, &content, parse_ast, &can_ir.common, config.linecol_mode);
         try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
         try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
     } else {
         // Other tests: standard order
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
-        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
-        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
-        try generateFormattedSection(&output, &content, &parse_ast);
+        try generateTokensSection(&output, parse_ast, &content, can_ir, config.linecol_mode);
+        try generateParseSection(&output, &content, parse_ast, &can_ir.common, config.linecol_mode);
+        try generateFormattedSection(&output, &content, parse_ast);
         try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
         try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
     }
@@ -1439,6 +1284,8 @@ fn processRocFileAsSnapshotWithExpected(
         .expected = expected_content,
         .output = null,
         .formatted = null,
+        .dev_output = null,
+        .docs_output = null,
         .has_canonicalize = true,
     };
 
@@ -1456,6 +1303,7 @@ const Config = struct {
     // Compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     builtin_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
+    cwd: []const u8,
 };
 
 const ProcessResult = struct {
@@ -1484,9 +1332,13 @@ const ProcessContext = struct {
 fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
     const work_item = context.work_list.items[item_id];
     const success = switch (work_item.kind) {
-        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config) catch false,
+        .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config) catch |err| blk: {
+            std.debug.print("Snapshot processing error in {s}: {s}\n", .{ work_item.path, @errorName(err) });
+            break :blk false;
+        },
         .multi_file_snapshot => blk: {
-            const res = processMultiFileSnapshot(allocator, work_item.path, context.config) catch {
+            const res = processMultiFileSnapshot(allocator, work_item.path, context.config) catch |err| {
+                std.debug.print("Snapshot processing error in {s}: {s}\n", .{ work_item.path, @errorName(err) });
                 break :blk false;
             };
             break :blk res;
@@ -1496,6 +1348,7 @@ fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usiz
     if (success) {
         _ = context.success_count.fetchAdd(1, .monotonic);
     } else {
+        std.debug.print("Snapshot failed: {s}\n", .{work_item.path});
         _ = context.failed_count.fetchAdd(1, .monotonic);
     }
 }
@@ -1604,9 +1457,12 @@ const Section = union(enum) {
     problems,
     types,
     mono,
+    dev_output,
+    docs,
 
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
+    pub const SOURCE_MULTI = "# SOURCE\n";
     pub const EXPECTED = "# EXPECTED\n";
     pub const OUTPUT = "# OUTPUT\n";
     pub const FORMATTED = "# FORMATTED\n~~~roc\n";
@@ -1616,12 +1472,16 @@ const Section = union(enum) {
     pub const PROBLEMS = "# PROBLEMS\n";
     pub const TYPES = "# TYPES\n~~~clojure\n";
     pub const MONO = "# MONO\n~~~roc\n";
+    pub const DEV_OUTPUT = "# DEV OUTPUT\n~~~ini\n";
+    pub const DOCS = "# DOCS\n~~~clojure\n";
 
     pub const SECTION_END = "~~~\n";
 
     fn fromString(str: []const u8) ?Section {
         if (std.mem.startsWith(u8, str, META)) return .meta;
+        // Check for single-file SOURCE first (has ~~~roc), then multi-file SOURCE
         if (std.mem.startsWith(u8, str, SOURCE)) return .source;
+        if (std.mem.startsWith(u8, str, SOURCE_MULTI)) return .source;
         if (std.mem.startsWith(u8, str, EXPECTED)) return .expected;
         if (std.mem.startsWith(u8, str, OUTPUT)) return .output;
         if (std.mem.startsWith(u8, str, FORMATTED)) return .formatted;
@@ -1630,8 +1490,15 @@ const Section = union(enum) {
         if (std.mem.startsWith(u8, str, TYPES)) return .types;
         if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
         if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
+        if (std.mem.startsWith(u8, str, DEV_OUTPUT)) return .dev_output;
+        if (std.mem.startsWith(u8, str, DOCS)) return .docs;
         if (std.mem.startsWith(u8, str, MONO)) return .mono;
         return null;
+    }
+
+    /// Check if the SOURCE section at this position uses multi-file format (## sub-headings)
+    fn isMultiFileSource(str: []const u8) bool {
+        return std.mem.startsWith(u8, str, SOURCE_MULTI) and !std.mem.startsWith(u8, str, SOURCE);
     }
 
     fn asString(self: Section) []const u8 {
@@ -1647,6 +1514,8 @@ const Section = union(enum) {
             .problems => PROBLEMS,
             .types => TYPES,
             .mono => MONO,
+            .dev_output => DEV_OUTPUT,
+            .docs => DOCS,
         };
     }
 
@@ -1681,6 +1550,8 @@ pub const NodeType = enum {
     repl,
     snippet,
     mono,
+    dev_object,
+    docs,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1692,6 +1563,8 @@ pub const NodeType = enum {
     pub const REPL = "repl";
     pub const SNIPPET = "snippet";
     pub const MONO = "mono";
+    pub const DEV_OBJECT = "dev_object";
+    pub const DOCS_TYPE = "docs";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1704,6 +1577,8 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, REPL)) return .repl;
         if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
         if (std.mem.eql(u8, str, MONO)) return .mono;
+        if (std.mem.eql(u8, str, DEV_OBJECT)) return .dev_object;
+        if (std.mem.eql(u8, str, DOCS_TYPE)) return .docs;
         return Error.InvalidNodeType;
     }
 
@@ -1719,6 +1594,8 @@ pub const NodeType = enum {
             .repl => "repl",
             .snippet => "snippet",
             .mono => "mono",
+            .dev_object => "dev_object",
+            .docs => "docs",
         };
     }
 };
@@ -1727,15 +1604,24 @@ const Meta = struct {
     description: []const u8,
     node_type: NodeType,
     filename: ?[]const u8 = null,
+    skip: bool = false,
+    include_canonicalize_diagnostics: bool = false,
+    include_module_validation_diagnostics: bool = false,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
+    const SKIP_START: []const u8 = "skip=";
+    const CANONICALIZE_DIAGNOSTICS_START: []const u8 = "canonicalize_diagnostics=";
+    const MODULE_VALIDATION_DIAGNOSTICS_START: []const u8 = "module_validation_diagnostics=";
 
     fn fromString(text: []const u8) Error!Meta {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var desc: []const u8 = "";
         var node_type: NodeType = .file;
         var filename: ?[]const u8 = null;
+        var skip: bool = false;
+        var include_canonicalize_diagnostics: bool = false;
+        var include_module_validation_diagnostics: bool = false;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
@@ -1749,6 +1635,12 @@ const Meta = struct {
                 } else {
                     node_type = try NodeType.fromString(ty);
                 }
+            } else if (std.mem.startsWith(u8, line, SKIP_START)) {
+                skip = std.mem.eql(u8, line[(SKIP_START.len)..], "true");
+            } else if (std.mem.startsWith(u8, line, CANONICALIZE_DIAGNOSTICS_START)) {
+                include_canonicalize_diagnostics = std.mem.eql(u8, line[(CANONICALIZE_DIAGNOSTICS_START.len)..], "true");
+            } else if (std.mem.startsWith(u8, line, MODULE_VALIDATION_DIAGNOSTICS_START)) {
+                include_module_validation_diagnostics = std.mem.eql(u8, line[(MODULE_VALIDATION_DIAGNOSTICS_START.len)..], "true");
             }
         }
 
@@ -1756,6 +1648,9 @@ const Meta = struct {
             .description = desc,
             .node_type = node_type,
             .filename = filename,
+            .skip = skip,
+            .include_canonicalize_diagnostics = include_canonicalize_diagnostics,
+            .include_module_validation_diagnostics = include_module_validation_diagnostics,
         };
     }
 
@@ -1768,6 +1663,21 @@ const Meta = struct {
         if (self.filename) |fname| {
             try writer.writeAll(":");
             try writer.writeAll(fname);
+        }
+        if (self.skip) {
+            try writer.writeAll("\n");
+            try writer.writeAll(SKIP_START);
+            try writer.writeAll("true");
+        }
+        if (self.include_canonicalize_diagnostics) {
+            try writer.writeAll("\n");
+            try writer.writeAll(CANONICALIZE_DIAGNOSTICS_START);
+            try writer.writeAll("true");
+        }
+        if (self.include_module_validation_diagnostics) {
+            try writer.writeAll("\n");
+            try writer.writeAll(MODULE_VALIDATION_DIAGNOSTICS_START);
+            try writer.writeAll("true");
         }
     }
 
@@ -1825,6 +1735,8 @@ pub const Content = struct {
     expected: ?[]const u8,
     output: ?[]const u8,
     formatted: ?[]const u8,
+    dev_output: ?[]const u8,
+    docs_output: ?[]const u8,
     has_canonicalize: bool,
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
@@ -1832,6 +1744,8 @@ pub const Content = struct {
         var expected: ?[]const u8 = undefined;
         var output: ?[]const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
+        var dev_output: ?[]const u8 = undefined;
+        var docs_output: ?[]const u8 = undefined;
         var has_canonicalize: bool = false;
 
         if (ranges.get(.source)) |value| {
@@ -1859,6 +1773,18 @@ pub const Content = struct {
             formatted = null;
         }
 
+        if (ranges.get(.dev_output)) |value| {
+            dev_output = value.extract(content);
+        } else {
+            dev_output = null;
+        }
+
+        if (ranges.get(.docs)) |value| {
+            docs_output = value.extract(content);
+        } else {
+            docs_output = null;
+        }
+
         if (ranges.get(.canonicalize)) |_| {
             has_canonicalize = true;
         }
@@ -1872,6 +1798,8 @@ pub const Content = struct {
                 .expected = expected,
                 .output = output,
                 .formatted = formatted,
+                .dev_output = dev_output,
+                .docs_output = docs_output,
                 .has_canonicalize = has_canonicalize,
             };
         } else {
@@ -2231,6 +2159,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const file = parse_ast.store.getFile();
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
+        .dev_object, .docs => unreachable, // Handled separately
     }
 
     // Only generate section if we have content on the stack
@@ -2300,6 +2229,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .snippet => {
             try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
+        .dev_object, .docs => unreachable, // Handled separately
     }
 
     const is_changed = !std.mem.eql(u8, formatted.written(), content.source);
@@ -2398,7 +2328,7 @@ fn computeTransformedExprType(
         const needed_len: usize = @intCast(@intFromEnum(expr_var) + 1);
         var i: usize = current_len;
         while (i < needed_len) : (i += 1) {
-            _ = try can_ir.types.fresh();
+            try can_ir.types.fresh();
         }
     }
 
@@ -2492,7 +2422,7 @@ fn computeTransformedExprType(
                 const needed_len: usize = @intCast(@intFromEnum(pattern_var) + 1);
                 var i: usize = current_len;
                 while (i < needed_len) : (i += 1) {
-                    _ = try can_ir.types.fresh();
+                    try can_ir.types.fresh();
                 }
             }
             return pattern_var;
@@ -2557,7 +2487,7 @@ fn computeTransformedExprType(
 fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) ![]const u8 {
     var seen = std.ArrayList(types.Var).empty;
     defer seen.deinit(allocator);
-    return getDefaultedTypeStringWithSeen(allocator, can_ir, type_var, &seen);
+    return getDefaultedTypeStringWithSeen(allocator, can_ir, type_var, &seen, true);
 }
 
 fn getDefaultedTypeStringWithSeen(
@@ -2565,6 +2495,7 @@ fn getDefaultedTypeStringWithSeen(
     can_ir: *ModuleEnv,
     type_var: types.Var,
     seen: *std.ArrayList(types.Var),
+    is_top_level: bool,
 ) ![]const u8 {
     const resolved = can_ir.types.resolveVar(type_var);
 
@@ -2594,40 +2525,46 @@ fn getDefaultedTypeStringWithSeen(
         .structure => |flat_type| {
             switch (flat_type) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    // Recursively default function argument and return types
-                    // Use Roc syntax: a, b -> c (not curried a -> b -> c)
-                    var result = std.array_list.Managed(u8).init(allocator);
-                    errdefer result.deinit();
-
-                    const arg_vars = can_ir.types.sliceVars(func.args);
-                    for (arg_vars, 0..) |arg_var, i| {
-                        if (i > 0) try result.appendSlice(", ");
-                        const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen);
-                        defer allocator.free(arg_type);
-                        try result.appendSlice(arg_type);
-                    }
-
-                    try result.appendSlice(" -> ");
-
-                    // Check if return type is also a function - if so, wrap in parens
-                    const ret_resolved = can_ir.types.resolveVar(func.ret);
-                    const ret_is_fn = ret_resolved.desc.content == .structure and
-                        (ret_resolved.desc.content.structure == .fn_pure or
-                            ret_resolved.desc.content.structure == .fn_effectful or
-                            ret_resolved.desc.content.structure == .fn_unbound);
-
-                    const ret_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, func.ret, seen);
-                    defer allocator.free(ret_type);
-
-                    if (ret_is_fn) {
-                        try result.append('(');
-                        try result.appendSlice(ret_type);
-                        try result.append(')');
+                    // For top-level function types, let TypeWriter handle it
+                    // so that where clauses are properly included
+                    if (is_top_level) {
+                        // Fall through to TypeWriter at the end
                     } else {
-                        try result.appendSlice(ret_type);
-                    }
+                        // For nested function types (e.g., in record fields), build manually
+                        // Use Roc syntax: a, b -> c (not curried a -> b -> c)
+                        var result = std.array_list.Managed(u8).init(allocator);
+                        errdefer result.deinit();
 
-                    return result.toOwnedSlice();
+                        const arg_vars = can_ir.types.sliceVars(func.args);
+                        for (arg_vars, 0..) |arg_var, i| {
+                            if (i > 0) try result.appendSlice(", ");
+                            const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen, false);
+                            defer allocator.free(arg_type);
+                            try result.appendSlice(arg_type);
+                        }
+
+                        try result.appendSlice(" -> ");
+
+                        // Check if return type is also a function - if so, wrap in parens
+                        const ret_resolved = can_ir.types.resolveVar(func.ret);
+                        const ret_is_fn = ret_resolved.desc.content == .structure and
+                            (ret_resolved.desc.content.structure == .fn_pure or
+                                ret_resolved.desc.content.structure == .fn_effectful or
+                                ret_resolved.desc.content.structure == .fn_unbound);
+
+                        const ret_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, func.ret, seen, false);
+                        defer allocator.free(ret_type);
+
+                        if (ret_is_fn) {
+                            try result.append('(');
+                            try result.appendSlice(ret_type);
+                            try result.append(')');
+                        } else {
+                            try result.appendSlice(ret_type);
+                        }
+
+                        return result.toOwnedSlice();
+                    }
                 },
                 .tag_union => |tag_union| {
                     // Emit tag union as closed union (without extension variable)
@@ -2648,7 +2585,7 @@ fn getDefaultedTypeStringWithSeen(
                             try result.append('(');
                             for (arg_vars, 0..) |arg_var, j| {
                                 if (j > 0) try result.appendSlice(", ");
-                                const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen);
+                                const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen, false);
                                 defer allocator.free(arg_type);
                                 try result.appendSlice(arg_type);
                             }
@@ -2675,7 +2612,7 @@ fn getDefaultedTypeStringWithSeen(
                         try result.appendSlice(field_name);
                         try result.appendSlice(" : ");
 
-                        const field_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, field_var, seen);
+                        const field_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, field_var, seen, false);
                         defer allocator.free(field_type);
                         try result.appendSlice(field_type);
                     }
@@ -2692,7 +2629,16 @@ fn getDefaultedTypeStringWithSeen(
     // Use TypeWriter for all other cases - it has proper cycle detection
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
-    try type_writer.write(type_var, .one_line);
+
+    // Enable numeral defaulting for MONO output - flex vars with from_numeral
+    // constraint should display as "Dec" instead of showing the constraint
+    type_writer.setDefaultNumeralsToDec(true);
+
+    if (is_top_level) {
+        try type_writer.write(type_var, .one_line);
+    } else {
+        try type_writer.writeWithoutConstraints(type_var);
+    }
 
     // Copy the result since type_writer will be deinitialized
     return allocator.dupe(u8, type_writer.get());
@@ -2817,11 +2763,15 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Parse the MONO output as a headerless type module
-    var validation_ast = parse.parse(&validation_env.common, allocator) catch |err| {
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const validation_ast = parse.parse(&allocators, &validation_env.common) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
         return false;
     };
-    defer validation_ast.deinit(allocator);
+    defer validation_ast.deinit();
 
     // Check for parse errors
     if (validation_ast.hasErrors()) {
@@ -2846,19 +2796,18 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         return false;
     };
 
-    // Set up module_envs with builtin types if available
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs.deinit();
-
-    if (config.builtin_module) |builtin_env| {
-        Can.populateModuleEnvs(&module_envs, &validation_env, builtin_env, config.builtin_indices) catch |err| {
-            std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate module envs: {}", .{ source_path, err });
-            return false;
-        };
-    }
+    const builtin_env = config.builtin_module orelse {
+        std.log.err("MONO VALIDATION ERROR in {s}: Missing builtin module context", .{source_path});
+        return false;
+    };
 
     // Canonicalize the parsed MONO output
-    var czer = Can.init(&validation_env, &validation_ast, &module_envs) catch |err| {
+    var czer = Can.initModule(&allocators, &validation_env, validation_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = config.builtin_indices,
+        },
+    }) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
         return false;
     };
@@ -2916,12 +2865,25 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         .builtin_indices = config.builtin_indices,
     };
 
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs_map.deinit();
+
+    Can.populateModuleEnvs(&module_envs_map, &validation_env, builtin_env, config.builtin_indices) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate auto-imported types: {}", .{ source_path, err });
+        return false;
+    };
+
+    const imported_modules: []const *const ModuleEnv = &.{builtin_env};
+    validation_env.imports.clearResolvedModules();
+    validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules);
+    validation_env.imports.markUnresolvedImportsFailedBeforeChecking();
+
     var checker = Check.init(
         allocator,
         &validation_env.types,
         &validation_env,
-        &.{}, // No imported modules
-        &module_envs,
+        imported_modules,
+        &module_envs_map,
         &validation_env.store.regions,
         builtin_ctx,
     ) catch |err| {
@@ -2938,7 +2900,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     // Check for type-checking problems
     const type_problems = checker.problems.problems.items;
     if (type_problems.len > 0) {
-        std.log.err("MONO TYPE ERROR in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
+        std.log.err("TYPE ERROR IN GENERATED ROC SOURCE in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
         for (type_problems) |problem| {
             const tag_name = @tagName(problem);
             std.log.err("  - {s}", .{tag_name});
@@ -2982,8 +2944,12 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    var parse_ast = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
 
     // Check for parse errors - if there are any, we can't format
     if (parse_ast.hasErrors()) {
@@ -2992,13 +2958,46 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
 
     var result: std.Io.Writer.Allocating = .init(gpa);
     errdefer result.deinit();
-    try fmt.formatAst(parse_ast, &result.writer);
+    try fmt.formatAst(parse_ast.*, &result.writer);
 
     return try result.toOwnedSlice();
 }
 
+/// Check if a type string contains type variables (single lowercase letters like 'a', 'b').
+/// This indicates a polymorphic type that hasn't been fully monomorphized.
+fn typeStringIsPolymorphic(type_str: []const u8) bool {
+    var i: usize = 0;
+    while (i < type_str.len) : (i += 1) {
+        const c = type_str[i];
+        if (c >= 'a' and c <= 'z') {
+            // Check if this is a standalone single letter (not part of a word)
+            const prev_is_ident = i > 0 and (std.ascii.isAlphanumeric(type_str[i - 1]) or type_str[i - 1] == '_');
+            const next_is_ident = i + 1 < type_str.len and (std.ascii.isAlphanumeric(type_str[i + 1]) or type_str[i + 1] == '_');
+            if (!prev_is_ident and !next_is_ident) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Check if an identifier name appears as a reference in the given text.
+/// Checks for whole-word matches (not substrings of other identifiers).
+fn isIdentReferencedIn(name: []const u8, text: []const u8) bool {
+    if (name.len == 0) return false;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, text, pos, name)) |idx| {
+        const before_ok = idx == 0 or (!std.ascii.isAlphanumeric(text[idx - 1]) and text[idx - 1] != '_');
+        const after_idx = idx + name.len;
+        const after_ok = after_idx >= text.len or (!std.ascii.isAlphanumeric(text[after_idx]) and text[after_idx] != '_');
+        if (before_ok and after_ok) return true;
+        pos = idx + 1;
+    }
+    return false;
+}
+
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config, lifted_functions: []const LambdaLifter.LiftedFunction) !void {
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) !void {
     // First, build the mono source in a buffer for validation
     var mono_buffer = std.ArrayList(u8).empty;
     defer mono_buffer.deinit(output.gpa);
@@ -3007,60 +3006,26 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
 
-    // Phase 5: Output lifted function definitions first (before regular definitions)
-    // These are the closures that have been lifted to top-level functions.
-    // Dispatch now calls these functions instead of inlining the lambda bodies.
-    for (lifted_functions) |lifted_fn| {
-        // Get the function name and convert to a valid Roc identifier
-        const fn_name = can_ir.getIdent(lifted_fn.name);
+    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
 
-        // Convert # prefix to 'c' (for compiler-generated closures like #1_foo -> c1_foo)
-        // or uppercase first char to lowercase for backwards compatibility
-        var fn_name_lower = try output.gpa.alloc(u8, fn_name.len);
-        defer output.gpa.free(fn_name_lower);
-        @memcpy(fn_name_lower, fn_name);
-        if (fn_name_lower.len > 0 and fn_name_lower[0] == '#') {
-            fn_name_lower[0] = 'c';
-        } else if (fn_name_lower.len > 0 and fn_name_lower[0] >= 'A' and fn_name_lower[0] <= 'Z') {
-            fn_name_lower[0] = fn_name_lower[0] + ('a' - 'A');
+    // Two-pass approach: first emit all defs to collect their text,
+    // then skip unreferenced polymorphic defs (dead code from constant folding).
+    const DefInfo = struct {
+        pattern_output: []const u8,
+        expr_output: []const u8,
+        type_str: []const u8,
+        is_polymorphic: bool,
+    };
+    var def_infos = std.ArrayList(DefInfo).empty;
+    defer {
+        for (def_infos.items) |info| {
+            output.gpa.free(info.pattern_output);
+            output.gpa.free(info.expr_output);
+            output.gpa.free(info.type_str);
         }
-
-        // Output as a proper definition
-        try mono_buffer.appendSlice(output.gpa, fn_name_lower);
-        try mono_buffer.appendSlice(output.gpa, " = |");
-
-        // Emit the original lambda arguments
-        const args = can_ir.store.slicePatterns(lifted_fn.args);
-        for (args, 0..) |arg_pattern, i| {
-            if (i > 0) {
-                try mono_buffer.appendSlice(output.gpa, ", ");
-            }
-            emitter.reset();
-            try emitter.emitPattern(arg_pattern);
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        }
-
-        // Add the captures parameter if there are captures
-        if (lifted_fn.captures_pattern) |captures_pat| {
-            if (args.len > 0) {
-                try mono_buffer.appendSlice(output.gpa, ", ");
-            }
-            emitter.reset();
-            try emitter.emitPattern(captures_pat);
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        }
-
-        try mono_buffer.appendSlice(output.gpa, "| ");
-
-        // Emit the transformed body
-        emitter.reset();
-        try emitter.emitExpr(lifted_fn.body);
-        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        try mono_buffer.appendSlice(output.gpa, "\n\n");
+        def_infos.deinit(output.gpa);
     }
 
-    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-    const has_lifted_functions = lifted_functions.len > 0;
     for (defs) |def_idx| {
         const def = can_ir.store.getDef(def_idx);
 
@@ -3068,37 +3033,59 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         emitter.reset();
         try emitter.emitPattern(def.pattern);
         const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
-        defer output.gpa.free(pattern_output);
 
         // Emit the expression (right side of =)
         emitter.reset();
         try emitter.emitExpr(def.expr);
+        const expr_output = try output.gpa.dupe(u8, emitter.getOutput());
 
-        // For closure transforms, skip type annotations since computing them correctly
-        // is complex (transformed expressions have new indices without proper type vars).
-        // For non-closure transforms, emit type annotations using the pattern's type.
-        if (has_lifted_functions) {
-            // Skip type annotations - just emit: name = expr
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " = ");
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-            try mono_buffer.appendSlice(output.gpa, "\n\n");
-        } else {
-            // Use the pattern's type from type checking (not computed from expression)
-            const pattern_type = ModuleEnv.varFrom(def.pattern);
-            const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
-            defer output.gpa.free(type_str);
+        // Use the pattern's type from type checking (not computed from expression)
+        const pattern_type = ModuleEnv.varFrom(def.pattern);
+        const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
 
-            // Build the mono source: name : Type\nname = expr\n
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " : ");
-            try mono_buffer.appendSlice(output.gpa, type_str);
-            try mono_buffer.appendSlice(output.gpa, "\n");
-            try mono_buffer.appendSlice(output.gpa, pattern_output);
-            try mono_buffer.appendSlice(output.gpa, " = ");
-            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-            try mono_buffer.appendSlice(output.gpa, "\n\n");
+        // Check if the type is polymorphic (contains type variables like 'a', 'b', etc.)
+        const is_polymorphic = typeStringIsPolymorphic(type_str);
+
+        try def_infos.append(output.gpa, .{
+            .pattern_output = pattern_output,
+            .expr_output = expr_output,
+            .type_str = type_str,
+            .is_polymorphic = is_polymorphic,
+        });
+    }
+
+    // Build a combined string of all non-polymorphic expressions to check references
+    var all_exprs = std.ArrayList(u8).empty;
+    defer all_exprs.deinit(output.gpa);
+    for (def_infos.items) |info| {
+        if (!info.is_polymorphic) {
+            try all_exprs.appendSlice(output.gpa, info.expr_output);
+            try all_exprs.append(output.gpa, '\n');
         }
+    }
+
+    for (def_infos.items) |info| {
+        // Skip polymorphic defs that are unreferenced by any other def's expression.
+        // These are dead code from constant folding (e.g., func was called but the
+        // result was folded to a constant, leaving func's polymorphic type unresolvable).
+        if (info.is_polymorphic) {
+            if (!isIdentReferencedIn(info.pattern_output, all_exprs.items)) continue;
+        }
+
+        // Only monomorphic definitions get explicit annotations here. This
+        // snapshot emitter reconstructs source for tooling; constrained
+        // polymorphic helper types can contain static-dispatch constraints that
+        // are not valid as standalone generated source annotations.
+        if (!info.is_polymorphic) {
+            try mono_buffer.appendSlice(output.gpa, info.pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " : ");
+            try mono_buffer.appendSlice(output.gpa, info.type_str);
+            try mono_buffer.appendSlice(output.gpa, "\n");
+        }
+        try mono_buffer.appendSlice(output.gpa, info.pattern_output);
+        try mono_buffer.appendSlice(output.gpa, " = ");
+        try mono_buffer.appendSlice(output.gpa, info.expr_output);
+        try mono_buffer.appendSlice(output.gpa, "\n\n");
     }
 
     // Trim trailing newline (we added one too many at the end)
@@ -3301,41 +3288,60 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
 
     // If flag --fuzz-corpus is passed, write the SOURCE to our corpus
     if (config.maybe_fuzz_corpus_path) |path| {
-        const rand_file_name = [_][]const u8{
-            path,
-            &[_]u8{
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                rand.intRangeAtMost(u8, 'a', 'z'),
-                '.',
-                'r',
-                'o',
-                'c',
-            },
-        };
+        // For REPL snapshots, write each expression (without ») as a separate corpus file
+        if (content.meta.node_type == .repl) {
+            var parts = std.mem.splitSequence(u8, content.source, "»");
+            // Skip the first part (before the first »)
+            _ = parts.next();
 
-        const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
-        defer gpa.free(corpus_file_path);
-
-        var corpus_file = std.fs.cwd().createFile(corpus_file_path, .{}) catch |err| {
-            std.log.err("failed to create file in '{s}': {s}", .{ config.maybe_fuzz_corpus_path.?, @errorName(err) });
-            return false;
-        };
-        defer corpus_file.close();
-
-        var write_buffer: [4096]u8 = undefined;
-        var corpus_writer = corpus_file.writer(&write_buffer);
-        const writer = &corpus_writer.interface;
-        try writer.writeAll(content.source);
-        try writer.flush();
+            while (parts.next()) |part| {
+                const trimmed = std.mem.trim(u8, part, " \t\r\n");
+                if (trimmed.len > 0) {
+                    try writeCorpusFile(gpa, path, trimmed, rand);
+                }
+            }
+        } else {
+            try writeCorpusFile(gpa, path, content.source, rand);
+        }
     }
 
     return success;
+}
+
+/// Write a single source to the fuzz corpus with a random filename
+fn writeCorpusFile(gpa: Allocator, path: []const u8, source: []const u8, rng: std.Random) !void {
+    const rand_file_name = [_][]const u8{
+        path,
+        &[_]u8{
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            rng.intRangeAtMost(u8, 'a', 'z'),
+            '.',
+            'r',
+            'o',
+            'c',
+        },
+    };
+
+    const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
+    defer gpa.free(corpus_file_path);
+
+    var corpus_file = std.fs.cwd().createFile(corpus_file_path, .{}) catch |err| {
+        std.log.err("failed to create file in '{s}': {s}", .{ path, @errorName(err) });
+        return;
+    };
+    defer corpus_file.close();
+
+    var write_buffer: [4096]u8 = undefined;
+    var corpus_writer = corpus_file.writer(&write_buffer);
+    const writer = &corpus_writer.interface;
+    try writer.writeAll(source);
+    try writer.flush();
 }
 
 fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {
@@ -3353,16 +3359,19 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
         // Look for section headers
         if (idx == 0 or (idx > 0 and content[idx - 1] == '\n')) {
             if (Section.fromString(content[idx..])) |section| {
-                // Only process META, SOURCE, OUTPUT, and EXPECTED sections
-                if (section == .meta or section == .source or section == .expected or section == .output) {
-                    const header_len = section.asString().len;
+                // Only process META, SOURCE, OUTPUT, EXPECTED, and DEV_OUTPUT sections
+                if (section == .meta or section == .source or section == .expected or section == .output or section == .dev_output or section == .docs) {
+                    // Determine header length - for multi-file SOURCE (no ~~~roc after # SOURCE),
+                    // the header is just "# SOURCE\n"
+                    const is_multi_file_source = section == .source and Section.isMultiFileSource(content[idx..]);
+                    const header_len = if (is_multi_file_source) Section.SOURCE_MULTI.len else section.asString().len;
                     const start = idx + header_len;
 
                     // Find the end of this section
                     var end = content.len;
 
-                    // For sections with ~~~ delimiters (META and SOURCE)
-                    if (section == .meta or section == .source) {
+                    // For sections with ~~~ delimiters (META, single-file SOURCE, DEV_OUTPUT)
+                    if (section == .meta or (section == .source and !is_multi_file_source) or section == .dev_output or section == .docs) {
                         // Find the closing ~~~
                         var search_idx = start;
                         while (search_idx < content.len - 3) {
@@ -3378,10 +3387,11 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
                         }
                     } else {
                         // For sections without ~~~ delimiters (EXPECTED, OUTPUT)
-                        // Find the next section header
+                        // or multi-file SOURCE (delimited by next top-level # section)
                         var search_idx = start;
                         while (search_idx < content.len) {
                             if (search_idx == 0 or (search_idx > 0 and content[search_idx - 1] == '\n')) {
+                                // Match top-level section headers (# FOO) but NOT ## sub-headings
                                 if (content[search_idx] == '#' and
                                     search_idx + 1 < content.len and
                                     content[search_idx + 1] == ' ')
@@ -3408,39 +3418,1294 @@ pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
     return try Content.from_ranges(ranges, content);
 }
 
+// Docs Snapshot Processing
+
+/// Process a docs snapshot: parse multi-file source, compile with BuildEnv,
+/// extract documentation from compiled modules, and serialize to S-expressions.
+fn processDocsSnapshot(
+    allocator: Allocator,
+    content: Content,
+    output_path: []const u8,
+    config: *const Config,
+) !bool {
+    log("Processing docs snapshot: {s}", .{output_path});
+
+    // 1. Parse multi-file source
+    const source_files = try parseMultiFileSource(allocator, content.source);
+    defer allocator.free(source_files);
+
+    if (source_files.len == 0) {
+        std.log.err("docs snapshot has no source files (need ## filename.roc sub-headings)", .{});
+        return false;
+    }
+
+    // 2. Write source files to a temp directory
+    var tmp_dir_name_buf: [256]u8 = undefined;
+    const tmp_dir_name = std.fmt.bufPrint(&tmp_dir_name_buf, "/tmp/roc_snapshot_docs_{d}", .{
+        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
+    }) catch return false;
+
+    std.fs.cwd().makePath(tmp_dir_name) catch |err| {
+        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
+        return false;
+    };
+    defer std.fs.cwd().deleteTree(tmp_dir_name) catch {};
+
+    // Find the app file (first .roc file, or explicitly "app.roc")
+    var app_filename: ?[]const u8 = null;
+    for (source_files) |sf| {
+        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
+        defer allocator.free(sub_path);
+        std.fs.cwd().writeFile(.{
+            .sub_path = sub_path,
+            .data = sf.content,
+        }) catch |err| {
+            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
+            return false;
+        };
+        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
+            app_filename = sf.filename;
+        }
+    }
+
+    const app_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, app_filename.? });
+    defer allocator.free(app_path);
+
+    // 3. Build with BuildEnv
+    const BuildEnv = compile.BuildEnv;
+    const native_target = roc_target.RocTarget.detectNative();
+
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd) catch |err| {
+        std.log.err("Failed to init BuildEnv: {}", .{err});
+        return false;
+    };
+    defer build_env.deinit();
+    build_env.setFinalizeExecutableArtifacts(false);
+
+    build_env.build(app_path) catch |err| {
+        std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
+        return false;
+    };
+
+    // 4. Get compiled modules and extract docs
+    const modules = build_env.getCompiledModules(allocator) catch |err| {
+        std.log.err("Failed to get compiled modules: {}", .{err});
+        return false;
+    };
+    defer allocator.free(modules);
+
+    if (modules.len == 0) {
+        std.log.err("No modules were compiled", .{});
+        return false;
+    }
+
+    // Extract docs from each compiled module
+    var module_docs_list = std.ArrayList(docs_mod.DocModel.ModuleDocs).empty;
+    defer {
+        for (module_docs_list.items) |*md| md.deinit(allocator);
+        module_docs_list.deinit(allocator);
+    }
+
+    for (modules) |mod| {
+        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, mod.package_name, mod.path) catch |err| {
+            std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
+            continue;
+        };
+        // Override the module name with the clean name from CompiledModuleInfo
+        allocator.free(mod_docs.name);
+        mod_docs.name = allocator.dupe(u8, mod.name) catch continue;
+        module_docs_list.append(allocator, mod_docs) catch continue;
+    }
+
+    // Build PackageDocs
+    const package_name = try allocator.dupe(u8, "test-app");
+    const modules_owned = try allocator.dupe(docs_mod.DocModel.ModuleDocs, module_docs_list.items);
+    // Clear the list so deinit doesn't double-free
+    module_docs_list.clearRetainingCapacity();
+
+    var package_docs = docs_mod.DocModel.PackageDocs{
+        .name = package_name,
+        .modules = modules_owned,
+    };
+    defer package_docs.deinit(allocator);
+
+    // 5. Serialize to S-expression
+    var sexpr_buffer = std.ArrayList(u8).empty;
+    defer sexpr_buffer.deinit(allocator);
+    var sexpr_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &sexpr_buffer);
+
+    try package_docs.writeToSExpr(&sexpr_writer.writer);
+
+    sexpr_buffer = sexpr_writer.toArrayList();
+    const new_docs_text = sexpr_buffer.items;
+
+    // 6. Compare against existing DOCS section and decide what to write
+    var success = true;
+    const write_new_docs = blk: {
+        if (content.docs_output == null) {
+            // First run - always write new docs
+            break :blk true;
+        }
+        switch (config.expected_section_command) {
+            .update => break :blk true,
+            .check => {
+                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
+                    std.debug.print("\nDOCS mismatch in {s}\n\n", .{output_path});
+                    std.debug.print("Expected:\n{s}\n\nActual:\n{s}\n", .{ existing_trimmed, new_trimmed });
+                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DOCS output.\n\n", .{});
+                    success = false;
+                }
+                break :blk false;
+            },
+            .none => {
+                const existing_trimmed = std.mem.trimRight(u8, content.docs_output.?, " \t\r\n");
+                const new_trimmed = std.mem.trimRight(u8, new_docs_text, " \t\r\n");
+                if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
+                    std.debug.print("\nDOCS warning: output changed in {s}\n", .{output_path});
+                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                }
+                break :blk false;
+            },
+        }
+    };
+
+    // 7. Generate output file
+    var md_buffer = std.ArrayList(u8).empty;
+    defer md_buffer.deinit(allocator);
+    var md_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer);
+
+    // META section
+    try md_writer.writer.writeAll(Section.META);
+    try content.meta.format(&md_writer.writer);
+    try md_writer.writer.writeAll("\n" ++ Section.SECTION_END);
+
+    // SOURCE section (preserve original multi-file format)
+    try md_writer.writer.writeAll(Section.SOURCE_MULTI);
+    try md_writer.writer.writeAll(content.source);
+    // Ensure trailing newline before next section
+    if (content.source.len > 0 and content.source[content.source.len - 1] != '\n') {
+        try md_writer.writer.writeByte('\n');
+    }
+
+    // DOCS section
+    try md_writer.writer.writeAll(Section.DOCS);
+    if (write_new_docs) {
+        try md_writer.writer.writeAll(new_docs_text);
+    } else {
+        // Preserve existing DOCS content
+        try md_writer.writer.writeAll(content.docs_output.?);
+        // Ensure trailing newline
+        if (content.docs_output.?.len > 0 and content.docs_output.?[content.docs_output.?.len - 1] != '\n') {
+            try md_writer.writer.writeByte('\n');
+        }
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    // Transfer from writer to buffer
+    md_buffer = md_writer.toArrayList();
+
+    // Write the output file
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+    return success;
+}
+
+// Dev Object Snapshot Processing
+
+/// Represents a single source file extracted from a multi-file SOURCE section
+const SourceFile = struct {
+    filename: []const u8,
+    content: []const u8,
+};
+
+/// Parse multi-file SOURCE section with ## filename.roc sub-headings.
+///
+/// Format:
+///   ## app.roc
+///   ~~~roc
+///   ...code...
+///   ~~~
+///   ## platform.roc
+///   ~~~roc
+///   ...code...
+///   ~~~
+fn parseMultiFileSource(allocator: Allocator, source_text: []const u8) ![]SourceFile {
+    var files = std.ArrayList(SourceFile).empty;
+    errdefer files.deinit(allocator);
+
+    var idx: usize = 0;
+    while (idx < source_text.len) {
+        // Look for "## " at line start
+        const is_line_start = idx == 0 or source_text[idx - 1] == '\n';
+        if (is_line_start and idx + 3 < source_text.len and
+            source_text[idx] == '#' and source_text[idx + 1] == '#' and source_text[idx + 2] == ' ')
+        {
+            // Extract filename (rest of line)
+            const name_start = idx + 3;
+            const name_end = std.mem.indexOfScalarPos(u8, source_text, name_start, '\n') orelse source_text.len;
+            const filename = std.mem.trim(u8, source_text[name_start..name_end], " \t\r");
+            idx = name_end;
+
+            // Find ~~~roc block
+            const roc_marker = "~~~roc\n";
+            if (std.mem.indexOfPos(u8, source_text, idx, roc_marker)) |roc_start| {
+                const content_start = roc_start + roc_marker.len;
+                // Find closing ~~~
+                if (std.mem.indexOfPos(u8, source_text, content_start, "~~~")) |content_end| {
+                    try files.append(allocator, .{
+                        .filename = filename,
+                        .content = source_text[content_start..content_end],
+                    });
+                    idx = content_end + 3;
+                    continue;
+                }
+            }
+        }
+        idx += 1;
+    }
+
+    return files.toOwnedSlice(allocator);
+}
+
+/// Result of cross-compiling for a single target
+const TargetHashResult = struct {
+    target_name: []const u8,
+    hash_hex: [64]u8, // Blake3 produces 256-bit (32 byte) hash = 64 hex chars
+    supported: bool,
+};
+
+/// Compare two hash text blocks (target=hash lines) for equality,
+/// ignoring trailing whitespace differences.
+fn hashTextMatches(existing: []const u8, new: []const u8) bool {
+    const existing_trimmed = std.mem.trimRight(u8, existing, " \t\r\n");
+    const new_trimmed = std.mem.trimRight(u8, new, " \t\r\n");
+    return std.mem.eql(u8, existing_trimmed, new_trimmed);
+}
+
+/// Print a table showing which targets have hash mismatches.
+fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
+    std.debug.print("  {s:<18} | {s:<64} | {s}\n", .{ "target", "expected", "actual" });
+    std.debug.print("  {s:-<18} | {s:-<64} | {s:-<64}\n", .{ "", "", "" });
+
+    // Parse existing hashes into a map-like iteration
+    var new_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, new, " \t\r\n"), '\n');
+    var existing_lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, existing, " \t\r\n"), '\n');
+
+    while (new_lines.next()) |new_line| {
+        const new_eq = std.mem.indexOfScalar(u8, new_line, '=') orelse continue;
+        const target = new_line[0..new_eq];
+        const new_hash = new_line[new_eq + 1 ..];
+
+        // Find matching target in existing
+        existing_lines.reset();
+        var old_hash: ?[]const u8 = null;
+        while (existing_lines.next()) |existing_line| {
+            const ex_eq = std.mem.indexOfScalar(u8, existing_line, '=') orelse continue;
+            if (std.mem.eql(u8, existing_line[0..ex_eq], target)) {
+                old_hash = existing_line[ex_eq + 1 ..];
+                break;
+            }
+        }
+
+        if (old_hash) |oh| {
+            if (std.mem.eql(u8, oh, new_hash)) {
+                std.debug.print("  {s:<18} | (matches)\n", .{target});
+            } else {
+                std.debug.print("  {s:<18} | {s:<64} | {s}\n", .{ target, oh, new_hash });
+            }
+        } else {
+            std.debug.print("  {s:<18} | (new)                                                            | {s}\n", .{ target, new_hash });
+        }
+    }
+}
+
+fn snapshotRootRequestByOrder(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    order: u32,
+) check.CheckedArtifact.RootRequest {
+    for (root_artifact.root_requests.requests) |request| {
+        if (request.order == order) return request;
+    }
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
+    }
+    unreachable;
+}
+
+fn snapshotProvidedEntrypointName(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root: check.CheckedArtifact.RootRequest,
+) []const u8 {
+    const def_idx = switch (root.source) {
+        .def => |def| def,
+        else => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
+            }
+            unreachable;
+        },
+    };
+    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
+        }
+        unreachable;
+    };
+
+    for (root_artifact.provides_requires.provides) |entry| {
+        if (entry.source_name == top_level.source_name) {
+            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
+        }
+    }
+
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic(
+            "snapshot invariant violated: exported platform root has no published FFI symbol",
+            .{},
+        );
+    }
+    unreachable;
+}
+
+fn snapshotNativeEntrypoints(
+    allocator: Allocator,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) ![]backend.Entrypoint {
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
+                .{ root_procs.len, root_metadata.len },
+            );
+        }
+        unreachable;
+    }
+
+    var entrypoints = std.ArrayList(backend.Entrypoint).empty;
+    errdefer {
+        for (entrypoints.items) |entrypoint| {
+            allocator.free(entrypoint.symbol_name);
+            allocator.free(entrypoint.arg_layouts);
+        }
+        entrypoints.deinit(allocator);
+    }
+
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.abi != .platform or metadata.exposure != .exported) continue;
+        const root = snapshotRootRequestByOrder(root_artifact, metadata.order);
+        if (root.kind != .provided_export) continue;
+
+        const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_locals = lowered.lir_result.store.getLocalSpan(proc_spec.args);
+        const arg_layouts = try allocator.alloc(layout.Idx, arg_locals.len);
+        var arg_layouts_owned = true;
+        errdefer if (arg_layouts_owned) allocator.free(arg_layouts);
+
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
+        }
+
+        const entrypoint_name = snapshotProvidedEntrypointName(root_artifact, root);
+        const symbol_name = try std.fmt.allocPrint(allocator, "roc__{s}", .{entrypoint_name});
+        var symbol_name_owned = true;
+        errdefer if (symbol_name_owned) allocator.free(symbol_name);
+
+        try entrypoints.append(allocator, .{
+            .symbol_name = symbol_name,
+            .proc = root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc_spec.ret_layout,
+        });
+        arg_layouts_owned = false;
+        symbol_name_owned = false;
+    }
+
+    return try entrypoints.toOwnedSlice(allocator);
+}
+
+fn snapshotHasProvidedProcedureExports(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) bool {
+    for (root_artifact.provided_exports.exports) |provided| {
+        switch (provided) {
+            .procedure => return true,
+            .data => {},
+        }
+    }
+    return false;
+}
+
+fn snapshotHasProvidedDataExports(
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+) bool {
+    for (root_artifact.provided_exports.exports) |provided| {
+        switch (provided) {
+            .data => return true,
+            .procedure => {},
+        }
+    }
+    return false;
+}
+
+/// Process a dev_object snapshot: parse multi-file source, compile with BuildEnv,
+/// lower through checked artifacts to LIR, cross-compile for all targets, and
+/// record blake3 hashes.
+fn processDevObjectSnapshot(
+    allocator: Allocator,
+    content: Content,
+    output_path: []const u8,
+    config: *const Config,
+) !bool {
+    log("Processing dev_object snapshot: {s}", .{output_path});
+
+    const source_files = try parseMultiFileSource(allocator, content.source);
+    defer allocator.free(source_files);
+
+    if (source_files.len == 0) {
+        std.log.err("dev_object snapshot has no source files (need ## filename.roc sub-headings)", .{});
+        return false;
+    }
+
+    var tmp_dir_name_buf: [256]u8 = undefined;
+    const tmp_dir_name = std.fmt.bufPrint(&tmp_dir_name_buf, "/tmp/roc_snapshot_dev_{d}", .{
+        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
+    }) catch return false;
+
+    std.fs.cwd().makePath(tmp_dir_name) catch |err| {
+        std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
+        return false;
+    };
+    defer std.fs.cwd().deleteTree(tmp_dir_name) catch {};
+
+    var app_filename: ?[]const u8 = null;
+    for (source_files) |sf| {
+        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
+        defer allocator.free(sub_path);
+        std.fs.cwd().writeFile(.{
+            .sub_path = sub_path,
+            .data = sf.content,
+        }) catch |err| {
+            std.log.err("Failed to write {s}: {}", .{ sf.filename, err });
+            return false;
+        };
+        if (std.mem.eql(u8, sf.filename, "app.roc") or app_filename == null) {
+            app_filename = sf.filename;
+        }
+    }
+
+    const app_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, app_filename.? });
+    defer allocator.free(app_path);
+
+    const BuildEnv = compile.BuildEnv;
+    const native_target = roc_target.RocTarget.detectNative();
+
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, native_target, config.cwd) catch |err| {
+        std.log.err("Failed to init BuildEnv: {}", .{err});
+        return false;
+    };
+    defer build_env.deinit();
+
+    build_env.build(app_path) catch |err| {
+        std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
+        return false;
+    };
+
+    const modules = build_env.getModulesInSerializationOrder(allocator) catch |err| {
+        std.log.err("Failed to get compiled modules: {}", .{err});
+        return false;
+    };
+    defer allocator.free(modules);
+
+    if (modules.len == 0) {
+        std.log.err("No modules were compiled", .{});
+        return false;
+    }
+
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    const imported_artifacts = try build_env.collectImportedArtifactViews(allocator, root_artifact);
+    defer allocator.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
+    defer allocator.free(relation_artifacts);
+
+    var lowered: ?lir.CheckedPipeline.LoweredProgram = null;
+    defer if (lowered) |*lowered_program| lowered_program.deinit();
+
+    var entrypoints: []backend.Entrypoint = &.{};
+    var entrypoints_owned = false;
+    defer if (entrypoints_owned) {
+        for (entrypoints) |entrypoint| {
+            allocator.free(entrypoint.symbol_name);
+            allocator.free(entrypoint.arg_layouts);
+        }
+        allocator.free(entrypoints);
+    };
+
+    if (snapshotHasProvidedProcedureExports(root_artifact)) {
+        lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+            allocator,
+            .{
+                .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                .imports = imported_artifacts,
+            },
+            .{ .requests = root_artifact.root_requests.requests },
+            .{
+                .target_usize = base.target.TargetUsize.native,
+            },
+        );
+
+        if (lowered) |*lowered_program| {
+            entrypoints = try snapshotNativeEntrypoints(allocator, root_artifact, lowered_program);
+        } else unreachable;
+        entrypoints_owned = true;
+    }
+
+    if (entrypoints.len == 0 and !snapshotHasProvidedDataExports(root_artifact)) {
+        std.log.err("Failed to produce any exported platform entrypoints or data symbols", .{});
+        return false;
+    }
+
+    var empty_lir_store = lir.LirStore.init(allocator);
+    defer empty_lir_store.deinit();
+    var empty_layout_store = try layout.Store.init(allocator, base.target.TargetUsize.native);
+    defer empty_layout_store.deinit();
+
+    const RocTarget = roc_target.RocTarget;
+    const Blake3 = std.crypto.hash.Blake3;
+    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+
+    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+    var object_compiler = backend.ObjectFileCompiler.init(allocator);
+
+    inline for (roc_target_fields, 0..) |field, i| {
+        const target: RocTarget = @enumFromInt(field.value);
+        hash_results[i].target_name = field.name;
+
+        target_snapshot: {
+            const arch = target.toCpuArch();
+            if (arch != .x86_64 and arch != .aarch64 and arch != .aarch64_be) {
+                hash_results[i].hash_hex = undefined;
+                hash_results[i].supported = false;
+                break :target_snapshot;
+            }
+
+            const lir_store = if (lowered) |*lowered_program| &lowered_program.lir_result.store else &empty_lir_store;
+            const layout_store = if (lowered) |*lowered_program| &lowered_program.lir_result.layouts else &empty_layout_store;
+            const proc_specs = if (lowered) |*lowered_program| lowered_program.lir_result.store.getProcSpecs() else &.{};
+            const static_data_exports = compile.static_data_exports.buildProvidedDataExports(
+                allocator,
+                .{
+                    .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .imports = imported_artifacts,
+                },
+                if (lowered) |*lowered_program| lowered_program else null,
+                target,
+            ) catch |err| {
+                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
+                hash_results[i].hash_hex = undefined;
+                hash_results[i].supported = false;
+                break :target_snapshot;
+            };
+            defer compile.static_data_exports.deinitProvidedDataExports(allocator, static_data_exports);
+
+            if (object_compiler.compileToObjectFile(
+                lir_store,
+                layout_store,
+                entrypoints,
+                static_data_exports,
+                proc_specs,
+                target,
+            )) |result| {
+                var hasher = Blake3.init(.{});
+                hasher.update(result.object_bytes);
+                var hash: [32]u8 = undefined;
+                hasher.final(&hash);
+                hash_results[i].hash_hex = std.fmt.bytesToHex(hash, .lower);
+                hash_results[i].supported = true;
+                result.allocator.free(result.object_bytes);
+            } else |_| {
+                hash_results[i].hash_hex = undefined;
+                hash_results[i].supported = false;
+            }
+        }
+    }
+
+    var md_buffer = std.ArrayList(u8).empty;
+    defer md_buffer.deinit(allocator);
+    var md_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer);
+
+    try md_writer.writer.writeAll(Section.META);
+    try content.meta.format(&md_writer.writer);
+    try md_writer.writer.writeAll("\n" ++ Section.SECTION_END);
+
+    try md_writer.writer.writeAll(Section.SOURCE_MULTI);
+    try md_writer.writer.writeAll(content.source);
+    if (content.source.len > 0 and content.source[content.source.len - 1] != '\n') {
+        try md_writer.writer.writeByte('\n');
+    }
+
+    try md_writer.writer.writeAll(Section.MONO);
+    for (modules) |mod| {
+        const mod_env = mod.semantic.env;
+        const mod_name = base.module_path.getModuleName(mod_env.module_name);
+
+        var emitter = can.RocEmitter.init(allocator, mod_env);
+        defer emitter.deinit();
+
+        const defs = mod_env.store.sliceDefs(mod_env.all_defs);
+        if (defs.len == 0) continue;
+
+        try md_writer.writer.writeAll("# ");
+        try md_writer.writer.writeAll(mod_name);
+        try md_writer.writer.writeByte('\n');
+
+        for (defs) |def_idx| {
+            const def = mod_env.store.getDef(def_idx);
+
+            emitter.reset();
+            try emitter.emitPattern(def.pattern);
+            const pattern_str = try allocator.dupe(u8, emitter.getOutput());
+            defer allocator.free(pattern_str);
+
+            emitter.reset();
+            try emitter.emitExpr(def.expr);
+
+            try md_writer.writer.writeAll(pattern_str);
+            try md_writer.writer.writeAll(" = ");
+            try md_writer.writer.writeAll(emitter.getOutput());
+            try md_writer.writer.writeByte('\n');
+        }
+        try md_writer.writer.writeByte('\n');
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    var new_hash_buf = std.ArrayList(u8).empty;
+    defer new_hash_buf.deinit(allocator);
+    for (&hash_results) |result| {
+        try new_hash_buf.appendSlice(allocator, result.target_name);
+        try new_hash_buf.append(allocator, '=');
+        if (result.supported) {
+            try new_hash_buf.appendSlice(allocator, &result.hash_hex);
+        } else {
+            try new_hash_buf.appendSlice(allocator, "NOT_IMPLEMENTED");
+        }
+        try new_hash_buf.append(allocator, '\n');
+    }
+    const new_hash_text = new_hash_buf.items;
+
+    var success = true;
+    const write_new_hashes = blk: {
+        if (content.dev_output == null) break :blk true;
+        switch (config.expected_section_command) {
+            .update => break :blk true,
+            .check => {
+                if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
+                    std.debug.print("\nDEV OUTPUT mismatch in {s}\n\n", .{output_path});
+                    printHashMismatchTable(content.dev_output.?, new_hash_text);
+                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DEV OUTPUT hashes.\n\n", .{});
+                    success = false;
+                }
+                break :blk false;
+            },
+            .none => {
+                if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
+                    std.debug.print("\nDEV OUTPUT warning: hashes changed in {s}\n", .{output_path});
+                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                }
+                break :blk false;
+            },
+        }
+    };
+
+    try md_writer.writer.writeAll(Section.DEV_OUTPUT);
+    if (write_new_hashes) {
+        try md_writer.writer.writeAll(new_hash_text);
+    } else {
+        try md_writer.writer.writeAll(content.dev_output.?);
+        if (content.dev_output.?.len > 0 and content.dev_output.?[content.dev_output.?.len - 1] != '\n') {
+            try md_writer.writer.writeByte('\n');
+        }
+    }
+    try md_writer.writer.writeAll(Section.SECTION_END);
+
+    md_buffer = md_writer.toArrayList();
+
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+    return success;
+}
+
+// REPL Snapshot Processing
+
+const SnapshotReplDefinitionKind = enum {
+    value,
+    type_annotation,
+    type_declaration,
+    import,
+    file_import,
+};
+
+const SnapshotReplDefinition = struct {
+    kind: SnapshotReplDefinitionKind,
+    name: []u8,
+    source: []u8,
+
+    fn deinit(self: *SnapshotReplDefinition, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.source);
+    }
+};
+
+const SnapshotReplSession = struct {
+    definitions: std.ArrayList(SnapshotReplDefinition) = .empty,
+
+    fn deinit(self: *SnapshotReplSession, allocator: Allocator) void {
+        for (self.definitions.items) |*definition| {
+            definition.deinit(allocator);
+        }
+        self.definitions.deinit(allocator);
+    }
+
+    fn hasDefinition(self: *const SnapshotReplSession, kind: SnapshotReplDefinitionKind, name: []const u8) bool {
+        for (self.definitions.items) |definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) return true;
+        }
+        return false;
+    }
+
+    fn upsertDefinition(
+        self: *SnapshotReplSession,
+        allocator: Allocator,
+        kind: SnapshotReplDefinitionKind,
+        name: []const u8,
+        source: []const u8,
+    ) Allocator.Error!void {
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
+
+        for (self.definitions.items) |*definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
+                definition.deinit(allocator);
+                definition.* = .{
+                    .kind = kind,
+                    .name = owned_name,
+                    .source = owned_source,
+                };
+                return;
+            }
+        }
+
+        try self.definitions.append(allocator, .{
+            .kind = kind,
+            .name = owned_name,
+            .source = owned_source,
+        });
+    }
+};
+
+const SnapshotReplInputKind = enum {
+    definition,
+    expression,
+    statement_expression,
+};
+
+const SnapshotReplDefinitionIdentity = struct {
+    kind: SnapshotReplDefinitionKind,
+    name: []const u8,
+};
+
+const SnapshotReplParsedLine = struct {
+    allocator: Allocator,
+    // Heap-allocated so its address stays stable: `ast.env` is a `*CommonEnv`
+    // that points into this `ModuleEnv`, and would dangle if the struct were
+    // copied by value out of a stack frame.
+    module_env: *ModuleEnv,
+    ast: *AST,
+    statement: AST.Statement.Idx,
+
+    fn deinit(self: *@This()) void {
+        self.ast.deinit();
+        self.module_env.deinit();
+        self.allocator.destroy(self.module_env);
+    }
+};
+
+fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?SnapshotReplParsedLine {
+    const module_env = try allocator.create(ModuleEnv);
+    errdefer allocator.destroy(module_env);
+    module_env.* = try ModuleEnv.init(allocator, line);
+    errdefer module_env.deinit();
+    module_env.common.source = line;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = single_module.parseSingleModule(
+        &allocators,
+        module_env,
+        .file,
+        .{ .module_name = "repl" },
+    ) catch return null;
+    errdefer ast.deinit();
+    if (ast.hasErrors()) {
+        ast.deinit();
+        module_env.deinit();
+        allocator.destroy(module_env);
+        return null;
+    }
+
+    const file = ast.store.getFile();
+    const statements = ast.store.statementSlice(file.statements);
+    if (statements.len != 1) {
+        ast.deinit();
+        module_env.deinit();
+        allocator.destroy(module_env);
+        return null;
+    }
+
+    return .{
+        .allocator = allocator,
+        .module_env = module_env,
+        .ast = ast,
+        .statement = statements[0],
+    };
+}
+
+fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) !?AST.Statement {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    defer ast.deinit();
+    if (ast.hasErrors()) return null;
+
+    return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+}
+
+fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) !?SnapshotReplInputKind {
+    var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
+    const statement = if (maybe_file_parse) |*parsed| blk: {
+        defer parsed.deinit();
+        const file_statement = parsed.ast.store.getStatement(parsed.statement);
+        switch (file_statement) {
+            .decl,
+            .@"var",
+            .import,
+            .file_import,
+            .type_decl,
+            .type_anno,
+            => break :blk file_statement,
+            else => {},
+        }
+        break :blk (try parseSnapshotReplLineAsStatement(allocator, line)) orelse file_statement;
+    } else (try parseSnapshotReplLineAsStatement(allocator, line)) orelse return null;
+
+    return switch (statement) {
+        .expr => .expression,
+        .decl,
+        .@"var",
+        .import,
+        .file_import,
+        .type_decl,
+        .type_anno,
+        => .definition,
+        .malformed => null,
+        .crash,
+        .dbg,
+        .expect,
+        .@"for",
+        .@"while",
+        .@"return",
+        .@"break",
+        => .statement_expression,
+    };
+}
+
+fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) !?SnapshotReplDefinitionIdentity {
+    var parsed = (try parseSnapshotReplLineAsFile(allocator, line)) orelse return null;
+    defer parsed.deinit();
+
+    const ast = parsed.ast;
+    const statement = ast.store.getStatement(parsed.statement);
+    return switch (statement) {
+        .decl => |decl| blk: {
+            const pattern = ast.store.getPattern(decl.pattern);
+            break :blk switch (pattern) {
+                .ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                .var_ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
+                else => null,
+            };
+        },
+        .@"var" => |var_decl| .{ .kind = .value, .name = ast.resolve(var_decl.name) },
+        .type_anno => |anno| .{ .kind = .type_annotation, .name = ast.resolve(anno.name) },
+        .type_decl => |decl| blk: {
+            const header = ast.store.getTypeHeader(decl.header) catch break :blk null;
+            break :blk .{ .kind = .type_declaration, .name = ast.resolve(header.name) };
+        },
+        .import => |import| .{
+            .kind = .import,
+            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+        },
+        .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
+        else => null,
+    };
+}
+
+fn writeSnapshotReplDefinitionsWithReplacement(
+    writer: *std.Io.Writer,
+    session: *const SnapshotReplSession,
+    replacement: ?SnapshotReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+) !void {
+    var replaced = false;
+    for (session.definitions.items) |definition| {
+        if (replacement) |identity| {
+            if (definition.kind == identity.kind and std.mem.eql(u8, definition.name, identity.name)) {
+                try writer.writeAll(replacement_source.?);
+                try writer.writeAll("\n");
+                replaced = true;
+                continue;
+            }
+        }
+
+        try writer.writeAll(definition.source);
+        try writer.writeAll("\n");
+    }
+
+    if (!replaced) {
+        if (replacement_source) |source| {
+            try writer.writeAll(source);
+            try writer.writeAll("\n");
+        }
+    }
+}
+
+fn buildSnapshotReplModuleSource(
+    allocator: Allocator,
+    session: *const SnapshotReplSession,
+    replacement: ?SnapshotReplDefinitionIdentity,
+    replacement_source: ?[]const u8,
+) ![]u8 {
+    var source_writer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer source_writer.deinit();
+
+    try writeSnapshotReplDefinitionsWithReplacement(&source_writer.writer, session, replacement, replacement_source);
+    try source_writer.writer.flush();
+
+    return source_writer.toOwnedSlice();
+}
+
+fn compileSnapshotReplInspectedModule(allocator: Allocator, source: []const u8) !eval_mod.test_helpers.CompiledProgram {
+    return eval_mod.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
+}
+
+fn renderSnapshotReplTypeProblems(
+    allocator: Allocator,
+    source_kind: eval_mod.test_helpers.SourceKind,
+    source: []const u8,
+    config: *const Config,
+) ![]const u8 {
+    const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
+
+    var module_env = try single_module.ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+    var can_ir = &module_env;
+
+    var allocators: single_module.Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const parse_mode: single_module.ParseMode = switch (source_kind) {
+        // REPL expression lines are identified through the statement parser once
+        // they are known not to be definitions. The diagnostic renderer must use
+        // that same shape instead of reparsing through expression-only or file
+        // mode, both of which accept different syntax at their roots.
+        .expr => .statement,
+        .module => .file,
+    };
+    const parse_ast = try single_module.parseSingleModule(
+        &allocators,
+        can_ir,
+        parse_mode,
+        .{ .module_name = "repl" },
+    );
+    defer parse_ast.deinit();
+
+    const builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try can_ir.insertIdent(base.Ident.for_text("repl")),
+        .bool_stmt = config.builtin_indices.bool_type,
+        .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
+        .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
+    };
+
+    var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = config.builtin_indices,
+        },
+    });
+    defer czer.deinit();
+
+    const repl_expr = switch (source_kind) {
+        .expr => blk: {
+            const statement_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const statement = parse_ast.store.getStatement(statement_idx);
+            const expr_idx = switch (statement) {
+                .expr => |expr_stmt| expr_stmt.expr,
+                else => break :blk null,
+            };
+            break :blk try czer.canonicalizeExpr(expr_idx);
+        },
+        .module => blk: {
+            try czer.canonicalizeFile();
+            break :blk null;
+        },
+    };
+    if (source_kind == .expr and can_ir.store.scratch != null) {
+        can_ir.diagnostics = try can_ir.store.diagnosticSpanFrom(0);
+    }
+
+    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(allocator);
+    defer imported_envs.deinit();
+    for (can_ir.imports.imports.items.items) |str_idx| {
+        const import_name = can_ir.getString(str_idx);
+        if (std.mem.eql(u8, import_name, "Builtin")) {
+            try imported_envs.append(builtin_env);
+        }
+    }
+    if (imported_envs.items.len == 0) {
+        try imported_envs.append(builtin_env);
+    }
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+
+    can_ir.imports.clearResolvedModules();
+    can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
+    can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
+
+    var checker = try Check.init(
+        allocator,
+        &can_ir.types,
+        can_ir,
+        imported_envs.items,
+        &module_envs,
+        &can_ir.store.regions,
+        builtin_ctx,
+    );
+    defer checker.deinit();
+
+    const check_result: anyerror!void = switch (source_kind) {
+        .expr => if (repl_expr) |expr| checker.checkExprRepl(expr.idx) else {},
+        .module => checker.checkFile(),
+    };
+    check_result catch |err| switch (err) {
+        error.TypeCheckError => {},
+        else => return err,
+    };
+
+    var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl", can_ir);
+    defer {
+        for (reports.items) |*report| {
+            report.deinit();
+        }
+        reports.deinit();
+    }
+    if (reports.items.len == 0) {
+        const diagnostics = try can_ir.getDiagnostics();
+        defer allocator.free(diagnostics);
+        std.debug.print(
+            "REPL diagnostic rendering invariant violated: TypeCheckError produced no reports. source_kind={s} tokenize={d} parse={d} canonicalize={d} check={d}\nsource:\n{s}\n",
+            .{
+                switch (source_kind) {
+                    .expr => "expr",
+                    .module => "module",
+                },
+                parse_ast.tokenize_diagnostics.items.len,
+                parse_ast.parse_diagnostics.items.len,
+                diagnostics.len,
+                checker.problems.problems.items.len,
+                source,
+            },
+        );
+        return error.TypeCheckError;
+    }
+
+    var rendered: std.Io.Writer.Allocating = .init(allocator);
+    errdefer rendered.deinit();
+    for (reports.items) |report| {
+        try report.render(&rendered.writer, .markdown);
+    }
+    const raw = try rendered.toOwnedSlice();
+    const trimmed = std.mem.trimRight(u8, raw, "\r\n");
+    if (trimmed.len == raw.len) return raw;
+    const out = try allocator.dupe(u8, trimmed);
+    allocator.free(raw);
+    return out;
+}
+
+fn snapshotReplDefinitionStep(
+    allocator: Allocator,
+    session: *SnapshotReplSession,
+    input: []const u8,
+    config: *const Config,
+) ![]const u8 {
+    const maybe_identity = try snapshotReplDefinitionIdentity(allocator, input);
+    const identity = maybe_identity orelse
+        return try allocator.dupe(u8, "Parse error: REPL definitions must bind a top-level identifier");
+    if (identity.kind == .type_annotation) {
+        return try allocator.dupe(u8, "Parse error: Type annotations are not supported in the REPL yet");
+    }
+
+    const defines_main = identity.kind == .value and std.mem.eql(u8, identity.name, "main");
+    const validation_main_source = if (defines_main or session.hasDefinition(.value, "main"))
+        null
+    else
+        "main = \"\"";
+
+    const validation_base = try buildSnapshotReplModuleSource(
+        allocator,
+        session,
+        identity,
+        input,
+    );
+    defer allocator.free(validation_base);
+
+    const validation_with_main = if (validation_main_source) |main_source| blk: {
+        var source_writer: std.Io.Writer.Allocating = .init(allocator);
+        errdefer source_writer.deinit();
+        try source_writer.writer.writeAll(validation_base);
+        try source_writer.writer.writeAll(main_source);
+        try source_writer.writer.writeAll("\n");
+        try source_writer.writer.flush();
+        break :blk try source_writer.toOwnedSlice();
+    } else validation_base;
+    defer if (validation_main_source != null) allocator.free(validation_with_main);
+
+    var compiled = compileSnapshotReplInspectedModule(allocator, validation_with_main) catch |err| {
+        return switch (err) {
+            error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .module, validation_with_main, config),
+            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+        };
+    };
+    compiled.deinit(allocator);
+
+    try session.upsertDefinition(allocator, identity.kind, identity.name, input);
+    return try std.fmt.allocPrint(allocator, "assigned `{s}`", .{identity.name});
+}
+
+fn snapshotReplExpressionStep(
+    allocator: Allocator,
+    session: *SnapshotReplSession,
+    input: []const u8,
+    config: *const Config,
+    statement_body: bool,
+) ![]const u8 {
+    const main_source = if (statement_body)
+        try std.fmt.allocPrint(allocator, "main = {{\n    {s}\n}}", .{input})
+    else
+        try std.fmt.allocPrint(allocator, "main = {s}", .{input});
+    defer allocator.free(main_source);
+
+    const source = try buildSnapshotReplModuleSource(
+        allocator,
+        session,
+        .{ .kind = .value, .name = "main" },
+        main_source,
+    );
+    defer allocator.free(source);
+
+    var compiled = compileSnapshotReplInspectedModule(allocator, source) catch |err| {
+        return switch (err) {
+            error.TypeCheckError => if (statement_body or session.definitions.items.len > 0)
+                renderSnapshotReplTypeProblems(allocator, .module, source, config)
+            else
+                renderSnapshotReplTypeProblems(allocator, .expr, input, config),
+            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+        };
+    };
+    defer compiled.deinit(allocator);
+
+    return eval_mod.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
+        return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
+    };
+}
+
+fn snapshotReplStep(
+    allocator: Allocator,
+    session: *SnapshotReplSession,
+    input: []const u8,
+    config: *const Config,
+) ![]const u8 {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    if (trimmed.len == 0) return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
+
+    const maybe_input_kind = try resolveSnapshotReplInputKind(allocator, trimmed);
+    const input_kind = maybe_input_kind orelse
+        return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
+
+    return switch (input_kind) {
+        .definition => snapshotReplDefinitionStep(allocator, session, trimmed, config),
+        .expression => snapshotReplExpressionStep(allocator, session, trimmed, config, false),
+        .statement_expression => snapshotReplExpressionStep(allocator, session, trimmed, config, true),
+    };
+}
+
 fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
+    if (gpa_poisoned) return false;
+
     var success = true;
     log("Processing REPL snapshot: {s}", .{output_path});
 
-    // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
-    defer md_buffer_unmanaged.deinit(allocator);
+    defer if (!gpa_poisoned) md_buffer_unmanaged.deinit(allocator);
 
     var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
-    defer {
+    defer if (!gpa_poisoned) {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
-    }
+    };
 
     var output = DualOutput.init(allocator, &md_writer_allocating, if (html_writer_allocating) |*hw| hw else null);
 
-    // Generate HTML wrapper
     try generateHtmlWrapper(&output, &content);
-
-    // Generate all sections
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
     success = try generateReplOutputSection(&output, output_path, &content, config) and success;
     try generateReplProblemsSection(&output, &content);
     try generateHtmlClosing(&output);
 
-    // Transfer contents from writer back to buffer before writing
     md_buffer_unmanaged = md_writer_allocating.toArrayList();
     if (html_writer_allocating) |*hw| html_buffer_unmanaged.? = hw.toArrayList();
 
     if (!config.disable_updates) {
-        // Write the markdown file
         const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
             std.log.err("Failed to create {s}: {}", .{ output_path, err });
             return false;
@@ -3460,58 +4725,40 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 }
 
 fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+    if (gpa_poisoned) return false;
+
     var success = true;
-    // Parse REPL inputs from the source using » as delimiter
     var inputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer inputs.deinit();
+    defer if (!gpa_poisoned) inputs.deinit();
 
-    // Split by the » character, each section is a separate REPL input
     var parts = std.mem.splitSequence(u8, content.source, "»");
-
-    // Skip the first part (before the first »)
     _ = parts.next();
-
     while (parts.next()) |part| {
-        // Trim whitespace and newlines
         const trimmed = std.mem.trim(u8, part, " \t\r\n");
         if (trimmed.len > 0) {
             try inputs.append(trimmed);
         }
     }
 
-    var snapshot_ops = SnapshotOps.init(output.gpa);
-    defer snapshot_ops.deinit();
+    var session = SnapshotReplSession{};
+    defer if (!gpa_poisoned) session.deinit(output.gpa);
 
-    // Initialize REPL
-    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops(), snapshot_ops.crashContextPtr());
-    defer repl_instance.deinit();
-
-    // Enable debug snapshots for CAN/TYPES generation
-    repl_instance.enableDebugSnapshots();
-
-    // Enable tracing if requested
-    // if (config.trace_eval) {
-    //     repl_instance.setTraceWriter(stderrWriter());
-    // }
-
-    // Process each input and generate output
     var actual_outputs = std.array_list.Managed([]const u8).init(output.gpa);
-    defer {
+    defer if (!gpa_poisoned) {
         for (actual_outputs.items) |item| {
             output.gpa.free(item);
         }
         actual_outputs.deinit();
-    }
+    };
 
     for (inputs.items) |input| {
-        const repl_output = try repl_instance.step(input);
+        const repl_output = try snapshotReplStep(output.gpa, &session, input, config);
         try actual_outputs.append(repl_output);
     }
 
     switch (config.output_section_command) {
         .update => {
             try output.begin_section("OUTPUT");
-            // Write actual outputs
             for (actual_outputs.items, 0..) |repl_output, i| {
                 if (i > 0) {
                     try output.md_writer.writer.writeAll("---\n");
@@ -3519,7 +4766,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 try output.md_writer.writer.writeAll(repl_output);
                 try output.md_writer.writer.writeByte('\n');
 
-                // HTML output
                 if (output.html_writer) |writer| {
                     if (i > 0) {
                         try writer.writer.writeAll("                <hr>\n");
@@ -3536,10 +4782,8 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         .check, .none => {
             const emit_error = config.output_section_command == .check;
 
-            // Compare with expected output if provided
             if (content.output) |expected| {
                 try output.begin_section("OUTPUT");
-                // Parse expected outputs
                 var expected_outputs = std.array_list.Managed([]const u8).init(output.gpa);
                 defer expected_outputs.deinit();
 
@@ -3551,7 +4795,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     }
                 }
 
-                // Verify the outputs match
                 if (actual_outputs.items.len != expected_outputs.items.len) {
                     std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
                         actual_outputs.items.len,
@@ -3571,7 +4814,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     }
                 }
 
-                // Write the old outputs back to the file
                 for (expected_outputs.items, 0..) |expected_output, i| {
                     if (i > 0) {
                         try output.md_writer.writer.writeAll("---\n");
@@ -3579,7 +4821,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     try output.md_writer.writer.writeAll(expected_output);
                     try output.md_writer.writer.writeByte('\n');
 
-                    // HTML output
                     if (output.html_writer) |writer| {
                         if (i > 0) {
                             try writer.writer.writeAll("                <hr>\n");
@@ -3593,7 +4834,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 }
                 try output.end_section();
             } else {
-                // No existing OUTPUT section - generate one for new snapshots
                 try output.begin_section("OUTPUT");
                 for (actual_outputs.items, 0..) |repl_output, i| {
                     if (i > 0) {
@@ -3602,7 +4842,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     try output.md_writer.writer.writeAll(repl_output);
                     try output.md_writer.writer.writeByte('\n');
 
-                    // HTML output
                     if (output.html_writer) |writer| {
                         if (i > 0) {
                             try writer.writer.writeAll("                <hr>\n");
@@ -3615,8 +4854,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                     }
                 }
                 try output.end_section();
-
-                // No validation needed for new snapshots - they should have outputs
             }
         },
     }
@@ -3741,146 +4978,3 @@ test "TODO: cross-module function calls - string_interpolation_comparison" {}
 test "TODO: cross-module function calls - string_multiline_comparison" {}
 
 test "TODO: cross-module function calls - string_ordering_unsupported" {}
-
-test "LambdaLifter" {
-    std.testing.refAllDecls(LambdaLifter);
-}
-
-/// An implementation of RocOps for snapshot testing.
-pub const SnapshotOps = struct {
-    allocator: std.mem.Allocator,
-    crash: CrashContext,
-    roc_ops: RocOps,
-
-    pub fn init(allocator: std.mem.Allocator) SnapshotOps {
-        return SnapshotOps{
-            .allocator = allocator,
-            .crash = CrashContext.init(allocator),
-            .roc_ops = RocOps{
-                .env = undefined, // will be set below
-                .roc_alloc = snapshotRocAlloc,
-                .roc_dealloc = snapshotRocDealloc,
-                .roc_realloc = snapshotRocRealloc,
-                .roc_dbg = snapshotRocDbg,
-                .roc_expect_failed = snapshotRocExpectFailed,
-                .roc_crashed = snapshotRocCrashed,
-                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in snapshots
-            },
-        };
-    }
-
-    pub fn deinit(self: *SnapshotOps) void {
-        self.crash.deinit();
-    }
-
-    pub fn get_ops(self: *SnapshotOps) *RocOps {
-        self.roc_ops.env = @ptrCast(self);
-        self.crash.reset();
-        return &self.roc_ops;
-    }
-
-    pub fn crashContextPtr(self: *SnapshotOps) *CrashContext {
-        return &self.crash;
-    }
-};
-
-fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-
-    // Allocate memory including space for size metadata
-    const result = snapshot_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
-        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
-    };
-
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-}
-
-fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
-    const total_size = size_ptr.*;
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-
-    // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    snapshot_env.allocator.rawFree(slice, align_enum, @returnAddress());
-}
-
-fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-
-    // Perform reallocation
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = snapshot_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during snapshotRocRealloc", .{});
-    };
-
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-
-    // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
-}
-
-fn snapshotRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    @panic("snapshotRocDbg not implemented yet");
-}
-
-fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
-    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
-    // Format and record the message
-    const formatted = std.fmt.allocPrint(snapshot_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
-        std.debug.panic("failed to allocate snapshot expect failure message", .{});
-    };
-    snapshot_env.crash.recordCrash(formatted) catch |err| {
-        snapshot_env.allocator.free(formatted);
-        std.debug.panic("failed to store snapshot expect failure: {}", .{err});
-    };
-}
-
-fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
-    snapshot_env.crash.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
-        std.debug.panic("failed to store snapshot crash message: {}", .{err});
-    };
-}

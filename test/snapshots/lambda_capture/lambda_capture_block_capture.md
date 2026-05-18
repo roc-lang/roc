@@ -70,12 +70,12 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-call
+	(e-call (constraint-fn-var 46)
 		(e-lookup-local
 			(p-assign (ident "f")))
 		(e-num (value "10"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+(expr (type "Dec"))
 ~~~

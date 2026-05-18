@@ -12,7 +12,7 @@ type=repl
 » List.last(List.with_capacity(10))
 ~~~
 # OUTPUT
-Ok(3)
+Ok(3.0)
 ---
 Ok("world")
 ---

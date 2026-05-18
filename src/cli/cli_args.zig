@@ -14,7 +14,8 @@ pub const CliArgs = union(enum) {
     test_cmd: TestArgs,
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
-    repl,
+    repl: ReplArgs,
+    glue: GlueArgs,
     version,
     docs: DocsArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -48,22 +49,32 @@ pub const ArgProblem = union(enum) {
 
 /// The optimization strategy for the compilation of a Roc program
 pub const OptLevel = enum {
-    size, // binary size
-    speed, // execution speed
-    dev, // speed of compilation
+    size, // binary size (future: LLVM)
+    speed, // execution speed (future: LLVM)
+    dev, // speed of compilation (dev backend)
+    interpreter,
 
-    fn from_str(str: []const u8) ?OptLevel {
+    pub fn from_str(str: []const u8) ?OptLevel {
         if (mem.eql(u8, str, "speed")) return .speed;
         if (mem.eql(u8, str, "size")) return .size;
         if (mem.eql(u8, str, "dev")) return .dev;
+        if (mem.eql(u8, str, "interpreter")) return .interpreter;
         return null;
+    }
+
+    /// Convert to the backend evaluation enum used by internal modules
+    pub fn toBackend(self: OptLevel) @import("eval").EvalBackend {
+        return switch (self) {
+            .interpreter => .interpreter,
+            .dev, .size, .speed => .dev,
+        };
     }
 };
 
 /// Arguments for the default `roc` command
 pub const RunArgs = struct {
     path: []const u8, // the path of the roc file to be executed
-    opt: OptLevel = .dev, // the optimization level
+    opt: OptLevel = .dev, // the optimization level (dev, interpreter, size, speed)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
@@ -77,29 +88,40 @@ pub const CheckArgs = struct {
     time: bool = false, // whether to print timing information
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
+    max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
 };
 
 /// Arguments for `roc build`
 pub const BuildArgs = struct {
     path: []const u8, // the path to the roc file to be built
-    opt: OptLevel, // the optimization level
+    opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
+    no_link: bool = false, // output object file only, skip linking with host
     debug: bool = false, // include debug information in the output binary
     allow_errors: bool = false, // allow building even if there are type errors
+    verbose: bool = false, // enable verbose output including cache statistics
+    no_cache: bool = false, // disable compilation caching
+    max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
     z_dump_linker: bool = false, // dump linker inputs to temp directory for debugging
+    exit_on_warnings: bool = true, // exit with code 2 when warnings are emitted
+    warning_count_out: ?*usize = null, // optionally receive the total warning count
+    require_executable_output: bool = false, // reject static/shared library targets
+    suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
 };
 
 /// Arguments for `roc test`
 pub const TestArgs = struct {
     path: []const u8, // the path to the file to be tested
-    opt: OptLevel, // the optimization level to be used for test execution
+    opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
     main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
     verbose: bool = false, // enable verbose output showing individual test results
+    no_cache: bool = false, // disable compilation caching, force re-run all tests
+    max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
 };
 
 /// Arguments for `roc format`
@@ -140,6 +162,19 @@ pub const ExperimentalLspArgs = struct {
     debug_server: bool = false,
 };
 
+/// Arguments for `roc repl`
+pub const ReplArgs = struct {
+    opt: OptLevel = .dev,
+};
+
+/// Arguments for `roc glue`
+pub const GlueArgs = struct {
+    glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
+    output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
+    platform_path: []const u8, // path to the platform .roc file (default: main.roc)
+    opt: OptLevel = .dev,
+};
+
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
@@ -156,6 +191,7 @@ pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
+    if (mem.eql(u8, args[0], "glue")) return parseGlue(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
@@ -179,6 +215,7 @@ const main_help =
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+    \\  glue             Generate native glue code from a Roc platform using a language-specific glue spec
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -191,10 +228,10 @@ const main_help =
     \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
-    \\      --opt=<size|speed|dev> Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
-    \\      --target=<target>      Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
-    \\      --no-cache             Force a rebuild of the interpreted host (useful for compiler and platform developers)
-    \\      --allow-errors         Allow execution even if there are type errors (warnings are always allowed)
+    \\      --opt=<opt>                    Optimization level: dev (default, fast compilation), interpreter, size or speed (future: LLVM)
+    \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+    \\      --no-cache                     Force a rebuild of the interpreted host (useful for compiler and platform developers)
+    \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
     \\
 ;
 
@@ -218,11 +255,12 @@ fn parseCheck(args: []const []const u8) CliArgs {
     var time: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
+    var max_threads: ?usize = null;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
-            \\Check the code for problems, but don’t build or run it
+            \\Check the code for problems, but don't build or run it
             \\
             \\Usage: roc check [OPTIONS] [ROC_FILE]
             \\
@@ -234,6 +272,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache     Disable caching
             \\      --verbose      Enable verbose output including cache statistics
+            \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\  -h, --help         Print help
             \\
         };
@@ -249,6 +288,23 @@ fn parseCheck(args: []const []const u8) CliArgs {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.startsWith(u8, arg, "--jobs")) {
+            if (getFlagValue(arg)) |value| {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "-j")) {
+            // Handle -jN format (e.g., -j4)
+            const value = arg[2..];
+            if (value.len == 0) {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
+            }
+            max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
+            };
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
@@ -257,7 +313,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose, .max_threads = max_threads } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
@@ -265,8 +321,12 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var opt: OptLevel = .dev;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
+    var no_link: bool = false;
     var debug: bool = false;
     var allow_errors: bool = false;
+    var verbose: bool = false;
+    var no_cache: bool = false;
+    var max_threads: ?usize = null;
     var wasm_memory: ?usize = null;
     var wasm_stack_size: ?usize = null;
     var z_bench_tokenize: ?[]const u8 = null;
@@ -284,10 +344,14 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --opt=<opt>                    Optimization level: dev (default, fast compilation), interpreter, size or speed (future: LLVM)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+            \\      --no-link                      Output object file only, skip linking with host (useful for debugging or custom toolchains)
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
+            \\      --verbose                      Enable verbose output including cache statistics
+            \\      --no-cache                     Disable compilation caching
+            \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
@@ -313,11 +377,13 @@ fn parseBuild(args: []const []const u8) CliArgs {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
                 }
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
+        } else if (mem.eql(u8, arg, "--no-link")) {
+            no_link = true;
         } else if (mem.startsWith(u8, arg, "--z-bench-tokenize")) {
             if (getFlagValue(arg)) |value| {
                 z_bench_tokenize = value;
@@ -352,6 +418,28 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--z-dump-linker")) {
             z_dump_linker = true;
+        } else if (mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
+        } else if (mem.startsWith(u8, arg, "--jobs")) {
+            if (getFlagValue(arg)) |value| {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "-j")) {
+            // Handle -j<N> (no space) or -j <N> (with space handled by next iteration)
+            const value = arg[2..];
+            if (value.len > 0) {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
+            }
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -359,7 +447,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .no_link = no_link, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -535,6 +623,8 @@ fn parseTest(args: []const []const u8) CliArgs {
     var opt: OptLevel = .dev;
     var main: ?[]const u8 = null;
     var verbose: bool = false;
+    var no_cache: bool = false;
+    var max_threads: ?usize = null;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -546,10 +636,12 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed dev
-            \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
-            \\      --verbose               Enable verbose output showing individual test results
-            \\  -h, --help                  Print help
+            \\      --opt=<opt>                     Optimization level: dev (default, fast compilation), interpreter, size or speed (future: LLVM)
+            \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
+            \\      --verbose                       Enable verbose output showing individual test results
+            \\      --no-cache                      Disable compilation caching, force re-run all tests
+            \\  -j, --jobs=<N>                      Max worker threads for parallel compilation (default: auto-detect CPU count)
+            \\  -h, --help                          Print help
             \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
@@ -563,13 +655,32 @@ fn parseTest(args: []const []const u8) CliArgs {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
                 }
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
+        } else if (mem.startsWith(u8, arg, "--jobs")) {
+            if (getFlagValue(arg)) |value| {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "-j")) {
+            // Handle -jN format (e.g., -j4)
+            const value = arg[2..];
+            if (value.len == 0) {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
+            }
+            max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
+            };
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
@@ -577,10 +688,12 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
+    var opt: OptLevel = .dev;
+
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -589,14 +702,119 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\Usage: roc repl [OPTIONS]
             \\
             \\Options:
-            \\  -h, --help  Print help
+            \\      --opt=<opt>  Optimization level: dev (default, fast compilation), interpreter
+            \\  -h, --help       Print help
             \\
         };
+        } else if (mem.startsWith(u8, arg, "--opt")) {
+            if (getFlagValue(arg)) |value| {
+                if (OptLevel.from_str(value)) |level| {
+                    opt = level;
+                } else {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
+                }
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
+            }
         } else {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs.repl;
+    return CliArgs{ .repl = .{ .opt = opt } };
+}
+
+fn parseGlue(args: []const []const u8) CliArgs {
+    var glue_spec: ?[]const u8 = null;
+    var output_dir: ?[]const u8 = null;
+    var platform_path: ?[]const u8 = null;
+    var opt: OptLevel = .dev;
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help = 
+            \\Generate glue code from a platform using a glue spec
+            \\
+            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+            \\  <GLUE_DIR>   The output directory for generated glue files
+            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+            \\
+            \\Options:
+            \\      --opt=<opt>  Optimization level: dev (default, fast compilation), interpreter
+            \\  -h, --help       Print help
+            \\
+        };
+        } else if (mem.startsWith(u8, arg, "--opt")) {
+            if (getFlagValue(arg)) |value| {
+                if (OptLevel.from_str(value)) |level| {
+                    opt = level;
+                } else {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
+                }
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
+            }
+        } else {
+            if (glue_spec == null) {
+                glue_spec = arg;
+            } else if (output_dir == null) {
+                output_dir = arg;
+            } else if (platform_path == null) {
+                platform_path = arg;
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "glue", .arg = arg } } };
+            }
+        }
+    }
+
+    // glue_spec is required
+    if (glue_spec == null) {
+        return CliArgs{ .help = 
+        \\Error: Missing required argument <GLUE_SPEC>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
+    }
+
+    // output_dir is required
+    if (output_dir == null) {
+        return CliArgs{ .help = 
+        \\Error: Missing required argument <GLUE_DIR>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
+    }
+
+    return CliArgs{ .glue = GlueArgs{
+        .glue_spec = glue_spec.?,
+        .output_dir = output_dir.?,
+        .platform_path = platform_path orelse "main.roc",
+        .opt = opt,
+    } };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {
@@ -782,7 +1000,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
                     opt = level;
                 } else {
                     app_args.deinit();
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
                 }
             } else {
                 app_args.deinit();
@@ -1168,6 +1386,55 @@ test "roc check" {
         try testing.expectEqualStrings("foo.roc", result.check.path);
         try testing.expectEqualStrings("bar.roc", result.check.main.?);
         try testing.expectEqual(true, result.check.time);
+    }
+    // --jobs flag tests
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-j1" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 1), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-j4" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 4), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs=2" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 2), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs=8" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 8), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs=abc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--jobs", result.problem.invalid_flag_value.flag);
+        try testing.expectEqualStrings("abc", result.problem.invalid_flag_value.value);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-jabc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("-j", result.problem.invalid_flag_value.flag);
+        try testing.expectEqualStrings("abc", result.problem.invalid_flag_value.value);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--jobs", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-j" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("-j", result.problem.missing_flag_value.flag);
+    }
+    {
+        // default is null (auto-detect)
+        const result = try parse(gpa, &[_][]const u8{"check"});
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, null), result.check.max_threads);
     }
 }
 

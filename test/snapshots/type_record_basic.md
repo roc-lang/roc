@@ -13,11 +13,11 @@ getName = |_person| "hello"
 main! = |_| getName({namee: "luke", age:21})
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_record_basic.md:6:21:6:44
+TYPE MISMATCH - type_record_basic.md:6:13:6:13
 # PROBLEMS
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**type_record_basic.md:6:21:6:44:**
+**type_record_basic.md:6:13:**
 ```roc
 main! = |_| getName({namee: "luke", age:21})
 ```
@@ -31,6 +31,8 @@ This argument has the type:
 But `getName` needs the first argument to be:
 
     { age: U64, name: Str }
+
+**Hint:** Maybe `namee` should be `name`?
 
 # TOKENS
 ~~~zig
@@ -113,30 +115,15 @@ main! = |_| getName({ namee: "luke", age: 21 })
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "getName")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "getName")))
-					(e-record
-						(fields
-							(field (name "namee")
-								(e-string
-									(e-literal (string "luke"))))
-							(field (name "age")
-								(e-num (value "21"))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: U64, name: Str } -> Str"))
+		(patt (type "Error -> Str"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "{ age: U64, name: Str } -> Str"))
+		(expr (type "Error -> Str"))
 		(expr (type "_arg -> Error"))))
 ~~~

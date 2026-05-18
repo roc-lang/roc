@@ -6,7 +6,7 @@ import pf.Stderr
 demo_input = "L000000000000000000000000"
 
 main! = || {
-    match demo_input.drop_prefix("L") {
-        _ => {}
-    }
+	match demo_input.drop_prefix("L") {
+		_ => {}
+	}
 }

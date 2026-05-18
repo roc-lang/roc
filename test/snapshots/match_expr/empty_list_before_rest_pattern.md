@@ -11,19 +11,9 @@ match l {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - empty_list_before_rest_pattern.md:1:7:1:8
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `l` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**empty_list_before_rest_pattern.md:1:7:1:8:**
-```roc
-match l {
-```
-      ^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -88,5 +78,5 @@ match l {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Err([EmptyList, .._others]), Ok(_a), .._others2]"))
+(expr (type "[Err([EmptyList, ..]), Ok(_a), ..]"))
 ~~~

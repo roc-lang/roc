@@ -25,7 +25,6 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -40,10 +39,19 @@ pub const Instantiator = struct {
     idents: *const base.Ident.Store,
     var_map: *std.AutoHashMap(Var, Var),
 
-    current_rank: Rank = Rank.top_level,
+    current_rank: Rank,
     rigid_behavior: RigidBehavior,
+    rank_behavior: RankBehavior = .respect_rank,
 
-    /// The mode to use when instantiating
+    /// Controls whether to respect rank when deciding what to instantiate
+    pub const RankBehavior = enum {
+        /// Only instantiate generalized types (type checker semantics)
+        respect_rank,
+        /// Instantiate all types regardless of rank (runtime semantics)
+        ignore_rank,
+    };
+
+    /// The mode to use when instantiating rigids
     pub const RigidBehavior = union(enum) {
         /// In this mode, all rigids are instantiated as new flex vars
         /// Note that the the rigid var structure will be preserved.
@@ -63,6 +71,10 @@ pub const Instantiator = struct {
 
     const Self = @This();
 
+    fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
+        return self.idents.getText(idx);
+    }
+
     // instantiation //
 
     /// Instantiate a variable
@@ -73,9 +85,16 @@ pub const Instantiator = struct {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
 
+        // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
+        if (self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
+            return resolved_var;
+        }
+
         // Check if we've already instantiated this variable
-        if (self.var_map.get(resolved_var)) |fresh_var| {
-            return fresh_var;
+        if (self.var_map.count() > 0) {
+            if (self.var_map.get(resolved_var)) |fresh_var| {
+                return fresh_var;
+            }
         }
 
         switch (resolved.desc.content) {
@@ -128,34 +147,43 @@ pub const Instantiator = struct {
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
+                    else => false,
+                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .mark = Mark.none,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
                 return fresh_var;
             },
             else => {
+                // Generate the content
+
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
-                // Generate the content
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
+                    else => false,
+                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .mark = Mark.none,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -204,7 +232,7 @@ pub const Instantiator = struct {
         const backing_var = self.store.getAliasBackingVar(alias);
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
-        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items);
+        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items, alias.origin_module);
     }
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
@@ -296,7 +324,7 @@ pub const Instantiator = struct {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            _ = try fresh_fields.append(self.store.gpa, RecordField{
+            try fresh_fields.append(self.store.gpa, RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -325,7 +353,7 @@ pub const Instantiator = struct {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            _ = try fresh_fields.append(self.store.gpa, RecordField{
+            try fresh_fields.append(self.store.gpa, RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -378,7 +406,7 @@ pub const Instantiator = struct {
 
             const fresh_args_range = try self.store.appendVars(fresh_args.items);
 
-            _ = try fresh_tags.append(self.store.gpa, Tag{
+            try fresh_tags.append(self.store.gpa, Tag{
                 .name = tag_name,
                 .args = fresh_args_range,
             });
@@ -386,7 +414,11 @@ pub const Instantiator = struct {
 
         // Sort the fresh tags alphabetically by name before appending.
         // This ensures tag discriminants are consistent after instantiation.
-        std.mem.sort(Tag, fresh_tags.items, self.idents, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, fresh_tags.items, self, struct {
+            fn less(instantiator: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, instantiator.getIdentText(a.name), instantiator.getIdentText(b.name)) == .lt;
+            }
+        }.less);
 
         const tags_range = try self.store.appendTags(fresh_tags.items);
         return TagUnion{
@@ -396,7 +428,7 @@ pub const Instantiator = struct {
     }
 
     pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
-        return self.idents.getText(idx);
+        return self.getIdentText(idx);
     }
 
     fn instantiateStaticDispatchConstraints(self: *Self, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
@@ -407,10 +439,14 @@ pub const Instantiator = struct {
             var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
             defer fresh_constraints.deinit(self.store.gpa);
 
-            // Use index-based iteration to avoid iterator invalidation
-            // (see comment in instantiateFunc for details)
+            // IMPORTANT: We must re-fetch on each iteration, not cache the slice.
+            // The slice would point into the backing ArrayList, but instantiateVar
+            // can recursively instantiate flex vars with constraints, which calls
+            // appendStaticDispatchConstraints, potentially reallocating the array
+            // and invalidating any cached slice.
             const constraints_start: usize = @intFromEnum(constraints.start);
             for (0..constraints_len) |i| {
+                // Re-fetch the constraint on each iteration since the backing array may have moved
                 const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
                 const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
                 try fresh_constraints.append(self.store.gpa, fresh_constraint);
@@ -422,10 +458,8 @@ pub const Instantiator = struct {
     }
 
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
-        return StaticDispatchConstraint{
-            .fn_name = constraint.fn_name,
-            .fn_var = try self.instantiateVar(constraint.fn_var),
-            .origin = constraint.origin,
-        };
+        var result = constraint;
+        result.fn_var = try self.instantiateVar(constraint.fn_var);
+        return result;
     }
 };

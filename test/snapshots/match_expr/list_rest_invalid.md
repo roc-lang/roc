@@ -2,6 +2,7 @@
 ~~~ini
 description=Match expression with invalid (old style) list rest patterns should error
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
@@ -232,5 +233,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "Dec"))
 ~~~

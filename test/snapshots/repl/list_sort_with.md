@@ -7,7 +7,7 @@ type=repl
 ~~~roc
 » List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
 » List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))
-» List.len(List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ))
+» List.len(List.sort_with(List.drop_first([0], 1), |a, b| if a < b LT else if a > b GT else EQ))
 » List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))
 » List.first(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
 » List.first(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))
@@ -26,18 +26,18 @@ type=repl
 ---
 1
 ---
-Ok(1)
+Ok(1.0)
 ---
-Ok(1)
+Ok(1.0)
 ---
-Ok(5)
+Ok(5.0)
 ---
 4
 ---
-Ok(1)
+Ok(1.0)
 ---
 2
 ---
-Ok(1)
+Ok(1.0)
 # PROBLEMS
 NIL

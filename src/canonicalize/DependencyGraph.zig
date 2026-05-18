@@ -80,6 +80,29 @@ pub const EvaluationOrder = struct {
 
     allocator: std.mem.Allocator,
 
+    pub fn clone(self: *const EvaluationOrder, allocator: std.mem.Allocator) std.mem.Allocator.Error!EvaluationOrder {
+        const sccs = try allocator.alloc(SCC, self.sccs.len);
+        errdefer allocator.free(sccs);
+
+        var built: usize = 0;
+        errdefer {
+            for (sccs[0..built]) |scc| allocator.free(scc.defs);
+        }
+
+        for (self.sccs, 0..) |scc, i| {
+            sccs[i] = .{
+                .defs = try allocator.dupe(CIR.Def.Idx, scc.defs),
+                .is_recursive = scc.is_recursive,
+            };
+            built += 1;
+        }
+
+        return .{
+            .sccs = sccs,
+            .allocator = allocator,
+        };
+    }
+
     pub fn deinit(self: *EvaluationOrder) void {
         for (self.sccs) |scc| {
             self.allocator.free(scc.defs);
@@ -164,13 +187,45 @@ fn collectExprDependencies(
             }
         },
 
-        .e_dot_access => |access| {
+        .e_field_access => |access| {
             try collectExprDependencies(cir, access.receiver, dependencies, allocator);
-            if (access.args) |args_span| {
-                for (cir.store.sliceExpr(args_span)) |arg_idx| {
-                    try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-                }
+        },
+
+        .e_method_call => |call| {
+            try collectExprDependencies(cir, call.receiver, dependencies, allocator);
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
             }
+        },
+        .e_dispatch_call => |call| {
+            try collectExprDependencies(cir, call.receiver, dependencies, allocator);
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+
+        .e_structural_eq => |eq| {
+            try collectExprDependencies(cir, eq.lhs, dependencies, allocator);
+            try collectExprDependencies(cir, eq.rhs, dependencies, allocator);
+        },
+        .e_method_eq => |eq| {
+            try collectExprDependencies(cir, eq.lhs, dependencies, allocator);
+            try collectExprDependencies(cir, eq.rhs, dependencies, allocator);
+        },
+
+        .e_type_method_call => |call| {
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+        .e_type_dispatch_call => |call| {
+            for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
+        },
+
+        .e_tuple_access => |tuple_access| {
+            try collectExprDependencies(cir, tuple_access.tuple, dependencies, allocator);
         },
 
         .e_tuple => |tuple| {
@@ -198,9 +253,6 @@ fn collectExprDependencies(
                 const stmt = cir.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl| {
-                        try collectExprDependencies(cir, decl.expr, dependencies, allocator);
-                    },
-                    .s_decl_gen => |decl| {
                         try collectExprDependencies(cir, decl.expr, dependencies, allocator);
                     },
                     .s_var => |var_stmt| {
@@ -246,10 +298,12 @@ fn collectExprDependencies(
         },
 
         // Literals and hosted lambdas have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
 
-        .e_low_level_lambda => |ll| {
-            try collectExprDependencies(cir, ll.body, dependencies, allocator);
+        .e_run_low_level => |run_ll| {
+            for (cir.store.sliceExpr(run_ll.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
         },
 
         // External lookups reference other modules - skip for now
@@ -280,13 +334,6 @@ fn collectExprDependencies(
         .e_for => |for_expr| {
             try collectExprDependencies(cir, for_expr.expr, dependencies, allocator);
             try collectExprDependencies(cir, for_expr.body, dependencies, allocator);
-        },
-
-        .e_type_var_dispatch => |tvd| {
-            // Collect dependencies from the arguments
-            for (cir.store.exprSlice(tvd.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
         },
 
         .e_runtime_error => {},
@@ -368,6 +415,107 @@ pub fn computeSCCs(
         .sccs = try state.sccs.toOwnedSlice(allocator),
         .allocator = allocator,
     };
+}
+
+/// Returns indices of all top-level constants (definitions that are not functions).
+///
+/// This is used to identify definitions that should be evaluated at compile time,
+/// as opposed to functions which are only evaluated when called.
+pub fn getTopLevelConstants(
+    cir: *const ModuleEnv,
+    all_defs: CIR.Def.Span,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error![]const CIR.Def.Idx {
+    const defs_slice = cir.store.sliceDefs(all_defs);
+
+    var constants = std.ArrayList(CIR.Def.Idx){};
+    errdefer constants.deinit(allocator);
+
+    for (defs_slice) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+        const expr = cir.store.getExpr(def.expr);
+
+        const is_constant = switch (expr) {
+            .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda => false,
+            else => true,
+        };
+
+        if (is_constant) {
+            try constants.append(allocator, def_idx);
+        }
+    }
+
+    return constants.toOwnedSlice(allocator);
+}
+
+/// Returns constants in dependency order (dependencies first).
+///
+/// This computes the strongly connected components (SCCs) for only the constant
+/// definitions, returning them in topological order so that each constant can
+/// be evaluated after all its dependencies have been evaluated.
+pub fn getConstantsInDependencyOrder(
+    cir: *const ModuleEnv,
+    all_defs: CIR.Def.Span,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!EvaluationOrder {
+    // Get only the constant definitions
+    const constants = try getTopLevelConstants(cir, all_defs, allocator);
+    defer allocator.free(constants);
+
+    if (constants.len == 0) {
+        return EvaluationOrder{
+            .sccs = &[_]SCC{},
+            .allocator = allocator,
+        };
+    }
+
+    // Build a dependency graph for just the constants
+    var graph = DependencyGraph.init(allocator, constants);
+    errdefer graph.deinit();
+
+    // Map from Ident.Idx to Def.Idx for resolving references (only for constants)
+    var ident_to_def = std.AutoHashMapUnmanaged(base.Ident.Idx, CIR.Def.Idx){};
+    defer ident_to_def.deinit(allocator);
+
+    // First pass: build ident -> def mapping for constants only
+    for (constants) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+        const pattern = cir.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            try ident_to_def.put(allocator, pattern.assign.ident, def_idx);
+        }
+    }
+
+    // Second pass: collect dependencies and build graph
+    for (constants) |def_idx| {
+        const def = cir.store.getDef(def_idx);
+
+        // Collect all identifiers this def's expression references
+        var deps = std.AutoHashMapUnmanaged(base.Ident.Idx, void){};
+        defer deps.deinit(allocator);
+
+        try collectExprDependencies(cir, def.expr, &deps, allocator);
+
+        // Convert ident dependencies to def dependencies
+        var dep_iter = deps.keyIterator();
+        while (dep_iter.next()) |ident_idx| {
+            if (ident_to_def.get(ident_idx.*)) |dep_def_idx| {
+                try graph.addEdge(def_idx, dep_def_idx);
+            }
+            // If ident not found in ident_to_def, it's either:
+            // - A function (not a constant)
+            // - A builtin function
+            // - An external module reference
+            // - A parameter/local variable
+            // In all cases, we don't need to track it for constant evaluation order
+        }
+    }
+
+    // Compute SCCs using Tarjan's algorithm
+    const result = try computeSCCs(&graph, allocator);
+    graph.deinit();
+    return result;
 }
 
 const TarjanState = struct {
@@ -456,7 +604,7 @@ const TarjanState = struct {
 
             while (true) {
                 const w = self.stack.pop() orelse unreachable; // Stack should not be empty
-                _ = self.on_stack.remove(w);
+                std.debug.assert(self.on_stack.remove(w));
                 try scc_defs.append(self.allocator, w);
 
                 if (@intFromEnum(w) == @intFromEnum(v)) break;

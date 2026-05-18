@@ -400,6 +400,12 @@ test "NodeStore round trip - TypeAnno" {
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
+        .underscore_type_var = .{
+            .tok = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
         .ty = .{
             .qualifiers = AST.Token.Span{ .span = rand_span() },
             .region = rand_region(),
@@ -408,7 +414,21 @@ test "NodeStore round trip - TypeAnno" {
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tag_union = .{
-            .ext = .{ .named = rand_idx(AST.TypeAnno.Idx) },
+            .ext = .closed,
+            .tags = AST.TypeAnno.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .tag_union = .{
+            .ext = .{ .named = .{ .anno = rand_idx(AST.TypeAnno.Idx), .region = rand_region() } },
+            .tags = AST.TypeAnno.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .tag_union = .{
+            .ext = .{ .open = rand_token_idx() },
             .tags = AST.TypeAnno.Span{ .span = rand_span() },
             .region = rand_region(),
         },
@@ -422,14 +442,21 @@ test "NodeStore round trip - TypeAnno" {
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
             .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
-            .ext = null,
+            .ext = .closed,
             .region = rand_region(),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
             .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
-            .ext = rand_idx(AST.TypeAnno.Idx), // Test record with extension
+            .ext = .{ .named = .{ .anno = rand_idx(AST.TypeAnno.Idx), .region = rand_region() } },
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .record = .{
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .ext = .{ .open = rand_token_idx() },
             .region = rand_region(),
         },
     });
@@ -448,10 +475,10 @@ test "NodeStore round trip - TypeAnno" {
         },
     });
 
-    // We don't include .malformed variant, but we do include an extra test case
-    // for record with extension (so record is tested both with and without ext)
+    // We don't include .malformed variant, but we do include extra test cases
+    // for record and tag unions extensions (so they are tested with all variants)
     expected_test_count -= 1;
-    expected_test_count += 1; // record with ext
+    expected_test_count += 4; // record & tag union ext variants
 
     for (ty_annos.items) |anno| {
         const idx = try store.addTypeAnno(anno);
@@ -495,6 +522,20 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .typed_int = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+            .type_token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .typed_frac = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+            .type_token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .single_quote = .{
             .region = rand_region(),
             .token = rand_token_idx(),
@@ -508,6 +549,13 @@ test "NodeStore round trip - Expr" {
     });
     try expressions.append(gpa, AST.Expr{
         .string = .{
+            .parts = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .multiline_string = .{
             .parts = AST.Expr.Span{ .span = rand_span() },
             .region = rand_region(),
             .token = rand_token_idx(),
@@ -553,6 +601,12 @@ test "NodeStore round trip - Expr" {
             .region = rand_region(),
         },
     });
+    try expressions.append(gpa, AST.Expr{
+        .record_updater = .{
+            .token = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
 
     try expressions.append(gpa, AST.Expr{
         .field_access = .{
@@ -563,7 +617,22 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
-        .local_dispatch = .{
+        .method_call = .{
+            .receiver = rand_idx(AST.Expr.Idx),
+            .method_token = rand_token_idx(),
+            .args = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .tuple_access = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .elem_token = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .arrow_call = .{
             .left = rand_idx(AST.Expr.Idx),
             .right = rand_idx(AST.Expr.Idx),
             .operator = rand_token_idx(),
@@ -601,6 +670,13 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .if_without_else = .{
+            .condition = rand_idx(AST.Expr.Idx),
+            .then = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .match = .{
             .branches = AST.MatchBranch.Span{ .span = rand_span() },
             .expr = rand_idx(AST.Expr.Idx),
@@ -622,7 +698,7 @@ test "NodeStore round trip - Expr" {
     });
     try expressions.append(gpa, AST.Expr{
         .record_builder = .{
-            .fields = rand_idx(AST.RecordField.Idx),
+            .fields = AST.RecordField.Span{ .span = rand_span() },
             .mapper = rand_idx(AST.Expr.Idx),
             .region = rand_region(),
         },
@@ -634,6 +710,14 @@ test "NodeStore round trip - Expr" {
         .block = .{
             .region = rand_region(),
             .statements = AST.Statement.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .for_expr = .{
+            .patt = rand_idx(AST.Pattern.Idx),
+            .expr = rand_idx(AST.Expr.Idx),
+            .body = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
         },
     });
 
@@ -742,4 +826,20 @@ test "NodeStore round trip - Targets" {
         std.debug.print("Retrieved TargetsSection (nulls): {any}\n\n", .{retrieved_section_nulls});
         return err;
     };
+}
+
+test "NodeStore debug function" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    // Add some nodes to make debug output more interesting
+    _ = try store.addHeader(.{
+        .type_module = .{
+            .region = rand_region(),
+        },
+    });
+
+    // Call debug function - it should not crash (use null writer to avoid polluting test output)
+    try store.debugTo(std.io.null_writer.any());
 }

@@ -3,7 +3,7 @@
 //! This executable runs during `zig build` on the host machine to:
 //! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
-//! 3. Output Builtin.bin to zig-out/builtins/ (which gets embedded in the roc binary)
+//! 3. Output Builtin.bin and builtin_indices.bin to paths provided by the build system
 
 const std = @import("std");
 const base = @import("base");
@@ -18,6 +18,7 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
+const Allocators = base.Allocators;
 const CIR = can.CIR;
 
 const max_builtin_bytes = 1024 * 1024;
@@ -33,6 +34,24 @@ fn flushStderr() void {
     }
 }
 
+fn numericFromStrLowLevel(num_type: []const u8) CIR.Expr.LowLevel {
+    if (std.mem.eql(u8, num_type, "U8")) return .u8_from_str;
+    if (std.mem.eql(u8, num_type, "I8")) return .i8_from_str;
+    if (std.mem.eql(u8, num_type, "U16")) return .u16_from_str;
+    if (std.mem.eql(u8, num_type, "I16")) return .i16_from_str;
+    if (std.mem.eql(u8, num_type, "U32")) return .u32_from_str;
+    if (std.mem.eql(u8, num_type, "I32")) return .i32_from_str;
+    if (std.mem.eql(u8, num_type, "U64")) return .u64_from_str;
+    if (std.mem.eql(u8, num_type, "I64")) return .i64_from_str;
+    if (std.mem.eql(u8, num_type, "U128")) return .u128_from_str;
+    if (std.mem.eql(u8, num_type, "I128")) return .i128_from_str;
+    if (std.mem.eql(u8, num_type, "Dec")) return .dec_from_str;
+    if (std.mem.eql(u8, num_type, "F32")) return .f32_from_str;
+    if (std.mem.eql(u8, num_type, "F64")) return .f64_from_str;
+
+    unreachable;
+}
+
 fn stderrWriter() *std.Io.Writer {
     if (!stderr_initialized) {
         stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
@@ -44,11 +63,14 @@ fn stderrWriter() *std.Io.Writer {
 // Use the canonical BuiltinIndices from CIR
 const BuiltinIndices = CIR.BuiltinIndices;
 
-/// Replace specific e_anno_only expressions with e_low_level_lambda operations.
-/// This transforms standalone annotations into low-level builtin lambda operations
-/// that will be recognized by the compiler backend.
+/// Replace specific `e_anno_only` builtin declarations with `e_lambda` wrappers
+/// around `e_run_low_level` operations.
+///
+/// This keeps compiler-provided builtins in one uniform shape so later
+/// lowering can recognize them generically instead of carrying per-builtin
+/// exceptions.
 /// Returns a list of new def indices created.
-fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
+fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
     var new_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
@@ -71,9 +93,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // Add all low-level operations to the map using full qualified names
     // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
     // We need to find the actual ident that was created during canonicalization
-    if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
-        try low_level_map.put(str_is_empty_ident, .str_is_empty);
-    }
     if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
         try low_level_map.put(str_is_eq_ident, .str_is_eq);
     }
@@ -110,9 +129,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.repeat")) |str_repeat_ident| {
         try low_level_map.put(str_repeat_ident, .str_repeat);
     }
-    if (env.common.findIdent("Builtin.Str.with_prefix")) |str_with_prefix_ident| {
-        try low_level_map.put(str_with_prefix_ident, .str_with_prefix);
-    }
     if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
         try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
     }
@@ -146,26 +162,20 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
         try low_level_map.put(str_join_with_ident, .str_join_with);
     }
-    if (env.common.findIdent("Builtin.Str.inspect")) |str_inspekt_ident| {
-        try low_level_map.put(str_inspekt_ident, .str_inspekt);
+    if (env.common.findIdent("Builtin.Box.box")) |box_box_ident| {
+        try low_level_map.put(box_box_ident, .box_box);
+    }
+    if (env.common.findIdent("Builtin.Box.unbox")) |box_unbox_ident| {
+        try low_level_map.put(box_unbox_ident, .box_unbox);
     }
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
-    if (env.common.findIdent("Builtin.List.is_empty")) |list_is_empty_ident| {
-        try low_level_map.put(list_is_empty_ident, .list_is_empty);
-    }
     if (env.common.findIdent("Builtin.List.concat")) |list_concat_ident| {
         try low_level_map.put(list_concat_ident, .list_concat);
     }
-    if (env.common.findIdent("Builtin.List.append")) |list_append_ident| {
-        try low_level_map.put(list_append_ident, .list_append);
-    }
     if (env.common.findIdent("Builtin.List.with_capacity")) |list_with_capacity_ident| {
         try low_level_map.put(list_with_capacity_ident, .list_with_capacity);
-    }
-    if (env.common.findIdent("Builtin.List.sort_with")) |list_sort_with_ident| {
-        try low_level_map.put(list_sort_with_ident, .list_sort_with);
     }
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
@@ -173,48 +183,23 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
         try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
     }
+    if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
+        try low_level_map.put(list_reserve_ident, .list_reserve);
+    }
+    if (env.common.findIdent("list_release_excess_capacity")) |list_release_excess_capacity_ident| {
+        try low_level_map.put(list_release_excess_capacity_ident, .list_release_excess_capacity);
+    }
     if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
         try low_level_map.put(list_drop_at_ident, .list_drop_at);
     }
     if (env.common.findIdent("Builtin.List.sublist")) |list_sublist_ident| {
         try low_level_map.put(list_sublist_ident, .list_sublist);
     }
-    if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
-        try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
-    }
-
-    // Numeric type checking operations (all numeric types)
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
-    for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_zero (all types)
-        const is_zero = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_zero", .{num_type});
-        if (env.common.findIdent(is_zero)) |ident| {
-            try low_level_map.put(ident, .num_is_zero);
-        }
-    }
-
-    // Numeric sign checking operations (signed types only)
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
-    for (signed_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_negative
-        const is_negative = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_negative", .{num_type});
-        if (env.common.findIdent(is_negative)) |ident| {
-            try low_level_map.put(ident, .num_is_negative);
-        }
-
-        // is_positive
-        const is_positive = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_positive", .{num_type});
-        if (env.common.findIdent(is_positive)) |ident| {
-            try low_level_map.put(ident, .num_is_positive);
-        }
-    }
-
-    // Numeric equality operations (integer types + Dec only, NOT F32/F64)
-    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
+    // Numeric equality operations.
+    // `num_is_eq` already lowers correctly for integers, Dec, and fractional types.
+    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     for (eq_types) |num_type| {
         var buf: [256]u8 = undefined;
 
@@ -310,7 +295,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
         const from_str = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_str", .{num_type});
         if (env.common.findIdent(from_str)) |ident| {
-            try low_level_map.put(ident, .num_from_str);
+            try low_level_map.put(ident, numericFromStrLowLevel(num_type));
         }
     }
 
@@ -978,61 +963,61 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // F32 conversion operations
-    if (env.common.findIdent("Builtin.Num.F32.to_i8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i8_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i8_trunc);
     }
     if (env.common.findIdent("f32_to_i8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i16_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i16_trunc);
     }
     if (env.common.findIdent("f32_to_i16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i32_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i32_trunc);
     }
     if (env.common.findIdent("f32_to_i32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i64_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i64_trunc);
     }
     if (env.common.findIdent("f32_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_i128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_i128_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_i128_trunc);
     }
     if (env.common.findIdent("f32_to_i128_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_i128_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u8_trunc);
     }
     if (env.common.findIdent("f32_to_u8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u16_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u16_trunc);
     }
     if (env.common.findIdent("f32_to_u16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u32_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u32_trunc);
     }
     if (env.common.findIdent("f32_to_u32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u64_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u64_trunc);
     }
     if (env.common.findIdent("f32_to_u64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F32.to_u128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F32.to_u128_wrap")) |ident| {
         try low_level_map.put(ident, .f32_to_u128_trunc);
     }
     if (env.common.findIdent("f32_to_u128_try_unsafe")) |ident| {
@@ -1043,61 +1028,61 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // F64 conversion operations
-    if (env.common.findIdent("Builtin.Num.F64.to_i8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i8_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i8_trunc);
     }
     if (env.common.findIdent("f64_to_i8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i16_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i16_trunc);
     }
     if (env.common.findIdent("f64_to_i16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i32_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i32_trunc);
     }
     if (env.common.findIdent("f64_to_i32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i64_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i64_trunc);
     }
     if (env.common.findIdent("f64_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_i128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_i128_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_i128_trunc);
     }
     if (env.common.findIdent("f64_to_i128_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_i128_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u8_trunc);
     }
     if (env.common.findIdent("f64_to_u8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u16_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u16_trunc);
     }
     if (env.common.findIdent("f64_to_u16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u32_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u32_trunc);
     }
     if (env.common.findIdent("f64_to_u32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u64_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u64_trunc);
     }
     if (env.common.findIdent("f64_to_u64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_u64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.F64.to_u128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.F64.to_u128_wrap")) |ident| {
         try low_level_map.put(ident, .f64_to_u128_trunc);
     }
     if (env.common.findIdent("f64_to_u128_try_unsafe")) |ident| {
@@ -1111,61 +1096,61 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     // Dec conversion functions
-    if (env.common.findIdent("Builtin.Num.Dec.to_i8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i8_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i8_trunc);
     }
     if (env.common.findIdent("dec_to_i8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i16_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i16_trunc);
     }
     if (env.common.findIdent("dec_to_i16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i32_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i32_trunc);
     }
     if (env.common.findIdent("dec_to_i32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i64_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i64_trunc);
     }
     if (env.common.findIdent("dec_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i128_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_i128_trunc);
     }
     if (env.common.findIdent("dec_to_i128_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i128_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u8_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u8_trunc);
     }
     if (env.common.findIdent("dec_to_u8_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u8_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u16_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u16_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u16_trunc);
     }
     if (env.common.findIdent("dec_to_u16_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u16_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u32_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u32_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u32_trunc);
     }
     if (env.common.findIdent("dec_to_u32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u32_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u64_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u64_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u64_trunc);
     }
     if (env.common.findIdent("dec_to_u64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_u64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u128_trunc")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_u128_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u128_trunc);
     }
     if (env.common.findIdent("dec_to_u128_try_unsafe")) |ident| {
@@ -1213,6 +1198,7 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                         else => std.debug.panic("Low-level operation {s} does not have a function type annotation", .{@tagName(low_level_op)}),
                     };
 
+                    // Create parameter patterns for the lambda
                     const patterns_start = env.store.scratchTop("patterns");
                     var i: u32 = 0;
                     while (i < num_params) : (i += 1) {
@@ -1224,31 +1210,37 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     }
                     const args_span = try env.store.patternSpanFrom(patterns_start);
 
-                    // Create an e_runtime_error body that crashes when the function is called
-                    const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
-                    const diagnostic_idx = try env.addDiagnostic(.{ .not_implemented = .{
-                        .feature = error_msg_lit,
-                        .region = base.Region.zero(),
-                    } });
-                    const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, base.Region.zero());
+                    // Create e_lookup_local expressions for each parameter
+                    const exprs_start = env.store.scratchExprTop();
+                    const param_patterns = env.store.slicePatterns(args_span);
+                    for (param_patterns) |pat_idx| {
+                        const lookup_idx = try env.addExpr(.{ .e_lookup_local = .{
+                            .pattern_idx = pat_idx,
+                        } }, base.Region.zero());
+                        try env.store.addScratchExpr(lookup_idx);
+                    }
+                    const lookup_span = try env.store.exprSpanFrom(exprs_start);
 
-                    // Create e_low_level_lambda expression
-                    const expr_idx = try env.addExpr(.{ .e_low_level_lambda = .{
+                    // Create e_run_low_level body expression
+                    const body_idx = try env.addExpr(.{ .e_run_low_level = .{
                         .op = low_level_op,
+                        .args = lookup_span,
+                    } }, base.Region.zero());
+
+                    // Create e_lambda expression wrapping the low-level body
+                    const expr_idx = try env.addExpr(.{ .e_lambda = .{
                         .args = args_span,
                         .body = body_idx,
                     } }, base.Region.zero());
 
-                    // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // Def structure is stored in extra_data:
-                    // extra_data[0] = pattern, extra_data[1] = expr, ...
-                    // node.data_1 points to the start index in extra_data
+                    // Now replace the e_anno_only expression with the e_lambda
+                    // Def structure is stored in def_data list
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
                     const def_node = env.store.nodes.get(def_node_idx);
-                    const extra_start = def_node.data_1;
+                    const def_data_idx = def_node.getPayload().def.def_data_idx;
 
-                    // Update the expr field (at extra_start + 1)
-                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+                    // Update the expr field in def_data
+                    env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -1297,8 +1289,12 @@ fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
 ///
-/// The build system passes the absolute path to Builtin.roc as the first argument for cache tracking;
-/// we honor that when present so the compiler works regardless of the current working directory.
+/// The build system passes:
+/// 1. the absolute path to Builtin.roc for cache tracking
+/// 2. the output path for Builtin.bin
+/// 3. the output path for builtin_indices.bin
+///
+/// We also keep project-relative defaults so manual runs still succeed.
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -1312,9 +1308,11 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
-    // Prefer the absolute path provided by the build system, but fall back to the
-    // project-relative path so manual runs (e.g. `zig build run`) still succeed.
+    // Prefer the explicit paths provided by the build system, but fall back to the
+    // project-relative defaults so manual runs still succeed.
     const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
+    const builtin_bin_path = if (args.len >= 3) args[2] else "zig-out/builtins/Builtin.bin";
+    const builtin_indices_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.bin";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
@@ -1420,11 +1418,16 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
-    // Create output directory
-    try std.fs.cwd().makePath("zig-out/builtins");
+    // Create output directories when needed.
+    if (std.fs.path.dirname(builtin_bin_path)) |dir| {
+        try std.fs.cwd().makePath(dir);
+    }
+    if (std.fs.path.dirname(builtin_indices_path)) |dir| {
+        try std.fs.cwd().makePath(dir);
+    }
 
     // Serialize the single Builtin module
-    try serializeModuleEnv(gpa, builtin_env, "zig-out/builtins/Builtin.bin");
+    try serializeModuleEnv(gpa, builtin_env, builtin_bin_path);
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
@@ -1481,7 +1484,7 @@ pub fn main() !void {
     // This ensures BuiltinIndices stays in sync with the actual Builtin module content
     try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
 
-    try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
+    try serializeBuiltinIndices(builtin_indices, builtin_indices_path);
 }
 
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
@@ -1577,13 +1580,12 @@ fn compileModule(
     };
 
     // 3. Parse
-    var parse_ast = try gpa.create(parse.AST);
-    defer {
-        parse_ast.deinit(gpa);
-        gpa.destroy(parse_ast);
-    }
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    parse_ast.* = try parse.parse(&module_env.common, gpa);
+    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
     // Check for parse errors
@@ -1629,8 +1631,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    // When compiling Builtin itself, pass null for module_envs so setupAutoImportedBuiltinTypes doesn't run
-    can_result.* = try Can.init(module_env, parse_ast, null);
+    can_result.* = try Can.initBuiltin(&allocators, module_env, parse_ast);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
@@ -1662,7 +1663,7 @@ fn compileModule(
     // For the Builtin module, transform annotation-only defs into low-level operations
     if (std.mem.eql(u8, module_name, "Builtin")) {
         // Transform annotation-only defs and get the list of new def indices
-        var new_def_indices = try replaceStrIsEmptyWithLowLevel(module_env);
+        var new_def_indices = try replaceProvidedByCompilerLowLevels(module_env);
         defer new_def_indices.deinit(gpa);
 
         if (new_def_indices.items.len > 0) {
@@ -1729,6 +1730,8 @@ fn compileModule(
     for (deps) |dep| {
         try imported_envs.append(gpa, dep.env);
     }
+    module_env.imports.clearResolvedModules();
+    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
@@ -1753,14 +1756,16 @@ fn compileModule(
         const config = reporting.ReportingConfig.initColorTerminal();
 
         const problem = check.problem;
-        var report_builder = problem.ReportBuilder.init(
+        var report_builder = try check.report.ReportBuilder.init(
             gpa,
             module_env,
             module_env,
             &checker.snapshots,
+            &checker.problems,
             source_path,
             imported_envs.items,
             &checker.import_mapping,
+            &checker.regions,
         );
         defer report_builder.deinit();
 
@@ -1789,8 +1794,6 @@ fn serializeModuleEnv(
     env: *const ModuleEnv,
     output_path: []const u8,
 ) !void {
-    // This follows the pattern from module_env_test.zig
-
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
@@ -1824,16 +1827,16 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |decl| {
-                const header = env.store.getTypeHeader(decl.header);
-                const ident_idx = header.name;
-                const ident_text = env.getIdentText(ident_idx);
-                if (std.mem.eql(u8, ident_text, qualified_name)) {
-                    return stmt_idx;
-                }
-            },
+        const header_idx = switch (stmt) {
+            .s_nominal_decl => |decl| decl.header,
+            .s_alias_decl => |alias| alias.header,
             else => continue,
+        };
+        const header = env.store.getTypeHeader(header_idx);
+        const ident_idx = header.name;
+        const ident_text = env.getIdentText(ident_idx);
+        if (std.mem.eql(u8, ident_text, qualified_name)) {
+            return stmt_idx;
         }
     }
 

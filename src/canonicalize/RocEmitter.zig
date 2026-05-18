@@ -9,6 +9,9 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
+
+const i128h = builtins.compiler_rt_128;
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
@@ -95,33 +98,6 @@ pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     try self.emitPatternValue(pattern);
 }
 
-/// Emit a pattern, checking for shadowing and generating unique names
-fn emitPatternWithShadowCheck(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
-    const pattern = self.module_env.store.getPattern(pattern_idx);
-
-    // Only handle assign patterns for shadowing (other patterns don't introduce names)
-    if (pattern == .assign) {
-        const name = self.module_env.getIdent(pattern.assign.ident);
-
-        if (self.names_in_scope.contains(name)) {
-            // Generate a unique name
-            const unique_name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ name, self.rename_counter });
-            self.rename_counter += 1;
-
-            // Store the rename mapping
-            try self.capture_renames.put(pattern_idx, unique_name);
-            try self.names_in_scope.put(unique_name, {});
-            try self.emitIdent(unique_name);
-        } else {
-            try self.names_in_scope.put(name, {});
-            try self.emitIdent(name);
-        }
-    } else {
-        // For other pattern types, just emit normally
-        try self.emitPatternValue(pattern);
-    }
-}
-
 /// Emit a binop operand, wrapping in parens only if needed for precedence
 fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !void {
     const expr = self.module_env.store.getExpr(expr_idx);
@@ -169,19 +145,31 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // Dec is stored scaled by 10^18, need to emit as decimal
             const value = dec.value.num;
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                try self.writer().print("{d}", .{whole});
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
             } else {
-                try self.writer().print("{d}.{d:0>18}", .{ whole, frac_part });
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
+                try self.writer().writeAll(".");
+                // Format frac_part with leading zeros (18 digits)
+                var frac_buf: [40]u8 = undefined;
+                const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
+                // Pad with leading zeros to 18 digits
+                var pad: usize = 18 - frac_str.len;
+                while (pad > 0) : (pad -= 1) {
+                    try self.writer().writeAll("0");
+                }
+                try self.writer().writeAll(frac_str);
             }
         },
         .e_dec_small => |small| {
             const numerator = small.value.numerator;
             const power = small.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.writer().print("{d}", .{numerator});
+                try self.writer().print("{}", .{numerator});
             } else {
                 // Convert to decimal string
                 var divisor: i32 = 1;
@@ -190,12 +178,35 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.writer().print("{d}.{d}", .{ whole, frac_part });
+                try self.writer().print("{}.{}", .{ whole, frac_part });
             }
+        },
+        .e_typed_int => |typed| {
+            try self.emitIntValue(typed.value);
+            const type_name = self.module_env.getIdent(typed.type_name);
+            try self.writer().print(".{s}", .{type_name});
+        },
+        .e_typed_frac => |typed| {
+            // Emit as decimal and add type suffix
+            const value = typed.value.toI128();
+            const scale: i128 = 1_000_000_000_000_000_000;
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
+            if (frac_part == 0) {
+                try self.writer().print("{d}.0", .{whole});
+            } else {
+                try self.writer().print("{d}.{d:0>18}", .{ whole, frac_part });
+            }
+            const type_name = self.module_env.getIdent(typed.type_name);
+            try self.writer().print(".{s}", .{type_name});
         },
         .e_str_segment => |seg| {
             const text = self.module_env.common.getString(seg.literal);
             try self.writer().print("\"{s}\"", .{text});
+        },
+        .e_bytes_literal => |bytes| {
+            const data = self.module_env.common.getString(bytes.literal);
+            try self.writer().print("<bytes:{d}>", .{data.len});
         },
         .e_str => |str| {
             // Multi-segment string
@@ -238,6 +249,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 try self.emitExpr(elem_idx);
             }
             try self.write(")");
+        },
+        .e_tuple_access => |tuple_access| {
+            try self.emitExpr(tuple_access.tuple);
+            try self.writer().print(".{d}", .{tuple_access.elem_index});
         },
         .e_if => |if_expr| {
             const branch_indices = self.module_env.store.sliceIfBranches(if_expr.branches);
@@ -342,55 +357,12 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitTagName(name);
         },
         .e_closure => |closure| {
-            // Emit closure as a lambda with non-top-level captures as leading arguments
-            // e.g., |y| x + y with capture x becomes |x, y| x + y (if x is local)
-            // but top-level captures are not lifted (they're always in scope)
-            // Handle shadowing by generating unique names for captures
+            // Emit closure as its underlying lambda - captured variables are
+            // already in scope from the enclosing function/block, so we don't
+            // need to inline them as parameters.
             const lambda = self.module_env.store.getExpr(closure.lambda_idx);
             std.debug.assert(lambda == .e_lambda);
-
-            try self.write("|");
-
-            // First emit non-top-level captures as arguments, renaming if they would shadow
-            const captures = self.module_env.store.sliceCaptures(closure.captures);
-            var emitted_captures: u32 = 0;
-            for (captures) |capture_idx| {
-                const capture = self.module_env.store.getCapture(capture_idx);
-
-                // Skip top-level captures - they're always in scope
-                if (self.isTopLevelPattern(capture.pattern_idx)) continue;
-
-                if (emitted_captures > 0) try self.write(", ");
-                emitted_captures += 1;
-
-                const capture_name = self.module_env.getIdent(capture.name);
-
-                // Check if this name would shadow an existing name
-                if (self.names_in_scope.contains(capture_name)) {
-                    // Generate a unique name
-                    const unique_name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ capture_name, self.rename_counter });
-                    self.rename_counter += 1;
-
-                    // Store the rename mapping
-                    try self.capture_renames.put(capture.pattern_idx, unique_name);
-                    try self.names_in_scope.put(unique_name, {});
-                    try self.write(unique_name);
-                } else {
-                    // No shadowing, use original name
-                    try self.names_in_scope.put(capture_name, {});
-                    try self.write(capture_name);
-                }
-            }
-
-            // Then emit the lambda's own arguments (also check for shadowing)
-            const args = self.module_env.store.slicePatterns(lambda.e_lambda.args);
-            for (args, 0..) |arg_idx, i| {
-                if (emitted_captures > 0 or i > 0) try self.write(", ");
-                try self.emitPatternWithShadowCheck(arg_idx);
-            }
-
-            try self.write("| ");
-            try self.emitExpr(lambda.e_lambda.body);
+            try self.emitExprValue(lambda);
         },
         .e_lambda => |lambda| {
             try self.write("|");
@@ -418,20 +390,69 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write("!");
             try self.emitExpr(unary.expr);
         },
-        .e_dot_access => |dot| {
-            try self.emitExpr(dot.receiver);
+        .e_field_access => |field_access| {
+            try self.emitExpr(field_access.receiver);
             try self.write(".");
-            const field_name = self.module_env.getIdent(dot.field_name);
+            const field_name = self.module_env.getIdent(field_access.field_name);
             try self.write(field_name);
-            if (dot.args) |args_span| {
-                try self.write("(");
-                const args = self.module_env.store.sliceExpr(args_span);
-                for (args, 0..) |arg_idx, i| {
-                    if (i > 0) try self.write(", ");
-                    try self.emitExpr(arg_idx);
-                }
-                try self.write(")");
+        },
+        .e_method_call => |method_call| {
+            try self.emitExpr(method_call.receiver);
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
             }
+            try self.write(")");
+        },
+        .e_dispatch_call => |method_call| {
+            try self.emitExpr(method_call.receiver);
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
+        },
+        .e_structural_eq => |eq| {
+            try self.emitExpr(eq.lhs);
+            try self.write(if (eq.negated) " != " else " == ");
+            try self.emitExpr(eq.rhs);
+        },
+        .e_method_eq => |eq| {
+            try self.emitExpr(eq.lhs);
+            try self.write(if (eq.negated) " != " else " == ");
+            try self.emitExpr(eq.rhs);
+        },
+        .e_type_method_call => |method_call| {
+            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
+        },
+        .e_type_dispatch_call => |method_call| {
+            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            try self.write(".");
+            try self.write(self.module_env.getIdent(method_call.method_name));
+            try self.write("(");
+            const args = self.module_env.store.sliceExpr(method_call.args);
+            for (args, 0..) |arg_idx, i| {
+                if (i != 0) try self.write(", ");
+                try self.emitExpr(arg_idx);
+            }
+            try self.write(")");
         },
         .e_runtime_error => {
             try self.write("<runtime_error>");
@@ -497,9 +518,6 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         .e_lookup_required => {
             try self.write("<required>");
         },
-        .e_type_var_dispatch => {
-            try self.write("<type_var_dispatch>");
-        },
         .e_for => |for_expr| {
             try self.write("for ");
             try self.emitPattern(for_expr.patt);
@@ -511,8 +529,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         .e_hosted_lambda => {
             try self.write("<hosted_lambda>");
         },
-        .e_low_level_lambda => {
-            try self.write("<low_level>");
+        .e_run_low_level => |run_ll| {
+            try self.write("<run_low_level: ");
+            try self.write(@tagName(run_ll.op));
+            try self.write(">");
         },
     }
 }
@@ -580,6 +600,10 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                             try self.write(": ");
                             try self.emitPattern(pat_idx);
                         },
+                        .Rest => |pat_idx| {
+                            try self.write("..");
+                            try self.emitPattern(pat_idx);
+                        },
                     }
                 }
                 try self.write(" }");
@@ -629,7 +653,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             const numerator = dec.value.numerator;
             const power = dec.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.writer().print("{d}", .{numerator});
+                try self.writer().print("{}", .{numerator});
             } else {
                 var divisor: i32 = 1;
                 for (0..power) |_| {
@@ -637,25 +661,39 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.writer().print("{d}.{d}", .{ whole, frac_part });
+                try self.writer().print("{}.{}", .{ whole, frac_part });
             }
         },
         .dec_literal => |dec| {
             const value = dec.value.num;
             const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = @divTrunc(value, scale);
-            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                try self.writer().print("{d}", .{whole});
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
             } else {
-                try self.writer().print("{d}.{d:0>18}", .{ whole, frac_part });
+                var str_buf: [40]u8 = undefined;
+                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
+                try self.writer().writeAll(".");
+                var frac_buf: [40]u8 = undefined;
+                const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
+                var pad: usize = 18 - frac_str.len;
+                while (pad > 0) : (pad -= 1) {
+                    try self.writer().writeAll("0");
+                }
+                try self.writer().writeAll(frac_str);
             }
         },
         .frac_f32_literal => |frac| {
-            try self.writer().print("{d}f32", .{frac.value});
+            var float_buf: [400]u8 = undefined;
+            try self.writer().writeAll(i128h.f32_to_str(&float_buf, frac.value));
+            try self.writer().writeAll("f32");
         },
         .frac_f64_literal => |frac| {
-            try self.writer().print("{d}f64", .{frac.value});
+            var float_buf: [400]u8 = undefined;
+            try self.writer().writeAll(i128h.f64_to_str(&float_buf, frac.value));
+            try self.writer().writeAll("f64");
         },
     }
 }
@@ -664,13 +702,6 @@ fn emitStatement(self: *Self, stmt_idx: CIR.Statement.Idx) EmitError!void {
     const stmt = self.module_env.store.getStatement(stmt_idx);
     switch (stmt) {
         .s_decl => |decl| {
-            // Add the declared name to scope
-            try self.addPatternToScope(decl.pattern);
-            try self.emitPattern(decl.pattern);
-            try self.write(" = ");
-            try self.emitExpr(decl.expr);
-        },
-        .s_decl_gen => |decl| {
             // Add the declared name to scope
             try self.addPatternToScope(decl.pattern);
             try self.emitPattern(decl.pattern);
@@ -692,18 +723,6 @@ fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     }
     // For other pattern types (destructuring, etc.), we could recursively add names
     // but for now just handling simple assigns
-}
-
-/// Check if a pattern belongs to a top-level definition
-fn isTopLevelPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) bool {
-    const defs = self.module_env.store.sliceDefs(self.module_env.all_defs);
-    for (defs) |def_idx| {
-        const def = self.module_env.store.getDef(def_idx);
-        if (def.pattern == pattern_idx) {
-            return true;
-        }
-    }
-    return false;
 }
 
 fn emitIntValue(self: *Self, value: CIR.IntValue) !void {

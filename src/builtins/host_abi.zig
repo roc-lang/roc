@@ -36,7 +36,39 @@ pub const RocCall = fn (
 /// inside the Roc compiler itself.
 /// Function pointer type for hosted functions provided by the platform.
 /// All hosted functions follow the RocCall ABI: (ops, ret_ptr, args_ptr).
-pub const HostedFn = *const fn (*RocOps, *anyopaque, *anyopaque) callconv(.c) void;
+///
+/// Roc transfers ownership of refcounted arguments to hosted functions. A host
+/// function must decref each owned refcounted argument when it is done with it,
+/// or transfer that ownership into its return value or longer-lived storage. If
+/// the host keeps both the call argument and a stored copy, it must incref the
+/// stored copy so each live reference has one ownership.
+///
+/// The first parameter is `*anyopaque` instead of `*RocOps` to break a type-level
+/// dependency loop (HostedFn -> *RocOps -> HostedFunctions -> [*]HostedFn).
+/// Callers should cast the opaque pointer to `*RocOps` as needed.
+/// Use `hostedFn` to type-erase a concrete hosted function pointer.
+pub const HostedFn = *const fn (*anyopaque, *anyopaque, *anyopaque) callconv(.c) void;
+
+/// Type-erase a hosted function pointer to `HostedFn`.
+///
+/// Hosted functions are typically written with concrete parameter types for clarity
+/// (e.g. `*RocOps`, `*RocStr`, `[*]u8`), but must be stored as `HostedFn` which
+/// uses `*anyopaque` for all parameters. This helper performs that cast.
+pub fn hostedFn(func: anytype) HostedFn {
+    const T = @TypeOf(func);
+    const info = @typeInfo(T);
+    if (info == .pointer) {
+        const child = @typeInfo(info.pointer.child);
+        if (child == .@"fn") {
+            const f = child.@"fn";
+            if (f.params.len != 3)
+                @compileError("hostedFn: function must take exactly 3 parameters (ops, ret_ptr, args_ptr)");
+            if (f.return_type != void)
+                @compileError("hostedFn: function must return void");
+        }
+    }
+    return @ptrCast(func);
+}
 
 /// Array of hosted function pointers provided by the platform.
 /// These are sorted alphabetically by function name during canonicalization.
@@ -44,6 +76,18 @@ pub const HostedFunctions = extern struct {
     count: u32,
     fns: [*]HostedFn,
 };
+
+const empty_hosted_fns = struct {
+    fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+
+    var fns: [1]HostedFn = .{hostedFn(&dummyHostedFn)};
+};
+
+/// Return a valid empty hosted function table for callers that don't expose any
+/// platform functions but still need an initialized `RocOps.hosted_fns`.
+pub fn emptyHostedFunctions() HostedFunctions {
+    return .{ .count = 0, .fns = &empty_hosted_fns.fns };
+}
 
 /// Operations that the host provides to Roc code, including memory management,
 /// panic handling, and platform-specific effects.
@@ -92,6 +136,18 @@ pub const RocOps = extern struct {
             .len = msg.len,
         };
         self.roc_dbg(&roc_dbg_args, self.env);
+    }
+
+    /// Helper function to report a failed `expect` to the host.
+    pub fn expectFailed(self: *RocOps, msg: []const u8) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        const roc_expect_failed_args = RocExpectFailed{
+            .utf8_bytes = @constCast(msg.ptr),
+            .len = msg.len,
+        };
+        self.roc_expect_failed(&roc_expect_failed_args, self.env);
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {

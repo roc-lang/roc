@@ -2,7 +2,7 @@
 //!
 //! This module provides background cleanup functionality that:
 //! - Removes temporary runtime directories older than 5 minutes
-//! - Removes persistent cache files (mod/ and exe/) older than 30 days
+//! - Removes persistent cache files (mod/, exe/, and test/) older than 30 days
 //! - Removes empty directories after cleanup
 //!
 //! The cleanup runs on a single background thread that is fire-and-forget:
@@ -11,9 +11,14 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const CacheConfig = @import("cache_config.zig").CacheConfig;
+const cache_config = @import("cache_config.zig");
+const CacheConfig = cache_config.CacheConfig;
+const Io = @import("io").Io;
+const threading = @import("threading.zig");
 
 const Allocator = std.mem.Allocator;
+
+const is_freestanding = threading.is_freestanding;
 
 /// Cleanup configuration constants
 pub const Config = struct {
@@ -38,7 +43,7 @@ pub const CleanupStats = struct {
 /// This is a fire-and-forget thread - you don't need to join it.
 /// If the main process exits before cleanup completes, the OS will
 /// automatically terminate this thread along with the process.
-pub const CleanupThread = struct {
+pub const CleanupThread = if (!is_freestanding) struct {
     thread: std.Thread,
 
     /// Wait for the cleanup thread to complete.
@@ -47,7 +52,7 @@ pub const CleanupThread = struct {
     pub fn join(self: *CleanupThread) void {
         self.thread.join();
     }
-};
+} else struct {};
 
 /// Start background cleanup on a separate thread.
 ///
@@ -60,34 +65,31 @@ pub const CleanupThread = struct {
 /// The thread is fire-and-forget: if the main process exits before cleanup
 /// completes, the OS will automatically terminate the cleanup thread.
 /// You do not need to join the returned handle.
-pub fn startBackgroundCleanup(allocator: Allocator) !CleanupThread {
-    const thread = try std.Thread.spawn(.{}, runCleanup, .{allocator});
+pub fn startBackgroundCleanup(allocator: Allocator, filesystem: Io) !?CleanupThread {
+    if (comptime is_freestanding) return null;
+    const thread = try std.Thread.spawn(.{}, runCleanup, .{ allocator, filesystem });
     return CleanupThread{ .thread = thread };
 }
 
 /// Run the full cleanup process (called on background thread).
-fn runCleanup(allocator: Allocator) void {
-    // ---------------------------------------------------------------------------
+fn runCleanup(allocator: Allocator, filesystem: Io) void {
     // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
     // This is just to clean up people who have old stale Roc caches from before
     // we restructured the cache directories to use roc/{version}/ structure.
-    // ---------------------------------------------------------------------------
-    cleanupLegacyTempDirs(allocator, null);
-    cleanupLegacyPersistentCache(allocator, null);
-    // ---------------------------------------------------------------------------
+    cleanupLegacyTempDirs(allocator, null, filesystem);
+    cleanupLegacyPersistentCache(allocator, null, filesystem);
     // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
-    // ---------------------------------------------------------------------------
 
     // Clean up temp directories (5 minute threshold)
-    cleanupTempDirs(allocator, null);
+    cleanupTempDirs(allocator, null, filesystem);
 
     // Clean up persistent cache (30 day threshold)
-    cleanupPersistentCache(allocator, null);
+    cleanupPersistentCache(allocator, null, filesystem);
 }
 
 /// Clean up temporary runtime directories older than 5 minutes.
-fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
-    const temp_base = CacheConfig.getTempDir(allocator) catch return;
+fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
+    const temp_base = cache_config.getTempDir(filesystem, allocator) catch return;
     defer allocator.free(temp_base);
 
     const now = std.time.nanoTimestamp();
@@ -159,8 +161,8 @@ fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
 }
 
 /// Clean up persistent cache files older than 30 days.
-fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
-    const config = CacheConfig{};
+fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
+    const config = CacheConfig{ .io = filesystem };
 
     // Get the base cache directory
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
@@ -189,6 +191,11 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats) voi
         const exe_path = std.fs.path.join(allocator, &.{ version_path, "exe" }) catch continue;
         cleanupCacheSubdir(allocator, exe_path, now, maybe_stats);
         allocator.free(exe_path);
+
+        // Clean up test/ directory
+        const test_path = std.fs.path.join(allocator, &.{ version_path, "test" }) catch continue;
+        cleanupCacheSubdir(allocator, test_path, now, maybe_stats);
+        allocator.free(test_path);
 
         // NOTE: We intentionally do NOT delete empty version directories.
         // Empty directories are harmless and deleting them can cause race conditions.
@@ -276,22 +283,19 @@ pub fn deleteTempDir(allocator: Allocator, temp_dir_path: []const u8) void {
     std.fs.cwd().deleteFile(txt_path) catch {};
 }
 
-// ---------------------------------------------------------------------------
-// LEGACY CLEANUP FUNCTIONS
 // TODO: REMOVE THESE FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
 // These clean up old cache directories from before we restructured to use
 // the roc/{version}/ directory structure.
-// ---------------------------------------------------------------------------
 
 /// Clean up legacy temp directories that used the old "roc-*" prefix pattern.
 /// Old structure: /tmp/roc-{random}/ (directly in temp, with roc- prefix)
 /// New structure: /tmp/roc/{version}/{random}/
-fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
+fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
     const temp_base = switch (builtin.target.os.tag) {
-        .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
-            std.process.getEnvVarOwned(allocator, "TMP") catch
+        .windows => filesystem.getEnvVar("TEMP", allocator) catch
+            filesystem.getEnvVar("TMP", allocator) catch
             return,
-        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
+        else => filesystem.getEnvVar("TMPDIR", allocator) catch
             allocator.dupe(u8, "/tmp") catch return,
     };
     defer allocator.free(temp_base);
@@ -322,8 +326,8 @@ fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void
 /// Clean up legacy persistent cache that used the old flat structure.
 /// Old structure: ~/.cache/roc/{hash}/ or ~/.cache/roc/*.rcache (flat)
 /// New structure: ~/.cache/roc/{version}/mod/ and ~/.cache/roc/{version}/exe/
-fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
-    const config = CacheConfig{};
+fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats, filesystem: Io) void {
+    const config = CacheConfig{ .io = filesystem };
 
     const cache_base = config.getEffectiveCacheDir(allocator) catch return;
     defer allocator.free(cache_base);
@@ -383,14 +387,6 @@ fn isLegacyHashDir(name: []const u8) bool {
 
     return true;
 }
-
-// ---------------------------------------------------------------------------
-// END OF LEGACY CLEANUP FUNCTIONS - REMOVE FOR 0.1.0
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 test "Config constants are reasonable" {
     // 5 minutes in nanoseconds

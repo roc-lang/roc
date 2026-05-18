@@ -1,6 +1,11 @@
 //! This module contains the canonicalizer and the Canonical Intermediate Representation (CIR).
 
 const std = @import("std");
+const base = @import("base");
+const parse = @import("parse");
+
+const Allocators = base.Allocators;
+const AST = parse.AST;
 
 /// The canonicalizer (the thing that canonicalizes the AST).
 pub const Can = @import("Can.zig");
@@ -16,10 +21,64 @@ pub const DependencyGraph = @import("DependencyGraph.zig");
 pub const HostedCompiler = @import("HostedCompiler.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
-/// Monomorphizer - specializes polymorphic functions to concrete types
-pub const Monomorphizer = @import("Monomorphizer.zig");
-/// Closure Transformer - transforms closures with captures into tagged values
-pub const ClosureTransformer = @import("ClosureTransformer.zig");
+/// Node storage for CIR nodes (used internally by ModuleEnv)
+pub const NodeStore = @import("NodeStore.zig");
+
+/// Re-export AutoImportedType for callers
+pub const AutoImportedType = Can.AutoImportedType;
+
+/// Canonicalize a full module file.
+///
+/// This is the unified entry point for module canonicalization. It:
+/// 1. Initializes the canonicalizer
+/// 2. Canonicalizes the entire file
+/// 3. Validates the result for type checking
+/// 4. Cleans up canonicalizer resources
+///
+/// Results are stored in module_env (all_defs, all_statements, diagnostics, etc).
+///
+/// Memory ownership:
+/// - allocators: Caller provides and manages
+/// - module_env: Caller provides; results stored here
+/// - parse_ast: Caller provides and manages
+/// - context: Builtin type context plus optional explicit imported module environments
+pub fn canonicalizeModule(
+    allocators: *Allocators,
+    module_env: *ModuleEnv,
+    parse_ast: *AST,
+    context: Can.ModuleInitContext,
+) std.mem.Allocator.Error!void {
+    var czer = try Can.initModule(allocators, module_env, parse_ast, context);
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+    try czer.validateForChecking();
+}
+
+/// Canonicalize a single expression (for REPL).
+///
+/// Returns the canonical expression result, or null if canonicalization failed.
+/// Check module_env.getDiagnostics() for any errors.
+///
+/// Memory ownership:
+/// - allocators: Caller provides and manages
+/// - module_env: Caller provides; results stored here
+/// - parse_ast: Caller provides (root_node_idx should point to expression)
+/// - context: Builtin type context plus optional explicit imported module environments
+pub fn canonicalizeExpr(
+    allocators: *Allocators,
+    module_env: *ModuleEnv,
+    parse_ast: *AST,
+    context: Can.ModuleInitContext,
+) std.mem.Allocator.Error!?Can.CanonicalizedExpr {
+    var czer = try Can.initModule(allocators, module_env, parse_ast, context);
+    defer czer.deinit();
+    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const result = try czer.canonicalizeExpr(expr_idx);
+    if (module_env.store.scratch != null) {
+        module_env.diagnostics = try module_env.store.diagnosticSpanFrom(0);
+    }
+    return result;
+}
 
 test "compile tests" {
     std.testing.refAllDecls(@This());
@@ -53,8 +112,4 @@ test "compile tests" {
     // Backend tests (Roc emitter)
     std.testing.refAllDecls(@import("RocEmitter.zig"));
     std.testing.refAllDecls(@import("test/roc_emitter_test.zig"));
-
-    // Monomorphization
-    std.testing.refAllDecls(@import("Monomorphizer.zig"));
-    std.testing.refAllDecls(@import("ClosureTransformer.zig"));
 }

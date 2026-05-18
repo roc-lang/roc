@@ -56,9 +56,9 @@ pub const AST_STATEMENT_NODE_COUNT = 13;
 /// Count of the pattern nodes in the AST
 pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
-pub const AST_TYPE_ANNO_NODE_COUNT = 10;
+pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = 24;
+pub const AST_EXPR_NODE_COUNT = std.meta.fields(AST.Expr).len;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -85,12 +85,18 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa),
     };
 
-    _ = try store.nodes.append(gpa, .{
+    const expected_idx = store.nodes.items.len;
+    const idx = try store.nodes.append(gpa, .{
         .tag = .root,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
         .region = .{ .start = 0, .end = 0 },
     });
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(@intFromEnum(idx) == expected_idx);
+    } else if (@intFromEnum(idx) != expected_idx) {
+        unreachable;
+    }
     return store;
 }
 
@@ -138,34 +144,42 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_requires_entries.clearFrom(0);
 }
 
+const StderrWriter = std.io.GenericWriter(std.fs.File, std.fs.File.WriteError, struct {
+    fn write(file: std.fs.File, bytes: []const u8) std.fs.File.WriteError!usize {
+        return file.write(bytes);
+    }
+}.write);
+
 /// Prints debug information about all nodes and scratch buffers in the store.
 pub fn debug(store: *NodeStore) void {
     if (comptime builtin.target.os.tag != .freestanding) {
-        std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
-        std.debug.print("Nodes:\n", .{});
-        var nodes_iter = store.nodes.iterIndices();
-        while (nodes_iter.next()) |idx| {
-            std.debug.print("{d}: {any}\n", .{ @intFromEnum(idx), store.nodes.get(idx) });
-        }
-        std.debug.print("Extra Data: {any}\n", .{store.extra_data.items});
-        std.debug.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
-        std.debug.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
-        std.debug.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
-        std.debug.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
-        std.debug.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
-        std.debug.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
-        std.debug.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
-        std.debug.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
-        std.debug.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
-        std.debug.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
-        std.debug.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
-        std.debug.print("==> IR.NodeStore DEBUG <==\n\n", .{});
+        const stderr_writer: StderrWriter = .{ .context = std.fs.File.stderr() };
+        store.debugTo(stderr_writer.any()) catch {};
     }
 }
 
-// ------------------------------------------------------------------------
-// Creation API - All nodes should be added using these functions
-// ------------------------------------------------------------------------
+/// Writes debug information about all nodes and scratch buffers to the given writer.
+pub fn debugTo(store: *NodeStore, writer: std.io.AnyWriter) !void {
+    try writer.print("\n==> IR.NodeStore DEBUG <==\n", .{});
+    try writer.print("Nodes:\n", .{});
+    var nodes_iter = store.nodes.iterIndices();
+    while (nodes_iter.next()) |idx| {
+        try writer.print("{d}: {any}\n", .{ @intFromEnum(idx), store.nodes.get(idx) });
+    }
+    try writer.print("Extra Data: {any}\n", .{store.extra_data.items});
+    try writer.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
+    try writer.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
+    try writer.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
+    try writer.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
+    try writer.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
+    try writer.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
+    try writer.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
+    try writer.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
+    try writer.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
+    try writer.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
+    try writer.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
+    try writer.print("==> IR.NodeStore DEBUG <==\n\n", .{});
+}
 
 /// Any node type can be malformed, but must come with a diagnostic reason
 pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag, region: Region) std.mem.Allocator.Error!T {
@@ -473,6 +487,13 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             const is_var_bit: u32 = if (a.is_var) TYPE_ANNO_IS_VAR_BIT else 0;
             node.main_token = where_val | is_var_bit;
         },
+        .file_import => |fi| {
+            node.tag = .file_import;
+            node.region = fi.region;
+            node.main_token = fi.path_tok;
+            node.data.lhs = fi.name_tok;
+            node.data.rhs = fi.type_tok | (if (fi.is_bytes) @as(u32, 1) << 31 else 0);
+        },
         .malformed => {
             @panic("Use addMalformed instead");
         },
@@ -605,6 +626,18 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.region = e.region;
             node.main_token = e.token;
         },
+        .typed_int => |e| {
+            node.tag = .typed_int;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = e.type_token;
+        },
+        .typed_frac => |e| {
+            node.tag = .typed_frac;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = e.type_token;
+        },
         .tag => |e| {
             node.tag = .tag;
             node.region = e.region;
@@ -686,7 +719,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @intFromEnum(app.@"fn"));
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
-        .record_updater => |_| {},
+        .record_updater => |updater| {
+            node.tag = .record_update;
+            node.region = updater.region;
+            node.main_token = updater.token;
+        },
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
@@ -694,8 +731,24 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @intFromEnum(fa.left);
             node.data.rhs = @intFromEnum(fa.right);
         },
-        .local_dispatch => |ld| {
-            node.tag = .local_dispatch;
+        .method_call => |mc| {
+            node.tag = .method_call;
+            node.region = mc.region;
+            node.main_token = mc.method_token;
+            node.data.lhs = @intFromEnum(mc.receiver);
+            const args_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, mc.args.span.start);
+            try store.extra_data.append(store.gpa, mc.args.span.len);
+            node.data.rhs = @as(u32, @intCast(args_data_idx));
+        },
+        .tuple_access => |ta| {
+            node.tag = .tuple_access;
+            node.region = ta.region;
+            node.main_token = ta.elem_token;
+            node.data.lhs = @intFromEnum(ta.expr);
+        },
+        .arrow_call => |ld| {
+            node.tag = .arrow_call;
             node.region = ld.region;
             node.main_token = ld.operator;
             node.data.lhs = @intFromEnum(ld.left);
@@ -760,8 +813,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
         .record_builder => |rb| {
             node.tag = .record_builder;
             node.region = rb.region;
-            node.data.lhs = @intFromEnum(rb.mapper);
-            node.data.rhs = @intFromEnum(rb.fields);
+            // Store [fields.span.start, fields.span.len, mapper] in extra_data
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            try store.extra_data.append(store.gpa, rb.fields.span.start);
+            try store.extra_data.append(store.gpa, rb.fields.span.len);
+            try store.extra_data.append(store.gpa, @intFromEnum(rb.mapper));
+            node.data.lhs = data_start;
         },
         .block => |body| {
             node.tag = .block;
@@ -843,7 +900,7 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocat
 pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) std.mem.Allocator.Error!AST.MatchBranch.Idx {
     const node = Node{
         .tag = .branch,
-        .main_token = 0,
+        .main_token = if (branch.guard) |g| @intFromEnum(g) + 1 else 0,
         .data = .{
             .lhs = @intFromEnum(branch.pattern),
             .rhs = @intFromEnum(branch.body),
@@ -973,7 +1030,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             node.region = tu.region;
 
             // Store all tag_union data in flat format:
-            // [tags.span.start, tags.span.len, open_anno?]
+            // [tags.span.start, tags.span.len, ext_data...]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, tu.tags.span.start);
             try store.extra_data.append(store.gpa, tu.tags.span.len);
@@ -986,10 +1043,17 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             };
             const rhs = AST.TypeAnno.TagUnionRhs{
                 .ext_kind = ext_kind,
-                .tags_len = @as(u30, @intCast(tu.tags.span.len)),
             };
-            if (tu.ext == .named) {
-                try store.extra_data.append(store.gpa, @intFromEnum(tu.ext.named));
+            switch (tu.ext) {
+                .named => |named| {
+                    try store.extra_data.append(store.gpa, @intFromEnum(named.anno));
+                    try store.extra_data.append(store.gpa, named.region.start);
+                    try store.extra_data.append(store.gpa, named.region.end);
+                },
+                .open => |double_dot_tok| {
+                    try store.extra_data.append(store.gpa, double_dot_tok);
+                },
+                .closed => {},
             }
 
             node.data.lhs = data_start;
@@ -1006,20 +1070,30 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             node.region = r.region;
 
             // Store all data in extra_data:
-            // [fields.span.start, fields.span.len, ext?]
+            // [fields.span.start, fields.span.len, ext_data...]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, r.fields.span.start);
             try store.extra_data.append(store.gpa, r.fields.span.len);
 
-            // Use packed struct similar to TagUnionRhs
-            const RecordRhs = packed struct { has_ext: u1, fields_len: u31 };
-            var rhs = RecordRhs{
-                .has_ext = 0,
-                .fields_len = @as(u31, @intCast(r.fields.span.len)),
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext_kind: u2 = switch (r.ext) {
+                .closed => 0,
+                .open => 1,
+                .named => 2,
             };
-            if (r.ext) |ext| {
-                rhs.has_ext = 1;
-                try store.extra_data.append(store.gpa, @intFromEnum(ext));
+            const rhs = AST.TypeAnno.RecordRhs{
+                .ext_kind = ext_kind,
+            };
+            switch (r.ext) {
+                .named => |named| {
+                    try store.extra_data.append(store.gpa, @intFromEnum(named.anno));
+                    try store.extra_data.append(store.gpa, named.region.start);
+                    try store.extra_data.append(store.gpa, named.region.end);
+                },
+                .open => |double_dot_tok| {
+                    try store.extra_data.append(store.gpa, double_dot_tok);
+                },
+                .closed => {},
             }
 
             node.data.lhs = data_start;
@@ -1050,10 +1124,6 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
     const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
-
-// ------------------------------------------------------------------------
-// Read API - All nodes should be accessed using these functions
-// ------------------------------------------------------------------------
 
 /// TODO
 pub fn getFile(store: *const NodeStore) AST.File {
@@ -1417,6 +1487,17 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .is_var = is_var,
             } };
         },
+        .file_import => {
+            const is_bytes = (node.data.rhs & (@as(u32, 1) << 31)) != 0;
+            const type_tok = node.data.rhs & ~(@as(u32, 1) << 31);
+            return .{ .file_import = .{
+                .path_tok = node.main_token,
+                .name_tok = node.data.lhs,
+                .type_tok = type_tok,
+                .is_bytes = is_bytes,
+                .region = node.region,
+            } };
+        },
         .malformed => {
             return .{ .malformed = .{
                 .reason = @enumFromInt(node.data.lhs),
@@ -1573,6 +1654,20 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
+        .typed_int => {
+            return .{ .typed_int = .{
+                .token = node.main_token,
+                .type_token = node.data.lhs,
+                .region = node.region,
+            } };
+        },
+        .typed_frac => {
+            return .{ .typed_frac = .{
+                .token = node.main_token,
+                .type_token = node.data.lhs,
+                .region = node.region,
+            } };
+        },
         .single_quote => {
             return .{ .single_quote = .{
                 .token = node.main_token,
@@ -1667,6 +1762,12 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
+        .record_update => {
+            return .{ .record_updater = .{
+                .token = node.main_token,
+                .region = node.region,
+            } };
+        },
         .field_access => {
             return .{ .field_access = .{
                 .left = @enumFromInt(node.data.lhs),
@@ -1675,8 +1776,27 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .local_dispatch => {
-            return .{ .local_dispatch = .{
+        .method_call => {
+            const args_data_idx = node.data.rhs;
+            return .{ .method_call = .{
+                .receiver = @enumFromInt(node.data.lhs),
+                .method_token = node.main_token,
+                .args = .{ .span = .{
+                    .start = store.extra_data.items[args_data_idx],
+                    .len = store.extra_data.items[args_data_idx + 1],
+                } },
+                .region = node.region,
+            } };
+        },
+        .tuple_access => {
+            return .{ .tuple_access = .{
+                .expr = @enumFromInt(node.data.lhs),
+                .elem_token = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .arrow_call => {
+            return .{ .arrow_call = .{
                 .left = @enumFromInt(node.data.lhs),
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
@@ -1780,9 +1900,16 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             } };
         },
         .record_builder => {
+            const extra_data_pos = node.data.lhs;
+            const fields_start = store.extra_data.items[extra_data_pos];
+            const fields_len = store.extra_data.items[extra_data_pos + 1];
+            const mapper_value = store.extra_data.items[extra_data_pos + 2];
             return .{ .record_builder = .{
-                .mapper = @enumFromInt(node.data.lhs),
-                .fields = @enumFromInt(node.data.rhs),
+                .mapper = @enumFromInt(mapper_value),
+                .fields = .{ .span = .{
+                    .start = fields_start,
+                    .len = fields_len,
+                } },
                 .region = node.region,
             } };
         },
@@ -1812,13 +1939,14 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
     };
 }
 
-/// Retrieves when branch data from a stored when branch node.
+/// Retrieves match branch data from a stored match branch node.
 pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
         .region = node.region,
         .pattern = @enumFromInt(node.data.lhs),
         .body = @enumFromInt(node.data.rhs),
+        .guard = if (node.main_token == 0) null else @enumFromInt(node.main_token - 1),
     };
 }
 
@@ -1932,7 +2060,7 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
         .ty_union => {
             const rhs = @as(AST.TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
 
-            // Read flat data format: [tags.span.start, tags.span.len, open_anno?]
+            // Read flat data format: [tags.span.start, tags.span.len, ext_data...]
             var extra_data_pos = node.data.lhs;
             const tags_start = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
@@ -1942,8 +2070,14 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
             const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
                 0 => .closed,
-                1 => .open,
-                2 => .{ .named = @enumFromInt(store.extra_data.items[extra_data_pos]) },
+                1 => .{ .open = store.extra_data.items[extra_data_pos] },
+                2 => .{ .named = .{
+                    .anno = @enumFromInt(store.extra_data.items[extra_data_pos]),
+                    .region = .{
+                        .start = store.extra_data.items[extra_data_pos + 1],
+                        .end = store.extra_data.items[extra_data_pos + 2],
+                    },
+                } },
                 3 => unreachable,
             };
 
@@ -1966,15 +2100,26 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             } };
         },
         .ty_record => {
-            const RecordRhs = packed struct { has_ext: u1, fields_len: u31 };
-            const rhs = @as(RecordRhs, @bitCast(node.data.rhs));
-            const extra_idx = node.data.lhs;
-            const fields_start = store.extra_data.items[extra_idx];
-            const fields_len = store.extra_data.items[extra_idx + 1];
-            const ext: ?AST.TypeAnno.Idx = if (rhs.has_ext == 1)
-                @enumFromInt(store.extra_data.items[extra_idx + 2])
-            else
-                null;
+            const rhs = @as(AST.TypeAnno.RecordRhs, @bitCast(node.data.rhs));
+            var extra_data_pos = node.data.lhs;
+            const fields_start = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const fields_len = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext: AST.TypeAnno.RecordExt = switch (rhs.ext_kind) {
+                0 => .closed,
+                1 => .{ .open = store.extra_data.items[extra_data_pos] },
+                2 => .{ .named = .{
+                    .anno = @enumFromInt(store.extra_data.items[extra_data_pos]),
+                    .region = .{
+                        .start = store.extra_data.items[extra_data_pos + 1],
+                        .end = store.extra_data.items[extra_data_pos + 2],
+                    },
+                } },
+                3 => unreachable,
+            };
 
             return .{ .record = .{
                 .region = node.region,
@@ -2022,10 +2167,6 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
     const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
 }
-
-// ------------------------------------------------------------------------
-// Node types - these are the constituent types used in the Node Store API
-// ------------------------------------------------------------------------
 
 /// Returns the start position for a new Span of AST.Expr.Idxs in scratch
 pub fn scratchExprTop(store: *NodeStore) u32 {
@@ -2137,6 +2278,7 @@ pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
+    if (span.len == 0) return &.{};
     return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
 }
 
@@ -2439,10 +2581,6 @@ pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
 pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []AST.WhereClause.Idx {
     return store.sliceFromSpan(AST.WhereClause.Idx, span.span);
 }
-
-// -----------------------------------------------------------------
-// Target section functions
-// -----------------------------------------------------------------
 
 /// Adds a TargetsSection node and returns its index.
 pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem.Allocator.Error!AST.TargetsSection.Idx {

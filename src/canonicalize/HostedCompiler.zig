@@ -1,7 +1,7 @@
 //! Compiler support for hosted functions in platform modules.
 //!
 //! This module handles the transformation of annotation-only declarations
-//! into hosted lambda expressions that will be provided by the platform at runtime.
+//! into explicit hosted lambda facts that will be provided by the platform at runtime.
 
 const std = @import("std");
 const base = @import("base");
@@ -28,106 +28,96 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
-    // Iterate through all defs and replace ALL anno-only defs with hosted implementations
-    const all_defs = env.store.sliceDefs(env.all_defs);
+    // Iterate through all defs and replace ALL anno-only defs with hosted implementations.
+    // Copy the def indices locally first: sliceDefs returns a slice backed by
+    // store.index_data, which patternSpanFrom appends to inside the loop. A reallocation
+    // there would invalidate a directly-held slice.
+    const defs_slice = env.store.sliceDefs(env.all_defs);
+    const all_defs = try gpa.dupe(CIR.Def.Idx, defs_slice);
+    defer gpa.free(all_defs);
     for (all_defs) |def_idx| {
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);
 
         // Check if this is an anno-only def (e_anno_only expression)
         if (expr == .e_anno_only and def.annotation != null) {
-            // Get the identifier from the pattern
-            const pattern = env.store.getPattern(def.pattern);
-            if (pattern == .assign) {
-                const full_ident = pattern.assign.ident;
+            // Get the identifier directly from the e_anno_only expression
+            // (no need to access the pattern, which could have cross-module index issues)
+            const full_ident = expr.e_anno_only.ident;
 
-                // Get the region from the original def for better error messages
-                const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-                const def_region = env.store.getRegionAt(def_node_idx);
+            // Get the region from the original def for better error messages
+            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+            const def_region = env.store.getRegionAt(def_node_idx);
 
-                // Extract the unqualified name (e.g., "line!" from "Stdout.line!")
-                // The pattern might contain a qualified name, but we need the unqualified one
-                const full_name = env.getIdent(full_ident);
-                const unqualified_name = if (std.mem.lastIndexOfScalar(u8, full_name, '.')) |dot_idx|
-                    full_name[dot_idx + 1 ..]
-                else
-                    full_name;
-                const ident = env.common.findIdent(unqualified_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(unqualified_name));
+            // Extract the local name by stripping the module name prefix (first dot-separated segment).
+            // Use indexOfScalar (first dot) instead of lastIndexOfScalar to preserve nested type paths.
+            // e.g., "PartDef.Idx.get!" -> "Idx.get!" (not just "get!")
+            // e.g., "Echo.line!" -> "line!"
+            const full_name = env.getIdent(full_ident);
+            const local_name = if (std.mem.indexOfScalar(u8, full_name, '.')) |dot_idx|
+                full_name[dot_idx + 1 ..]
+            else
+                full_name;
+            const ident = env.common.findIdent(local_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(local_name));
 
-                // Extract the number of arguments from the annotation
-                const annotation = env.store.getAnnotation(def.annotation.?);
-                const type_anno = env.store.getTypeAnno(annotation.anno);
+            // Extract the number of arguments from the annotation
+            const annotation = env.store.getAnnotation(def.annotation.?);
+            const type_anno = env.store.getTypeAnno(annotation.anno);
 
-                const num_args: usize = if (type_anno == .@"fn") blk: {
-                    const func_type = type_anno.@"fn";
-                    const args_slice = env.store.sliceTypeAnnos(func_type.args);
+            const num_args: usize = if (type_anno == .@"fn") blk: {
+                const func_type = type_anno.@"fn";
+                const args_slice = env.store.sliceTypeAnnos(func_type.args);
 
-                    // Check if single argument is empty tuple () - if so, create 0 params
-                    if (args_slice.len == 1) {
-                        const first_arg = env.store.getTypeAnno(args_slice[0]);
-                        if (first_arg == .tuple) {
-                            if (first_arg.tuple.elems.span.len == 0) {
-                                break :blk 0; // () means 0 parameters
-                            }
+                // Check if single argument is empty tuple () - if so, create 0 params
+                if (args_slice.len == 1) {
+                    const first_arg = env.store.getTypeAnno(args_slice[0]);
+                    if (first_arg == .tuple) {
+                        if (first_arg.tuple.elems.span.len == 0) {
+                            break :blk 0; // () means 0 parameters
                         }
                     }
-
-                    break :blk args_slice.len;
-                } else 0;
-
-                // Create dummy parameter patterns for the lambda (one for each argument)
-                // Use the def's region for better error diagnostics
-                const patterns_start = env.store.scratchTop("patterns");
-                var arg_i: usize = 0;
-                while (arg_i < num_args) : (arg_i += 1) {
-                    const arg_name = try std.fmt.allocPrint(gpa, "_arg{}", .{arg_i});
-                    defer gpa.free(arg_name);
-                    const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
-                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, def_region);
-                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
-                }
-                const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = @intCast(num_args) } };
-
-                // Create an e_crash body that crashes when the function is called in the interpreter.
-                // This is a placeholder - hosted functions are provided by the platform's native code,
-                // so this body should never be evaluated during normal compilation/execution.
-                const crash_msg = try env.insertString("Hosted functions cannot be called in the interpreter");
-                const body_idx = try env.addExpr(.{ .e_crash = .{ .msg = crash_msg } }, def_region);
-
-                // Ensure types array has entries for all new expressions
-                const body_int = @intFromEnum(body_idx);
-                while (env.types.len() <= body_int) {
-                    _ = try env.types.fresh();
                 }
 
-                // Create e_hosted_lambda expression
-                const expr_idx = try env.addExpr(.{
-                    .e_hosted_lambda = .{
-                        .symbol_name = ident,
-                        .index = 0, // Placeholder; will be assigned during sorting pass
-                        .args = args_span,
-                        .body = body_idx,
-                    },
-                }, def_region);
+                break :blk args_slice.len;
+            } else 0;
 
-                // Ensure types array has an entry for this new expression
-                const expr_int = @intFromEnum(expr_idx);
-                while (env.types.len() <= expr_int) {
-                    _ = try env.types.fresh();
-                }
-
-                // Now replace the e_anno_only expression with the e_hosted_lambda
-                // We need to modify the def's expr field in extra_data (NOT data_2!)
-                // The expr is stored in extra_data[extra_start + 1]
-                // (reuse def_node_idx from above)
-                const def_node = env.store.nodes.get(def_node_idx);
-                const extra_start = def_node.data_1;
-
-                env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
-
-                // Track this modified def index
-                try modified_def_indices.append(gpa, def_idx);
+            // Create dummy parameter patterns for the lambda (one for each argument)
+            // Use the def's region for better error diagnostics
+            const patterns_start = env.store.scratchTop("patterns");
+            var arg_i: usize = 0;
+            while (arg_i < num_args) : (arg_i += 1) {
+                const arg_name = try std.fmt.allocPrint(gpa, "_arg{}", .{arg_i});
+                defer gpa.free(arg_name);
+                const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
+                const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, def_region);
+                try env.store.scratch.?.patterns.append(arg_pattern_idx);
             }
+            const args_span = try env.store.patternSpanFrom(patterns_start);
+
+            // Create e_hosted_lambda expression
+            const expr_idx = try env.addExpr(.{
+                .e_hosted_lambda = .{
+                    .symbol_name = ident,
+                    .args = args_span,
+                },
+            }, def_region);
+
+            // Ensure types array has an entry for this new expression
+            const expr_int = @intFromEnum(expr_idx);
+            while (env.types.len() <= expr_int) {
+                _ = try env.types.fresh();
+            }
+
+            // Now replace the e_anno_only expression with the e_hosted_lambda
+            // The def's expr field is stored in def_data
+            // (reuse def_node_idx from above)
+            const def_node = env.store.nodes.get(def_node_idx);
+            const def_data_idx = def_node.getPayload().def.def_data_idx;
+
+            env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
+
+            // Track this modified def index
+            try modified_def_indices.append(gpa, def_idx);
         }
     }
 
@@ -202,21 +192,4 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
     std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
 
     return hosted_fns;
-}
-
-/// Assign indices to e_hosted_lambda expressions based on sorted order
-pub fn assignHostedIndices(env: *ModuleEnv, sorted_fns: []const HostedFunctionInfo) !void {
-    for (sorted_fns, 0..) |fn_info, index| {
-        // Get the expression node (Expr.Idx and Node.Idx have same underlying representation)
-        const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
-        var expr_node = env.store.nodes.get(expr_node_idx);
-
-        // For e_hosted_lambda nodes:
-        // data_1 = symbol_name (Ident.Idx via @bitCast)
-        // data_2 = index (u32) <- We set this here
-        // data_3 = extra_data pointer (for args and body)
-        expr_node.data_2 = @intCast(index);
-
-        env.store.nodes.set(expr_node_idx, expr_node);
-    }
 }

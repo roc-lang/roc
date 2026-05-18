@@ -50,10 +50,10 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-ident (raw "list")))
-				(e-field-access
-					(e-ident (raw "list"))
-					(e-apply
-						(e-ident (raw "len"))))))
+				(e-method-call (method ".len")
+					(receiver
+						(e-ident (raw "list")))
+					(args))))
 		(s-decl
 			(p-ident (raw "main!"))
 			(e-lambda
@@ -84,7 +84,7 @@ main! = |_| processList(["one", "two"])
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dot-access (field "len")
+			(e-dispatch-call (method "len") (constraint-fn-var 54)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -96,21 +96,18 @@ main! = |_| processList(["one", "two"])
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "processList")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "processList")))
-					(e-list
-						(elems
-							(e-string
-								(e-literal (string "one")))
-							(e-string
-								(e-literal (string "two"))))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call (constraint-fn-var 86)
+				(e-lookup-local
+					(p-assign (ident "processList")))
+				(e-list
+					(elems
+						(e-string
+							(e-literal (string "one")))
+						(e-string
+							(e-literal (string "two")))))))))
 ~~~
 # TYPES
 ~~~clojure

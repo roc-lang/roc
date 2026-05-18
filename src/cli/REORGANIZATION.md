@@ -37,7 +37,6 @@ src/cli/
 ├── platform_cache.zig            # getRocCacheDir, URL platform resolution
 ├── platform_validation.zig       # Platform header validation (existing)
 │
-├── compile_serialization.zig     # compileAndSerializeModulesForEmbedding
 ├── compile_shared_memory.zig     # POSIX/Windows shared memory
 │
 ├── builder.zig                   # LLVM bitcode compilation (existing)
@@ -67,7 +66,7 @@ src/cli/
 
 ### Phase 2: Extract Compilation Infrastructure
 1. Create `compile_shared_memory.zig` - SharedMemoryHandle, write functions
-2. Create `compile_serialization.zig` - compileAndSerializeModulesForEmbedding
+2. Keep compilation and runtime execution split at a viewable LIR runtime image
 
 ### Phase 3: Extract Platform Resolution
 1. Create `platform_resolution.zig` - extractPlatformSpecFromApp, resolvePlatformPaths

@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» 0u64.until(3u64)
-» 1u64.until(1u64)
-» 5u64.until(3u64)
+» 0.U64.until(3.U64)
+» 1.U64.until(1.U64)
+» 5.U64.until(3.U64)
 ~~~
 # OUTPUT
 [0, 1, 2]

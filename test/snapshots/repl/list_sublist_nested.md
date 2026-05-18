@@ -11,6 +11,6 @@ type=repl
 # OUTPUT
 assigned `nested`
 ---
-Ok([4, 5])
+Ok([4.0, 5.0])
 # PROBLEMS
 NIL

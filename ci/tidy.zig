@@ -17,12 +17,13 @@ const mem = std.mem;
 const Ast = std.zig.Ast;
 
 const MiB = 1024 * 1024;
+const max_text_file_size = 4 * MiB;
 
 /// Binary file extensions that should be skipped entirely (not read into the buffer).
 /// These are compiled artifacts, images, and other non-text files.
 const binary_extensions: []const []const u8 = &.{
-    ".ico", ".png", ".webp", ".jpg", ".jpeg", ".gif", ".bin",
-    ".o", ".a", ".lib", ".dll", ".so", ".dylib", ".wasm",
+    ".ico",  ".png",   ".webp", ".jpg", ".jpeg", ".gif",   ".bin",
+    ".o",    ".a",     ".lib",  ".dll", ".so",   ".dylib", ".wasm",
     ".rlib", ".rmeta",
 };
 
@@ -47,7 +48,7 @@ pub fn main() !void {
 
     // NB: all checks are intentionally implemented in a streaming fashion,
     // such that we only need to read the files once.
-    const file_buffer = try gpa.alloc(u8, 1 * MiB);
+    const file_buffer = try gpa.alloc(u8, max_text_file_size);
     defer gpa.free(file_buffer);
 
     const paths = try listFilePaths(gpa);
@@ -69,7 +70,7 @@ pub fn main() !void {
                 \\
                 \\If this is a binary file, add its extension to `binary_extensions` in ci/tidy.zig
                 \\to exclude it from tidy checks.
-            , .{ file_buffer.len / MiB, file_path });
+            , .{ max_text_file_size / MiB, file_path });
         }
         file_buffer[bytes_read] = 0;
 
@@ -256,7 +257,6 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
         }
     }
 }
-
 
 const IdentifierCounter = struct {
     const file_identifier_count_max = 100_000;
@@ -480,9 +480,9 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
     // Skip directories with different conventions
     const skip_paths: []const []const u8 = &.{
         "test/snapshots/", // Snapshot files are generated
-        "crates/",         // Old Rust crate code
-        "design/",         // Design docs may have different structure
-        "www/",            // Website content
+        "crates/", // Old Rust crate code
+        "design/", // Design docs may have different structure
+        "www/", // Website content
     };
     for (skip_paths) |skip_path| {
         if (std.mem.indexOf(u8, file.path, skip_path) != null) return;
@@ -515,7 +515,11 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
 // practice.
 const DeadFilesDetector = struct {
     const FileName = [64]u8;
-    const FileState = struct { import_count: u32, definition_count: u32 };
+    const FileState = struct {
+        import_count: u32,
+        definition_count: u32,
+        is_src: bool,
+    };
     const FileMap = std.AutoArrayHashMap(FileName, FileState);
 
     files: FileMap,
@@ -531,15 +535,21 @@ const DeadFilesDetector = struct {
     fn visit(detector: *DeadFilesDetector, file: SourceFile) Allocator.Error!void {
         assert(file.hasExtension(".zig"));
 
-        // Only track src/ files as needing to be imported somewhere
+        const is_test_file = std.mem.startsWith(u8, file.path, "test/");
+
+        // Track src/ and test/ definitions so imported test helpers are
+        // recognized as tracked files. Only src/ files are later checked for
+        // dead-file status.
         const is_src_file = std.mem.startsWith(u8, file.path, "src/");
-        if (is_src_file) {
-            (try detector.fileState(file.path)).definition_count += 1;
+        if (is_src_file or is_test_file) {
+            const state = try detector.fileState(file.path);
+            state.definition_count += 1;
+            state.is_src = is_src_file;
         }
 
         // Only scan src/, test/, and build files for imports
         const should_scan = is_src_file or
-            std.mem.startsWith(u8, file.path, "test/") or
+            is_test_file or
             std.mem.eql(u8, file.path, "build.zig") or
             std.mem.startsWith(u8, file.path, "ci/");
         if (!should_scan) return;
@@ -566,7 +576,7 @@ const DeadFilesDetector = struct {
             if (state.definition_count == 0) {
                 errors.addFileUntracked(&name);
             }
-            if (state.import_count == 0 and !isEntryPoint(name)) {
+            if (state.is_src and state.import_count == 0 and !isEntryPoint(name)) {
                 errors.addFileDead(&name);
             }
         }
@@ -574,7 +584,13 @@ const DeadFilesDetector = struct {
 
     fn fileState(detector: *DeadFilesDetector, path: []const u8) !*FileState {
         const gop = try detector.files.getOrPut(pathToName(path));
-        if (!gop.found_existing) gop.value_ptr.* = .{ .import_count = 0, .definition_count = 0 };
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{
+                .import_count = 0,
+                .definition_count = 0,
+                .is_src = false,
+            };
+        }
         return gop.value_ptr;
     }
 
@@ -593,10 +609,22 @@ const DeadFilesDetector = struct {
             "main.zig", // CLI, playground_wasm, interpreter_shim, etc.
             "static_lib.zig", // Builtins static library
             "tracy.zig", // Profiler module (added via b.addModule)
+            "tracy_stub.zig", // No-op tracy stub for standalone static library builds (added via b.addModule)
             "fuzz_sort.zig", // Fuzzing entry point
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests
+            "glue_test.zig", // Glue generation tests
+            "host.zig", // Glue platform host
             "roc_subcommands.zig", // CLI subcommand tests
+            "test_runner.zig", // Test runner executable
+            "llvm_evaluator.zig", // LLVM evaluator executable
+            "darwin_compat.zig", // Compiled to .o by build.zig for macOS linking
+            "echo.zig", // Echo platform WASM entry point
+            "parallel_cli_runner.zig", // Parallel CLI test runner executable
+            "test_harness.zig", // Shared test harness (added via b.addModule)
+            "test_env_pkg.zig", // Typed CIR package root used via build root_source_file
+            "module_env_serialization_test_root.zig", // Serialization suite root used via build root_source_file
+            "mono_emit_test_root.zig", // Mono emit suite root used via build root_source_file
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;
@@ -634,6 +662,7 @@ fn listFilePaths(allocator: Allocator) ![][]const u8 {
     var lines = std.mem.splitScalar(u8, files, 0);
     outer: while (lines.next()) |line| {
         if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "vendor/")) continue;
         // Skip binary files entirely - they shouldn't be read into the buffer
         for (binary_extensions) |ext| {
             if (std.mem.endsWith(u8, line, ext)) continue :outer;

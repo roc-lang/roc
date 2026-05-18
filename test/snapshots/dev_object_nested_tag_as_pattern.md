@@ -1,0 +1,81 @@
+# META
+~~~ini
+description=Nested tag matching through as-pattern wrapper
+type=dev_object
+~~~
+# SOURCE
+## app.roc
+~~~roc
+app [main] { pf: platform "./platform.roc" }
+
+Error : [Exit(I64), NotFound]
+Result : [Ok(I64), Err(Error)]
+
+extract_code : Result -> I64
+extract_code = |result|
+    match result {
+        Ok(n) => n
+        Err(Exit(code) as inner) =>
+            match inner {
+                Exit(_) => code
+                _ => -2
+            }
+        Err(_) => -1
+    }
+
+main = Str.inspect(extract_code(Err(Exit(42))))
+~~~
+## platform.roc
+~~~roc
+platform ""
+    requires {} { main : Str }
+    exposes []
+    packages {}
+    provides { main_for_host: "main" }
+    targets: {
+        files: "targets/",
+        exe: {
+            x64glibc: [app],
+        }
+    }
+
+main_for_host : Str
+main_for_host = main
+~~~
+# MONO
+~~~roc
+# platform
+main_for_host = <required>
+
+# app
+extract_code = |result| match result {
+	Ok(n) => n
+	Err(Exit(code) as inner) => match Exit(code) as inner {
+		Exit(_) => code
+		_ => -2
+	}
+	Err(_) => -1
+}
+main = inspect(extract_code(Err(Exit(42))))
+
+~~~
+# DEV OUTPUT
+~~~ini
+x64mac=32ca1b1d1f12b766cb19aacffb6d2f3e00a3d57391822cee27574d7d5a92d877
+x64win=a85c32d8b5921ce20f69261e1efe1cd11485e1ee3634e901a5742a36770b95fc
+x64freebsd=35a1850f1c28546bc830186ff707dcf63728aea8d8db43faab16fd733fbffe15
+x64openbsd=35a1850f1c28546bc830186ff707dcf63728aea8d8db43faab16fd733fbffe15
+x64netbsd=35a1850f1c28546bc830186ff707dcf63728aea8d8db43faab16fd733fbffe15
+x64musl=35a1850f1c28546bc830186ff707dcf63728aea8d8db43faab16fd733fbffe15
+x64glibc=35a1850f1c28546bc830186ff707dcf63728aea8d8db43faab16fd733fbffe15
+x64linux=35a1850f1c28546bc830186ff707dcf63728aea8d8db43faab16fd733fbffe15
+x64elf=35a1850f1c28546bc830186ff707dcf63728aea8d8db43faab16fd733fbffe15
+arm64mac=19b415661a641363b96933938346cda4d842e5dc94438d7699e16a34bef57236
+arm64win=beb6bac84ad3763a040f89fa3203c12c7ff7673a77dbfab2bd69fbc144b3adf0
+arm64linux=7fc4816e86954b21b8299235df363a929419b292988a892a974ed3e52fc2f13e
+arm64musl=7fc4816e86954b21b8299235df363a929419b292988a892a974ed3e52fc2f13e
+arm64glibc=7fc4816e86954b21b8299235df363a929419b292988a892a974ed3e52fc2f13e
+arm32linux=NOT_IMPLEMENTED
+arm32musl=NOT_IMPLEMENTED
+wasm32=NOT_IMPLEMENTED
+~~~

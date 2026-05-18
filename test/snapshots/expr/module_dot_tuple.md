@@ -8,18 +8,23 @@ type=expr
 I.5
 ~~~
 # EXPECTED
-PARSE ERROR - module_dot_tuple.md:1:2:1:4
+TYPE MISMATCH - module_dot_tuple.md:1:1:1:4
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expr_no_space_dot_int`
-This is an unexpected parsing error. Please check your syntax.
-
-**module_dot_tuple.md:1:2:1:4:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**module_dot_tuple.md:1:1:1:4:**
 ```roc
 I.5
 ```
- ^^
+^^^
 
+It has the type:
+
+    (_field, _field2, _field3, _field4, _field5, _field6)
+
+But you are trying to use it as:
+
+    [I, ..]
 
 # TOKENS
 ~~~zig
@@ -28,19 +33,20 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed (reason "expr_no_space_dot_int"))
+(e-tuple-access
+	(e-tag (raw "I"))
+	".5")
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-tuple-access (index "5")
+	(e-tag (name "I")))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr (type "_a"))
 ~~~

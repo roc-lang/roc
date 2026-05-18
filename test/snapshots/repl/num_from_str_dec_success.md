@@ -11,12 +11,12 @@ type=repl
 » Dec.from_str("1000000")
 ~~~
 # OUTPUT
-Ok(0)
+Ok(0.0)
 ---
 Ok(123.456)
 ---
 Ok(-99.99)
 ---
-Ok(1000000)
+Ok(1000000.0)
 # PROBLEMS
 NIL

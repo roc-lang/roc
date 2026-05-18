@@ -10,23 +10,18 @@ func = |offset| {
 	f = if condition |x| x + offset else |x| x * 2
 	f(10)
 }
+
 result = func(1)
 ~~~
 # MONO
 ~~~roc
-c1_f = |x, captures| x + captures.offset
-
-c2_f = |x| x * 2
-
 func = |offset| {
 	condition = True
-	f = if (condition) C1_f({ offset: offset }) else C2_f({})
-	match f {
-		C1_f(captures) => c1_f(10, captures)
-		C2_f({}) => c2_f(10)
-	}
+	f = if (condition) |x| x + offset else |x| x * 2
+	f(10)
 }
 
+result : Dec
 result = func(1)
 ~~~
 # FORMATTED
@@ -106,46 +101,32 @@ EndOfFile,
 							(if-branch
 								(e-lookup-local
 									(p-assign (ident "condition")))
-								(e-tag (name "#1_f")
-									(args
-										(e-record
-											(fields
-												(field (name "offset")
-													(e-lookup-local
-														(p-assign (ident "offset"))))))))))
+								(e-closure
+									(captures
+										(capture (ident "offset")))
+									(e-lambda
+										(args
+											(p-assign (ident "x")))
+										(e-binop (op "add")
+											(e-lookup-local
+												(p-assign (ident "x")))
+											(e-lookup-local
+												(p-assign (ident "offset"))))))))
 						(if-else
-							(e-tag (name "#2_f")
+							(e-lambda
 								(args
-									(e-empty_record))))))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "f"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-lookup-local
-											(p-assign (ident "c1_f")))
-										(e-num (value "10"))
-										(e-lookup-local
-											(p-assign (ident "captures"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-lookup-local
-											(p-assign (ident "c2_f")))
-										(e-num (value "10")))))))))))
+									(p-assign (ident "x")))
+								(e-binop (op "mul")
+									(e-lookup-local
+										(p-assign (ident "x")))
+									(e-num (value "2")))))))
+				(e-call (constraint-fn-var 76)
+					(e-lookup-local
+						(p-assign (ident "f")))
+					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
+		(e-call (constraint-fn-var 99)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "1")))))
@@ -154,9 +135,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, a.times : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, b -> b, b.times : b, b -> b]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, a.times : a, a -> a]")))
+		(patt (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "a -> [] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, a.times : a, a -> a]"))
-		(expr (type "[]"))))
+		(expr (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))))
 ~~~

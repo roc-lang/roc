@@ -13,6 +13,7 @@ c : L
 ~~~
 # EXPECTED
 UNDECLARED TYPE - fuzz_crash_080.md:1:5:1:6
+DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _L_ is not declared in this scope.
@@ -24,6 +25,20 @@ c : L
 ```
     ^
 
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_080.md:1:1:5:10:**
+```roc
+c : L
+        where [
+                o
+                .h : a,
+        ]
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

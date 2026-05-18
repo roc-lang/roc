@@ -8,6 +8,7 @@ type=file
 app [] { pf: platform "../basic-cli/platform.roc" }
 
 a = 5
+
 b = a + 1
 ~~~
 # EXPECTED
@@ -64,9 +65,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]")))
+		(patt (type "Dec"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))))
+		(expr (type "Dec"))
+		(expr (type "Dec"))))
 ~~~

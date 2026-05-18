@@ -1,4 +1,4 @@
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app [main!] { pf: platform "../fx/platform/main.roc" }
 
 import pf.Stdout
 
@@ -17,7 +17,7 @@ findPair = |targetSum, maxVal| {
     (-1, -1)
 }
 
-main! = |_| {
+main! = || {
     (a, b) = findPair 10 20
 
     if a + b == 10 && a >= 0 && b >= 0 {

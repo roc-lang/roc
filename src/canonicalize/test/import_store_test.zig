@@ -76,7 +76,7 @@ test "Import.Store empty CompactWriter roundtrip" {
     defer gpa.free(buffer);
 
     const serialized_ptr = @as(*Import.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = try serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.imports.len());
@@ -118,16 +118,16 @@ test "Import.Store basic CompactWriter roundtrip" {
     defer gpa.free(buffer);
 
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized = try serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    var deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
     defer deserialized.map.deinit(gpa);
 
     // Verify the correct number of imports
     try testing.expectEqual(@as(usize, 3), deserialized.imports.len());
 
     // Verify all expected module names are present by iterating
-    try testing.expect(storeContainsModule(deserialized, &string_store, "json.Json"));
-    try testing.expect(storeContainsModule(deserialized, &string_store, "core.List"));
-    try testing.expect(storeContainsModule(deserialized, &string_store, "my.Module"));
+    try testing.expect(storeContainsModule(&deserialized, &string_store, "json.Json"));
+    try testing.expect(storeContainsModule(&deserialized, &string_store, "core.List"));
+    try testing.expect(storeContainsModule(&deserialized, &string_store, "my.Module"));
 
     // Verify the map is repopulated correctly
     try testing.expectEqual(@as(usize, 3), deserialized.map.count());
@@ -170,15 +170,15 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     defer gpa.free(buffer);
 
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized = try serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    var deserialized = try serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
     defer deserialized.map.deinit(gpa);
 
     // Verify correct number of imports (duplicates deduplicated)
     try testing.expectEqual(@as(usize, 2), deserialized.imports.len());
 
     // Verify expected module names are present
-    try testing.expect(storeContainsModule(deserialized, &string_store, "test.Module"));
-    try testing.expect(storeContainsModule(deserialized, &string_store, "another.Module"));
+    try testing.expect(storeContainsModule(&deserialized, &string_store, "test.Module"));
+    try testing.expect(storeContainsModule(&deserialized, &string_store, "another.Module"));
 
     // Verify the map was repopulated correctly
     try testing.expectEqual(@as(usize, 2), deserialized.map.count());

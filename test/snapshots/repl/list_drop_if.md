@@ -8,6 +8,6 @@ type=repl
 » List.drop_if([1, 2, 3, 4, 5], |x| x > 2)
 ~~~
 # OUTPUT
-[1, 2]
+[1.0, 2.0]
 # PROBLEMS
 NIL

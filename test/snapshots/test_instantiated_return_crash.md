@@ -16,11 +16,11 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiated_return_crash.md:6:26:6:35
+TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**test_instantiated_return_crash.md:6:26:6:35:**
+**test_instantiated_return_crash.md:6:24:**
 ```roc
     needs_string = |f| f(["hello"])
 ```
@@ -113,7 +113,7 @@ EndOfFile,
 					(elems
 						(e-string
 							(e-literal (string "hello"))))))))
-	(e-call
+	(e-call (constraint-fn-var 73)
 		(e-lookup-local
 			(p-assign (ident "needs_string")))
 		(e-lookup-local
@@ -121,5 +121,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

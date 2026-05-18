@@ -33,9 +33,9 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .check => &.{"check tests"},
         .parse => &.{"parser tests"},
         .layout => &.{"layout tests"},
+        .values => &.{"values tests"},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
-        .repl => &.{"repl tests"},
         .fmt => &.{"fmt tests"},
         else => &.{},
     };
@@ -269,7 +269,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [20]ModuleTest,
+    tests: [28]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -288,25 +288,36 @@ pub const ModuleType = enum {
     can,
     check,
     tracy,
-    fs,
+    io,
     build_options,
     layout,
+    interpreter_layout,
+    values,
     eval,
     ipc,
-    repl,
     fmt,
     watch,
     bundle,
     unbundle,
     base58,
     lsp,
+    backend,
+    lir,
+    symbol,
+    mir,
+    ir,
+    roc_target,
+    sljmp,
+    echo_platform,
+    docs,
+    glue,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
         return switch (self) {
             .build_options => &.{},
             .builtins => &.{.tracy},
-            .fs => &.{},
+            .io => &.{},
             .tracy => &.{.build_options},
             .collections => &.{},
             .base => &.{ .collections, .builtins },
@@ -315,18 +326,29 @@ pub const ModuleType = enum {
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
-            .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
+            .check => &.{ .tracy, .build_options, .builtins, .collections, .base, .parse, .types, .can, .reporting, .symbol },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
-            .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
+            .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
+            .values => &.{ .collections, .base, .builtins, .layout },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp, .ipc },
+            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .mir, .ir, .sljmp },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
-            .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
+            .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
-            .lsp => &.{ .compile, .reporting, .build_options, .fs },
+            .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
+            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .mir, .ir },
+            .symbol => &.{.base},
+            .mir => &.{ .base, .types, .can, .check, .symbol, .layout },
+            .ir => &.{ .base, .types, .symbol, .mir, .layout },
+            .roc_target => &.{.base},
+            .sljmp => &.{},
+            .echo_platform => &.{.builtins},
+            .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
+            .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir },
         };
     }
 };
@@ -344,19 +366,29 @@ pub const RocModules = struct {
     can: *Module,
     check: *Module,
     tracy: *Module,
-    fs: *Module,
+    io: *Module,
     build_options: *Module,
     layout: *Module,
+    interpreter_layout: *Module,
+    values: *Module,
     eval: *Module,
     ipc: *Module,
-    repl: *Module,
     fmt: *Module,
     watch: *Module,
     bundle: *Module,
     unbundle: *Module,
     base58: *Module,
     lsp: *Module,
+    backend: *Module,
+    lir: *Module,
+    symbol: *Module,
+    mir: *Module,
+    ir: *Module,
     roc_target: *Module,
+    sljmp: *Module,
+    echo_platform: *Module,
+    docs: *Module,
+    glue: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -374,22 +406,32 @@ pub const RocModules = struct {
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
             .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/build/tracy.zig") }),
-            .fs = b.addModule("fs", .{ .root_source_file = b.path("src/fs/mod.zig") }),
+            .io = b.addModule("io", .{ .root_source_file = b.path("src/io/mod.zig") }),
             .build_options = b.addModule(
                 "build_options",
                 .{ .root_source_file = build_options_step.getOutput() },
             ),
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
+            .interpreter_layout = b.addModule("interpreter_layout", .{ .root_source_file = b.path("src/interpreter_layout/mod.zig") }),
+            .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
-            .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
             .watch = b.addModule("watch", .{ .root_source_file = b.path("src/watch/watch.zig") }),
             .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
+            .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
+            .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
+            .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
+            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
+            .ir = b.addModule("ir", .{ .root_source_file = b.path("src/ir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
+            .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
+            .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
+            .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
+            .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -416,18 +458,29 @@ pub const RocModules = struct {
             .can,
             .check,
             .tracy,
-            .fs,
+            .io,
             .build_options,
             .layout,
+            .interpreter_layout,
+            .values,
             .eval,
             .ipc,
-            .repl,
             .fmt,
             .watch,
             .bundle,
             .unbundle,
             .base58,
             .lsp,
+            .backend,
+            .lir,
+            .symbol,
+            .mir,
+            .ir,
+            .roc_target,
+            .sljmp,
+            .echo_platform,
+            .docs,
+            .glue,
         };
 
         // Setup dependencies for each module
@@ -443,34 +496,45 @@ pub const RocModules = struct {
     }
 
     pub fn addAll(self: RocModules, step: *Step.Compile) void {
+        const is_wasm = step.rootModuleTarget().cpu.arch == .wasm32;
+
         step.root_module.addImport("base", self.base);
         step.root_module.addImport("collections", self.collections);
         step.root_module.addImport("types", self.types);
-        step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
         step.root_module.addImport("check", self.check);
         step.root_module.addImport("tracy", self.tracy);
         step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("fs", self.fs);
+        step.root_module.addImport("io", self.io);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
+        step.root_module.addImport("interpreter_layout", self.interpreter_layout);
         step.root_module.addImport("eval", self.eval);
-        step.root_module.addImport("ipc", self.ipc);
-        step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
-        step.root_module.addImport("watch", self.watch);
-        step.root_module.addImport("lsp", self.lsp);
-
-        // Don't add bundle module for WASM targets (zstd C library not available)
-        if (step.rootModuleTarget().cpu.arch != .wasm32) {
-            step.root_module.addImport("bundle", self.bundle);
-        }
-
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
+        step.root_module.addImport("backend", self.backend);
+        step.root_module.addImport("lir", self.lir);
+        step.root_module.addImport("symbol", self.symbol);
+        step.root_module.addImport("mir", self.mir);
+        step.root_module.addImport("ir", self.ir);
+        step.root_module.addImport("sljmp", self.sljmp);
+        step.root_module.addImport("echo_platform", self.echo_platform);
+        step.root_module.addImport("docs", self.docs);
+        step.root_module.addImport("glue", self.glue);
+        step.root_module.addImport("compile", self.compile);
+
+        // Don't add thread-dependent or native-only modules for WASM targets
+        if (!is_wasm) {
+            step.root_module.addImport("ipc", self.ipc);
+            step.root_module.addImport("watch", self.watch);
+            step.root_module.addImport("lsp", self.lsp);
+            // Don't add bundle module for WASM targets (zstd C library not available)
+            step.root_module.addImport("bundle", self.bundle);
+        }
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
@@ -491,18 +555,29 @@ pub const RocModules = struct {
             .can => self.can,
             .check => self.check,
             .tracy => self.tracy,
-            .fs => self.fs,
+            .io => self.io,
             .build_options => self.build_options,
             .layout => self.layout,
+            .interpreter_layout => self.interpreter_layout,
+            .values => self.values,
             .eval => self.eval,
             .ipc => self.ipc,
-            .repl => self.repl,
             .fmt => self.fmt,
             .watch => self.watch,
             .bundle => self.bundle,
             .unbundle => self.unbundle,
             .base58 => self.base58,
             .lsp => self.lsp,
+            .backend => self.backend,
+            .lir => self.lir,
+            .symbol => self.symbol,
+            .mir => self.mir,
+            .ir => self.ir,
+            .roc_target => self.roc_target,
+            .sljmp => self.sljmp,
+            .echo_platform => self.echo_platform,
+            .docs => self.docs,
+            .glue => self.glue,
         };
     }
 
@@ -533,17 +608,25 @@ pub const RocModules = struct {
             .parse,
             .can,
             .check,
-            .fs,
+            .io,
             .layout,
-            .eval,
+            .interpreter_layout,
+            .values,
             .ipc,
-            .repl,
             .fmt,
             .watch,
             .bundle,
             .unbundle,
             .base58,
             .lsp,
+            .backend,
+            .lir,
+            .symbol,
+            .mir,
+            .ir,
+            .sljmp,
+            .echo_platform,
+            .docs,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;
@@ -565,7 +648,10 @@ pub const RocModules = struct {
                     .optimize = optimize,
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
-                    .link_libc = (module_type == .ipc or module_type == .bundle),
+                    // Eval module needs libc for setjmp/longjmp crash protection
+                    // sljmp module needs libc for setjmp/longjmp functions
+                    // compile/lsp modules transitively depend on eval->sljmp, so also need libc
+                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
                 }),
                 .filters = filter_injection.filters,
             });

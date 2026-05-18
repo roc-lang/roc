@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Regression test for issue 8738: Using ? operator on a non-Try type should give a clear EXPECTED TRY TYPE error
+description=Regression test for issue 8738: Using ? operator on a non-Try type should give a clear TYPE MISMATCH error
 type=snippet
 ~~~
 # SOURCE
@@ -20,23 +20,21 @@ do_something = || {
 result = do_something()
 ~~~
 # EXPECTED
-EXPECTED TRY TYPE - issue8738_question_on_non_try.md:9:7:9:7
+TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 # PROBLEMS
-**EXPECTED TRY TYPE**
-The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
-but I found:
-**issue8738_question_on_non_try.md:9:7:**
+**TYPE MISMATCH**
+The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and `Err` tags), but I found:
+**issue8738_question_on_non_try.md:9:7:9:30:**
 ```roc
 	_x = ok_or(Err(""), Exit(5))?
 ```
-      ^^^^^^^^^^^^^^^^^^^^^^^
+	     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This expression has type:
 
-_[Exit(a), Ok(_b), Err(_c), .._others]
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+    [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
-Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
+__Tip:__ Maybe wrap a value using `Ok(value)` or `Err(value)`.
 
 # TOKENS
 ~~~zig
@@ -138,51 +136,52 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "ok"))))))
 	(d-let
 		(p-assign (ident "do_something"))
-		(e-closure
-			(captures
-				(capture (ident "ok_or")))
-			(e-lambda
-				(args)
-				(e-block
-					(s-let
-						(p-assign (ident "_x"))
-						(e-match
-							(match
-								(cond
-									(e-call
+		(e-lambda
+			(args)
+			(e-block
+				(s-let
+					(p-assign (ident "_x"))
+					(e-match
+						(match
+							(cond
+								(e-call (constraint-fn-var 99)
+									(e-lookup-local
+										(p-assign (ident "ok_or")))
+									(e-tag (name "Err")
+										(args
+											(e-string
+												(e-literal (string "")))))
+									(e-tag (name "Exit")
+										(args
+											(e-num (value "5"))))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
 										(e-lookup-local
-											(p-assign (ident "ok_or")))
-										(e-tag (name "Err")
-											(args
-												(e-string
-													(e-literal (string "")))))
-										(e-tag (name "Exit")
-											(args
-												(e-num (value "5"))))))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-lookup-local
-												(p-assign (ident "#ok")))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-return
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-nominal-external
+												(builtin)
 												(e-tag (name "Err")
 													(args
 														(e-lookup-local
-															(p-assign (ident "#err"))))))))))))
-					(e-tag (name "Ok")
-						(args
-							(e-empty_record)))))))
+															(p-assign (ident "#err")))))))))))))
+				(e-tag (name "Ok")
+					(args
+						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
+		(e-call (constraint-fn-var 137)
 			(e-lookup-local
 				(p-assign (ident "do_something"))))))
 ~~~
@@ -191,10 +190,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
-		(patt (type "({}) -> [Err(_a), Ok({}), .._others]"))
-		(patt (type "[Err(_a), Ok({}), .._others]")))
+		(patt (type "({}) -> Try({}, err)"))
+		(patt (type "Try({}, err)")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
-		(expr (type "({}) -> [Err(_a), Ok({}), .._others]"))
-		(expr (type "[Err(_a), Ok({}), .._others]"))))
+		(expr (type "({}) -> Try({}, err)"))
+		(expr (type "Try({}, err)"))))
 ~~~

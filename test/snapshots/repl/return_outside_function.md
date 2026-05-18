@@ -9,9 +9,12 @@ type=repl
 ~~~
 # OUTPUT
 **RETURN OUTSIDE FUNCTION**
-The **return** keyword can only be used inside a function body.
+The `return` keyword can only be used inside function bodies.
 
-Use `return` to exit early from a function and provide a value. For example:
-    foo = |x| { if x < 0 { return Err(NegativeInput) }; Ok(x) }
+**repl:2:5:2:14:**
+```roc
+    return 42
+```
+    ^^^^^^^^^
 # PROBLEMS
 NIL

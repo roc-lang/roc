@@ -34,6 +34,7 @@ pub fn generateComprehensiveStub(
         // Memory operations
         "memcpy",
         "memmove",
+        "memset",
         "mmap",
         "mmap64",
         "munmap",

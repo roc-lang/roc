@@ -12,19 +12,9 @@ match color {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multi_pattern_branch.md:1:7:1:12
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `color` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**multi_pattern_branch.md:1:7:1:12:**
-```roc
-match color {
-```
-      ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -92,5 +82,5 @@ match color {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "Dec"))
 ~~~

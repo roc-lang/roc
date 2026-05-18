@@ -11,17 +11,29 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_import_type.md:1:1:1:13
+MODULE NOT FOUND - nominal_import_type.md:3:12:3:16
+MODULE NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `Color` was not found in this Roc project.
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**nominal_import_type.md:1:1:1:13:**
+You're attempting to use this type here:
+**nominal_import_type.md:3:12:3:16:**
 ```roc
-import Color
+red : Color.RGB
 ```
-^^^^^^^^^^^^
+           ^^^^
+
+
+**MODULE NOT FOUND**
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**nominal_import_type.md:4:12:4:16:**
+```roc
+red = Color.RGB.Red
+```
+           ^^^^
 
 
 # TOKENS
@@ -52,11 +64,9 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "red"))
-		(e-nominal-external
-			(external-module "Color")
-			(e-tag (name "Red")))
+		(e-runtime-error (tag "type_from_missing_module"))
 		(annotation
-			(ty-lookup (name "RGB") (external-module "Color"))))
+			(ty-malformed)))
 	(s-import (module "Color")
 		(exposes)))
 ~~~

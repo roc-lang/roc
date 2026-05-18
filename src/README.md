@@ -49,6 +49,22 @@ By avoiding generating final executables, we can build and typecheck much much f
 
 Try it with `zig build -Dno-bin -fincremental --watch`
 
+### Running Language Server (LSP) Tests
+
+To run only the LSP-related tests, use:
+
+```sh
+zig build test-lsp
+```
+
+For faster iteration with incremental compilation and watch mode:
+
+```sh
+zig build test-lsp -fincremental --watch
+```
+
+This is useful when working on LSP features like syntax checking, completions, semantic tokens, etc.
+
 ### Expanding to ZLS
 
 This fast config can also be used with `zls`. Simply follow these steps:

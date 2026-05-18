@@ -123,25 +123,21 @@ NO CHANGE
 					(p-assign (ident "n"))))))
 	(d-let
 		(p-assign (ident "process!"))
-		(e-closure
-			(captures
-				(capture (ident "print_number!"))
-				(capture (ident "multiply")))
-			(e-lambda
-				(args
-					(p-assign (ident "x")))
-				(e-call
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-call (constraint-fn-var 58)
+				(e-lookup-local
+					(p-assign (ident "print_number!")))
+				(e-call (constraint-fn-var 57)
 					(e-lookup-local
-						(p-assign (ident "print_number!")))
-					(e-call
-						(e-lookup-local
-							(p-assign (ident "multiply")))
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-num (value "2")))))))
+						(p-assign (ident "multiply")))
+					(e-lookup-local
+						(p-assign (ident "x")))
+					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call
+		(e-call (constraint-fn-var 77)
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))
@@ -152,13 +148,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, a -> a where [a.times : a, a -> a]"))
+		(patt (type "a, b -> a where [a.times : a, b -> a]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.times : a, a -> a]"))
+		(patt (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "a, a -> a where [a.times : a, a -> a]"))
+		(expr (type "a, b -> a where [a.times : a, b -> a]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.times : a, a -> a]"))
+		(expr (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))))
 ~~~

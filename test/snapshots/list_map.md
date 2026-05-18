@@ -9,7 +9,7 @@ type=repl
 » List.map([], |_| 0)
 ~~~
 # OUTPUT
-[4, 8, 12]
+[4.0, 8.0, 12.0]
 ---
 []
 # PROBLEMS

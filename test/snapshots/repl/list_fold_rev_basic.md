@@ -8,6 +8,6 @@ type=repl
 » List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)
 ~~~
 # OUTPUT
-321
+321.0
 # PROBLEMS
 NIL

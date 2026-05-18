@@ -9,13 +9,19 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const RocOps = @import("host_abi.zig").RocOps;
+pub const RocOps = @import("host_abi.zig").RocOps;
 const RocDealloc = @import("host_abi.zig").RocDealloc;
 const RocAlloc = @import("host_abi.zig").RocAlloc;
 const RocRealloc = @import("host_abi.zig").RocRealloc;
 const RocDbg = @import("host_abi.zig").RocDbg;
 const RocExpectFailed = @import("host_abi.zig").RocExpectFailed;
 const RocCrashed = @import("host_abi.zig").RocCrashed;
+
+inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.os.tag != .freestanding) {
+        std.debug.print(fmt, args);
+    }
+}
 
 /// Performs a pointer cast with debug-mode alignment verification.
 ///
@@ -45,11 +51,45 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
             // 2. This is a debug-only check (comptime builtin.mode == .Debug)
             // 3. On non-WASM, this will trigger a trap with a stack trace
             // 4. The @src() parameter helps identify the call site in logs
-            _ = src; // Used for debugging context
+            debugPrint("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
             unreachable;
         }
     }
     return @ptrCast(@alignCast(ptr));
+}
+
+/// Reads a typed value from a raw pointer with debug-mode alignment verification.
+///
+/// In debug builds, verifies that the pointer is properly aligned for the target type
+/// and panics with diagnostic information if alignment is incorrect.
+/// In release builds, this is equivalent to `@as(*const T, @ptrCast(@alignCast(ptr))).*`.
+///
+/// Usage:
+/// ```
+/// const value = readAs(u64, raw_ptr, @src());
+/// ```
+///
+/// The `src` parameter should always be `@src()` at the call site - this captures
+/// the file, function, and line number to aid in reproducing alignment bugs.
+pub inline fn readAs(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
+    return alignedPtrCast(*const T, ptr, src).*;
+}
+
+/// Writes a typed value to a raw pointer with debug-mode alignment verification.
+///
+/// In debug builds, verifies that the pointer is properly aligned for the target type
+/// and panics with diagnostic information if alignment is incorrect.
+/// In release builds, this is equivalent to `@as(*T, @ptrCast(@alignCast(ptr))).* = value`.
+///
+/// Usage:
+/// ```
+/// writeAs(u64, raw_ptr, 42, @src());
+/// ```
+///
+/// The `src` parameter should always be `@src()` at the call site - this captures
+/// the file, function, and line number to aid in reproducing alignment bugs.
+pub inline fn writeAs(comptime T: type, ptr: anytype, value: T, src: std.builtin.SourceLocation) void {
+    alignedPtrCast(*T, ptr, src).* = value;
 }
 
 /// Tracks allocations for testing purposes with C ABI compatibility. Uses a single global testing allocator to track allocations. If we need multiple independent allocators we will need to modify this and use comptime.
@@ -104,7 +144,7 @@ pub const TestEnv = struct {
                 else => {
                     // Use unreachable since we can't call roc_ops.crash in deinit
                     // This should never happen in properly written tests
-                    std.debug.print("Unsupported alignment in test deallocator cleanup: {d}\n", .{entry.value_ptr.alignment});
+                    debugPrint("Unsupported alignment in test deallocator cleanup: {d}\n", .{entry.value_ptr.alignment});
                     unreachable;
                 },
             }
@@ -129,11 +169,11 @@ pub const TestEnv = struct {
             16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", roc_alloc.length),
             else => {
                 // Use unreachable since we can't call roc_ops.crash in test allocator
-                std.debug.print("Unsupported alignment in test allocator: {d}\n", .{roc_alloc.alignment});
+                debugPrint("Unsupported alignment in test allocator: {d}\n", .{roc_alloc.alignment});
                 unreachable;
             },
         } catch {
-            std.debug.print("Test allocation failed\n", .{});
+            debugPrint("Test allocation failed\n", .{});
             unreachable;
         };
 
@@ -146,7 +186,7 @@ pub const TestEnv = struct {
             .alignment = roc_alloc.alignment,
         }) catch {
             self.allocator.free(ptr);
-            std.debug.print("Failed to track test allocation\n", .{});
+            debugPrint("Failed to track test allocation\n", .{});
             unreachable;
         };
 
@@ -167,7 +207,7 @@ pub const TestEnv = struct {
                 8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
                 else => {
-                    std.debug.print("Unsupported alignment in test deallocator: {d}\n", .{entry.value.alignment});
+                    debugPrint("Unsupported alignment in test deallocator: {d}\n", .{entry.value.alignment});
                     unreachable;
                 },
             }
@@ -190,11 +230,11 @@ pub const TestEnv = struct {
                 8 => self.allocator.realloc(@as([]align(8) u8, @alignCast(old_slice)), roc_realloc.new_length),
                 16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), roc_realloc.new_length),
                 else => {
-                    std.debug.print("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
+                    debugPrint("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
                     unreachable;
                 },
             } catch {
-                std.debug.print("Test reallocation failed\n", .{});
+                debugPrint("Test reallocation failed\n", .{});
                 unreachable;
             };
 
@@ -206,13 +246,13 @@ pub const TestEnv = struct {
                 .alignment = entry.value.alignment,
             }) catch {
                 self.allocator.free(new_ptr);
-                std.debug.print("Failed to track test reallocation\n", .{});
+                debugPrint("Failed to track test reallocation\n", .{});
                 unreachable;
             };
 
             roc_realloc.answer = result;
         } else {
-            std.debug.print("Test realloc: pointer not found in allocation map\n", .{});
+            debugPrint("Test realloc: pointer not found in allocation map\n", .{});
             unreachable;
         }
     }
@@ -223,7 +263,7 @@ pub const TestEnv = struct {
 
     fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
         const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-        std.debug.print("Roc crashed: {s}\n", .{message});
+        debugPrint("Roc crashed: {s}\n", .{message});
         unreachable;
     }
 };
@@ -303,6 +343,9 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
     // Debug-only assertions to catch refcount bugs early.
     if (builtin.mode == .Debug) {
         if (refcount == POISON_VALUE) {
+            if (builtin.os.tag != .freestanding) {
+                DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
+            }
             roc_ops.crash("Use-after-free: incref on already-freed memory");
             return;
         }
@@ -320,9 +363,23 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
                 ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
-                _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                const previous = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                const new_refcount = previous +% amount;
+                if (new_refcount == POISON_VALUE) {
+                    if (builtin.mode == .Debug) {
+                        if (builtin.os.tag != .freestanding) {
+                            DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
+                        }
+                        roc_ops.crash("Use-after-free: incref on already-freed memory");
+                        return;
+                    }
+                    unreachable;
+                }
             },
             .none => unreachable,
+        }
+        if (comptime builtin.os.tag != .freestanding) {
+            DebugRefcountTracker.onIncref(@intFromPtr(ptr_to_refcount), amount);
         }
     }
 }
@@ -343,7 +400,7 @@ pub fn decrefRcPtrC(
     return @call(
         .always_inline,
         decref_ptr_to_refcount,
-        .{ bytes, alignment, elements_refcounted, roc_ops },
+        .{ bytes, alignment, elements_refcounted, roc_ops, .decref_rc_ptr },
     );
 }
 
@@ -362,7 +419,7 @@ pub fn decrefCheckNullC(
         return @call(
             .always_inline,
             decref_ptr_to_refcount,
-            .{ isizes - 1, alignment, elements_refcounted, roc_ops },
+            .{ isizes - 1, alignment, elements_refcounted, roc_ops, .decref_check_null },
         );
     }
 }
@@ -377,6 +434,7 @@ pub fn decrefDataPtrC(
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
 
     const data_ptr = @intFromPtr(bytes);
 
@@ -391,7 +449,6 @@ pub fn decrefDataPtrC(
         }
     }
 
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const unmasked_ptr = data_ptr & ~tag_mask;
 
     // Verify alignment before @ptrFromInt
@@ -422,16 +479,7 @@ pub fn increfDataPtrC(
 
     const ptr = @intFromPtr(bytes);
 
-    // Verify original pointer is properly aligned (can fail if seamless slice encoding produces bad pointer)
-    if (comptime builtin.mode == .Debug) {
-        if (ptr % @alignOf(usize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC: ORIGINAL ptr=0x{x} is not {d}-byte aligned", .{ ptr, @alignOf(usize) }) catch "increfDataPtrC: original alignment error";
-            roc_ops.crash(msg);
-            return;
-        }
-    }
-
+    // Strip tag bits from the pointer - recursive tag unions may store tag IDs in low bits
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
     const rc_addr = masked_ptr - @sizeOf(usize);
@@ -447,7 +495,6 @@ pub fn increfDataPtrC(
     }
 
     const isizes: *isize = @as(*isize, @ptrFromInt(rc_addr));
-
     return increfRcPtrC(isizes, inc_amount, roc_ops);
 }
 
@@ -511,7 +558,7 @@ pub fn decref(
 
     const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
 
-    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops);
+    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops, .decref_data_ptr);
 }
 
 inline fn free_ptr_to_refcount(
@@ -521,6 +568,11 @@ inline fn free_ptr_to_refcount(
     roc_ops: *RocOps,
 ) void {
     if (RC_TYPE == .none) return;
+
+    // Debug-only: Track the free in the shadow refcount tracker.
+    if (comptime builtin.os.tag != .freestanding) {
+        DebugRefcountTracker.onFree(@intFromPtr(refcount_ptr));
+    }
 
     // Debug-only: Poison the refcount slot before freeing to detect use-after-free.
     // Any subsequent access to this refcount will see POISON_VALUE and panic.
@@ -550,6 +602,7 @@ inline fn decref_ptr_to_refcount(
     element_alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
+    comptime site: DebugRefcountTracker.Site,
 ) void {
     if (RC_TYPE == .none) return;
 
@@ -564,13 +617,23 @@ inline fn decref_ptr_to_refcount(
     // Use roc_ops.crash() instead of @panic for WASM compatibility.
     if (builtin.mode == .Debug) {
         if (refcount == POISON_VALUE) {
+            if (builtin.os.tag != .freestanding) {
+                DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
+            }
             roc_ops.crash("Use-after-free: decref on already-freed memory");
             return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
+            if (builtin.os.tag != .freestanding) {
+                DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
+            }
             roc_ops.crash("Refcount underflow: decrementing non-positive refcount");
             return;
         }
+    }
+
+    if (comptime builtin.os.tag != .freestanding) {
+        DebugRefcountTracker.onDecref(@intFromPtr(refcount_ptr), site);
     }
 
     if (!rcConstant(refcount)) {
@@ -771,6 +834,10 @@ pub fn allocateWithRefcount(
     const refcount_ptr: [*]usize = alignedPtrCast([*]usize, data_ptr - @sizeOf(usize), @src());
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
+    if (comptime builtin.os.tag != .freestanding) {
+        DebugRefcountTracker.trackAlloc(@intFromPtr(refcount_ptr));
+    }
+
     return data_ptr;
 }
 
@@ -817,6 +884,11 @@ pub fn unsafeReallocate(
     roc_ops.roc_realloc(&roc_realloc_args, roc_ops.env);
 
     const new_source = @as([*]u8, @ptrCast(roc_realloc_args.answer)) + extra_bytes;
+    if (comptime builtin.os.tag != .freestanding) {
+        const old_rc_addr = @intFromPtr(source_ptr - @sizeOf(usize));
+        const new_rc_addr = @intFromPtr(new_source - @sizeOf(usize));
+        DebugRefcountTracker.onRealloc(old_rc_addr, new_rc_addr);
+    }
     return new_source;
 }
 
@@ -845,6 +917,191 @@ pub const UpdateMode = enum(u8) {
 pub fn dictPseudoSeed() callconv(.c) u64 {
     return @as(u64, @intCast(@intFromPtr(&dictPseudoSeed)));
 }
+
+/// Debug-only shadow refcount tracker.
+///
+/// Independently records all refcount operations and asserts consistency.
+/// Active only in debug builds (zero overhead in release). Catches:
+/// - Missing increfs/decrefs (shadow diverges from actual)
+/// - Refcount leaks (allocations whose refcount never reaches 0)
+/// - Operations on unknown/already-freed allocations
+///
+/// Uses static arrays (no allocator needed), following the StaticAlloc
+/// pattern already used in DevRocEnv.
+pub const DebugRefcountTracker = struct {
+    const max_tracked = 4096;
+    const max_ops = 8192;
+
+    /// Where a refcount operation originated.
+    pub const Site = enum(u8) {
+        allocate_with_refcount,
+        incref_rc_ptr,
+        decref_rc_ptr,
+        decref_data_ptr,
+        decref_check_null,
+        free_from_decref,
+    };
+
+    const OpKind = enum(u8) { alloc, incref, decref, free };
+    const OpEntry = struct {
+        rc_addr: usize,
+        kind: OpKind,
+        /// For incref: the amount. For others: 0.
+        amount: isize,
+        /// Shadow refcount after this operation.
+        shadow_after: isize,
+        /// Where the operation originated.
+        site: Site,
+    };
+
+    var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
+    var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
+    var count: usize = 0;
+    var active: bool = false;
+
+    var op_log: [max_ops]OpEntry = undefined;
+    var op_count: usize = 0;
+
+    pub fn enable() void {
+        active = true;
+        count = 0;
+        op_count = 0;
+    }
+
+    pub fn disable() void {
+        active = false;
+    }
+
+    fn logOp(rc_addr: usize, kind: OpKind, amount: isize, shadow_after: isize, site: Site) void {
+        if (op_count < max_ops) {
+            op_log[op_count] = .{
+                .rc_addr = rc_addr,
+                .kind = kind,
+                .amount = amount,
+                .shadow_after = shadow_after,
+                .site = site,
+            };
+            op_count += 1;
+        }
+    }
+
+    /// Find or insert a refcount address, return its index.
+    fn findOrInsert(rc_addr: usize) ?usize {
+        for (rc_addrs[0..count], 0..) |addr, i| {
+            if (addr == rc_addr) return i;
+        }
+        if (count >= max_tracked) return null;
+        rc_addrs[count] = rc_addr;
+        shadow_rcs[count] = 0;
+        count += 1;
+        return count - 1;
+    }
+
+    fn find(rc_addr: usize) ?usize {
+        for (rc_addrs[0..count], 0..) |addr, i| {
+            if (addr == rc_addr) return i;
+        }
+        return null;
+    }
+
+    /// Called from allocateWithRefcount — initial refcount = 1
+    pub fn trackAlloc(rc_addr: usize) void {
+        if (!active) return;
+        if (findOrInsert(rc_addr)) |idx| {
+            shadow_rcs[idx] = 1;
+            logOp(rc_addr, .alloc, 0, 1, .allocate_with_refcount);
+        }
+    }
+
+    /// Called from increfRcPtrC
+    pub fn onIncref(rc_addr: usize, amount: isize) void {
+        if (!active) return;
+        if (findOrInsert(rc_addr)) |idx| {
+            shadow_rcs[idx] += amount;
+            logOp(rc_addr, .incref, amount, shadow_rcs[idx], .incref_rc_ptr);
+        }
+    }
+
+    /// Called from decref_ptr_to_refcount (inline fn — site identifies the caller)
+    pub fn onDecref(rc_addr: usize, site: Site) void {
+        if (!active) return;
+        if (find(rc_addr)) |idx| {
+            shadow_rcs[idx] -= 1;
+            logOp(rc_addr, .decref, 0, shadow_rcs[idx], site);
+            if (shadow_rcs[idx] < 0) {
+                debugPrint(
+                    "DebugRefcountTracker: refcount underflow at rc_addr=0x{x}\n",
+                    .{rc_addr},
+                );
+            }
+        }
+        // Unknown address = static data or pre-existing, skip
+    }
+
+    /// Called from free_ptr_to_refcount
+    pub fn onFree(rc_addr: usize) void {
+        if (!active) return;
+        if (find(rc_addr)) |idx| {
+            logOp(rc_addr, .free, 0, shadow_rcs[idx], .free_from_decref);
+            shadow_rcs[idx] = -1; // mark as freed
+        }
+    }
+
+    /// Called from unsafeReallocate when an allocation's address changes.
+    pub fn onRealloc(old_rc_addr: usize, new_rc_addr: usize) void {
+        if (!active) return;
+        if (old_rc_addr == new_rc_addr) return;
+        if (find(old_rc_addr)) |idx| {
+            rc_addrs[idx] = new_rc_addr;
+        }
+    }
+
+    /// Report leaks: allocations whose shadow refcount > 0 at end.
+    /// Prints the full operation history for each leaking address.
+    pub fn reportLeaks() usize {
+        if (!active) return 0;
+        var leak_count: usize = 0;
+        for (rc_addrs[0..count], shadow_rcs[0..count]) |addr, rc| {
+            if (rc > 0 and addr != 0) {
+                debugPrint(
+                    "LEAK: rc_addr=0x{x} shadow_rc={d}\n",
+                    .{ addr, rc },
+                );
+                // Print operation history for this address
+                for (op_log[0..op_count]) |op| {
+                    if (op.rc_addr == addr) {
+                        switch (op.kind) {
+                            .alloc => debugPrint("  alloc(1)", .{}),
+                            .incref => debugPrint("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
+                            .decref => debugPrint("  decref={d}", .{op.shadow_after}),
+                            .free => debugPrint("  free", .{}),
+                        }
+                        debugPrint(" via {s}\n", .{@tagName(op.site)});
+                    }
+                }
+                leak_count += 1;
+            }
+        }
+        return leak_count;
+    }
+
+    pub fn printHistory(rc_addr: usize) void {
+        if (!active) return;
+
+        debugPrint("DebugRefcountTracker history for rc_addr=0x{x}\n", .{rc_addr});
+        for (op_log[0..op_count]) |op| {
+            if (op.rc_addr == rc_addr) {
+                switch (op.kind) {
+                    .alloc => debugPrint("  alloc(1)", .{}),
+                    .incref => debugPrint("  incref(+{d})={d}", .{ op.amount, op.shadow_after }),
+                    .decref => debugPrint("  decref={d}", .{op.shadow_after}),
+                    .free => debugPrint("  free", .{}),
+                }
+                debugPrint(" via {s}\n", .{@tagName(op.site)});
+            }
+        }
+    }
+};
 
 test "increfC, refcounted data" {
     var test_env = TestEnv.init(std.testing.allocator);
@@ -949,7 +1206,7 @@ test "allocateWithRefcount basic functionality" {
 
     // Allocate memory with refcount
     const ptr = allocateWithRefcount(64, 8, false, ops);
-    _ = ptr; // Just verify it doesn't crash
+    try std.testing.expect(@intFromPtr(ptr) != 0);
 
     // Should have tracked the allocation
     try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());

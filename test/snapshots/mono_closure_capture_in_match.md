@@ -15,25 +15,24 @@ func = |x| {
 	}
 	result
 }
+
 answer = func(42)
 ~~~
 # MONO
 ~~~roc
-c1_add_x = |y, captures| captures.x + y
-
+func : Dec -> Dec
 func = |x| {
 	result = match True {
 		True => {
-			add_x = C1_add_x({ x: x })
-			match add_x {
-				C1_add_x(captures) => c1_add_x(10, captures)
-			}
+			add_x = |y| x + y
+			add_x(10)
 		}
 		False => 0
 	}
 	result
 }
 
+answer : Dec
 answer = func(42)
 ~~~
 # FORMATTED
@@ -125,30 +124,21 @@ EndOfFile,
 										(e-block
 											(s-let
 												(p-assign (ident "add_x"))
-												(e-tag (name "#1_add_x")
-													(args
-														(e-record
-															(fields
-																(field (name "x")
-																	(e-lookup-local
-																		(p-assign (ident "x")))))))))
-											(e-match
-												(match
-													(cond
-														(e-lookup-local
-															(p-assign (ident "add_x"))))
-													(branches
-														(branch
-															(patterns
-																(pattern (degenerate false)
-																	(p-applied-tag)))
-															(value
-																(e-call
-																	(e-lookup-local
-																		(p-assign (ident "c1_add_x")))
-																	(e-num (value "10"))
-																	(e-lookup-local
-																		(p-assign (ident "captures"))))))))))))
+												(e-closure
+													(captures
+														(capture (ident "x")))
+													(e-lambda
+														(args
+															(p-assign (ident "y")))
+														(e-binop (op "add")
+															(e-lookup-local
+																(p-assign (ident "x")))
+															(e-lookup-local
+																(p-assign (ident "y")))))))
+											(e-call (constraint-fn-var 57)
+												(e-lookup-local
+													(p-assign (ident "add_x")))
+												(e-num (value "10"))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
@@ -159,7 +149,7 @@ EndOfFile,
 					(p-assign (ident "result"))))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call
+		(e-call (constraint-fn-var 90)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "42")))))
@@ -168,9 +158,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
+		(expr (type "Dec"))))
 ~~~

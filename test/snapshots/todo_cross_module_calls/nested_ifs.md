@@ -8,6 +8,6 @@ type=repl
 » if 5 > 3 (if 1 > 2 3 else 4) else 5
 ~~~
 # OUTPUT
-4
+4.0
 # PROBLEMS
 NIL

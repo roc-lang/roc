@@ -12,7 +12,6 @@ ASCII CONTROL CHARACTER - :0:0:0:0
 PARSE ERROR - fuzz_crash_008.md:1:1:1:2
 PARSE ERROR - fuzz_crash_008.md:1:3:1:4
 PARSE ERROR - fuzz_crash_008.md:1:4:1:5
-MISSING MAIN! FUNCTION - fuzz_crash_008.md:1:1:1:5
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -50,20 +49,6 @@ This is an unexpected parsing error. Please check your syntax.
 ||1
 ```
    ^
-
-
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_crash_008.md:1:1:1:5:**
-```roc
-||1
-```
-^^^^
 
 
 # TOKENS

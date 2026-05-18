@@ -182,11 +182,13 @@ expect user1 != user3
 													(pattern (degenerate false)
 														(p-applied-tag)))
 												(value
-													(e-binop (op "eq")
-														(e-lookup-local
-															(p-assign (ident "id_a")))
-														(e-lookup-local
-															(p-assign (ident "id_b")))))))))))))))
+													(e-method-eq (negated "false")
+														(lhs
+															(e-lookup-local
+																(p-assign (ident "id_a"))))
+														(rhs
+															(e-lookup-local
+																(p-assign (ident "id_b"))))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "UserId") (local))
@@ -222,17 +224,21 @@ expect user1 != user3
 			(ty-tag-name (name "Id")
 				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "user1")))
-			(e-lookup-local
-				(p-assign (ident "user2")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "user1"))))
+			(rhs
+				(e-lookup-local
+					(p-assign (ident "user2"))))))
 	(s-expect
-		(e-binop (op "ne")
-			(e-lookup-local
-				(p-assign (ident "user1")))
-			(e-lookup-local
-				(p-assign (ident "user3"))))))
+		(e-method-eq (negated "true")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "user1"))))
+			(rhs
+				(e-lookup-local
+					(p-assign (ident "user3")))))))
 ~~~
 # TYPES
 ~~~clojure

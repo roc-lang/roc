@@ -13,19 +13,21 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TOO FEW ARGUMENTS - type_app_with_vars.md:6:13:6:33
+TOO FEW ARGS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TOO FEW ARGUMENTS**
-The function `mapList` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `mapList` function expects 2 arguments, but it got 1 instead:
 **type_app_with_vars.md:6:13:6:33:**
 ```roc
 main! = |_| mapList([1,2,3,4,5])
 ```
             ^^^^^^^^^^^^^^^^^^^^
 
-The function has the signature:
+The `mapList` function has the type:
 
     List(a), (a -> b) -> List(b)
+
+Are there any missing commas?
 
 # TOKENS
 ~~~zig
@@ -67,10 +69,10 @@ EndOfFile,
 				(args
 					(p-ident (raw "list"))
 					(p-ident (raw "fn")))
-				(e-field-access
-					(e-ident (raw "list"))
-					(e-apply
-						(e-ident (raw "map"))
+				(e-method-call (method ".map")
+					(receiver
+						(e-ident (raw "list")))
+					(args
 						(e-ident (raw "fn"))))))
 		(s-decl
 			(p-ident (raw "main!"))
@@ -104,7 +106,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(args
 				(p-assign (ident "list"))
 				(p-assign (ident "fn")))
-			(e-dot-access (field "map")
+			(e-dispatch-call (method "map") (constraint-fn-var 53)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -123,30 +125,27 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "mapList")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "mapList")))
-					(e-list
-						(elems
-							(e-num (value "1"))
-							(e-num (value "2"))
-							(e-num (value "3"))
-							(e-num (value "4"))
-							(e-num (value "5")))))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call (constraint-fn-var 135)
+				(e-lookup-local
+					(p-assign (ident "mapList")))
+				(e-list
+					(elems
+						(e-num (value "1"))
+						(e-num (value "2"))
+						(e-num (value "3"))
+						(e-num (value "4"))
+						(e-num (value "5"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "List(a), (a -> b) -> List(b)"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
 		(expr (type "List(a), (a -> b) -> List(b)"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

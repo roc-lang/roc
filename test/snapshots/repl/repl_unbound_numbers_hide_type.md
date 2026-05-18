@@ -10,10 +10,10 @@ type=repl
 » 1 + 2
 ~~~
 # OUTPUT
-42
+42.0
 ---
 3.14
 ---
-3
+3.0
 # PROBLEMS
 NIL

@@ -7,7 +7,7 @@ use roc_mono::ir::ErasedField;
 
 use super::build::{BuilderExt, Env};
 
-pub fn opaque_ptr_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
+pub fn ptr_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
     env.context.ptr_type(AddressSpace::default())
 }
 
@@ -26,13 +26,13 @@ fn refcounter_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
 /// }
 /// ```
 pub fn basic_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> StructType<'ctx> {
-    let opaque_ptr_ty = opaque_ptr_type(env);
+    let ptr_ty = ptr_type(env);
     let refcounter_ptr_ty = refcounter_type(env);
 
     env.context.struct_type(
         &[
-            opaque_ptr_ty.into(),
-            opaque_ptr_ty.into(),
+            ptr_ty.into(),
+            ptr_ty.into(),
             refcounter_ptr_ty.into(),
             refcounter_ptr_ty.into(),
         ],
@@ -40,15 +40,12 @@ pub fn basic_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> StructType<'ctx> {
     )
 }
 
-fn bitcast_to_opaque_ptr<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    value: PointerValue<'ctx>,
-) -> PointerValue<'ctx> {
+fn bitcast_to_ptr<'ctx>(env: &Env<'_, 'ctx, '_>, value: PointerValue<'ctx>) -> PointerValue<'ctx> {
     env.builder
         .new_build_bitcast(
             value,
             env.context.ptr_type(AddressSpace::default()),
-            "to_opaque_ptr",
+            "to_ptr",
         )
         .into_pointer_value()
 }
@@ -64,7 +61,7 @@ pub fn build<'ctx>(
 
     let struct_value = match value {
         Some(value) => {
-            let value = bitcast_to_opaque_ptr(env, value);
+            let value = bitcast_to_ptr(env, value);
             env.builder
                 .build_insert_value(struct_value, value, 0, "insert_value")
                 .unwrap()
@@ -72,7 +69,7 @@ pub fn build<'ctx>(
         None => struct_value,
     };
 
-    let callee = bitcast_to_opaque_ptr(env, callee);
+    let callee = bitcast_to_ptr(env, callee);
     let struct_value = env
         .builder
         .build_insert_value(struct_value, callee, 1, "insert_callee")

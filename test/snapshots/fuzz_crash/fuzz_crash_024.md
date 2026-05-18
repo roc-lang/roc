@@ -123,7 +123,7 @@ t = 0
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "_a")))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "_a"))))

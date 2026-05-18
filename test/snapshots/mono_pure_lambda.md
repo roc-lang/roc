@@ -6,7 +6,9 @@ type=mono
 # SOURCE
 ~~~roc
 one = 1
+
 add_one = |x| x + one
+
 result = add_one(5)
 ~~~
 # MONO
@@ -14,11 +16,10 @@ result = add_one(5)
 one : Dec
 one = 1
 
-add_one : Dec -> Dec
 add_one = |x| x + one
 
 result : Dec
-result = 6
+result = add_one(5)
 ~~~
 # FORMATTED
 ~~~roc
@@ -75,17 +76,20 @@ EndOfFile,
 					(p-assign (ident "one"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "6"))))
+		(e-call (constraint-fn-var 46)
+			(e-lookup-local
+				(p-assign (ident "add_one")))
+			(e-num (value "5")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
+		(patt (type "Dec"))
+		(patt (type "a -> a where [a.plus : a, Dec -> a]"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "_a where [_b.plus : c, c -> c, _d.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))
+		(expr (type "a -> a where [a.plus : a, Dec -> a]"))
+		(expr (type "Dec"))))
 ~~~

@@ -15,8 +15,30 @@ assigned `x`
 ---
 assigned `a`
 ---
-assigned `b`
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**repl:3:16:3:17:**
+```roc
+b = Dec.to_str(x)
+```
+               ^
+
+This argument has the type:
+
+    I64
+
+But the function needs the first argument to be:
+
+    Dec
 ---
-TYPE MISMATCH
+**UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**repl:3:22:3:23:**
+```roc
+main = Str.concat(a, b)
+```
+                     ^
 # PROBLEMS
 NIL

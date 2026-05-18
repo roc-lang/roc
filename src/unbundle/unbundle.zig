@@ -169,8 +169,8 @@ pub const DirExtractWriter = struct {
             const last_idx = self.open_files.items.len - 1;
             // Flush before closing
             self.open_files.items[last_idx].writer.interface.flush() catch {};
-            self.open_files.items[last_idx].file.close();
-            _ = self.open_files.orderedRemove(last_idx);
+            const removed = self.open_files.orderedRemove(last_idx);
+            removed.file.close();
         }
     }
 
@@ -651,12 +651,7 @@ pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
         return null;
     }
 
-    var hash: [32]u8 = undefined;
-    base58.decode(base58_str, &hash) catch {
-        return null;
-    };
-
-    return hash;
+    return base58.decode(base58_str) catch return null;
 }
 
 /// Unbundle files from a compressed tar archive to a directory.

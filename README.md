@@ -3,13 +3,13 @@
 [Roc](https://www.roc-lang.org) is not ready for a 0.1 release yet, but we do have:
 
 - [**installation** guide](https://www.roc-lang.org/install)
-- [**tutorial**](https://www.roc-lang.org/tutorial)
-- [**docs** for the standard library](https://www.roc-lang.org/builtins)
-- [**examples**](https://www.roc-lang.org/examples)
+- [**tutorial**](docs/mini-tutorial-new-compiler.md)
+- [**docs** for the standard library](https://roc-lang.org/builtins/main/)
+- [**examples**](test/echo/all_syntax_test.roc)
 - [**faq**: frequently asked questions](https://www.roc-lang.org/faq)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
-If you'd like to contribute, [get started here](CONTRIBUTING.md). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
+If you'd like to contribute, [get started here](CONTRIBUTING/README.md). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
 
 ## Sponsors
 

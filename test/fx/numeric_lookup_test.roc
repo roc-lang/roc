@@ -5,5 +5,5 @@ import pf.Stdout
 main! = || {
     x = 42
     y = x
-    Stdout.line!("done")
+    Stdout.line!("done: ${U64.to_str(y)}")
 }

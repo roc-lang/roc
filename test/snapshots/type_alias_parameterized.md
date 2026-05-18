@@ -15,17 +15,17 @@ swapPair = |(x, y)| (y, x)
 main! = |_| swapPair(1, 2)
 ~~~
 # EXPECTED
-TOO MANY ARGUMENTS - type_alias_parameterized.md:8:13:8:27
+TOO MANY ARGS - type_alias_parameterized.md:8:13:8:27
 # PROBLEMS
-**TOO MANY ARGUMENTS**
-The function `swapPair` expects 1 argument, but 2 were provided:
+**TOO MANY ARGS**
+The `swapPair` function expects 1 argument, but it got 2 instead:
 **type_alias_parameterized.md:8:13:8:27:**
 ```roc
 main! = |_| swapPair(1, 2)
 ```
             ^^^^^^^^^^^^^^
 
-The function has the signature:
+The `swapPair` function has the type:
 
     Pair(a, b) -> Pair(b, a)
 
@@ -122,17 +122,14 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "swapPair")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "swapPair")))
-					(e-num (value "1"))
-					(e-num (value "2"))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call (constraint-fn-var 83)
+				(e-lookup-local
+					(p-assign (ident "swapPair")))
+				(e-num (value "1"))
+				(e-num (value "2")))))
 	(s-alias-decl
 		(ty-header (name "Pair")
 			(ty-args
@@ -147,7 +144,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Pair(a, b) -> Pair(b, a)"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(type_decls
 		(alias (type "Pair(a, b)")
 			(ty-header (name "Pair")
@@ -156,5 +153,5 @@ NO CHANGE
 					(ty-rigid-var (name "b"))))))
 	(expressions
 		(expr (type "Pair(a, b) -> Pair(b, a)"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

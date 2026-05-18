@@ -7,7 +7,8 @@ const PathList = std.ArrayList([]u8);
 const max_file_bytes: usize = 16 * 1024 * 1024;
 
 const test_file_exclusions = [_][]const u8{
-    // Add files here that are intentionally not wired into the test suite
+    // Copied from Zig stdlib; tests are tested upstream
+    "src/backend/llvm/BitcodeReader.zig",
 };
 
 const TermColor = struct {

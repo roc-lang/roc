@@ -38,75 +38,148 @@ const wasm_allocator = std.heap.wasm_allocator;
 
 // Direct exports for the interpreter shim's memory allocation
 // (The interpreter shim's wasmAlloc calls these directly)
+//
+// IMPORTANT: Since roc_dealloc doesn't receive the allocation size, but Zig's WasmAllocator
+// needs it to determine the correct size class, we store the size at the beginning of each
+// allocation and return a pointer past it. This adds @sizeOf(usize) overhead per allocation.
+
 export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
-    const result = wasm_allocator.rawAlloc(size, align_log2, @returnAddress());
-    return @ptrCast(result);
+
+    // Header size must be at least alignment to ensure returned pointer is properly aligned
+    // We store the size in the header, which only needs @sizeOf(usize) bytes
+    const header_size = @max(alignment, @sizeOf(usize));
+    const total_size = size + header_size;
+
+    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse return null;
+
+    // Store the original requested size at the beginning
+    const size_ptr: *usize = @ptrCast(@alignCast(result));
+    size_ptr.* = size;
+
+    // Return pointer past the header (properly aligned)
+    return @ptrCast(result + header_size);
 }
 
 export fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void {
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
-    // WasmAllocator tracks size via size classes, but we need to pass something for rawFree
-    // Use 0 as the size since WasmAllocator doesn't actually need it for deallocation
-    const slice_ptr: [*]u8 = @ptrCast(ptr);
-    wasm_allocator.rawFree(slice_ptr[0..0], align_log2, @returnAddress());
+
+    // Calculate header size (must match roc_alloc)
+    const header_size = @max(alignment, @sizeOf(usize));
+
+    // Get the base pointer (before the header we stored in roc_alloc)
+    const byte_ptr: [*]u8 = @ptrCast(ptr);
+    const base_ptr = byte_ptr - header_size;
+
+    // Read the original size from the header
+    const size_ptr: *const usize = @ptrCast(@alignCast(base_ptr));
+    const original_size = size_ptr.*;
+
+    // Free the full allocation including the header
+    const total_size = original_size + header_size;
+    wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
 }
 
 export fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
-    // For WASM, we need to alloc new, copy, and free old since rawRealloc may not be available
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
-    const slice_ptr: [*]u8 = @ptrCast(ptr);
 
-    // Allocate new memory
-    const new_ptr = wasm_allocator.rawAlloc(new_size, align_log2, @returnAddress()) orelse return null;
+    // Calculate header size (must match roc_alloc)
+    const header_size = @max(alignment, @sizeOf(usize));
 
-    // Copy old data
+    // Get the base pointer (before the header)
+    const byte_ptr: [*]u8 = @ptrCast(ptr);
+    const base_ptr = byte_ptr - header_size;
+
+    // Allocate new memory with header
+    const new_total_size = new_size + header_size;
+    const new_base_ptr = wasm_allocator.rawAlloc(new_total_size, align_log2, @returnAddress()) orelse return null;
+
+    // Store new size at the beginning
+    const new_size_ptr: *usize = @ptrCast(@alignCast(new_base_ptr));
+    new_size_ptr.* = new_size;
+
+    // Copy old data (from user pointer to new user pointer)
+    const new_user_ptr = new_base_ptr + header_size;
     const copy_size = @min(old_size, new_size);
-    @memcpy(new_ptr[0..copy_size], slice_ptr[0..copy_size]);
+    @memcpy(new_user_ptr[0..copy_size], byte_ptr[0..copy_size]);
 
-    // Free old memory
-    wasm_allocator.rawFree(slice_ptr[0..old_size], align_log2, @returnAddress());
+    // Free old memory including the header
+    const old_total_size = old_size + header_size;
+    wasm_allocator.rawFree(base_ptr[0..old_total_size], align_log2, @returnAddress());
 
-    return @ptrCast(new_ptr);
+    return @ptrCast(new_user_ptr);
 }
 
 // RocOps callback implementations
+// These use the same size-header approach as the exported roc_alloc/roc_dealloc,
+// because RocDealloc doesn't provide the length (by design for seamless slices).
 
-fn rocAllocFn(alloc_req: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alloc_req.alignment));
-    const ptr = wasm_allocator.rawAlloc(alloc_req.length, align_log2, @returnAddress());
-    alloc_req.answer = @ptrCast(ptr orelse @panic("WASM allocation failed"));
+fn rocAllocFn(alloc_req: *RocAlloc, _: *anyopaque) callconv(.c) void {
+    const alignment: u32 = @intCast(alloc_req.alignment);
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
+
+    // Header size must be at least alignment to ensure returned pointer is properly aligned
+    const header_size = @max(alignment, @sizeOf(usize));
+    const total_size = alloc_req.length + header_size;
+
+    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse @panic("WASM allocation failed");
+
+    // Store the original requested size at the beginning
+    const size_ptr: *usize = @ptrCast(@alignCast(result));
+    size_ptr.* = alloc_req.length;
+
+    // Return pointer past the header (properly aligned)
+    alloc_req.answer = @ptrCast(result + header_size);
 }
 
-fn rocDeallocFn(dealloc_req: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, dealloc_req.alignment));
-    const slice_ptr: [*]u8 = @ptrCast(dealloc_req.ptr);
-    wasm_allocator.rawFree(slice_ptr[0..0], align_log2, @returnAddress());
+fn rocDeallocFn(dealloc_req: *RocDealloc, _: *anyopaque) callconv(.c) void {
+    const alignment: u32 = @intCast(dealloc_req.alignment);
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
+
+    // Calculate header size (must match rocAllocFn)
+    const header_size = @max(alignment, @sizeOf(usize));
+
+    // Get the base pointer (before the header we stored in rocAllocFn)
+    const byte_ptr: [*]u8 = @ptrCast(dealloc_req.ptr);
+    const base_ptr = byte_ptr - header_size;
+
+    // Read the original size from the header
+    const size_ptr: *const usize = @ptrCast(@alignCast(base_ptr));
+    const original_size = size_ptr.*;
+
+    // Free the full allocation including the header
+    const total_size = original_size + header_size;
+    wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
 }
 
-fn rocReallocFn(realloc_req: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    // RocRealloc doesn't provide the old pointer or size - this is an allocation-only operation
-    // Just allocate new memory
-    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, realloc_req.alignment));
-    const ptr = wasm_allocator.rawAlloc(realloc_req.new_length, align_log2, @returnAddress());
-    realloc_req.answer = @ptrCast(ptr orelse @panic("WASM reallocation failed"));
+fn rocReallocFn(realloc_req: *RocRealloc, _: *anyopaque) callconv(.c) void {
+    // RocRealloc provides new_length but we need to allocate with size header
+    const alignment: u32 = @intCast(realloc_req.alignment);
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
+
+    // Header size must be at least alignment
+    const header_size = @max(alignment, @sizeOf(usize));
+    const total_size = realloc_req.new_length + header_size;
+
+    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse @panic("WASM reallocation failed");
+
+    // Store the size at the beginning
+    const size_ptr: *usize = @ptrCast(@alignCast(result));
+    size_ptr.* = realloc_req.new_length;
+
+    // Return pointer past the header
+    realloc_req.answer = @ptrCast(result + header_size);
 }
 
-fn rocDbgFn(roc_dbg_arg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
+fn rocDbgFn(roc_dbg_arg: *const RocDbg, _: *anyopaque) callconv(.c) void {
     roc_dbg(roc_dbg_arg.utf8_bytes, roc_dbg_arg.len);
 }
 
-fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
+fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
     roc_expect_failed(roc_expect.utf8_bytes, roc_expect.len);
 }
 
-fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-    _ = env;
+fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
     roc_panic(roc_crashed.utf8_bytes, roc_crashed.len);
 }
 

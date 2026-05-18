@@ -15,21 +15,9 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_type_origin_mismatch.md:1:1:1:30
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `Data` was not found in this Roc project.
-
-You're attempting to use this module here:
-**nominal_type_origin_mismatch.md:1:1:1:30:**
-```roc
-import Data exposing [Person]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Person_ is not declared in this scope.
 
@@ -115,7 +103,7 @@ main =
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call
+		(e-call (constraint-fn-var 52)
 			(e-lookup-local
 				(p-assign (ident "expectsPerson")))
 			(e-string

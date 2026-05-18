@@ -275,7 +275,9 @@ my_empty_list = []
 
 # Empty list used in different contexts
 int_list = [1, 2, 3]
+
 str_list = ["hello", "world"]
+
 float_list = [1.1, 2.2, 3.3]
 
 # Append empty list (polymorphic use)
@@ -291,6 +293,7 @@ get_empty = |_| []
 
 # Used at different types
 empty_int_list = get_empty(42)
+
 empty_str_list = get_empty("test")
 
 main = |_| {
@@ -346,66 +349,61 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call
+		(e-call (constraint-fn-var 182)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call
+		(e-call (constraint-fn-var 193)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-closure
-			(captures
-				(capture (ident "all_int_list"))
-				(capture (ident "all_str_list"))
-				(capture (ident "all_float_list")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "len1"))
-						(e-call
-							(e-lookup-external
-								(builtin))
-							(e-lookup-local
-								(p-assign (ident "all_int_list")))))
-					(s-let
-						(p-assign (ident "len2"))
-						(e-call
-							(e-lookup-external
-								(builtin))
-							(e-lookup-local
-								(p-assign (ident "all_str_list")))))
-					(s-let
-						(p-assign (ident "len3"))
-						(e-call
-							(e-lookup-external
-								(builtin))
-							(e-lookup-local
-								(p-assign (ident "all_float_list")))))
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "len1")))
-							(e-lookup-local
-								(p-assign (ident "len2"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "len1"))
+					(e-call
+						(e-lookup-external
+							(builtin))
 						(e-lookup-local
-							(p-assign (ident "len3")))))))))
+							(p-assign (ident "all_int_list")))))
+				(s-let
+					(p-assign (ident "len2"))
+					(e-call
+						(e-lookup-external
+							(builtin))
+						(e-lookup-local
+							(p-assign (ident "all_str_list")))))
+				(s-let
+					(p-assign (ident "len3"))
+					(e-call
+						(e-lookup-external
+							(builtin))
+						(e-lookup-local
+							(p-assign (ident "all_float_list")))))
+				(e-binop (op "add")
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "len1")))
+						(e-lookup-local
+							(p-assign (ident "len2"))))
+					(e-lookup-local
+						(p-assign (ident "len3"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "List(_a)"))
-		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "List(Dec)"))
 		(patt (type "List(Str)"))
-		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "List(Dec)"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -415,9 +413,9 @@ main = |_| {
 		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "List(_a)"))
-		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "List(Dec)"))
 		(expr (type "List(Str)"))
-		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "List(Dec)"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

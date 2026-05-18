@@ -26,6 +26,8 @@ PARSE ERROR - fuzz_crash_022.md:8:1:8:2
 MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
 INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
+DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
+DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`
@@ -142,6 +144,28 @@ getUser = |id| if (id > 1!) "big" else "l"
            ^^
 
 
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_022.md:1:16:1:27:**
+```roc
+app [main!] { |f: platform "c" }
+```
+               ^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_022.md:5:1:5:20:**
+```roc
+ser : UserId -> Str
+```
+^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,OpBar,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -199,6 +223,7 @@ f :
 UserId : U64
 
 ser : UserId -> Str
+
 getUser = |id| if  "big" else "l"
 
 ain! = |_| getUser(900)
@@ -226,16 +251,13 @@ ain! = |_| getUser(900)
 			(e-runtime-error (tag "if_condition_not_canonicalized"))))
 	(d-let
 		(p-assign (ident "ain!"))
-		(e-closure
-			(captures
-				(capture (ident "getUser")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "getUser")))
-					(e-num (value "900"))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-call (constraint-fn-var 76)
+				(e-lookup-local
+					(p-assign (ident "getUser")))
+				(e-num (value "900")))))
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin))))

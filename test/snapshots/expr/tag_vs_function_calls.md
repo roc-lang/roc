@@ -17,19 +17,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_vs_function_calls.md:7:13:7:19
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `addOne` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tag_vs_function_calls.md:7:13:7:19:**
-```roc
-    result: addOne(5),
-```
-            ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -164,5 +154,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ addOne: a -> a, errTag: [Err(Str), .._others], nested: [Some([Ok([Just(b), .._others2]), .._others3]), .._others4], noneTag: [None, .._others5], okTag: [Ok(Str), .._others6], result: Error, someTag: [Some(c), .._others7], tagList: List([Some(d), ..[None, .._others8]]) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+(expr (type "{ addOne: a -> a, errTag: [Err(Str), ..], nested: [Some([Ok([Just(Dec), ..]), ..]), ..], noneTag: [None, ..], okTag: [Ok(Str), ..], result: Error, someTag: [Some(Dec), ..], tagList: List([None, Some(Dec), ..]) } where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

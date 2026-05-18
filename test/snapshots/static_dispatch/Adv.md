@@ -44,23 +44,21 @@ main = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - Adv.md:17:28:17:31
+TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **Adv.md:17:28:17:31:**
 ```roc
 	next_val = val.update_str(100)
 ```
 	                          ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **update_strr** method is being called on a value whose type doesn't have that method:
@@ -210,10 +208,10 @@ EndOfFile,
 								(e-string-part (raw "hello")))))
 					(s-decl
 						(p-ident (raw "next_val"))
-						(e-field-access
-							(e-ident (raw "val"))
-							(e-apply
-								(e-ident (raw "update_str"))
+						(e-method-call (method ".update_str")
+							(receiver
+								(e-ident (raw "val")))
+							(args
 								(e-int (raw "100")))))
 					(e-ident (raw "next_val")))))
 		(s-decl
@@ -229,10 +227,10 @@ EndOfFile,
 								(e-string-part (raw "hello")))))
 					(s-decl
 						(p-ident (raw "next_val"))
-						(e-field-access
-							(e-ident (raw "val"))
-							(e-apply
-								(e-ident (raw "update_strr"))
+						(e-method-call (method ".update_strr")
+							(receiver
+								(e-ident (raw "val")))
+							(args
 								(e-int (raw "100")))))
 					(e-ident (raw "next_val")))))
 		(s-decl
@@ -241,11 +239,11 @@ EndOfFile,
 				(statements
 					(s-decl
 						(p-ident (raw "next_val"))
-						(e-field-access
-							(e-string
-								(e-string-part (raw "Hello")))
-							(e-apply
-								(e-ident (raw "update"))
+						(e-method-call (method ".update")
+							(receiver
+								(e-string
+									(e-string-part (raw "Hello"))))
+							(args
 								(e-int (raw "100")))))
 					(e-ident (raw "next_val")))))
 		(s-type-anno (name "main")
@@ -265,25 +263,25 @@ EndOfFile,
 								(e-string-part (raw "hello")))))
 					(s-decl
 						(p-ident (raw "next_val"))
-						(e-field-access
-							(e-field-access
-								(e-ident (raw "val"))
-								(e-apply
-									(e-ident (raw "update_str"))
-									(e-string
-										(e-string-part (raw "world")))))
-							(e-apply
-								(e-ident (raw "update_u64"))
+						(e-method-call (method ".update_u64")
+							(receiver
+								(e-method-call (method ".update_str")
+									(receiver
+										(e-ident (raw "val")))
+									(args
+										(e-string
+											(e-string-part (raw "world"))))))
+							(args
 								(e-int (raw "20")))))
 					(e-tuple
-						(e-field-access
-							(e-ident (raw "next_val"))
-							(e-apply
-								(e-ident (raw "to_str"))))
-						(e-field-access
-							(e-ident (raw "next_val"))
-							(e-apply
-								(e-ident (raw "to_u64"))))))))))
+						(e-method-call (method ".to_str")
+							(receiver
+								(e-ident (raw "next_val")))
+							(args))
+						(e-method-call (method ".to_u64")
+							(receiver
+								(e-ident (raw "next_val")))
+							(args))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -403,7 +401,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dot-access (field "update_str")
+				(e-dispatch-call (method "update_str") (constraint-fn-var 422)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -413,38 +411,10 @@ main = {
 				(p-assign (ident "next_val")))))
 	(d-let
 		(p-assign (ident "mismatch2"))
-		(e-block
-			(s-let
-				(p-assign (ident "val"))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-num (value "10"))
-							(e-string
-								(e-literal (string "hello")))))))
-			(s-let
-				(p-assign (ident "next_val"))
-				(e-dot-access (field "update_strr")
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "val"))))
-					(args
-						(e-num (value "100")))))
-			(e-lookup-local
-				(p-assign (ident "next_val")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "mismatch3"))
-		(e-block
-			(s-let
-				(p-assign (ident "next_val"))
-				(e-dot-access (field "update")
-					(receiver
-						(e-string
-							(e-literal (string "Hello"))))
-					(args
-						(e-num (value "100")))))
-			(e-lookup-local
-				(p-assign (ident "next_val")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main"))
 		(e-block
@@ -458,9 +428,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dot-access (field "update_u64")
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 601)
 					(receiver
-						(e-dot-access (field "update_str")
+						(e-dispatch-call (method "update_str") (constraint-fn-var 589)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -471,12 +441,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dot-access (field "to_str")
+					(e-dispatch-call (method "to_str") (constraint-fn-var 648)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dot-access (field "to_u64")
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 650)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

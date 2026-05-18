@@ -26,7 +26,7 @@ expect result == result
 
 The type is:
 
-    [Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others]
+    [Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..]
       where [
         b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         b.is_gt : b, b -> Bool,
@@ -118,9 +118,13 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 x = Ok("hello")
+
 y = Validate(|n| n > 0)
+
 z = Transform(|s| s)
+
 w = Err("error")
+
 result = if True {
 	x
 } else if True {
@@ -201,15 +205,15 @@ expect result == result
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(patt (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]")))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(patt (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]")))
 	(expressions
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
-		(expr (type "[Ok(Str), Transform(a -> a), Validate(b -> Bool), Err(Str), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))
+		(expr (type "[Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.is_gt : b, b -> Bool]"))))
 ~~~

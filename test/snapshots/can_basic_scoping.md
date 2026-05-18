@@ -94,6 +94,7 @@ EndOfFile,
 ~~~roc
 # Top-level variables
 x = 5
+
 y = 10
 
 # Function that shadows outer variable
@@ -118,42 +119,39 @@ outerFunc = |_| {
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "outerFunc"))
-		(e-closure
-			(captures
-				(capture (ident "y")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "x"))
-						(e-num (value "20")))
-					(s-let
-						(p-assign (ident "innerResult"))
-						(e-block
-							(s-let
-								(p-assign (ident "z"))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-lookup-local
-										(p-assign (ident "y")))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "x"))
+					(e-num (value "20")))
+				(s-let
+					(p-assign (ident "innerResult"))
+					(e-block
+						(s-let
+							(p-assign (ident "z"))
 							(e-binop (op "add")
 								(e-lookup-local
-									(p-assign (ident "z")))
-								(e-num (value "1")))))
-					(e-lookup-local
-						(p-assign (ident "innerResult"))))))))
+									(p-assign (ident "x")))
+								(e-lookup-local
+									(p-assign (ident "y")))))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "z")))
+							(e-num (value "1")))))
+				(e-lookup-local
+					(p-assign (ident "innerResult")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "_arg -> Dec"))))
 ~~~

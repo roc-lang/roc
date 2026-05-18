@@ -78,16 +78,16 @@ EndOfFile,
 							(p-assign (ident "b"))))))))
 	(s-let
 		(p-assign (ident "g"))
-		(e-call
+		(e-call (constraint-fn-var 43)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-num (value "10"))))
-	(e-call
+	(e-call (constraint-fn-var 54)
 		(e-lookup-local
 			(p-assign (ident "g")))
 		(e-num (value "5"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
+(expr (type "Dec"))
 ~~~

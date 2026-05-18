@@ -1,0 +1,64 @@
+on:
+  workflow_call:
+  workflow_dispatch:
+  # temporary for testing
+  # pull_request:
+
+name: Zig Interpreter Benchmarks
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+jobs:
+  zig-benchmarks:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 90
+    steps:
+      # === MAIN BRANCH BUILD ===
+      # TEMPORARY: Using PR branch for both to test CI workflow - revert to ref: "main" after testing
+      - name: Checkout main branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+        with:
+          ref: "main"
+          clean: "true"
+
+      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-25.05
+
+      - name: Verify prerequisites
+        run: nix develop ./src/ -c bash -c "hyperfine --version && jq --version && zig version"
+
+      - name: Build main branch release binary
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "nix develop ./src/ -c bash -c 'zig build release'"
+          error_string_contains: "build.zig.zon"
+          retry_count: 3
+
+      - name: Prepare main artifacts
+        run: |
+          mkdir -p bench-main
+          cp zig-out/bin/roc bench-main/roc
+
+      # === PR BRANCH BUILD ===
+      - name: Checkout PR branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+        with:
+          clean: "false"
+
+      - name: Build PR branch release binary
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: "nix develop ./src/ -c bash -c 'zig build release'"
+          error_string_contains: "build.zig.zon"
+          retry_count: 3
+
+      - name: Prepare PR artifacts
+        run: |
+          mkdir -p bench-pr
+          cp zig-out/bin/roc bench-pr/roc
+
+      # === RUN BENCHMARKS ===
+      - name: Run benchmarks
+        run: nix develop ./src/ -c ./ci/benchmarks_zig/run_local_benchmarks.sh --main-dir bench-main --pr-dir bench-pr

@@ -13,17 +13,27 @@ pub const LoadedModule = struct {
     gpa: std.mem.Allocator,
 
     pub fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
+        // If runtime inserts were enabled, free interner-owned heap memory first.
+        self.env.common.idents.interner.deinit(self.gpa);
 
-        // Free the buffer (the env was deserialized in-place into this buffer)
+        // For builtins loaded via deserializeInto (not deserializeWithMutableTypes),
+        // most data points into the buffer. Only the imports hashmap was heap-allocated.
+        self.env.imports.deinitMapOnly(self.gpa);
+
+        // Free the heap-allocated ModuleEnv struct itself (Option F pattern)
+        self.gpa.destroy(self.env);
+
+        // Free the buffer that holds the serialized data
         self.gpa.free(self.buffer);
     }
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
 pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
+    if (bin_data.len < @sizeOf(can.CIR.BuiltinIndices)) {
+        return error.Internal;
+    }
+
     // Copy to properly aligned memory
     const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(can.CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
@@ -35,6 +45,10 @@ pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !
 
 /// Load a compiled ModuleEnv from embedded binary data
 pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+    if (bin_data.len < @sizeOf(ModuleEnv.Serialized)) {
+        return error.Internal;
+    }
+
     // Copy the embedded data to properly aligned memory
     // CompactWriter requires specific alignment for serialization
     const CompactWriter = collections.CompactWriter;
@@ -47,11 +61,18 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         @ptrCast(@alignCast(buffer.ptr)),
     );
     const base_addr = @intFromPtr(buffer.ptr);
-    const env = try serialized_ptr.deserialize(base_addr, gpa, source, module_name);
+    const env = try serialized_ptr.deserializeInto(base_addr, gpa, source, module_name);
 
     return LoadedModule{
         .env = env,
         .buffer = buffer,
         .gpa = gpa,
     };
+}
+
+test "loadCompiledModule rejects empty data" {
+    try std.testing.expectError(
+        error.Internal,
+        loadCompiledModule(std.testing.allocator, "", "Builtin", ""),
+    );
 }

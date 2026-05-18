@@ -151,9 +151,10 @@ pub fn appendAlloc(
     // Pad up front to the alignment of T
     try self.padToAlignment(allocator, alignment);
 
-    // Allocate a single item of type T
+    // Allocate a single item of type T, zeroed for deterministic serialization.
     const items = try allocator.alignedAlloc(T, std.mem.Alignment.fromByteUnits(alignment), 1);
     const answer = &items[0];
+    @memset(std.mem.asBytes(answer), 0);
 
     // Track the allocated memory for cleanup
     try self.allocated_memory.append(allocator, .{

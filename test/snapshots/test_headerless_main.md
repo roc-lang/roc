@@ -6,6 +6,7 @@ type=file
 # SOURCE
 ~~~roc
 x = 5
+
 main! = |_| x
 ~~~
 # EXPECTED
@@ -41,26 +42,34 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "echo!"))
+		(e-hosted-lambda (symbol "echo!")
+			(args
+				(p-assign (ident "_echo_arg"))))
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-record))))
+	(d-let
 		(p-assign (ident "x"))
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-lookup-local
-					(p-assign (ident "x")))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-lookup-local
+				(p-assign (ident "x"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "Str => {}"))
+		(patt (type "Dec"))
+		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Str => {}"))
+		(expr (type "Dec"))
+		(expr (type "_arg -> Dec"))))
 ~~~

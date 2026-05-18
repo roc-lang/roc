@@ -2,18 +2,11 @@
 //! This module contains type definitions and utilities used across the canonicalization IR.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const build_options = @import("build_options");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
-
-// Module tracing flag - enabled via `zig build -Dtrace-modules`
-// On native platforms, uses std.debug.print. On WASM, tracing in CIR is disabled
-// since we don't have roc_ops here (tracing is enabled in the interpreter/shim instead).
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
@@ -90,19 +83,19 @@ pub const BuiltinIndices = struct {
     /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
     /// This allows direct ident comparison instead of string comparison for type identification.
     pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
-        if (ident == self.u8_ident) return .u8;
-        if (ident == self.i8_ident) return .i8;
-        if (ident == self.u16_ident) return .u16;
-        if (ident == self.i16_ident) return .i16;
-        if (ident == self.u32_ident) return .u32;
-        if (ident == self.i32_ident) return .i32;
-        if (ident == self.u64_ident) return .u64;
-        if (ident == self.i64_ident) return .i64;
-        if (ident == self.u128_ident) return .u128;
-        if (ident == self.i128_ident) return .i128;
-        if (ident == self.f32_ident) return .f32;
-        if (ident == self.f64_ident) return .f64;
-        if (ident == self.dec_ident) return .dec;
+        if (ident.eql(self.u8_ident)) return .u8;
+        if (ident.eql(self.i8_ident)) return .i8;
+        if (ident.eql(self.u16_ident)) return .u16;
+        if (ident.eql(self.i16_ident)) return .i16;
+        if (ident.eql(self.u32_ident)) return .u32;
+        if (ident.eql(self.i32_ident)) return .i32;
+        if (ident.eql(self.u64_ident)) return .u64;
+        if (ident.eql(self.i64_ident)) return .i64;
+        if (ident.eql(self.u128_ident)) return .u128;
+        if (ident.eql(self.i128_ident)) return .i128;
+        if (ident.eql(self.f32_ident)) return .f32;
+        if (ident.eql(self.f64_ident)) return .f64;
+        if (ident.eql(self.dec_ident)) return .dec;
         return null;
     }
 };
@@ -157,7 +150,37 @@ pub const Def = struct {
 
         const attrs = tree.beginNode();
 
-        try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        // Safety check: verify pattern index points to actual pattern node
+        // This prevents crashes from cross-module node index issues
+        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
+        const pattern_node = cir.store.nodes.get(pattern_node_idx);
+        const is_valid_pattern = switch (pattern_node.tag) {
+            .pattern_identifier,
+            .pattern_as,
+            .pattern_applied_tag,
+            .pattern_nominal,
+            .pattern_nominal_external,
+            .pattern_record_destructure,
+            .pattern_list,
+            .pattern_tuple,
+            .pattern_num_literal,
+            .pattern_dec_literal,
+            .pattern_f32_literal,
+            .pattern_f64_literal,
+            .pattern_small_dec_literal,
+            .pattern_str_literal,
+            .pattern_underscore,
+            => true,
+            else => false,
+        };
+
+        if (is_valid_pattern) {
+            try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        } else {
+            // Pattern index is invalid - output placeholder to avoid crash
+            try tree.pushStaticAtom("invalid-pattern");
+        }
+
         try cir.store.getExpr(self.expr).pushToSExprTree(cir, tree, self.expr);
 
         if (self.annotation) |annotation_idx| {
@@ -475,14 +498,17 @@ pub const IntValue = struct {
     }
 
     pub fn bufPrint(self: IntValue, buf: []u8) ![]u8 {
+        const i128h = builtins.compiler_rt_128;
         switch (self.kind) {
             .i128 => {
                 const val: i128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.i128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
             .u128 => {
                 const val: u128 = @bitCast(self.bytes);
-                return std.fmt.bufPrint(buf, "{d}", .{val});
+                const result = i128h.u128_to_str(buf, val);
+                return buf[result.start..buf.len];
             },
         }
     }
@@ -534,13 +560,13 @@ pub const IntValue = struct {
     pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
         const f64_val: f64 = switch (self.kind) {
-            .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
+            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(self.bytes))),
             .u128 => blk: {
                 const val = @as(u128, @bitCast(self.bytes));
                 if (val > @as(u128, 1) << 64) {
                     break :blk std.math.inf(f64);
                 }
-                break :blk @floatFromInt(val);
+                break :blk builtins.compiler_rt_128.u128_to_f64(val);
             },
         };
 
@@ -669,7 +695,8 @@ pub fn formatBase256ToDecimal(
     for (digits_before_pt) |digit| {
         value = value * 256 + digit;
     }
-    w.print("{d}", .{value}) catch {};
+    var int_buf: [40]u8 = undefined;
+    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
 
     // Format fractional part if present and non-zero
     if (digits_after_pt.len > 0) {
@@ -684,14 +711,14 @@ pub fn formatBase256ToDecimal(
             w.writeAll(".") catch {};
             // Convert base-256 fractional digits to decimal
             var frac: f64 = 0;
-            var mult: f64 = 1.0 / 256.0;
+            var frac_mult: f64 = 1.0 / 256.0;
             for (digits_after_pt) |digit| {
-                frac += @as(f64, @floatFromInt(digit)) * mult;
-                mult /= 256.0;
+                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
+                frac_mult /= 256.0;
             }
             // Print fractional part (removing leading "0.")
-            var frac_buf: [32]u8 = undefined;
-            const frac_str = std.fmt.bufPrint(&frac_buf, "{d:.6}", .{frac}) catch "0";
+            var frac_buf: [400]u8 = undefined;
+            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
             if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
                 w.writeAll(frac_str[2..]) catch {};
             }
@@ -713,7 +740,7 @@ pub fn toI128(self: RocDec) i128 {
 /// Creates a RocDec from an f64 value, returns null if conversion fails
 pub fn fromF64(f: f64) ?RocDec {
     // Simple conversion - the real implementation is in builtins/dec.zig
-    const scaled = @as(i128, @intFromFloat(f * 1_000_000_000_000_000_000.0));
+    const scaled = builtins.compiler_rt_128.f64_to_i128(f * 1_000_000_000_000_000_000.0);
     return RocDec{ .num = scaled };
 }
 
@@ -724,8 +751,23 @@ pub const Import = struct {
         _,
     };
 
-    /// Sentinel value indicating unresolved import (max u32)
-    pub const UNRESOLVED_MODULE: u32 = std.math.maxInt(u32);
+    pub const ResolvedModuleIdx = enum(u32) {
+        failed_before_checking = std.math.maxInt(u32) - 1,
+        none = std.math.maxInt(u32),
+        _,
+
+        pub fn isNone(self: ResolvedModuleIdx) bool {
+            return self == .none;
+        }
+
+        pub fn isFailedBeforeChecking(self: ResolvedModuleIdx) bool {
+            return self == .failed_before_checking;
+        }
+
+        pub fn isResolved(self: ResolvedModuleIdx) bool {
+            return !self.isNone() and !self.isFailedBeforeChecking();
+        }
+    };
 
     pub const Store = struct {
         /// Map from interned string idx to Import.Idx for deduplication
@@ -736,8 +778,8 @@ pub const Import = struct {
         /// Used for efficient index-based lookups instead of string comparison
         import_idents: collections.SafeList(base.Ident.Idx) = .{},
         /// Resolved module indices, parallel to imports list
-        /// Each entry is either a valid module index or UNRESOLVED_MODULE
-        resolved_modules: collections.SafeList(u32) = .{},
+        /// Each entry is either a valid module index or unresolved
+        resolved_modules: collections.SafeList(ResolvedModuleIdx) = .{},
 
         pub fn init() Store {
             return .{};
@@ -750,9 +792,33 @@ pub const Import = struct {
             self.resolved_modules.deinit(allocator);
         }
 
+        pub fn clone(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+            var result = Store{
+                .map = .{},
+                .imports = try self.imports.clone(allocator),
+                .import_idents = try self.import_idents.clone(allocator),
+                .resolved_modules = try self.resolved_modules.clone(allocator),
+            };
+            errdefer result.deinit(allocator);
+
+            for (result.imports.items.items, 0..) |string_idx, i| {
+                const import_idx = @as(Import.Idx, @enumFromInt(i));
+                try result.map.put(allocator, string_idx, import_idx);
+            }
+
+            return result;
+        }
+
+        /// Deinit only the hash map, not the SafeLists.
+        /// Used for cached modules where the SafeLists point into the cache buffer
+        /// but the map was heap-allocated during deserialization.
+        pub fn deinitMapOnly(self: *Store, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
+        }
+
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8) !Import.Idx {
             return self.getOrPutWithIdent(allocator, strings, module_name, null);
@@ -760,7 +826,7 @@ pub const Import = struct {
 
         /// Get or create an Import.Idx for the given module name, with an associated ident.
         /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (UNRESOLVED_MODULE).
+        /// New imports are initially unresolved (unresolved).
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, strings: *base.StringLiteral.Store, module_name: []const u8, ident_idx: ?base.Ident.Idx) !Import.Idx {
             // First check if we already have this module name by comparing strings
@@ -786,9 +852,12 @@ pub const Import = struct {
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially
-            _ = try self.imports.append(allocator, string_idx);
-            _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            _ = try self.resolved_modules.append(allocator, Import.UNRESOLVED_MODULE);
+            const imports_idx = try self.imports.append(allocator, string_idx);
+            std.debug.assert(@intFromEnum(imports_idx) == @intFromEnum(idx));
+            const ident_idx_added = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
+            std.debug.assert(@intFromEnum(ident_idx_added) == @intFromEnum(idx));
+            const resolved_idx = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            std.debug.assert(@intFromEnum(resolved_idx) == @intFromEnum(idx));
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
@@ -808,54 +877,80 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
-            if (resolved == Import.UNRESOLVED_MODULE) return null;
-            return resolved;
+            if (!resolved.isResolved()) return null;
+            return @intFromEnum(resolved);
+        }
+
+        /// Return true when import resolution has already reported a user-facing
+        /// diagnostic before type checking. Type checking may continue for source
+        /// tooling, but post-check lowering must never consume this import.
+        pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.resolved_modules.len()) return false;
+            return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
             const idx = @intFromEnum(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = module_idx;
+                self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
             }
         }
 
-        /// Resolve all imports by matching import names to module names in the provided array.
-        /// This sets the resolved_modules index for each import that matches a module.
+        /// Mark one import as intentionally unavailable because an earlier stage
+        /// already owns the user-facing diagnostic.
+        pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
+            const idx = @intFromEnum(import_idx);
+            if (idx < self.resolved_modules.len()) {
+                self.resolved_modules.items.items[idx] = .failed_before_checking;
+            }
+        }
+
+        /// Diagnostics-only tooling can continue type inspection after unresolved
+        /// imports have been reported. This makes that state explicit instead of
+        /// leaving imports in the pre-resolution state.
+        pub fn markUnresolvedImportsFailedBeforeChecking(self: *Store) void {
+            for (self.resolved_modules.items.items) |*resolved| {
+                if (resolved.isNone()) resolved.* = .failed_before_checking;
+            }
+        }
+
+        /// Clear all resolved module indices.
+        pub fn clearResolvedModules(self: *Store) void {
+            for (self.resolved_modules.items.items) |*resolved| {
+                resolved.* = .none;
+            }
+        }
+
+        /// Resolve any still-unresolved imports by exact module-name match against
+        /// the provided array.
+        /// Existing `resolved_modules` entries are preserved.
         ///
         /// Parameters:
         /// - env: The module environment containing the string store for import names
         /// - available_modules: Array of module environments to match against
         ///
-        /// For each import, this finds the module in available_modules whose module_name
-        /// matches the import name and sets the resolved index accordingly.
-        ///
-        /// For package-qualified imports like "pf.Stdout", this also tries to match the
-        /// base module name ("Stdout") if the full qualified name doesn't match.
-        pub fn resolveImports(self: *Store, env: anytype, available_modules: []const *const @import("ModuleEnv.zig")) void {
+        /// For each unresolved import, this finds the module in available_modules whose
+        /// module_name exactly matches the import name and sets the resolved index
+        /// accordingly.
+        pub fn resolveImportsByExactModuleName(
+            self: *Store,
+            env: anytype,
+            available_modules: []const *const @import("ModuleEnv.zig"),
+        ) void {
             const import_count: usize = @intCast(self.imports.len());
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
+                const current = self.resolved_modules.items.items[i];
+                if (!current.isNone()) continue;
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                // For package-qualified imports like "pf.Stdout", extract the base module name
-                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
-                    import_name[dot_pos + 1 ..]
-                else
-                    import_name;
-
                 // Find matching module in available_modules by comparing module names
                 for (available_modules, 0..) |module_env, module_idx| {
-                    // Try exact match first, then base name match for package-qualified imports
-                    if (std.mem.eql(u8, module_env.module_name, import_name) or
-                        std.mem.eql(u8, module_env.module_name, base_name))
-                    {
+                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
                         self.setResolvedModule(import_idx, @intCast(module_idx));
-
-                        if (comptime trace_modules) {
-                            std.debug.print("[TRACE-MODULES] resolveImports: \"{s}\" -> module_idx={d} (matched \"{s}\")\n", .{ import_name, module_idx, module_env.module_name });
-                        }
                         break;
                     }
                 }
@@ -899,7 +994,7 @@ pub const Import = struct {
             map: [3]u64,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
             import_idents: collections.SafeList(base.Ident.Idx).Serialized,
-            resolved_modules: collections.SafeList(u32).Serialized,
+            resolved_modules: collections.SafeList(Import.ResolvedModuleIdx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
             pub fn serialize(
@@ -921,17 +1016,15 @@ pub const Import = struct {
                 // Note: The map is not serialized as it's only used for deduplication during insertion
             }
 
-            /// Deserialize this Serialized struct into a Store
+            /// Deserialize into a Store value (no in-place modification of cache buffer).
             /// The base parameter is the base address of the serialized buffer in memory.
-            pub fn deserialize(self: *Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
-                const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-                store.* = .{
+            /// Note: The map is freshly allocated and populated from the deserialized imports.
+            pub fn deserializeInto(self: *const Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+                var store = Store{
                     .map = .{}, // Will be repopulated below
-                    .imports = self.imports.deserialize(base_addr).*,
-                    .import_idents = self.import_idents.deserialize(base_addr).*,
-                    .resolved_modules = self.resolved_modules.deserialize(base_addr).*,
+                    .imports = self.imports.deserializeInto(base_addr),
+                    .import_idents = self.import_idents.deserializeInto(base_addr),
+                    .resolved_modules = self.resolved_modules.deserializeInto(base_addr),
                 };
 
                 // Pre-allocate the exact capacity needed for the map

@@ -2,18 +2,29 @@
 ~~~ini
 description=Try operator on undefined tag identifier
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
 A?
 ~~~
 # EXPECTED
-EXPECTED TRY TYPE - try_undefined_tag.md:1:1:1:1
+TRY OPERATOR OUTSIDE FUNCTION - try_undefined_tag.md:1:1:1:3
+TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 # PROBLEMS
-**EXPECTED TRY TYPE**
-The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
-but I found:
-**try_undefined_tag.md:1:1:**
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**try_undefined_tag.md:1:1:1:3:**
+```roc
+A?
+```
+^^
+
+
+**TYPE MISMATCH**
+The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and `Err` tags), but I found:
+**try_undefined_tag.md:1:1:1:2:**
 ```roc
 A?
 ```
@@ -21,9 +32,9 @@ A?
 
 This expression has type:
 
-_[A, Ok(_a), Err(_b), .._others]_
+    [A, ..]
 
-Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
+__Tip:__ Maybe wrap a value using `Ok(value)` or `Err(value)`.
 
 # TOKENS
 ~~~zig
@@ -49,22 +60,20 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
 					(e-lookup-local
 						(p-assign (ident "#ok")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
-					(e-return
-						(e-tag (name "Err")
-							(args
-								(e-lookup-local
-									(p-assign (ident "#err")))))))))))
+					(e-runtime-error (tag "return_outside_fn")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

@@ -32,27 +32,9 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
-INVALID IF CONDITION - :0:0:0:0
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:2:22:2:23
-MALFORMED TYPE - record_different_fields_reserved_error.md:3:11:3:12
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:12:3:25
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:25:3:26
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:26:3:27
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:11:4:12
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:29:4:30
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:8:6:9
-DOES NOT EXIST - record_different_fields_reserved_error.md:6:10:6:19
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
-DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
-UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
-UNUSED VARIABLE - record_different_fields_reserved_error.md:3:5:3:12
-UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:29
-UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:26
+DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
+TYPE MISMATCH - record_different_fields_reserved_error.md:4:13:4:29
+TYPE MISMATCH - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -241,206 +223,8 @@ Expressions can be identifiers, literals, function calls, or operators.
                   ^
 
 
-**INVALID IF CONDITION**
-The condition in this `if` expression could not be processed.
-
-The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:2:22:2:23:**
-```roc
-    if: "conditional",
-```
-                     ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**record_different_fields_reserved_error.md:3:11:3:12:**
-```roc
-    when: "pattern match",
-```
-          ^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:3:12:3:25:**
-```roc
-    when: "pattern match",
-```
-           ^^^^^^^^^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:3:25:3:26:**
-```roc
-    when: "pattern match",
-```
-                        ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:3:26:3:27:**
-```roc
-    when: "pattern match",
-```
-                         ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:4:11:4:12:**
-```roc
-    expect: "test assertion",
-```
-          ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:4:29:4:30:**
-```roc
-    expect: "test assertion",
-```
-                            ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:5:11:5:12:**
-```roc
-    import: "module load",
-```
-          ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:5:26:5:27:**
-```roc
-    import: "module load",
-```
-                         ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:6:5:6:8:**
-```roc
-    and: Bool.true,
-```
-    ^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:6:8:6:9:**
-```roc
-    and: Bool.true,
-```
-       ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**DOES NOT EXIST**
-`Bool.true` does not exist.
-
-`Bool` is in scope, but it has no associated `true`.
-
-It's referenced here:
-**record_different_fields_reserved_error.md:6:10:6:19:**
-```roc
-    and: Bool.true,
-```
-         ^^^^^^^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:6:19:6:20:**
-```roc
-    and: Bool.true,
-```
-                  ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:7:5:7:7:**
-```roc
-    or: Bool.false,
-```
-    ^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:7:7:7:8:**
-```roc
-    or: Bool.false,
-```
-      ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**DOES NOT EXIST**
-`Bool.false` does not exist.
-
-`Bool` is in scope, but it has no associated `false`.
-
-It's referenced here:
-**record_different_fields_reserved_error.md:7:9:7:19:**
-```roc
-    or: Bool.false,
-```
-        ^^^^^^^^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_reserved_error.md:7:19:7:20:**
-```roc
-    or: Bool.false,
-```
-                  ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNUSED VARIABLE**
-Variable `when` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_when` to suppress this warning.
-The unused variable is declared here:
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
 **record_different_fields_reserved_error.md:3:5:3:12:**
 ```roc
     when: "pattern match",
@@ -448,7 +232,9 @@ The unused variable is declared here:
     ^^^^^^^
 
 
-**UNUSED VALUE**
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_reserved_error.md:4:13:4:29:**
 ```roc
@@ -460,7 +246,10 @@ It has the type:
 
     Str
 
-**UNUSED VALUE**
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_reserved_error.md:5:13:5:26:**
 ```roc
@@ -471,6 +260,9 @@ This expression produces a value, but it's not being used:
 It has the type:
 
     Str
+
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

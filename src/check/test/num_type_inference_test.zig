@@ -31,8 +31,8 @@ test "infers type for small nums" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -70,8 +70,8 @@ test "infers type for zero" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -90,8 +90,8 @@ test "infers type for hex literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -109,8 +109,8 @@ test "infers type for binary literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -128,8 +128,8 @@ test "infers type for octal literals" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        // Number literals produce flex variables with from_numeral constraints
-        try test_env.assertLastDefTypeContains("from_numeral");
+        // Number literals resolve to Dec after finalization
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -169,19 +169,22 @@ test "numeric literal in comparison unifies with typed operand" {
             const def_name = test_env.module_env.getIdentStoreConst().getText(ptrn.assign.ident);
             if (std.mem.eql(u8, def_name, "result")) {
                 found_result = true;
-                // Get the expression - should be a binop
+                // After static-dispatch constraint finalization, `==` is
+                // represented as the explicit equality dispatch expression
+                // that MIR lowering consumes. The source operands are still
+                // the original comparison operands and must both resolve to I64.
                 const expr = test_env.module_env.store.getExpr(def.expr);
-                try testing.expect(expr == .e_binop);
-                const binop = expr.e_binop;
+                try testing.expect(expr == .e_method_eq);
+                const eq = expr.e_method_eq;
 
                 // Check LHS type (should be I64)
-                const lhs_var = ModuleEnv.varFrom(binop.lhs);
+                const lhs_var = ModuleEnv.varFrom(eq.lhs);
                 try test_env.type_writer.write(lhs_var, .wrap);
                 const lhs_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("I64", lhs_type);
 
                 // Check RHS type (the literal 42 - should also be I64 after unification)
-                const rhs_var = ModuleEnv.varFrom(binop.rhs);
+                const rhs_var = ModuleEnv.varFrom(eq.rhs);
                 try test_env.type_writer.write(rhs_var, .wrap);
                 const rhs_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("I64", rhs_type);
@@ -252,4 +255,14 @@ test "polymorphic numeric in list used as List.get index unifies to U64 - regres
         }
     }
     try testing.expect(found_index);
+}
+
+test "method call on numeric literal infers return type as Dec" {
+    // (-3.14).abs() should infer as Dec, not as an unresolved flex var.
+    // The literal -3.14 has type Dec (from from_numeral constraint),
+    // and abs : Dec -> Dec, so the call result must also be Dec.
+    var test_env = try TestEnv.initExpr("Test", "(-3.14).abs()");
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Dec");
 }

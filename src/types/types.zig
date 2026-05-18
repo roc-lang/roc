@@ -10,6 +10,14 @@
 //!
 //! Special care is taken to keep memory layouts small and efficient. When modifying
 //! these types, please consider their size impact and unification performance.
+//!
+//! Note: In other HM compilers (Elm, Roc Rust), marks are used to track intermediate
+//! metadata around type variables. Here, we intentionally do _not_ use them. The
+//! idea being that because marks are not used after type checking, if we store them
+//! on the type descriptor, then that memory has to stay allocated until the end
+//! of the program, even though they're not used! Instead, we allocate intermediate
+//! data structures during type checking to do the job that marks do, then deallocate
+//! after the phase, freeing that memory.
 
 const std = @import("std");
 const base = @import("base");
@@ -22,13 +30,13 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(36, @sizeOf(Descriptor));
+    try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(12, @sizeOf(Alias));
+    try std.testing.expectEqual(16, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint)); // Includes num_literal field
+    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -82,7 +90,7 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
-    mark: Mark,
+    from_numeral_origin: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -108,7 +116,7 @@ pub const Descriptor = struct {
 pub const Rank = enum(u8) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
-    top_level = 1,
+    outermost = 1,
     _,
 
     /// Get the lowest rank
@@ -129,27 +137,6 @@ pub const Rank = enum(u8) {
     /// Get the prev rank
     pub fn prev(a: Rank) Rank {
         return @enumFromInt(@intFromEnum(a) - 1);
-    }
-};
-
-/// A type variable mark
-///
-/// Marks are temporary annotations used during various phases of type inference
-/// and type checking to track state.
-///
-/// Some places `Mark` is used:
-/// * Marking variables as visited in occurs checks to avoid redundant work
-/// * Marking variables for generalizing during solving
-pub const Mark = enum(u32) {
-    const Self = @This();
-
-    visited = 0,
-    none = 1,
-    _,
-
-    /// Get the next mark
-    pub fn next(self: Self) Self {
-        return @enumFromInt(@intFromEnum(self) + 1);
     }
 };
 
@@ -300,6 +287,9 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
+    /// The full module path where this alias type was originally defined
+    /// (e.g., "Json.Decode" or "mypackage.Data.Person")
+    origin_module: Ident.Idx,
 };
 
 /// Represents an ident of a type
@@ -308,18 +298,6 @@ pub const TypeIdent = struct {
     const Self = @This();
 
     ident_idx: Ident.Idx,
-    // TODO: Add module ident?
-
-    pub fn eql(store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.order(store, a, b) == .eq;
-    }
-
-    /// Get the ordering of how a compares to b
-    pub fn order(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.ident_idx);
-        const b_text = store.getText(b.ident_idx);
-        return std.mem.order(u8, a_text, b_text);
-    }
 };
 
 // flat types //
@@ -611,7 +589,7 @@ pub const NominalType = struct {
         if (self.is_opaque) {
             // If opaque, then can only lift inner type if the current module is
             // the same
-            return self.origin_module == cur_module_idx;
+            return self.origin_module.eql(cur_module_idx);
         }
 
         // If not opaque, then the inner type can always be lifted
@@ -796,6 +774,9 @@ pub const StaticDispatchConstraint = struct {
     fn_var: Var,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
+    /// For `desugared_binop` equality constraints, whether the original source
+    /// operator was `!=` rather than `==`.
+    binop_negated: bool = false,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?NumeralInfo = null,
 

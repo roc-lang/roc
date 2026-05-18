@@ -7,26 +7,14 @@ type=expr
 ~~~roc
 match nestedList {
     [[x], [y]] => x + y
-    [[x, y]] => x - y  
+    [[x, y]] => x - y
     [x, [y]] => x * y
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
  - :0:0:0:0
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `nestedList` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nested_list_scoping.md:1:7:1:17:**
-```roc
-match nestedList {
-```
-      ^^^^^^^^^^
-
-
 **MISSING METHOD**
 The value before this ***** operator has a type that doesn't have a **times** method:
 **nested_list_scoping.md:4:17:4:22:**
@@ -37,9 +25,9 @@ The value before this ***** operator has a type that doesn't have a **times** me
 
 The value's type, which does not have a method named **times**, is:
 
-    List(...)
+    List(_a)
 
-**Hint:**The ***** operator calls a method named **times** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:** The ***** operator calls a method named **times** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig

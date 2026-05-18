@@ -11,12 +11,17 @@ import I2 exposing [I21 as Ias1, I22 as Ias2]
 
 # Where constraint
 A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
+
 B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]
 
 C(a, b) : (a, b)
+
 D(a, b) : C(a, b)
+
 E : { a : Str, b : Str }
+
 F : [A, B]
+
 G : () -> Str
 
 g : e -> e where [e.A, e.B]
@@ -38,20 +43,20 @@ h = |x, y| {
 ~~~
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:60
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:60
-MODULE NOT FOUND - everything.md:2:1:2:30
-MODULE NOT FOUND - everything.md:3:1:3:46
-UNUSED VARIABLE - everything.md:25:10:25:11
-UNUSED VARIABLE - everything.md:26:9:26:10
-UNUSED VARIABLE - everything.md:27:11:27:12
-UNUSED VARIABLE - everything.md:28:10:28:11
-UNUSED VARIABLE - everything.md:18:2:18:4
-UNUSED VARIABLE - everything.md:19:2:19:4
-UNUSED VARIABLE - everything.md:20:2:20:4
-UNUSED VARIABLE - everything.md:21:2:21:4
-UNUSED VARIABLE - everything.md:22:2:22:4
-UNSUPPORTED WHERE CLAUSE - everything.md:15:19:15:22
-UNSUPPORTED WHERE CLAUSE - everything.md:15:24:15:27
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:8:1:8:60
+UNUSED VARIABLE - everything.md:30:10:30:11
+UNUSED VARIABLE - everything.md:31:9:31:10
+UNUSED VARIABLE - everything.md:32:11:32:12
+UNUSED VARIABLE - everything.md:33:10:33:11
+UNUSED VARIABLE - everything.md:23:2:23:4
+UNUSED VARIABLE - everything.md:24:2:24:4
+UNUSED VARIABLE - everything.md:25:2:25:4
+UNUSED VARIABLE - everything.md:26:2:26:4
+UNUSED VARIABLE - everything.md:27:2:27:4
+UNSUPPORTED WHERE CLAUSE - everything.md:20:19:20:22
+UNSUPPORTED WHERE CLAUSE - everything.md:20:24:20:27
+DECLARATION HAS NO VALUE - everything.md:20:1:20:28
+NON-EXHAUSTIVE MATCH - everything.md:29:2:34:3
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -68,33 +73,11 @@ A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
 You cannot define a `where` clause inside a type declaration.
 
 You're attempting do this here:
-**everything.md:7:1:7:60:**
+**everything.md:8:1:8:60:**
 ```roc
 B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `I1` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:2:1:2:30:**
-```roc
-import I1 exposing [I11, I12]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `I2` was not found in this Roc project.
-
-You're attempting to use this module here:
-**everything.md:3:1:3:46:**
-```roc
-import I2 exposing [I21 as Ias1, I22 as Ias2]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -102,7 +85,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:25:10:25:11:**
+**everything.md:30:10:30:11:**
 ```roc
 		Z1((a, b)) => a
 ```
@@ -114,7 +97,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:26:9:26:10:**
+**everything.md:31:9:31:10:**
 ```roc
 		Z2(a, b) => a
 ```
@@ -126,7 +109,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:27:11:27:12:**
+**everything.md:32:11:32:12:**
 ```roc
 		Z3({ a, b }) => a
 ```
@@ -138,7 +121,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:28:10:28:11:**
+**everything.md:33:10:33:11:**
 ```roc
 		Z4([a, b]) => a
 ```
@@ -150,7 +133,7 @@ Variable `h1` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
 The unused variable is declared here:
-**everything.md:18:2:18:4:**
+**everything.md:23:2:23:4:**
 ```roc
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
 ```
@@ -162,7 +145,7 @@ Variable `h2` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
 The unused variable is declared here:
-**everything.md:19:2:19:4:**
+**everything.md:24:2:24:4:**
 ```roc
 	h2 = h(x, y)
 ```
@@ -174,7 +157,7 @@ Variable `h3` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
 The unused variable is declared here:
-**everything.md:20:2:20:4:**
+**everything.md:25:2:25:4:**
 ```roc
 	h3 = A(x, y)
 ```
@@ -186,7 +169,7 @@ Variable `h4` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
 The unused variable is declared here:
-**everything.md:21:2:21:4:**
+**everything.md:26:2:26:4:**
 ```roc
 	h4 = [x, y]
 ```
@@ -198,7 +181,7 @@ Variable `h5` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
 The unused variable is declared here:
-**everything.md:22:2:22:4:**
+**everything.md:27:2:27:4:**
 ```roc
 	h5 = (x, y)
 ```
@@ -207,7 +190,7 @@ The unused variable is declared here:
 
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _A_ is not supported:
-**everything.md:15:19:15:22:**
+**everything.md:20:19:20:22:**
 ```roc
 g : e -> e where [e.A, e.B]
 ```
@@ -217,13 +200,44 @@ This syntax was used for abilities, which have been removed from Roc. Use method
 
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _B_ is not supported:
-**everything.md:15:24:15:27:**
+**everything.md:20:24:20:27:**
 ```roc
 g : e -> e where [e.A, e.B]
 ```
                        ^^^
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**everything.md:20:1:20:28:**
+```roc
+g : e -> e where [e.A, e.B]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
+**everything.md:29:2:34:3:**
+```roc
+	match x {
+		Z1((a, b)) => a
+		Z2(a, b) => a
+		Z3({ a, b }) => a
+		Z4([a, b]) => a
+	}
+```
+
+The value being matched on has type:
+        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field, .. }), Z4(List(c))]_
+
+Missing patterns:
+        Z4 []
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
 
 # TOKENS
 ~~~zig
@@ -408,100 +422,97 @@ NO CHANGE
 				(alias (ty-rigid-var-lookup (ty-rigid-var (name "e"))) (name "B")))))
 	(d-let
 		(p-assign (ident "h"))
-		(e-closure
-			(captures
-				(capture (ident "h")))
-			(e-lambda
-				(args
-					(p-assign (ident "x"))
-					(p-assign (ident "y")))
-				(e-block
-					(s-let
-						(p-assign (ident "h1"))
-						(e-record
-							(fields
-								(field (name "h11")
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(field (name "h12")
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(field (name "h13")
-									(e-record
-										(fields
-											(field (name "h131")
-												(e-lookup-local
-													(p-assign (ident "x"))))
-											(field (name "h132")
-												(e-lookup-local
-													(p-assign (ident "y"))))))))))
-					(s-let
-						(p-assign (ident "h2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "h")))
+		(e-lambda
+			(args
+				(p-assign (ident "x"))
+				(p-assign (ident "y")))
+			(e-block
+				(s-let
+					(p-assign (ident "h1"))
+					(e-record
+						(fields
+							(field (name "h11")
+								(e-lookup-local
+									(p-assign (ident "x"))))
+							(field (name "h12")
+								(e-lookup-local
+									(p-assign (ident "x"))))
+							(field (name "h13")
+								(e-record
+									(fields
+										(field (name "h131")
+											(e-lookup-local
+												(p-assign (ident "x"))))
+										(field (name "h132")
+											(e-lookup-local
+												(p-assign (ident "y"))))))))))
+				(s-let
+					(p-assign (ident "h2"))
+					(e-call (constraint-fn-var 167)
+						(e-lookup-local
+							(p-assign (ident "h")))
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))
+				(s-let
+					(p-assign (ident "h3"))
+					(e-tag (name "A")
+						(args
 							(e-lookup-local
 								(p-assign (ident "x")))
 							(e-lookup-local
-								(p-assign (ident "y")))))
-					(s-let
-						(p-assign (ident "h3"))
-						(e-tag (name "A")
-							(args
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(s-let
-						(p-assign (ident "h4"))
-						(e-list
-							(elems
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(s-let
-						(p-assign (ident "h5"))
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))))
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "x"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "a"))))))))))))
+								(p-assign (ident "y"))))))
+				(s-let
+					(p-assign (ident "h4"))
+					(e-list
+						(elems
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))))
+				(s-let
+					(p-assign (ident "h5"))
+					(e-tuple
+						(elems
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "a")))))))))))
 	(s-alias-decl
 		(ty-header (name "A")
 			(ty-args
@@ -558,7 +569,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -586,5 +597,5 @@ NO CHANGE
 			(ty-header (name "G"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i, ..j }), Z4(List(c))] -> c"))))
 ~~~

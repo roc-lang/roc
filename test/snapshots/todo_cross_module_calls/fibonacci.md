@@ -11,6 +11,6 @@ type=repl
 # OUTPUT
 assigned `fib`
 ---
-5
+5.0
 # PROBLEMS
 NIL

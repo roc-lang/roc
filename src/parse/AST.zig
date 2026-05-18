@@ -27,6 +27,10 @@ pub const tokensToHtml = @import("HTML.zig").tokensToHtml;
 
 const AST = @This();
 
+/// The allocator used for internal allocations (tokens, nodes, diagnostics).
+/// Also used to free the AST struct itself in deinit().
+gpa: Allocator,
+
 env: *CommonEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
@@ -118,11 +122,18 @@ pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree
     try tree.pushBytesRange(start.start.offset, end.end.offset, info);
 }
 
-pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
-    defer self.tokens.deinit(gpa);
-    defer self.store.deinit();
-    defer self.tokenize_diagnostics.deinit(gpa);
-    defer self.parse_diagnostics.deinit(gpa);
+/// Frees all internal allocations AND the AST struct itself.
+/// This follows the Zig std pattern (see std/Build/Watch.zig) where
+/// deinit() includes gpa.destroy(self) for always-heap-allocated types.
+pub fn deinit(self: *AST) void {
+    const gpa = self.gpa;
+
+    self.tokens.deinit(gpa);
+    self.store.deinit();
+    self.tokenize_diagnostics.deinit(gpa);
+    self.parse_diagnostics.deinit(gpa);
+
+    gpa.destroy(self);
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
@@ -240,7 +251,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     const title = switch (diagnostic.tag) {
         .multiple_platforms => "MULTIPLE PLATFORMS",
         .no_platform => "NO PLATFORM",
-        .missing_header => "MISSING HEADER",
         .missing_arrow => "MISSING ARROW",
         .expected_exposes => "EXPECTED EXPOSES",
         .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
@@ -263,10 +273,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
-        .no_else => "IF WITHOUT ELSE",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
-        .where_clause_not_allowed_in_type_declaration => "WHERE CLAUSE IN TYPE DECLARATION",
         else => "PARSE ERROR",
     };
 
@@ -274,20 +282,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
 
     // Add detailed error message based on the diagnostic type
     switch (diagnostic.tag) {
-        .missing_header => {
-            try report.document.addReflowingText("Roc files must start with a module header.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("For example:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("module [main]");
-            try report.document.addLineBreak();
-            try report.document.addText("or for an app:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("app [main!] { pf: platform \"../basic-cli/platform.roc\" }");
-        },
         .multiple_platforms => {
             try report.document.addReflowingText("Only one platform declaration is allowed per file.");
             try report.document.addLineBreak();
@@ -528,6 +522,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .match_branch_wrong_arrow => {
             try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
         },
+        .match_has_no_branches => {
+            try report.document.addReflowingText("A match expression must have at least one branch.");
+        },
         .multi_arrow_needs_parens => {
             try report.document.addReflowingText("Function types with multiple arrows need parentheses.");
             try report.document.addLineBreak();
@@ -552,22 +549,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("takes", .emphasized);
             try report.document.addText(" another function)");
         },
-        .no_else => {
-            try report.document.addText("This ");
-            try report.document.addKeyword("if");
-            try report.document.addText(" is being used as an expression, but it doesn't have an ");
-            try report.document.addKeyword("else");
-            try report.document.addText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("When ");
-            try report.document.addKeyword("if");
-            try report.document.addReflowingText(" is used as an expression (to evaluate to a value), it must have an ");
-            try report.document.addKeyword("else");
-            try report.document.addReflowingText(" branch to specify what value to use when the condition is ");
-            try report.document.addKeyword("False");
-            try report.document.addReflowingText(".");
-        },
         .type_alias_cannot_have_associated => {
             try report.document.addText("Type aliases cannot have associated items (such as types or methods).");
             try report.document.addLineBreak();
@@ -583,14 +564,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
-        },
-        .where_clause_not_allowed_in_type_declaration => {
-            try report.document.addText("Type declarations cannot include ");
-            try report.document.addKeyword("where");
-            try report.document.addText(" clauses.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Only type annotations (such as annottions for a function or other value) can have them.");
         },
         else => {
             const tag_name = @tagName(diagnostic.tag);
@@ -629,7 +602,6 @@ pub const Diagnostic = struct {
     pub const Tag = enum {
         multiple_platforms,
         no_platform,
-        missing_header,
         missing_arrow,
         expected_exposes,
         expected_exposes_close_square,
@@ -647,16 +619,12 @@ pub const Diagnostic = struct {
         expected_platform_name_string,
         expected_platform_string,
         expected_provides,
-        expected_provides_close_square,
         expected_provides_open_square,
         expected_provides_close_curly,
         expected_provides_open_curly,
         expected_requires,
-        expected_requires_rigids_close_curly,
         expected_requires_rigids_open_curly,
         expected_requires_signatures_close_curly,
-        expected_requires_signatures_open_curly,
-        expected_for_clause_open_square,
         expected_for_clause_close_square,
         expected_for_clause_alias_name,
         expected_for_clause_colon,
@@ -678,7 +646,6 @@ pub const Diagnostic = struct {
         expr_no_space_dot_int,
         import_exposing_no_open,
         import_exposing_no_close,
-        no_else,
         expected_type_field_name,
         expected_colon_after_type_field_name,
         expected_arrow,
@@ -719,25 +686,26 @@ pub const Diagnostic = struct {
         for_expected_in,
         match_branch_wrong_arrow,
         match_branch_missing_arrow,
+        match_has_no_branches,
         expected_ty_anno_close_round,
         expected_ty_anno_close_round_or_comma,
         expected_expr_comma,
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
         incomplete_import,
+        file_import_expected_as,
+        file_import_expected_name,
+        file_import_expected_type,
+        file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
-        where_clause_not_allowed_in_type_declaration,
 
         // Targets section parse errors
-        expected_targets,
         expected_targets_colon,
         expected_targets_open_curly,
         expected_targets_close_curly,
         expected_targets_field_name,
         expected_targets_field_colon,
-        expected_targets_files_string,
-        unknown_targets_field,
 
         // Target entry parse errors
         expected_target_link_open_curly,
@@ -748,10 +716,6 @@ pub const Diagnostic = struct {
         expected_target_files_close_square,
         expected_target_file,
         expected_target_file_string_end,
-
-        // Semantic warnings (detected at CLI time, not parse time)
-        targets_exe_empty,
-        targets_duplicate_target,
     };
 };
 
@@ -778,6 +742,24 @@ pub const TokenizedRegion = struct {
         };
     }
 };
+
+/// Check whether the parsed file has a top-level `main!` declaration.
+/// Used to distinguish default_app modules (headerless files that provide
+/// a main! entry point) from plain type modules.
+pub fn hasMainBangDecl(self: *const AST) bool {
+    const file = self.store.getFile();
+    for (self.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.store.getStatement(stmt_id);
+        if (stmt == .decl) {
+            const pattern = self.store.getPattern(stmt.decl.pattern);
+            if (pattern == .ident) {
+                const ident_text = self.resolve(pattern.ident.ident_tok);
+                if (std.mem.eql(u8, ident_text, "main!")) return true;
+            }
+        }
+    }
+    return false;
+}
 
 /// Resolve a token index to a string slice from the source code.
 pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
@@ -824,6 +806,62 @@ pub fn resolveQualifiedName(
     }
 }
 
+/// Resolves the full module path for an import statement.
+/// For auto-expose imports, module_name_tok points to the second-to-last token.
+/// For explicit clause imports, module_name_tok points to the first token and
+/// we iterate through consecutive uppercase tokens.
+pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx, exposes: ExposedItem.Span) []const u8 {
+    const tags = self.tokens.tokens.items(.tag);
+
+    // Check if this is auto-expose by seeing if the first exposed item's token
+    // immediately follows module_name_tok
+    var is_auto_expose = false;
+    if (exposes.span.len > 0) {
+        const exposed_slice = self.store.exposedItemSlice(exposes);
+        if (exposed_slice.len > 0) {
+            const first_exposed = self.store.getExposedItem(exposed_slice[0]);
+            const first_exposed_tok: ?Token.Idx = switch (first_exposed) {
+                .lower_ident => |i| i.ident,
+                .upper_ident => |i| i.ident,
+                .upper_ident_star => |i| i.ident,
+                .malformed => null,
+            };
+            if (first_exposed_tok) |tok| {
+                if (tok == module_name_tok + 1) {
+                    is_auto_expose = true;
+                }
+            }
+        }
+    }
+
+    // Get start position (qualifier or first module segment)
+    const start_offset: usize = if (qualifier_tok) |q|
+        self.tokens.resolve(q).start.offset
+    else
+        self.tokens.resolve(module_name_tok).start.offset;
+
+    // Find the end token
+    var end_tok = module_name_tok;
+    if (!is_auto_expose) {
+        // For explicit clauses, iterate through consecutive uppercase tokens
+        var tok = module_name_tok + 1;
+        while (tok < tags.len) {
+            const tag = tags[tok];
+            if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
+                end_tok = tok;
+                tok += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Get end position
+    const end_offset = self.tokens.resolve(end_tok).end.offset;
+
+    return self.env.source[start_offset..end_offset];
+}
+
 /// Contains properties of the thing to the right of the `import` keyword.
 pub const ImportRhs = packed struct {
     /// e.g. 1 in case we use import `as`: `import Module as Mod`
@@ -842,7 +880,7 @@ comptime {
 }
 
 test {
-    _ = std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDeclsRecursive(@This());
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
@@ -920,6 +958,15 @@ pub const Statement = union(enum) {
         nested_import: bool,
         region: TokenizedRegion,
     },
+    /// File import: `import "path" as name : Type`
+    /// Embeds file contents as Str or List(U8).
+    file_import: struct {
+        path_tok: Token.Idx,
+        name_tok: Token.Idx,
+        type_tok: Token.Idx,
+        is_bytes: bool,
+        region: TokenizedRegion,
+    },
     type_decl: struct {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
@@ -990,23 +1037,9 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 try ast.appendRegionInfoToSexprTree(env, tree, import.region);
 
-                // Reconstruct full qualified module name
-                const module_name_raw = ast.resolve(import.module_name_tok);
-                if (import.qualifier_tok) |tok| {
-                    const qualifier_str = ast.resolve(tok);
-                    // Strip leading dot from module name if present
-                    const module_name_clean = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
-                        module_name_raw[1..]
-                    else
-                        module_name_raw;
-
-                    // Combine qualifier and module name
-                    const full_module_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ qualifier_str, module_name_clean });
-                    defer gpa.free(full_module_name);
-                    try tree.pushStringPair("raw", full_module_name);
-                } else {
-                    try tree.pushStringPair("raw", module_name_raw);
-                }
+                // Reconstruct full qualified module name using the new helper
+                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes);
+                try tree.pushStringPair("raw", full_module_name);
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
                 if (import.alias_tok) |tok| {
@@ -1027,6 +1060,18 @@ pub const Statement = union(enum) {
                     }
                     try tree.endNode(exposed, attrs2);
                 }
+                try tree.endNode(begin, attrs);
+            },
+            .file_import => |fi| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-file-import");
+                try ast.appendRegionInfoToSexprTree(env, tree, fi.region);
+                const attrs = tree.beginNode();
+
+                try tree.pushStringPair("path", ast.resolve(fi.path_tok));
+                try tree.pushStringPair("name", ast.resolve(fi.name_tok));
+                try tree.pushStringPair("type", if (fi.is_bytes) "List(U8)" else "Str");
+
                 try tree.endNode(begin, attrs);
             },
             .type_decl => |a| {
@@ -1216,6 +1261,7 @@ pub const Statement = union(enum) {
             .@"break" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,
+            .file_import => |fi| fi.region,
         };
     }
 };
@@ -2138,7 +2184,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
-        ext: ?TypeAnno.Idx,
+        ext: RecordExt,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2163,17 +2209,34 @@ pub const TypeAnno = union(enum) {
     pub const TagUnionExt = union(enum) {
         /// Closed tag union: `[A, B, C]`
         closed,
-        /// Anonymous open tag union: `[A, B, ..]`
-        open,
+        /// Anonymous open tag union: `[A, B, ..]` - stores the DoubleDot token index
+        open: Token.Idx,
         /// Named open tag union: `[A, B, ..ext]`
-        named: TypeAnno.Idx,
+        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
     };
 
     pub const TagUnionRhs = packed struct {
         /// 0 = closed, 1 = anonymous open, 2 = named open
         ext_kind: u2,
-        tags_len: u30,
+        _padding: u30 = 0,
     };
+
+    /// Extension type for open records
+    pub const RecordExt = union(enum) {
+        /// Closed record: `{ name: Str }`
+        closed,
+        /// Anonymous open record: `{ name: Str, .. }` - stores the DoubleDot token index
+        open: Token.Idx,
+        /// Named open record: `{ name: Str, ..ext }`
+        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
+    };
+
+    pub const RecordRhs = packed struct {
+        /// 0 = closed, 1 = anonymous open, 2 = named open
+        ext_kind: u2,
+        _padding: u30 = 0,
+    };
+
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
     /// Extract the region from any TypeAnno variant
@@ -2257,10 +2320,14 @@ pub const TypeAnno = union(enum) {
                 }
                 try tree.endNode(tags_begin, attrs2);
 
-                if (a.ext == .named) {
-                    try ast.store.getTypeAnno(a.ext.named).pushToSExprTree(gpa, env, ast, tree);
-                } else if (a.ext == .open) {
-                    try tree.pushStaticAtom("..");
+                switch (a.ext) {
+                    .named => |named| {
+                        try ast.store.getTypeAnno(named.anno).pushToSExprTree(gpa, env, ast, tree);
+                    },
+                    .open => {
+                        try tree.pushStaticAtom("..");
+                    },
+                    .closed => {},
                 }
 
                 try tree.endNode(begin, attrs);
@@ -2298,12 +2365,22 @@ pub const TypeAnno = union(enum) {
                 }
 
                 // Output extension if present
-                if (a.ext) |ext_idx| {
-                    const ext_begin = tree.beginNode();
-                    try tree.pushStaticAtom("ty-record-ext");
-                    const ext_attrs = tree.beginNode();
-                    try ast.store.getTypeAnno(ext_idx).pushToSExprTree(gpa, env, ast, tree);
-                    try tree.endNode(ext_begin, ext_attrs);
+                switch (a.ext) {
+                    .named => |named| {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-record-ext");
+                        const ext_attrs = tree.beginNode();
+                        try ast.store.getTypeAnno(named.anno).pushToSExprTree(gpa, env, ast, tree);
+                        try tree.endNode(ext_begin, ext_attrs);
+                    },
+                    .open => {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-record-ext");
+                        const ext_attrs = tree.beginNode();
+                        try tree.pushStaticAtom("..");
+                        try tree.endNode(ext_begin, ext_attrs);
+                    },
+                    .closed => {},
                 }
 
                 try tree.endNode(begin, attrs);
@@ -2487,6 +2564,20 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
+    /// An integer with an explicit type annotation: `123.U64`
+    /// The type_token contains the `.U64` part (NoSpaceDotUpperIdent)
+    typed_int: struct {
+        token: Token.Idx,
+        type_token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    /// A fractional number with an explicit type annotation: `3.14.Dec`
+    /// The type_token contains the `.Dec` part (NoSpaceDotUpperIdent)
+    typed_frac: struct {
+        token: Token.Idx,
+        type_token: Token.Idx,
+        region: TokenizedRegion,
+    },
     single_quote: struct {
         token: Token.Idx,
         region: TokenizedRegion,
@@ -2527,7 +2618,21 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     field_access: BinOp,
-    local_dispatch: BinOp,
+    method_call: struct {
+        receiver: Expr.Idx,
+        method_token: Token.Idx,
+        args: Expr.Span,
+        region: TokenizedRegion,
+    },
+    /// Tuple element access: `tuple.0`, `tuple.1`, etc.
+    tuple_access: struct {
+        /// The tuple expression being accessed
+        expr: Expr.Idx,
+        /// The token containing the element index (NoSpaceDotInt or DotInt)
+        elem_token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    arrow_call: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,
@@ -2558,7 +2663,7 @@ pub const Expr = union(enum) {
     },
     record_builder: struct {
         mapper: Expr.Idx,
-        fields: RecordField.Idx,
+        fields: RecordField.Span,
         region: TokenizedRegion,
     },
     ellipsis: struct {
@@ -2598,6 +2703,8 @@ pub const Expr = union(enum) {
             .ident => |e| e.region,
             .int => |e| e.region,
             .frac => |e| e.region,
+            .typed_int => |e| e.region,
+            .typed_frac => |e| e.region,
             .string => |e| e.region,
             .multiline_string => |e| e.region,
             .tag => |e| e.region,
@@ -2605,7 +2712,9 @@ pub const Expr = union(enum) {
             .record => |e| e.region,
             .tuple => |e| e.region,
             .field_access => |e| e.region,
-            .local_dispatch => |e| e.region,
+            .method_call => |e| e.region,
+            .tuple_access => |e| e.region,
+            .arrow_call => |e| e.region,
             .lambda => |e| e.region,
             .record_updater => |e| e.region,
             .bin_op => |e| e.region,
@@ -2648,6 +2757,24 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_int => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-int");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("raw", ast.resolve(a.token));
+                try tree.pushStringPair("type", ast.resolve(a.type_token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_frac => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-frac");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("raw", ast.resolve(a.token));
+                try tree.pushStringPair("type", ast.resolve(a.type_token));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2878,14 +3005,28 @@ pub const Expr = union(enum) {
             .record_builder => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-record-builder");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
-                // Push mapper
+                // Push mapper (the type suffix)
+                const mapper_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
+                const mapper_attrs = tree.beginNode();
+                try tree.endNode(mapper_wrapper, mapper_attrs);
 
-                // Push single field (not a collection)
-                const field = ast.store.getRecordField(a.fields);
-                try field.pushToSExprTree(gpa, env, ast, tree);
+                // Push fields
+                for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
+                    const record_field = ast.store.getRecordField(field_idx);
+                    const field_node = tree.beginNode();
+                    try tree.pushStaticAtom("field");
+                    try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    const attrs2 = tree.beginNode();
+                    if (record_field.value) |value_id| {
+                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    }
+                    try tree.endNode(field_node, attrs2);
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -2916,9 +3057,46 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .local_dispatch => |a| {
+            .method_call => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-local-dispatch");
+                try tree.pushStaticAtom("e-method-call");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("method", ast.resolve(a.method_token));
+                const attrs = tree.beginNode();
+
+                const receiver = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ast.store.getExpr(a.receiver).pushToSExprTree(gpa, env, ast, tree);
+                try tree.endNode(receiver, receiver_attrs);
+
+                const args = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ast.store.exprSlice(a.args)) |arg_id| {
+                    try ast.store.getExpr(arg_id).pushToSExprTree(gpa, env, ast, tree);
+                }
+                try tree.endNode(args, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .tuple_access => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-tuple-access");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                // Push the tuple expression
+                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push the element index
+                try tree.pushString(ast.resolve(a.elem_token));
+
+                try tree.endNode(begin, attrs);
+            },
+            .arrow_call => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-arrow-call");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
@@ -3034,6 +3212,7 @@ pub const IfElse = struct {
 pub const MatchBranch = struct {
     pattern: Pattern.Idx,
     body: Expr.Idx,
+    guard: ?Expr.Idx,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -3046,6 +3225,13 @@ pub const MatchBranch = struct {
         const attrs = tree.beginNode();
 
         try ast.store.getPattern(self.pattern).pushToSExprTree(gpa, env, ast, tree);
+        if (self.guard) |guard| {
+            const guard_begin = tree.beginNode();
+            try tree.pushStaticAtom("guard");
+            const guard_attrs = tree.beginNode();
+            try ast.store.getExpr(guard).pushToSExprTree(gpa, env, ast, tree);
+            try tree.endNode(guard_begin, guard_attrs);
+        }
         try ast.store.getExpr(self.body).pushToSExprTree(gpa, env, ast, tree);
 
         try tree.endNode(begin, attrs);

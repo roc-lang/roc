@@ -37,7 +37,7 @@ The value's type, which does not have a method named **plus**, is:
 
     a
 
-**Hint:** The **+** operator requires the type to have a **plus** method. Did you forget to specify it in the type annotation?
+**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -131,17 +131,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-closure
-				(captures
-					(capture (ident "x")))
-				(e-lambda
-					(args
-						(p-assign (ident "y")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y")))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
@@ -151,7 +141,7 @@ NO CHANGE
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "curriedAdd"))
-		(e-call
+		(e-call (constraint-fn-var 104)
 			(e-lookup-local
 				(p-assign (ident "makeAdder")))
 			(e-num (value "5")))
@@ -165,10 +155,10 @@ NO CHANGE
 			(args
 				(p-assign (ident "f"))
 				(p-assign (ident "x")))
-			(e-call
+			(e-call (constraint-fn-var 140)
 				(e-lookup-local
 					(p-assign (ident "f")))
-				(e-call
+				(e-call (constraint-fn-var 139)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -183,24 +173,21 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "addThreeTwice"))
-		(e-closure
-			(captures
-				(capture (ident "applyTwice")))
-			(e-lambda
-				(args
-					(p-assign (ident "n")))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "applyTwice")))
-					(e-lambda
-						(args
+		(e-lambda
+			(args
+				(p-assign (ident "n")))
+			(e-call (constraint-fn-var 170)
+				(e-lookup-local
+					(p-assign (ident "applyTwice")))
+				(e-lambda
+					(args
+						(p-assign (ident "x")))
+					(e-binop (op "add")
+						(e-lookup-local
 							(p-assign (ident "x")))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "x")))
-							(e-num (value "3"))))
-					(e-lookup-local
-						(p-assign (ident "n"))))))
+						(e-num (value "3"))))
+				(e-lookup-local
+					(p-assign (ident "n")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -215,7 +202,7 @@ NO CHANGE
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "Error -> (Error -> Error)"))
+		(expr (type "a -> (a -> a)"))
 		(expr (type "I64 -> I64"))
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "I64 -> I64"))))

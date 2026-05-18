@@ -5,7 +5,13 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» unchanged = { var value_ = 42; for n in [] { value_ = n }; value_ }
+» unchanged = {
+    var value_ = 42
+    for n in [] {
+        value_ = n
+    }
+    value_
+}
 ~~~
 # OUTPUT
 assigned `unchanged`

@@ -131,6 +131,13 @@ pub const TypeAnno = union(enum) {
                             try tree.pushStringPair("external-module", module_name);
                         }
                     },
+                    .pending => |pending| {
+                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("pending-module", module_name);
+                    },
                 }
 
                 const attrs = tree.beginNode();
@@ -199,6 +206,13 @@ pub const TypeAnno = union(enum) {
                         } else {
                             try tree.pushStringPair("external-module", module_name);
                         }
+                    },
+                    .pending => |pending| {
+                        const module_idx_int = @intFromEnum(pending.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("pending-module", module_name);
                     },
                 }
 
@@ -333,6 +347,11 @@ pub const TypeAnno = union(enum) {
             module_idx: CIR.Import.Idx,
             target_node_idx: u16,
         },
+        /// Pending external lookup - deferred until dependencies are canonicalized
+        pending: struct {
+            module_idx: CIR.Import.Idx,
+            type_name: Ident.Idx,
+        },
 
         // Just the tag of this union enum
         pub const Tag = std.meta.Tag(@This());
@@ -434,23 +453,23 @@ pub const TypeAnno = union(enum) {
         /// Check if an identifier index matches any builtin type name.
         /// This is more efficient than fromBytes() as it compares indices directly.
         pub fn isBuiltinTypeIdent(ident: base.Ident.Idx, idents: anytype) bool {
-            return ident == idents.list or
-                ident == idents.box or
-                ident == idents.str or
-                ident == idents.num or
-                ident == idents.u8 or
-                ident == idents.u16 or
-                ident == idents.u32 or
-                ident == idents.u64 or
-                ident == idents.u128 or
-                ident == idents.i8 or
-                ident == idents.i16 or
-                ident == idents.i32 or
-                ident == idents.i64 or
-                ident == idents.i128 or
-                ident == idents.f32 or
-                ident == idents.f64 or
-                ident == idents.dec;
+            return ident.eql(idents.list) or
+                ident.eql(idents.box) or
+                ident.eql(idents.str) or
+                ident.eql(idents.num) or
+                ident.eql(idents.u8) or
+                ident.eql(idents.u16) or
+                ident.eql(idents.u32) or
+                ident.eql(idents.u64) or
+                ident.eql(idents.u128) or
+                ident.eql(idents.i8) or
+                ident.eql(idents.i16) or
+                ident.eql(idents.i32) or
+                ident.eql(idents.i64) or
+                ident.eql(idents.i128) or
+                ident.eql(idents.f32) or
+                ident.eql(idents.f64) or
+                ident.eql(idents.dec);
         }
     };
 };

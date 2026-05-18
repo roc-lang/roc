@@ -1,16 +1,13 @@
 # META
 ~~~ini
-description=e_anno_only should crash when value is used
+description=annotation-only REPL input is rejected before lowering
 type=repl
 ~~~
 # SOURCE
 ~~~roc
 » foo : Str -> Str
-» foo("test")
 ~~~
 # OUTPUT
-Crash: Compile-time error encountered at runtime
----
-Crash: Cannot call function: compile-time error (ident_not_in_scope)
+Parse error: Type annotations are not supported in the REPL yet
 # PROBLEMS
 NIL

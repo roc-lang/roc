@@ -8,6 +8,6 @@ type=repl
 » List.keep_if([1, 2, 3, 4, 5], |x| x > 2)
 ~~~
 # OUTPUT
-[3, 4, 5]
+[3.0, 4.0, 5.0]
 # PROBLEMS
 NIL

@@ -58,7 +58,7 @@ EndOfFile,
 		(e-num (value "5")))
 	(s-let
 		(p-assign (ident "y"))
-		(e-call
+		(e-call (constraint-fn-var 42)
 			(e-closure
 				(captures
 					(capture (ident "x")))
@@ -73,5 +73,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "Dec"))
 ~~~

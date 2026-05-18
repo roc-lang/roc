@@ -26,7 +26,7 @@ EndOfFile,
 			(anno-record-field (name "age")
 				(ty (name "U32")))
 			(ty-record-ext
-				(_)))
+				..))
 		(ty (name "Str"))))
 ~~~
 # FORMATTED

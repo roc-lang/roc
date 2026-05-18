@@ -201,6 +201,74 @@ pub const InitializeResult = struct {
     serverInfo: ServerInfo,
 };
 
+/// Identifies a text document by its URI.
+pub const TextDocumentIdentifier = struct {
+    uri: []u8,
+
+    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !TextDocumentIdentifier {
+        const obj = switch (value) {
+            .object => |o| o,
+            else => return error.InvalidParams,
+        };
+
+        const uri_value = obj.get("uri") orelse return error.InvalidParams;
+        const uri_text = switch (uri_value) {
+            .string => |text| text,
+            else => return error.InvalidParams,
+        };
+
+        return .{
+            .uri = try copyString(allocator, uri_text),
+        };
+    }
+
+    pub fn deinit(self: *TextDocumentIdentifier, allocator: std.mem.Allocator) void {
+        allocator.free(self.uri);
+        self.* = undefined;
+    }
+};
+
+/// Parameters for the textDocument/semanticTokens/full request.
+pub const SemanticTokensParams = struct {
+    textDocument: TextDocumentIdentifier,
+
+    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !SemanticTokensParams {
+        const obj = switch (value) {
+            .object => |o| o,
+            else => return error.InvalidParams,
+        };
+
+        const doc_value = obj.get("textDocument") orelse return error.InvalidParams;
+
+        return .{
+            .textDocument = try TextDocumentIdentifier.fromJson(allocator, doc_value),
+        };
+    }
+
+    pub fn deinit(self: *SemanticTokensParams, allocator: std.mem.Allocator) void {
+        self.textDocument.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+/// Response for semantic tokens containing the encoded token data.
+pub const SemanticTokens = struct {
+    /// Encoded tokens as groups of 5 integers:
+    /// [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]...
+    data: []const u32,
+
+    pub fn jsonStringify(self: SemanticTokens, writer: anytype) !void {
+        try writer.beginObject();
+        try writer.objectField("data");
+        try writer.beginArray();
+        for (self.data) |val| {
+            try writer.write(val);
+        }
+        try writer.endArray();
+        try writer.endObject();
+    }
+};
+
 fn copyString(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
     const buf = try allocator.alloc(u8, text.len);
     @memcpy(buf, text);

@@ -11,6 +11,6 @@ type=repl
 # OUTPUT
 assigned `x`
 ---
-5
+5.0
 # PROBLEMS
 NIL

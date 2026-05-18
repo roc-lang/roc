@@ -5,11 +5,15 @@ const parse = @import("parse");
 const base = @import("base");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
+const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 
+const Allocators = base.Allocators;
 const Ident = base.Ident;
 
 test "record literal uses record_unbound" {
     const gpa = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     // Test a simple record literal
     {
@@ -20,10 +24,14 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var can = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -51,10 +59,14 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var can = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -82,10 +94,14 @@ test "record literal uses record_unbound" {
 
         try env.initCIRFields("test");
 
-        var ast = try parse.parseExpr(&env.common, gpa);
-        defer ast.deinit(gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(gpa);
+        defer allocators.deinit();
 
-        var can = try Can.init(&env, &ast, null);
+        const ast = try parse.parseExpr(&allocators, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -114,6 +130,8 @@ test "record literal uses record_unbound" {
 
 test "record_unbound basic functionality" {
     const gpa = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     const source = "{ x: 42, y: 99 }";
 
@@ -123,10 +141,14 @@ test "record_unbound basic functionality" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseExpr(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseExpr(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -156,6 +178,8 @@ test "record_unbound basic functionality" {
 
 test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     const source = "{ a: 123, b: 456, c: 789 }";
 
@@ -165,10 +189,14 @@ test "record_unbound with multiple fields" {
     try env.initCIRFields("test");
 
     // Create record_unbound with multiple fields
-    var ast = try parse.parseExpr(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseExpr(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -200,6 +228,8 @@ test "record_unbound with multiple fields" {
 
 test "record pattern destructuring" {
     const gpa = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     // Test simple record destructuring: { x, y } = { x: 1, y: 2 }
     const source = "{ x, y } = { x: 1, y: 2 }";
@@ -209,10 +239,14 @@ test "record pattern destructuring" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseStatement(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseStatement(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings
@@ -273,6 +307,8 @@ test "record pattern destructuring" {
 
 test "record pattern with sub-patterns" {
     const gpa = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
 
     // Test record destructuring with sub-patterns: { name: n, age: a } = person
     const source = "{ name: n, age: a } = person";
@@ -282,10 +318,14 @@ test "record pattern with sub-patterns" {
 
     try env.initCIRFields("test");
 
-    var ast = try parse.parseStatement(&env.common, gpa);
-    defer ast.deinit(gpa);
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
 
-    var can = try Can.init(&env, &ast, null);
+    const ast = try parse.parseStatement(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
 
     // Enter a function scope so we can have local bindings

@@ -95,7 +95,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call
+		(e-call (constraint-fn-var 45)
 			(e-lookup-local
 				(p-assign (ident "bad_function")))
 			(e-string
@@ -107,9 +107,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> {  }"))
-		(patt (type "{  }")))
+		(patt (type "Str -> {}"))
+		(patt (type "{}")))
 	(expressions
-		(expr (type "Str -> Error"))
-		(expr (type "{  }"))))
+		(expr (type "Str -> {}"))
+		(expr (type "{}"))))
 ~~~

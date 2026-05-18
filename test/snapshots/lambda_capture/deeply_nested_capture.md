@@ -84,9 +84,9 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
-	(e-call
-		(e-call
+(e-call (constraint-fn-var 88)
+	(e-call (constraint-fn-var 77)
+		(e-call (constraint-fn-var 63)
 			(e-lambda
 				(args
 					(p-assign (ident "a")))
@@ -128,5 +128,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d, d.times : d, d -> d]"))
+(expr (type "Dec"))
 ~~~

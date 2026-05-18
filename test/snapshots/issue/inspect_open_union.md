@@ -108,7 +108,7 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call
+								(e-call (constraint-fn-var 101)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -118,7 +118,7 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call
+								(e-call (constraint-fn-var 109)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -137,7 +137,7 @@ main_for_host = |result|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try({  }, [Exit(I32), ..others]) -> Str")))
+		(patt (type "Try({}, [Exit(I32), ..others]) -> Str")))
 	(expressions
-		(expr (type "Try({  }, [Exit(I32), ..others]) -> Str"))))
+		(expr (type "Try({}, [Exit(I32), ..others]) -> Str"))))
 ~~~

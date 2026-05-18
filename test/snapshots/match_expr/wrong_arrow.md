@@ -13,7 +13,6 @@ match l {
 # EXPECTED
 PARSE ERROR - wrong_arrow.md:2:8:2:8
 PARSE ERROR - wrong_arrow.md:3:13:3:13
-UNDEFINED VARIABLE - wrong_arrow.md:1:7:1:8
 # PROBLEMS
 **PARSE ERROR**
 Match branches use `=>` instead of `->`.
@@ -33,17 +32,6 @@ Match branches use `=>` instead of `->`.
     [.., e] -> Ok(e)
 ```
             ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**wrong_arrow.md:1:7:1:8:**
-```roc
-match l {
-```
-      ^
 
 
 # TOKENS
@@ -110,5 +98,5 @@ match l {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Err([EmptyList, .._others]), Ok(_a), .._others2]"))
+(expr (type "[Err([EmptyList, ..]), Ok(_a), ..]"))
 ~~~

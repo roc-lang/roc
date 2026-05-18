@@ -9,9 +9,13 @@ app [main] { pf: platform "../basic-cli/platform.roc" }
 
 # Basic values for polymorphism testing
 num = 42
+
 frac = 4.2
+
 str = "hello"
+
 my_empty_list = []
+
 my_nonempty_list = [num, frac]
 
 # Record with polymorphic field
@@ -19,7 +23,9 @@ make_container = |value| { data: value, count: 1 }
 
 # Used with different types
 int_container = make_container(num)
+
 str_container = make_container(str)
+
 list_container = make_container(my_empty_list)
 
 # Polymorphic record update
@@ -29,7 +35,9 @@ update_data = |container, new_value| { ..container, data: new_value }
 
 # Used with different record types
 updated_int = update_data(int_container, 100)
+
 updated_str = update_data(str_container, "world")
+
 updated_mismatch = update_data(str_container, 99)
 
 # Function returning polymorphic record
@@ -37,7 +45,9 @@ identity_record = |x| { value: x }
 
 # Used at different types
 int_record = identity_record(42)
+
 str_record = identity_record("test")
+
 list_record = identity_record([1, 2, 3])
 
 main = |_| {
@@ -49,52 +59,25 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - let_polymorphism_records.md:26:47:26:49
-UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
-MISSING METHOD - let_polymorphism_records.md:38:2:38:3
-MISSING METHOD - let_polymorphism_records.md:38:2:38:17
+TYPE MISMATCH - let_polymorphism_records.md:34:47:34:49
+MISSING METHOD - let_polymorphism_records.md:48:2:48:17
+MISSING METHOD - let_polymorphism_records.md:48:2:48:3
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:26:47:26:49:**
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**let_polymorphism_records.md:34:47:34:49:**
 ```roc
 updated_mismatch = update_data(str_container, 99)
 ```
                                               ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**let_polymorphism_records.md:38:2:38:17:**
-```roc
-	1 + update_data
-```
-	^^^^^^^^^^^^^^^
-
-It has the type:
-
-    { ..a, data: b }, b -> { ..a, data: b }
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:38:2:38:3:**
-```roc
-	1 + update_data
-```
-	^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    { ..a, data: b }, b -> { ..a, data: b }
-
 **MISSING METHOD**
 This **plus** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:38:2:38:17:**
+**let_polymorphism_records.md:48:2:48:17:**
 ```roc
 	1 + update_data
 ```
@@ -102,7 +85,19 @@ This **plus** method is being called on a value whose type doesn't have that met
 
 The value's type, which does not have a method named **plus**, is:
 
-    { ..a, data: b }, b -> { ..a, data: b }
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**let_polymorphism_records.md:48:2:48:3:**
+```roc
+	1 + update_data
+```
+	^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Error
 
 # TOKENS
 ~~~zig
@@ -305,21 +300,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call
+		(e-call (constraint-fn-var 165)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call
+		(e-call (constraint-fn-var 173)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call
+		(e-call (constraint-fn-var 181)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -340,7 +335,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call
+		(e-call (constraint-fn-var 198)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -348,7 +343,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call
+		(e-call (constraint-fn-var 210)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -357,7 +352,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call
+		(e-call (constraint-fn-var 226)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -375,20 +370,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call
+		(e-call (constraint-fn-var 242)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call
+		(e-call (constraint-fn-var 252)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call
+		(e-call (constraint-fn-var 288)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -398,69 +393,64 @@ NO CHANGE
 					(e-num (value "3"))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-closure
-			(captures
-				(capture (ident "update_data"))
-				(capture (ident "int_container"))
-				(capture (ident "str_container")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-expr
-						(e-binop (op "add")
-							(e-num (value "1"))
-							(e-lookup-local
-								(p-assign (ident "update_data")))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-expr
 					(e-binop (op "add")
-						(e-dot-access (field "count")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "int_container")))))
-						(e-dot-access (field "count")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "str_container")))))))))))
+						(e-num (value "1"))
+						(e-lookup-local
+							(p-assign (ident "update_data")))))
+				(e-binop (op "add")
+					(e-field-access (field "count")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "int_container")))))
+					(e-field-access (field "count")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "str_container"))))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "Str"))
 		(patt (type "List(_a)"))
-		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "List(Dec)"))
 		(patt (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "{ count: a, data: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(patt (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+		(patt (type "{ count: Dec, data: Dec }"))
+		(patt (type "{ count: Dec, data: Str }"))
+		(patt (type "{ count: Dec, data: List(_a) }"))
+		(patt (type "{ data: a, ..b }, a -> { data: a, ..b }"))
+		(patt (type "{ count: Dec, data: Dec }"))
+		(patt (type "{ count: Dec, data: Str }"))
+		(patt (type "{ count: Dec, data: Str }"))
 		(patt (type "a -> { value: a }"))
-		(patt (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ value: Dec }"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
+		(patt (type "{ value: List(Dec) }"))
+		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "Str"))
 		(expr (type "List(_a)"))
-		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "List(Dec)"))
 		(expr (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "{ count: a, data: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(expr (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+		(expr (type "{ count: Dec, data: Dec }"))
+		(expr (type "{ count: Dec, data: Str }"))
+		(expr (type "{ count: Dec, data: List(_a) }"))
+		(expr (type "{ data: a, ..b }, a -> { data: a, ..b }"))
+		(expr (type "{ count: Dec, data: Dec }"))
+		(expr (type "{ count: Dec, data: Str }"))
+		(expr (type "{ count: Dec, data: Str }"))
 		(expr (type "a -> { value: a }"))
-		(expr (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ value: Dec }"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))))
+		(expr (type "{ value: List(Dec) }"))
+		(expr (type "_arg -> Dec"))))
 ~~~

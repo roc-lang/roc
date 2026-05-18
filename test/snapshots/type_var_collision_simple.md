@@ -142,7 +142,9 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # Define some variables that would normally be used for type variables
 a = 1
+
 b = 2
+
 c = 3
 
 # This identity function should get type 'd -> d' since a, b, c are taken
@@ -202,66 +204,58 @@ main! = |_| {
 						(p-assign (ident "second")))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "identity"))
-				(capture (ident "identity2"))
-				(capture (ident "pair"))
-				(capture (ident "a"))
-				(capture (ident "b"))
-				(capture (ident "c")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "result1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "result2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity2")))
-							(e-string
-								(e-literal (string "hello")))))
-					(s-let
-						(p-assign (ident "result3"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "pair")))
-							(e-lookup-local
-								(p-assign (ident "result1")))
-							(e-lookup-local
-								(p-assign (ident "result2")))))
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "a")))
-							(e-lookup-local
-								(p-assign (ident "b"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "result1"))
+					(e-call (constraint-fn-var 103)
 						(e-lookup-local
-							(p-assign (ident "c")))))))))
+							(p-assign (ident "identity")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "result2"))
+					(e-call (constraint-fn-var 112)
+						(e-lookup-local
+							(p-assign (ident "identity2")))
+						(e-string
+							(e-literal (string "hello")))))
+				(s-let
+					(p-assign (ident "result3"))
+					(e-call (constraint-fn-var 117)
+						(e-lookup-local
+							(p-assign (ident "pair")))
+						(e-lookup-local
+							(p-assign (ident "result1")))
+						(e-lookup-local
+							(p-assign (ident "result2")))))
+				(e-binop (op "add")
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "a")))
+						(e-lookup-local
+							(p-assign (ident "b"))))
+					(e-lookup-local
+						(p-assign (ident "c"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "d -> d"))
 		(patt (type "d -> d"))
 		(patt (type "d, e -> (d, e)"))
-		(patt (type "_arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]")))
+		(patt (type "_arg -> Dec")))
 	(expressions
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "d -> d"))
 		(expr (type "d -> d"))
 		(expr (type "d, e -> (d, e)"))
-		(expr (type "_arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))))
+		(expr (type "_arg -> Dec"))))
 ~~~

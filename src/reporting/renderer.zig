@@ -227,8 +227,7 @@ fn renderElementToTerminal(element: DocumentElement, writer: *std.Io.Writer, pal
             try writer.writeAll(color);
         },
         .annotation_end => {
-            if (annotation_stack.items.len > 0) {
-                _ = annotation_stack.pop();
+            if (annotation_stack.pop()) |_| {
                 try writer.writeAll(palette.reset);
                 // Re-apply previous annotation if any
                 if (annotation_stack.items.len > 0) {
@@ -537,10 +536,8 @@ fn renderElementToMarkdown(element: DocumentElement, writer: *std.Io.Writer, con
                 try writer.writeAll(" ");
             }
         },
-        .horizontal_rule => |width| {
-            const rule_width = width orelse config.getMaxLineWidth();
+        .horizontal_rule => |_| {
             try writer.writeAll("\n---\n");
-            _ = rule_width; // Markdown uses standard horizontal rule
         },
         .annotation_start, .annotation_end => {}, // Handled in annotated case
         .raw => |content| try writer.writeAll(content),
@@ -700,9 +697,8 @@ fn renderElementToHtml(element: DocumentElement, writer: *std.Io.Writer, annotat
         },
         .annotation_end => {
             if (annotation_stack.items.len > 0) {
-                const annotation = annotation_stack.items[annotation_stack.items.len - 1];
+                const annotation = annotation_stack.pop().?;
                 const tag = getAnnotationHtmlTag(annotation);
-                _ = annotation_stack.pop();
                 try writer.print("</{s}>", .{tag});
             }
         },

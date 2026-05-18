@@ -60,11 +60,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
-	(e-call
-		(e-call
-			(e-call
-				(e-call
+(e-call (constraint-fn-var 116)
+	(e-call (constraint-fn-var 105)
+		(e-call (constraint-fn-var 94)
+			(e-call (constraint-fn-var 83)
+				(e-call (constraint-fn-var 67)
 					(e-lambda
 						(args
 							(p-assign (ident "a")))
@@ -120,5 +120,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.plus : f, f -> f]"))
+(expr (type "Dec"))
 ~~~

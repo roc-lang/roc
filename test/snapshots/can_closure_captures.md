@@ -126,15 +126,19 @@ EndOfFile,
 ~~~roc
 # Simple closure capturing outer variable
 outer = 42
+
 captureSimple = |_| outer
 
 # Closure capturing multiple variables
 x = 1
+
 y = 2
+
 captureMultiple = |_| x + y
 
 # Nested closures with multi-level capture
 level1 = 10
+
 outerFn = |_| {
 	level2 = 20
 	innerFn = |_| level1 + level2
@@ -143,6 +147,7 @@ outerFn = |_| {
 
 # Closure capturing closure
 makeClosure = |n| |_| n
+
 useClosure = makeClosure(100)
 
 main = (captureSimple, captureMultiple, outerFn, useClosure)
@@ -155,14 +160,11 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "captureSimple"))
-		(e-closure
-			(captures
-				(capture (ident "outer")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-lookup-local
-					(p-assign (ident "outer"))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-lookup-local
+				(p-assign (ident "outer")))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-num (value "1")))
@@ -171,49 +173,41 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "captureMultiple"))
-		(e-closure
-			(captures
-				(capture (ident "x"))
-				(capture (ident "y")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-lookup-local
-						(p-assign (ident "y")))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-lookup-local
+					(p-assign (ident "y"))))))
 	(d-let
 		(p-assign (ident "level1"))
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "outerFn"))
-		(e-closure
-			(captures
-				(capture (ident "level1")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "level2"))
-						(e-num (value "20")))
-					(s-let
-						(p-assign (ident "innerFn"))
-						(e-closure
-							(captures
-								(capture (ident "level1"))
-								(capture (ident "level2")))
-							(e-lambda
-								(args
-									(p-underscore))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "level1")))
-									(e-lookup-local
-										(p-assign (ident "level2")))))))
-					(e-lookup-local
-						(p-assign (ident "innerFn")))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "level2"))
+					(e-num (value "20")))
+				(s-let
+					(p-assign (ident "innerFn"))
+					(e-closure
+						(captures
+							(capture (ident "level2")))
+						(e-lambda
+							(args
+								(p-underscore))
+							(e-binop (op "add")
+								(e-lookup-local
+									(p-assign (ident "level1")))
+								(e-lookup-local
+									(p-assign (ident "level2")))))))
+				(e-lookup-local
+					(p-assign (ident "innerFn"))))))
 	(d-let
 		(p-assign (ident "makeClosure"))
 		(e-lambda
@@ -229,7 +223,7 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 						(p-assign (ident "n")))))))
 	(d-let
 		(p-assign (ident "useClosure"))
-		(e-call
+		(e-call (constraint-fn-var 139)
 			(e-lookup-local
 				(p-assign (ident "makeClosure")))
 			(e-num (value "100"))))
@@ -250,25 +244,25 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(patt (type "_arg -> (_arg2 -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+		(patt (type "Dec"))
+		(patt (type "_arg -> Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "_arg -> Dec"))
+		(patt (type "Dec"))
+		(patt (type "_arg -> (_arg2 -> Dec)"))
 		(patt (type "a -> (_arg -> a)"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "(_arg -> a, _arg2 -> b, _arg3 -> (_arg4 -> c), _arg5 -> d) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, b -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]")))
+		(patt (type "_arg -> Dec"))
+		(patt (type "(_arg -> Dec, _arg2 -> Dec, _arg3 -> (_arg4 -> Dec), _arg5 -> Dec)")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
-		(expr (type "_arg -> (_arg2 -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+		(expr (type "Dec"))
+		(expr (type "_arg -> Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "_arg -> Dec"))
+		(expr (type "Dec"))
+		(expr (type "_arg -> (_arg2 -> Dec)"))
 		(expr (type "a -> (_arg -> a)"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "(_arg -> a, _arg2 -> b, _arg3 -> (_arg4 -> c), _arg5 -> d) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, b -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))))
+		(expr (type "_arg -> Dec"))
+		(expr (type "(_arg -> Dec, _arg2 -> Dec, _arg3 -> (_arg4 -> Dec), _arg5 -> Dec)"))))
 ~~~

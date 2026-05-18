@@ -17,47 +17,66 @@ const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
-const unbundle = @import("unbundle");
+const unbundle = if (is_freestanding) struct {} else @import("unbundle");
+const Io = @import("io").Io;
 
 const Report = reporting.Report;
-const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
-const Mode = @import("compile_package.zig").Mode;
+const compile_package = @import("compile_package.zig");
+const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
+const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
-const Can = can.Can;
-const Check = check.Check;
-const PackageEnv = @import("compile_package.zig").PackageEnv;
-const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
-const ImportResolver = @import("compile_package.zig").ImportResolver;
-const ScheduleHook = @import("compile_package.zig").ScheduleHook;
+const PackageEnv = compile_package.PackageEnv;
+const SemanticModuleData = compile_package.SemanticModuleData;
+const ModuleTimingInfo = compile_package.TimingInfo;
+const ImportResolver = compile_package.ImportResolver;
+const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
-const FileProvider = @import("compile_package.zig").FileProvider;
+
+// Actor model components
+const coordinator_mod = @import("coordinator.zig");
+const Coordinator = coordinator_mod.Coordinator;
+const roc_target = @import("roc_target");
+const targets_config_mod = @import("targets_config.zig");
+
+// Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
+const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
-const threads_available = builtin.target.cpu.arch != .wasm32;
+const threading = @import("threading.zig");
+const is_freestanding = threading.is_freestanding;
 
-const Thread = if (threads_available) std.Thread else struct {};
-const Mutex = if (threads_available) std.Thread.Mutex else struct {};
-const ThreadCondition = if (threads_available) std.Thread.Condition else struct {};
+const Mutex = threading.Mutex;
+const ThreadCondition = threading.Condition;
 
-// Inflight counter: atomic usize on non-wasm; no-op struct on wasm
-const InflightCounter = if (threads_available) struct {
-    value: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+/// Which checked-artifact publication work a build should do after ordinary
+/// checking has produced typed modules.
+pub const PostCheckPublicationMode = enum {
+    none,
+    platform_relations,
+    executable_artifacts,
+};
 
-    pub fn inc(self: *@This()) void {
-        _ = self.value.fetchAdd(1, .monotonic);
+/// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
+/// and extracts it into the destination directory. Used by the CLI to wire up
+/// real download support through the Filesystem vtable.
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, Allocator, []const u8, []const u8) Io.FetchUrlError!void = if (!is_freestanding)
+    &nativeFetchUrlImpl
+else
+    null;
+
+fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Io.FetchUrlError!void {
+    if (comptime is_freestanding) {
+        return error.DownloadFailed;
+    } else {
+        var alloc = allocator;
+        unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+            return error.DownloadFailed;
+        };
     }
-
-    pub fn dec(self: *@This()) void {
-        _ = self.value.fetchSub(1, .monotonic);
-    }
-
-    pub fn load(self: *@This()) usize {
-        return self.value.load(.monotonic);
-    }
-} else struct {};
+}
 
 fn freeSlice(gpa: Allocator, s: []u8) void {
     gpa.free(s);
@@ -66,242 +85,6 @@ fn freeSlice(gpa: Allocator, s: []u8) void {
 fn freeConstSlice(gpa: Allocator, s: []const u8) void {
     gpa.free(@constCast(s));
 }
-
-// Global unified work-stealing queue
-
-const GlobalQueue = struct {
-    const Task = struct {
-        pkg: []u8,
-        module_name: []u8,
-    };
-
-    gpa: Allocator,
-    tasks: std.array_list.Managed(Task),
-    lock: Mutex = .{},
-    cond: ThreadCondition = .{},
-    workers: std.array_list.Managed(Thread),
-    running: bool = false,
-    sink_ptr: ?*OrderedSink = null,
-    // Pointer back to BuildEnv for dispatch
-    build_env: ?*BuildEnv = null,
-    // Inflight counter for idle detection (no-op on wasm)
-    inflight: InflightCounter = .{},
-
-    pub fn init(gpa: Allocator) GlobalQueue {
-        return .{
-            .gpa = gpa,
-            .tasks = std.array_list.Managed(Task).init(gpa),
-            .workers = std.array_list.Managed(std.Thread).init(gpa),
-        };
-    }
-
-    pub fn deinit(self: *GlobalQueue, gpa: Allocator) void {
-        // Stop workers
-        self.lock.lock();
-        self.running = false;
-        self.cond.broadcast();
-        self.lock.unlock();
-
-        if (threads_available) {
-            for (self.workers.items) |t| t.join();
-        }
-        self.workers.deinit();
-
-        // Free queued tasks
-        for (self.tasks.items) |t| {
-            freeSlice(gpa, t.pkg);
-            freeSlice(gpa, t.module_name);
-        }
-        self.tasks.deinit();
-
-        self.sink_ptr = null;
-        self.build_env = null;
-    }
-
-    pub fn start(self: *GlobalQueue, _: Allocator, max_threads: usize, sink: *OrderedSink) !void {
-        self.lock.lock();
-        self.sink_ptr = sink;
-        // On targets without threads (e.g. wasm32), do nothing.
-        if (builtin.target.cpu.arch == .wasm32) {
-            self.running = false;
-            self.lock.unlock();
-            return;
-        }
-        // Respect requested single-thread mode without spawning threads
-        if (max_threads <= 1) {
-            self.running = false;
-            self.lock.unlock();
-            return;
-        }
-        self.running = true;
-        self.lock.unlock();
-
-        const n = if (max_threads == 0) (std.Thread.getCpuCount() catch 1) else max_threads;
-        try self.workers.ensureTotalCapacity(n);
-        var i: usize = 0;
-        while (i < n) : (i += 1) {
-            const th = try std.Thread.spawn(.{}, worker, .{self});
-            try self.workers.append(th);
-        }
-    }
-
-    pub fn waitForIdle(self: *GlobalQueue) void {
-        // Wait until queue empty and no inflight work (non-wasm).
-        // BuildEnv.emitDeterministic() will be called after this.
-        while (true) {
-            if (threads_available) {
-                self.lock.lock();
-            }
-            const no_tasks = self.tasks.items.len == 0;
-            if (threads_available) {
-                self.lock.unlock();
-            }
-            const inflight_zero = if (threads_available) self.inflight.load() == 0 else true;
-            if (no_tasks and inflight_zero) break;
-        }
-    }
-
-    pub fn enqueue(self: *GlobalQueue, pkg: []const u8, module_name: []const u8) !void {
-        self.lock.lock();
-        defer self.lock.unlock();
-
-        try self.tasks.append(.{
-            .pkg = try self.gpa.dupe(u8, pkg),
-            .module_name = try self.gpa.dupe(u8, module_name),
-        });
-        self.cond.signal();
-    }
-
-    fn take(self: *GlobalQueue) ?Task {
-        if (threads_available) {
-            self.lock.lock();
-            defer self.lock.unlock();
-        }
-        if (self.tasks.items.len == 0) return null;
-        const idx = self.tasks.items.len - 1;
-        const t = self.tasks.items[idx];
-        self.tasks.items.len = idx;
-        return t;
-    }
-
-    fn worker(self: *GlobalQueue) void {
-        while (true) {
-            if (self.take()) |task| {
-                // Dispatch to the corresponding ModuleBuild
-                if (self.build_env) |be| {
-                    if (be.schedulers.get(task.pkg)) |sched| {
-                        // Process module task if present in scheduler
-                        const exists = sched.hasModule(task.module_name);
-                        if (exists) {
-                            // Mark inflight before processing and decrement after
-                            if (threads_available) {
-                                self.inflight.inc();
-                                defer self.inflight.dec();
-                            }
-
-                            // Check cache before processing
-                            if (be.cache_manager) |cm| {
-                                // Get module state to check path
-                                const module_state = sched.getModuleState(task.module_name).?;
-
-                                // Read the source file (normalize line endings for consistent behavior on Windows).
-                                const source = be.readFile(module_state.path, 10 * 1024 * 1024) catch {
-                                    // If we can't read the file, continue with normal processing
-                                    sched.processModuleByName(task.module_name) catch {
-                                        // Continue processing other modules despite this error
-                                    };
-
-                                    freeSlice(self.gpa, task.pkg);
-                                    freeSlice(self.gpa, task.module_name);
-                                    continue;
-                                };
-                                defer be.gpa.free(source);
-
-                                const cache_result = cm.loadFromCache("roc-zig-dev", source, task.module_name);
-                                switch (cache_result) {
-                                    .hit => |hit| {
-                                        // Cache hit! Update the module state with cached data
-                                        module_state.*.phase = .Done;
-                                        module_state.*.env = hit.module_env.*;
-
-                                        // Skip normal processing since we loaded from cache
-                                        freeSlice(self.gpa, task.pkg);
-                                        freeSlice(self.gpa, task.module_name);
-                                        continue;
-                                    },
-                                    .miss => {
-                                        // Continue with normal processing
-                                    },
-                                    .not_enabled => {
-                                        // Continue with normal processing
-                                    },
-                                }
-                            }
-
-                            sched.processModuleByName(task.module_name) catch {
-                                // Continue processing other modules despite this error
-                            };
-
-                            // After successful processing, store in cache
-                            if (be.cache_manager) |cm| {
-                                const module_state = sched.getModuleState(task.module_name).?;
-                                if (module_state.phase == .Done and module_state.env != null) {
-                                    // Read the source file again to generate the cache key
-                                    const source = be.readFile(module_state.path, 10 * 1024 * 1024) catch {
-                                        // If we can't read the file, skip caching
-                                        freeSlice(self.gpa, task.pkg);
-                                        freeSlice(self.gpa, task.module_name);
-                                        continue;
-                                    };
-                                    defer be.gpa.free(source);
-
-                                    const cache_key = CacheManager.generateCacheKey(source, "roc-zig-dev");
-                                    // For now, just pass 0 for error and warning counts
-                                    // TODO: Extract actual error/warning counts from reports
-                                    const error_count: u32 = 0;
-                                    const warning_count: u32 = 0;
-
-                                    cm.store(
-                                        cache_key,
-                                        &module_state.env.?,
-                                        error_count,
-                                        warning_count,
-                                    ) catch {
-                                        // Cache store failed, but continue
-                                    };
-                                }
-                            }
-                        }
-                    }
-                }
-                freeSlice(self.gpa, task.pkg);
-                freeSlice(self.gpa, task.module_name);
-                continue;
-            }
-
-            const keep_running = if (threads_available) blk: {
-                self.lock.lock();
-                while (self.tasks.items.len == 0 and self.running) {
-                    self.cond.wait(&self.lock);
-                }
-                const running = self.running;
-                self.lock.unlock();
-                break :blk running;
-            } else self.running;
-
-            if (!keep_running) break;
-        }
-    }
-
-    // Hook from ModuleBuild to enqueue newly discovered/scheduled modules
-    pub fn hookOnSchedule(ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, _: []const u8, _: u32) void {
-        var self: *GlobalQueue = @ptrCast(@alignCast(ctx.?));
-        // Enqueue to global queue - log but don't fail on error
-        self.enqueue(package_name, module_name) catch {
-            // Continue anyway - the module will still be processed by local scheduler
-        };
-    }
-};
 
 // Rooted path + normalization helper
 const PathUtils = struct {
@@ -346,6 +129,7 @@ pub const BuildEnv = struct {
     gpa: Allocator,
     mode: Mode,
     max_threads: usize,
+    target: roc_target.RocTarget,
     compiler_version: []const u8 = build_options.compiler_version,
 
     // Workspace roots for sandboxing (absolute, canonical)
@@ -359,16 +143,33 @@ pub const BuildEnv = struct {
     // Ordered sink over all packages (thread-safe, deterministic emission)
     sink: OrderedSink,
 
-    // Unified global work-stealing queue (WSQ)
-    global_queue: GlobalQueue,
+    // Actor model coordinator (owns all mutable compilation state)
+    coordinator: ?*Coordinator = null,
 
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
-    // Optional virtual file provider
-    file_provider: ?FileProvider = null,
+    // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
+    filesystem: Io = Io.default(),
+    // Explicit working directory for resolving relative paths
+    cwd: []const u8,
+
+    /// Controls which checked-artifact publication work runs after ordinary
+    /// checking has completed.
+    ///
+    /// Executable builds need the full platform/app executable relation because
+    /// later MIR/LIR stages consume it as lowering input. `roc check` needs the
+    /// type-level platform/app validation, but must not republish executable
+    /// platform roots; diagnostic-only checking must not force MIR/LIR lowering
+    /// of declarations that are not part of a valid executable program.
+    post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
+
+    // Discovery state (populated by discoverDependencies, consumed by compileDiscovered)
+    discovered_root_abs: ?[]const u8 = null,
+    discovered_root_dir: ?[]const u8 = null,
+    discovered_pkg_name: ?[]const u8 = null,
 
     // Owned resolver ctx pointers for cleanup (typed)
     resolver_ctxs: std.array_list.Managed(*ResolverCtx),
@@ -386,7 +187,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -394,33 +195,63 @@ pub const BuildEnv = struct {
         builtin_modules.* = try BuiltinModules.init(gpa);
         errdefer builtin_modules.deinit();
 
-        return .{
+        var env = BuildEnv{
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
+            .target = target,
+            .cwd = cwd,
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
-            .global_queue = GlobalQueue.init(gpa),
             .builtin_modules = builtin_modules,
             .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
             .pending_known_modules = std.array_list.Managed(PendingKnownModule).init(gpa),
         };
+
+        // On native targets, enable HTTP downloads for URL packages.
+        // On freestanding (WASM), fetchUrl remains the default stub (returns error.Unsupported).
+        if (nativeFetchUrl) |fetch_fn| {
+            env.filesystem.vtable.fetchUrl = fetch_fn;
+        }
+        // Note: `filesystem.vtable` is a value type so this mutation is safe.
+
+        return env;
     }
 
     pub fn deinit(self: *BuildEnv) void {
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] BuildEnv.deinit starting\n", .{});
+        }
+
         // Deinit and free builtin modules
         self.builtin_modules.deinit();
         self.gpa.destroy(self.builtin_modules);
 
-        // Stop global queue workers
-        self.global_queue.deinit(self.gpa);
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] builtin_modules done\n", .{});
+        }
+
+        // Deinit coordinator if present
+        if (self.coordinator) |coord| {
+            coord.deinit();
+            self.gpa.destroy(coord);
+        }
+
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] coordinator done\n", .{});
+        }
 
         // Deinit cache manager if present
         if (self.cache_manager) |cm| {
             self.gpa.destroy(cm);
         }
+
+        // Free discovery state
+        if (self.discovered_root_abs) |ra| self.gpa.free(ra);
+        if (self.discovered_root_dir) |rd| self.gpa.free(rd);
+        // discovered_pkg_name is a static string ("app" or "module"), not heap-allocated
 
         // Free resolver ctxs owned by this BuildEnv (if any)
         for (self.resolver_ctxs.items) |ctx_ptr| {
@@ -443,15 +274,33 @@ pub const BuildEnv = struct {
         }
         self.pending_known_modules.deinit();
 
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] ctxs done, deinitializing schedulers...\n", .{});
+        }
+
         // Deinit schedulers
         var sit = self.schedulers.iterator();
         while (sit.next()) |e| {
+            if (comptime trace_build) {
+                std.debug.print("[DEINIT] deinit scheduler {s} starting...\n", .{e.key_ptr.*});
+            }
             const mb_ptr: *PackageEnv = e.value_ptr.*;
             mb_ptr.deinit();
+            if (comptime trace_build) {
+                std.debug.print("[DEINIT] deinit scheduler {s} done\n", .{e.key_ptr.*});
+            }
             self.gpa.destroy(mb_ptr);
             freeConstSlice(self.gpa, e.key_ptr.*);
         }
+
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] all scheduler deinits done, freeing hashmap...\n", .{});
+        }
         self.schedulers.deinit(self.gpa);
+
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] schedulers done, deinitializing packages...\n", .{});
+        }
 
         // Deinit packages
         var pit = self.packages.iterator();
@@ -461,9 +310,6 @@ pub const BuildEnv = struct {
             freeConstSlice(self.gpa, e.key_ptr.*);
         }
         self.packages.deinit(self.gpa);
-
-        // Clear back-pointer
-        self.global_queue.build_env = null;
 
         // Deinit roots and free the duplicated strings
         for (self.workspace_roots.items) |root| {
@@ -479,9 +325,45 @@ pub const BuildEnv = struct {
         self.cache_manager = cache_manager;
     }
 
-    /// Set a virtual file provider for this BuildEnv.
-    pub fn setFileProvider(self: *BuildEnv, provider: ?FileProvider) void {
-        self.file_provider = provider;
+    /// Set the I/O implementation (or reset to OS default).
+    pub fn setIo(self: *BuildEnv, io: ?Io) void {
+        self.filesystem = io orelse Io.default();
+    }
+
+    /// Get the TargetsConfig from the platform package, if any.
+    pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
+        var pit = self.packages.iterator();
+        while (pit.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                return entry.value_ptr.targets_config;
+            }
+        }
+        return null;
+    }
+
+    /// Get the root_file of the platform package, if any.
+    pub fn getPlatformRootFile(self: *const BuildEnv) ?[]const u8 {
+        var pit = self.packages.iterator();
+        while (pit.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                return entry.value_ptr.root_file;
+            }
+        }
+        return null;
+    }
+
+    /// Set the target for this build environment.
+    /// Must be called before compileDiscovered() if target needs to change after discovery.
+    pub fn setTarget(self: *BuildEnv, target: roc_target.RocTarget) void {
+        self.target = target;
+    }
+
+    pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
+        self.post_check_publication_mode = if (enabled) .executable_artifacts else .none;
+    }
+
+    pub fn setPostCheckPublicationMode(self: *BuildEnv, mode: PostCheckPublicationMode) void {
+        self.post_check_publication_mode = mode;
     }
 
     /// Build an app file specifically (validates it's an app)
@@ -503,22 +385,56 @@ pub const BuildEnv = struct {
     // Assumptions:
     // - All header-declared paths are local filesystem paths (no URLs).
     // - Shorthand aliases uniquely identify packages within this workspace.
+    //
+    // Uses the actor model coordinator for both single-threaded and multi-threaded modes.
+    // The coordinator uses message passing to eliminate race conditions.
     pub fn build(self: *BuildEnv, root_file: []const u8) !void {
-        // Workspace root is directory containing the app header; normalize/sandbox
+        try self.discoverDependencies(root_file);
+        try self.compileDiscovered();
+    }
+
+    /// Initialize the actor model coordinator.
+    /// This must be called before compileDiscovered().
+    pub fn initCoordinator(self: *BuildEnv) !void {
+        if (self.coordinator != null) return; // Already initialized
+
+        const coord = try self.gpa.create(Coordinator);
+        coord.* = try Coordinator.init(
+            self.gpa,
+            self.mode,
+            self.max_threads,
+            self.target,
+            self.builtin_modules,
+            self.compiler_version,
+            self.cache_manager,
+        );
+        coord.setIo(self.filesystem);
+        // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
+        // This is required for roc build so that hosted functions can be called at runtime
+        coord.enable_hosted_transform = true;
+        self.coordinator = coord;
+    }
+
+    /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
+    /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
+    /// discovered state (e.g., TargetsConfig) and change the target before compilation.
+    pub fn discoverDependencies(self: *BuildEnv, root_file: []const u8) !void {
+        // Parse root file header
         const root_abs = try self.makeAbsolute(root_file);
-        defer self.gpa.free(root_abs);
+        // Store immediately so deinit() frees on any subsequent error
+        self.discovered_root_abs = root_abs;
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
-        defer self.gpa.free(root_dir);
-        // NOTE: Do not sandbox the app header; the app may reference arbitrary paths.
-        // We still record the root_dir for convenience in later checks.
+        self.discovered_root_dir = root_dir;
+
         try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
-        // Allow app, module, type_module, and default_app files
-        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
 
-        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module) {
+        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
+        // Allow all module types: app, module, type_module, package, platform
+        // Package and platform modules can also be tested
+        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .package and header_info.kind != .platform) {
             return error.UnsupportedHeader;
         }
 
@@ -535,212 +451,292 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
-        // Populate package graph and shorthand maps recursively (only for apps)
-        if (header_info.kind == .app) {
+        // Transfer provides entries from header to package for app or platform roots.
+        // For platforms, also transfer targets_config.
+        if (header_info.kind == .platform or header_info.kind == .app or header_info.kind == .default_app) {
+            if (self.packages.getPtr(pkg_name)) |pkg| {
+                pkg.provides_entries = header_info.provides_entries;
+                header_info.provides_entries = .{}; // Prevent double-free in deinit
+                if (header_info.kind == .platform) {
+                    pkg.targets_config = header_info.targets_config;
+                    header_info.targets_config = null; // Prevent double-free in deinit
+                }
+            }
+        }
+
+        // Populate package graph (for apps and packages with dependencies)
+        if (header_info.kind == .app or header_info.kind == .package) {
             try self.populatePackageShorthands(pkg_name, &header_info);
         }
 
-        // Create per-package schedulers wired with a shared resolver and global queue hook
-        try self.createSchedulers();
-
-        // Register pending known modules now that schedulers exist
-        try self.processPendingKnownModules();
-
-        // Set back-pointer for dispatch
-        self.global_queue.build_env = self;
-
-        // Start global queue workers with ordered sink only when threads are available and requested
-        if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
-            try self.global_queue.start(self.gpa, self.max_threads, &self.sink);
-        }
-
-        // Build platform and other dependency packages BEFORE the app
-        // This ensures platform module envs are available when app is canonicalized
-        var it = self.schedulers.iterator();
-        while (it.next()) |e| {
-            const name = e.key_ptr.*;
-            if (std.mem.eql(u8, name, pkg_name)) continue;
-            const pkg = self.packages.get(name).?;
-            try e.value_ptr.*.buildRoot(pkg.root_file);
-        }
-
-        // Seed root module into global queue via schedule hook (ModuleBuild will call back)
-        const root_sched = self.schedulers.getPtr(pkg_name).?;
-        try root_sched.*.buildRoot(pkg_root_file);
-
-        // Wait for all work to complete
-        if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
-            // Multi-threaded mode: wait for global queue to drain
-            self.global_queue.waitForIdle();
-        }
-        // Give modules stuck on external imports another chance now that all packages are scheduled.
-        try self.unblockExternalImports();
-        if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
-            self.global_queue.waitForIdle();
-        }
-        // Note: In single-threaded mode, buildRoot() runs synchronously and blocks
-        // until all modules are complete, so no additional waiting is needed.
-
-        // Check platform requirements for app modules
-        try self.checkPlatformRequirements();
-
-        // Deterministic emission: globally order reports by (min dependency depth from app, then module name)
-        try self.emitDeterministic();
+        self.discovered_pkg_name = pkg_name;
     }
 
-    /// Check that app exports match platform requirements.
-    /// This is called after all modules are compiled and type-checked.
-    fn checkPlatformRequirements(self: *BuildEnv) !void {
-        // Find the app and platform packages
-        var app_pkg: ?[]const u8 = null;
-        var platform_pkg: ?[]const u8 = null;
+    /// Phase 2: Initialize the Coordinator, create coordinator packages from the
+    /// discovered BuildEnv packages, and run compilation to completion.
+    /// Must be called after discoverDependencies().
+    pub fn compileDiscovered(self: *BuildEnv) !void {
+        const pkg_name = self.discovered_pkg_name orelse unreachable; // Must call discoverDependencies() first
 
+        // Initialize coordinator if not already done
+        try self.initCoordinator();
+        const coord = self.coordinator.?;
+
+        // Look up the root file from the package entry (already stored by discoverDependencies)
+        const root_pkg = self.packages.get(pkg_name) orelse unreachable; // Must call discoverDependencies() first
+        const pkg_root_file = root_pkg.root_file;
+
+        // Create coordinator packages mirroring BuildEnv packages
+        // Skip .module kind packages - these are platform-exposed modules (e.g., Stdout)
+        // that were incorrectly registered as packages. They should be modules within
+        // the platform package, not separate packages.
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] Creating coordinator packages from {} BuildEnv packages:\n", .{self.packages.count()});
+        }
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
-            if (pkg.kind == .app) {
-                app_pkg = entry.key_ptr.*;
-            } else if (pkg.kind == .platform) {
-                platform_pkg = entry.key_ptr.*;
+
+            // Skip module-type packages - they're platform-exposed modules, not real packages
+            // BUT don't skip the main package we're building, even if it's a module
+            const is_main_pkg = std.mem.eql(u8, entry.key_ptr.*, pkg_name);
+            if (!is_main_pkg and (pkg.kind == .module or pkg.kind == .type_module)) {
+                if (comptime trace_build) {
+                    std.debug.print("[BUILD]   Skipping module-as-package: {s}\n", .{entry.key_ptr.*});
+                }
+                continue;
             }
-        }
 
-        // If we don't have both an app and a platform, nothing to check
-        const app_name = app_pkg orelse return;
-        const platform_name = platform_pkg orelse return;
-
-        // Get the schedulers for both packages
-        const app_sched = self.schedulers.get(app_name) orelse return;
-        const platform_sched = self.schedulers.get(platform_name) orelse return;
-
-        // Get the root module envs for both packages
-        const app_root_env = app_sched.getRootEnv() orelse return;
-        const platform_root_env = platform_sched.getRootEnv() orelse return;
-
-        // If the platform has no requires_types, nothing to check
-        if (platform_root_env.requires_types.items.items.len == 0) {
-            return;
-        }
-
-        // Get builtin indices and module
-        const builtin_indices = self.builtin_modules.builtin_indices;
-        const builtin_module_env = self.builtin_modules.builtin_module.env;
-
-        // Build module_envs_map for type resolution
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
-        defer module_envs_map.deinit();
-
-        // Use the shared populateModuleEnvs function to set up auto-imported types
-        try Can.populateModuleEnvs(&module_envs_map, app_root_env, builtin_module_env, builtin_indices);
-
-        // Build builtin context for the type checker
-        const builtin_ctx = Check.BuiltinContext{
-            .module_name = app_root_env.module_name_idx,
-            .bool_stmt = builtin_indices.bool_type,
-            .try_stmt = builtin_indices.try_type,
-            .str_stmt = builtin_indices.str_type,
-            .builtin_module = builtin_module_env,
-            .builtin_indices = builtin_indices,
-        };
-
-        // Create type checker for the app module
-        var checker = try Check.init(
-            self.gpa,
-            &app_root_env.types,
-            app_root_env,
-            &.{}, // No imported modules needed for checking exports
-            &module_envs_map,
-            &app_root_env.store.regions,
-            builtin_ctx,
-        );
-        defer checker.deinit();
-
-        // Build the platform-to-app ident translation map
-        // This translates platform requirement idents to app idents by name
-        var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(self.gpa);
-        defer platform_to_app_idents.deinit();
-
-        for (platform_root_env.requires_types.items.items) |required_type| {
-            const platform_ident_text = platform_root_env.getIdent(required_type.ident);
-            if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
-                try platform_to_app_idents.put(required_type.ident, app_ident);
+            if (comptime trace_build) {
+                std.debug.print("[BUILD]   Package: {s} root_dir={s} kind={}\n", .{ entry.key_ptr.*, pkg.root_dir, pkg.kind });
             }
-        }
+            const coord_pkg = try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
 
-        // Check platform requirements against app exports
-        try checker.checkPlatformRequirements(platform_root_env, &platform_to_app_idents);
-
-        // If there are type problems, convert them to reports and emit via sink
-        if (checker.problems.problems.items.len > 0) {
-            const app_root_module = app_sched.getRootModule() orelse return;
-
-            var rb = ReportBuilder.init(
-                self.gpa,
-                app_root_env,
-                app_root_env,
-                &checker.snapshots,
-                app_root_module.path,
-                &.{},
-                &checker.import_mapping,
-            );
-            defer rb.deinit();
-
-            for (checker.problems.problems.items) |prob| {
-                const rep = rb.build(prob) catch continue;
-                // Emit via sink with the module name (not path) to match other reports
-                self.sink.emitReport(app_name, app_root_module.name, rep);
-            }
-        }
-    }
-
-    fn unblockExternalImports(self: *BuildEnv) !void {
-        var progress = true;
-        while (progress) {
-            progress = false;
-
-            var sched_it = self.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-
-                var mod_it = sched.moduleNamesIterator();
-                while (mod_it.next()) |m_entry| {
-                    const module_name = m_entry.key_ptr.*;
-                    const st = sched.getModuleState(module_name) orelse continue;
-                    if (st.phase != .WaitingOnImports or st.external_imports.items.len == 0) continue;
-
-                    const prev_remaining = sched.remaining_modules;
-                    var last_phase = st.phase;
-
-                    // Drive the module forward until it either finishes or stops making progress.
-                    while (true) {
-                        try sched.processModuleByName(module_name);
-                        const updated = sched.getModuleState(module_name) orelse break;
-                        if (updated.phase == .Done) {
-                            progress = true;
-                            break;
+            // Copy shorthands to coordinator package
+            // Only copy shorthands that map to real packages, not module-as-package entries
+            var sh_it = pkg.shorthands.iterator();
+            while (sh_it.next()) |sh_entry| {
+                const target_name = sh_entry.value_ptr.name;
+                // Check if the target is a real package or a module-as-package
+                if (self.packages.get(target_name)) |target_pkg| {
+                    if (target_pkg.kind == .module or target_pkg.kind == .type_module) {
+                        if (comptime trace_build) {
+                            std.debug.print("[BUILD]     Skipping shorthand to module: {s} -> {s}\n", .{ sh_entry.key_ptr.*, target_name });
                         }
-                        if (updated.phase == last_phase) {
-                            break;
-                        }
-                        last_phase = updated.phase;
+                        continue;
                     }
+                }
 
-                    if (sched.remaining_modules < prev_remaining) {
-                        progress = true;
+                if (comptime trace_build) {
+                    std.debug.print("[BUILD]     Shorthand: {s} -> {s}\n", .{ sh_entry.key_ptr.*, target_name });
+                }
+                try coord_pkg.shorthands.put(
+                    try self.gpa.dupe(u8, sh_entry.key_ptr.*),
+                    try self.gpa.dupe(u8, target_name),
+                );
+            }
+        }
+
+        // Create schedulers used by package-level build state.
+        try self.createSchedulers();
+        try self.processPendingKnownModules();
+
+        // Queue root module in coordinator
+        const coord_pkg = coord.getPackage(pkg_name).?;
+        const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
+        const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
+        coord_pkg.modules.items[root_id].depth = 0;
+        coord_pkg.root_module_id = root_id;
+        coord_pkg.remaining_modules += 1;
+        coord.total_remaining += 1;
+
+        // Start workers (for multi-threaded mode)
+        try coord.start();
+
+        // Queue initial parse task
+        try coord.enqueueParseTask(pkg_name, root_id);
+
+        // Also queue the platform's root module if this is an app
+        // The platform's root module contains the `requires` clause which must be compiled
+        // for type checking against the app's exports
+        var platform_root_queued = false;
+        var pf_it = self.packages.iterator();
+        while (pf_it.next()) |pf_entry| {
+            const pf_pkg = pf_entry.value_ptr.*;
+            if (pf_pkg.kind == .platform) {
+                if (coord.getPackage(pf_entry.key_ptr.*)) |platform_coord_pkg| {
+                    const plat_module_name = PackageEnv.moduleNameFromPath(pf_pkg.root_file);
+                    const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, plat_module_name, pf_pkg.root_file);
+                    if (platform_coord_pkg.modules.items[plat_root_id].phase == .Parse) {
+                        platform_coord_pkg.modules.items[plat_root_id].depth = 1;
+                        platform_coord_pkg.root_module_id = plat_root_id;
+                        platform_coord_pkg.remaining_modules += 1;
+                        coord.total_remaining += 1;
+                        try coord.enqueueParseTask(pf_entry.key_ptr.*, plat_root_id);
+                        platform_root_queued = true;
+                        if (comptime trace_build) {
+                            std.debug.print("[BUILD] Queued platform root module: {s} in package {s}\n", .{ plat_module_name, pf_entry.key_ptr.* });
+                        }
                     }
                 }
             }
+        }
 
-            if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
-                // If we queued any new work onto the global scheduler, wait for it.
-                self.global_queue.waitForIdle();
+        // Run coordinator loop
+        try coord.coordinatorLoop();
+        if (!coord.hasUserErrors()) {
+            switch (self.post_check_publication_mode) {
+                .none => {},
+                .platform_relations => try coord.validatePlatformAppRelationsForCheck(),
+                .executable_artifacts => try coord.finalizeExecutableArtifacts(),
             }
+        }
+
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
+        }
+
+        // Transfer results back to PackageEnv before platform validation and emission.
+        try self.transferCoordinatorResults();
+
+        // Deterministic emission
+        try self.emitDeterministic();
+
+        if (comptime trace_build) {
+            std.debug.print("[BUILD] compileDiscovered complete\n", .{});
         }
     }
 
-    // ------------------------
-    // Resolver implementation
-    // ------------------------
+    /// Transfer compilation results from Coordinator to PackageEnv.
+    fn transferCoordinatorResults(self: *BuildEnv) !void {
+        const coord = self.coordinator orelse return;
+
+        var coord_pkg_it = coord.packages.iterator();
+        while (coord_pkg_it.next()) |coord_entry| {
+            const coord_pkg = coord_entry.value_ptr.*;
+            const sched = self.schedulers.get(coord_entry.key_ptr.*) orelse {
+                if (comptime trace_build) {
+                    std.debug.print("[TRANSFER] No scheduler for package {s}, skipping\n", .{coord_entry.key_ptr.*});
+                }
+                continue;
+            };
+
+            if (comptime trace_build) {
+                std.debug.print("[TRANSFER] Package {s}: {} coord modules, {} sched modules\n", .{
+                    coord_entry.key_ptr.*,
+                    coord_pkg.modules.items.len,
+                    sched.modules.items.len,
+                });
+            }
+
+            // Transfer each module's results
+            for (coord_pkg.modules.items) |*coord_mod| {
+                // Ensure module exists in scheduler - if not, create it
+                var maybe_sched_mod = sched.getModuleState(coord_mod.name);
+                if (maybe_sched_mod == null) {
+                    if (comptime trace_build) {
+                        std.debug.print("[TRANSFER]   Module {s} not in scheduler, creating\n", .{coord_mod.name});
+                    }
+                    // Create the module in the scheduler
+                    _ = sched.ensureModule(coord_mod.name, coord_mod.path) catch continue;
+                    maybe_sched_mod = sched.getModuleState(coord_mod.name);
+                }
+                const sched_mod = maybe_sched_mod orelse continue;
+
+                // Transfer depth from coordinator to scheduler
+                sched.setModuleDepthIfSmaller(coord_mod.name, coord_mod.depth) catch {};
+                if (comptime trace_build) {
+                    std.debug.print("[TRANSFER]   Transferred depth {} for {s}\n", .{ coord_mod.depth, coord_mod.name });
+                }
+
+                if (comptime trace_build) {
+                    std.debug.print("[TRANSFER]   Before transfer: sched_mod.reports.len={} cap={}\n", .{ sched_mod.reports.items.len, sched_mod.reports.capacity });
+                }
+
+                // Transfer semantic ownership - move from coordinator to scheduler.
+                if (coord_mod.semantic) |*coord_semantic| {
+                    std.debug.assert(sched_mod.semantic == null);
+
+                    if (comptime trace_build) {
+                        std.debug.print("[TRANSFER]   Transferring semantic data for {s}\n", .{coord_mod.name});
+                    }
+
+                    const env = coord_semantic.module_env;
+                    const checked_artifact = coord_semantic.checked_artifact;
+                    sched_mod.semantic = .{
+                        .module_env = if (checked_artifact == null) env else null,
+                        .checked_artifact = checked_artifact,
+                    };
+
+                    coord_semantic.checked_artifact = null;
+
+                    // Clear coordinator ownership to prevent double-free during deinit.
+                    coord_mod.semantic = null;
+                }
+
+                if (comptime trace_build) {
+                    std.debug.print("[TRANSFER]   After env transfer: sched_mod.reports.len={} cap={}\n", .{ sched_mod.reports.items.len, sched_mod.reports.capacity });
+                    std.debug.print("[TRANSFER]   Coord reports to transfer: len={} cap={}\n", .{ coord_mod.reports.items.len, coord_mod.reports.capacity });
+                }
+
+                if (comptime trace_build) {
+                    std.debug.print("[TRANSFER]   coord_mod ptr={} reports.items.ptr={}\n", .{ @intFromPtr(coord_mod), @intFromPtr(coord_mod.reports.items.ptr) });
+                }
+
+                // Transfer reports
+                for (coord_mod.reports.items, 0..) |rep, ri| {
+                    if (comptime trace_build) {
+                        std.debug.print("[TRANSFER]   BEFORE append report {}: owned_strings.len={}\n", .{ ri, rep.owned_strings.items.len });
+                        if (rep.owned_strings.items.len > 0) {
+                            std.debug.print("[TRANSFER]   BEFORE append: first owned_string ptr={} len={}\n", .{ @intFromPtr(rep.owned_strings.items[0].ptr), rep.owned_strings.items[0].len });
+                        }
+                    }
+                    try sched_mod.reports.append(self.gpa, rep);
+                }
+                coord_mod.reports.clearRetainingCapacity();
+
+                if (comptime trace_build) {
+                    std.debug.print("[TRANSFER]   After reports transfer: sched_mod.reports.len={} cap={}\n", .{ sched_mod.reports.items.len, sched_mod.reports.capacity });
+                    for (sched_mod.reports.items, 0..) |rep, ri| {
+                        std.debug.print("[TRANSFER]   Report {}: title=\"{s}\" owned_strings.len={}\n", .{ ri, rep.title, rep.owned_strings.items.len });
+                        if (rep.owned_strings.items.len > 0) {
+                            std.debug.print("[TRANSFER]   First owned_string ptr={} len={}\n", .{ @intFromPtr(rep.owned_strings.items[0].ptr), rep.owned_strings.items[0].len });
+                        }
+                    }
+                }
+
+                // Update phase
+                sched_mod.phase = switch (coord_mod.phase) {
+                    .Parse, .Parsing => .Parse,
+                    .Canonicalize => .Canonicalize,
+                    .WaitingOnImports => .WaitingOnImports,
+                    .TypeCheck => .TypeCheck,
+                    .Done => .Done,
+                };
+
+                // Emit reports to sink for deterministic ordering
+                // Then clear scheduler's reports to transfer ownership to sink
+                for (sched_mod.reports.items) |rep| {
+                    self.sink.emitReport(coord_entry.key_ptr.*, coord_mod.name, rep);
+                }
+                sched_mod.reports.clearRetainingCapacity();
+            }
+
+            // Transfer root_module_id from coordinator to scheduler
+            if (coord_pkg.root_module_id) |root_id| {
+                if (root_id < coord_pkg.modules.items.len) {
+                    const root_name = coord_pkg.modules.items[root_id].name;
+                    // Find the corresponding module ID in the scheduler
+                    if (sched.module_names.get(root_name)) |sched_root_id| {
+                        sched.root_module_id = sched_root_id;
+                        if (comptime trace_build) {
+                            std.debug.print("[TRANSFER] Set root_module_id={} for package {s} (module: {s})\n", .{ sched_root_id, coord_entry.key_ptr.*, root_name });
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     const ResolverCtx = struct { ws: *BuildEnv };
 
@@ -756,26 +752,16 @@ pub const BuildEnv = struct {
         }
     };
 
-    // External import classification heuristic removed.
+    // External import classification now comes from CIR qualifier metadata.
     // ModuleBuild determines external vs local using CIR qualifier metadata (s_import.qualifier_tok).
-
-    fn splitQualifier(import_name: []const u8) struct { qual: []const u8, rest: []const u8 } {
-        if (std.mem.indexOfScalar(u8, import_name, '.')) |dot| {
-            return .{ .qual = import_name[0..dot], .rest = import_name[dot + 1 ..] };
-        } else {
-            return .{ .qual = import_name, .rest = "" };
-        }
-    }
 
     fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return;
 
-        const parts = splitQualifier(import_name);
-        const qual = parts.qual;
-        const rest = parts.rest;
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return;
 
-        const ref = cur_pkg.shorthands.get(qual) orelse {
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse {
             return;
         };
         const target_pkg_name = ref.name;
@@ -783,7 +769,7 @@ pub const BuildEnv = struct {
             return;
         };
 
-        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, rest) catch {
+        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, qualified.module) catch {
             return;
         };
         defer self.ws.gpa.free(mod_path);
@@ -791,7 +777,7 @@ pub const BuildEnv = struct {
         const sched = self.ws.schedulers.get(target_pkg_name) orelse {
             return;
         };
-        sched.*.scheduleModule(rest, mod_path, 1) catch {
+        sched.*.scheduleModule(qualified.module, mod_path, 1) catch {
             // Continue anyway - dependency resolution will handle missing modules
         };
     }
@@ -800,33 +786,60 @@ pub const BuildEnv = struct {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return false;
 
-        const parts = splitQualifier(import_name);
-        const qual = parts.qual;
-        const rest = parts.rest;
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return false;
 
-        const ref = cur_pkg.shorthands.get(qual) orelse return false;
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse return false;
         const sched = self.ws.schedulers.get(ref.name) orelse return false;
 
-        return sched.*.getEnvIfDone(rest) != null;
+        return sched.*.getSemanticDataIfDone(qualified.module) != null;
     }
 
     fn resolverGetEnv(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnv {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return null;
 
-        const parts = splitQualifier(import_name);
-        const qual = parts.qual;
-        const rest = parts.rest;
+        // Check if this is a local module (no qualifier)
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse {
+            // Local module - look it up in the current package's scheduler
+            const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
+            return if (cur_sched.*.getSemanticDataIfDone(import_name)) |semantic|
+                semantic.env
+            else
+                null;
+        };
 
-        const ref = cur_pkg.shorthands.get(qual) orelse {
+        // External module - look it up via shorthands
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse {
             return null;
         };
         const sched = self.ws.schedulers.get(ref.name) orelse {
             return null;
         };
 
-        const result = sched.*.getEnvIfDone(rest);
-        return result;
+        return if (sched.*.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.env
+        else
+            null;
+    }
+
+    fn resolverGetArtifact(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
+        const cur_pkg = self.ws.packages.get(current_package) orelse return null;
+
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse {
+            const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
+            return if (cur_sched.*.getSemanticDataIfDone(import_name)) |semantic|
+                semantic.checked_artifact
+            else
+                null;
+        };
+
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse return null;
+        const sched = self.ws.schedulers.get(ref.name) orelse return null;
+        return if (sched.*.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.checked_artifact
+        else
+            null;
     }
 
     fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
@@ -844,15 +857,19 @@ pub const BuildEnv = struct {
             .scheduleExternal = resolverScheduleExternal,
             .isReady = resolverIsReady,
             .getEnv = resolverGetEnv,
+            .getArtifact = resolverGetArtifact,
             .resolveLocalPath = resolverResolveLocalPath,
         };
     }
 
-    // ------------------------
-    // Package graph construction
-    // ------------------------
-
     const PackageKind = enum { app, package, platform, module, hosted, type_module, default_app };
+
+    /// A mapping from a Roc identifier to an FFI symbol name, extracted from
+    /// a platform's `provides { roc_ident: "ffi_symbol" }` clause.
+    pub const ProvidesEntry = struct {
+        roc_ident: []const u8,
+        ffi_symbol: []const u8,
+    };
 
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
@@ -865,8 +882,16 @@ pub const BuildEnv = struct {
         root_file: []u8,
         root_dir: []u8,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
+            if (self.targets_config) |tc| tc.deinit(gpa);
+            for (self.provides_entries.items) |entry| {
+                freeConstSlice(gpa, entry.roc_ident);
+                freeConstSlice(gpa, entry.ffi_symbol);
+            }
+            self.provides_entries.deinit(gpa);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
                 freeConstSlice(gpa, e.key_ptr.*);
@@ -887,8 +912,13 @@ pub const BuildEnv = struct {
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
         /// Platform-exposed modules (e.g., Stdout, Stderr) that apps can import
         exposes: std.ArrayListUnmanaged([]const u8) = .{},
+        /// Platform provides entries (roc_ident -> ffi_symbol mapping)
+        provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .{},
+        /// Targets configuration extracted from platform header
+        targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
+            if (self.targets_config) |tc| tc.deinit(gpa);
             if (self.platform_alias) |a| freeSlice(gpa, a);
             if (self.platform_path) |p| freeSlice(gpa, p);
             var it = self.shorthands.iterator();
@@ -901,6 +931,11 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, e);
             }
             self.exposes.deinit(gpa);
+            for (self.provides_entries.items) |entry| {
+                freeConstSlice(gpa, entry.roc_ident);
+                freeConstSlice(gpa, entry.ffi_symbol);
+            }
+            self.provides_entries.deinit(gpa);
         }
     };
 
@@ -944,7 +979,7 @@ pub const BuildEnv = struct {
         // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const src = self.readFile(file_abs, std.math.maxInt(usize)) catch |err| {
+        const src = self.readFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
                     var report = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
@@ -978,8 +1013,12 @@ pub const BuildEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        var ast = try parse.parse(&env.common, self.gpa);
-        defer ast.deinit(self.gpa);
+        var allocators: Allocators = undefined;
+        allocators.initInPlace(self.gpa);
+        defer allocators.deinit();
+
+        const ast = try parse.parse(&allocators, &env.common);
+        defer ast.deinit();
 
         // Check for parse errors - if any exist, we cannot proceed
         if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
@@ -1020,32 +1059,28 @@ pub const BuildEnv = struct {
                 const pf = ast.store.getRecordField(a.platform_idx);
                 const alias = ast.resolve(pf.name);
                 const value_expr = pf.value orelse return error.ExpectedPlatformString;
-                const plat_rel = try self.stringFromExpr(&ast, value_expr);
+                const plat_rel = try self.stringFromExpr(ast, value_expr);
                 defer self.gpa.free(plat_rel);
 
                 // Check if this is a URL - if so, resolve it to a cached local path
-                const plat_path = if (isUrl(plat_rel)) blk: {
+                const plat_path = if (base.url.isSafeUrl(plat_rel)) blk: {
                     const cached_path = try self.resolveUrlPackage(plat_rel);
                     break :blk cached_path;
                 } else blk: {
                     const header_dir = std.fs.path.dirname(file_abs) orelse ".";
                     const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir, plat_rel);
-                    // Restrict platform dependency path to be within the workspace root(s) even if declared by app.
-                    if (!PathUtils.isWithinRoot(abs_path, self.workspace_roots.items)) {
-                        self.gpa.free(abs_path);
-                        return error.PathOutsideWorkspace;
-                    }
                     break :blk abs_path;
                 };
 
                 info.platform_alias = try self.gpa.dupe(u8, alias);
                 info.platform_path = @constCast(plat_path);
 
-                // For URL-resolved packages, add the cache directory to workspace roots
-                // so that imports within the cached package can be resolved
-                if (isUrl(plat_rel)) {
-                    if (std.fs.path.dirname(plat_path)) |cache_pkg_dir| {
-                        try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                // Add platform directory to workspace roots so that imports within the platform
+                // can be resolved. This is needed for both URL packages (cached paths) and
+                // relative paths that may point outside the app directory (e.g., ../platform/main.roc)
+                if (std.fs.path.dirname(plat_path)) |plat_dir| {
+                    if (!PathUtils.isWithinRoot(plat_dir, self.workspace_roots.items)) {
+                        try self.workspace_roots.append(try self.gpa.dupe(u8, plat_dir));
                     }
                 }
 
@@ -1059,11 +1094,11 @@ pub const BuildEnv = struct {
                         // If no value is provided for an app field, skip it
                         continue;
                     }
-                    const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1094,11 +1129,11 @@ pub const BuildEnv = struct {
                         // If no value is provided for a package field, skip it
                         continue;
                     }
-                    const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1135,11 +1170,11 @@ pub const BuildEnv = struct {
                         // If no value is provided for a platform field, skip it
                         continue;
                     }
-                    const relp = try self.stringFromExpr(&ast, rf.value.?);
+                    const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1180,6 +1215,39 @@ pub const BuildEnv = struct {
                     const item_name = ast.resolve(token_idx);
                     try info.exposes.append(self.gpa, try self.gpa.dupe(u8, item_name));
                 }
+
+                // Extract provides entries (roc_ident -> ffi_symbol mapping)
+                const provides_coll = ast.store.getCollection(p.provides);
+                const provides_fields = ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+                for (provides_fields) |field_idx| {
+                    const field = ast.store.getRecordField(field_idx);
+                    const roc_ident = ast.resolve(field.name);
+                    const ffi_symbol = if (field.value) |value_idx| blk: {
+                        const value_expr = ast.store.getExpr(value_idx);
+                        switch (value_expr) {
+                            .string => |str_like| {
+                                const parts = ast.store.exprSlice(str_like.parts);
+                                if (parts.len > 0) {
+                                    const first_part = ast.store.getExpr(parts[0]);
+                                    switch (first_part) {
+                                        .string_part => |sp| break :blk ast.resolve(sp.token),
+                                        else => continue,
+                                    }
+                                }
+                                continue;
+                            },
+                            .string_part => |str_part| break :blk ast.resolve(str_part.token),
+                            else => continue,
+                        }
+                    } else continue;
+                    try info.provides_entries.append(self.gpa, .{
+                        .roc_ident = try self.gpa.dupe(u8, roc_ident),
+                        .ffi_symbol = try self.gpa.dupe(u8, ffi_symbol),
+                    });
+                }
+
+                // Extract targets config from the platform AST
+                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast) catch null;
             },
             .module => {
                 info.kind = .module;
@@ -1191,9 +1259,8 @@ pub const BuildEnv = struct {
                 // Hosted headers are like modules but for platform-specific code
             },
             .type_module => {
-                info.kind = .type_module;
-                // Type modules are headerless files with a top-level type matching the filename
-                // They don't have package dependencies
+                // Check if file has a main! function, making it a default app
+                info.kind = if (ast.hasMainBangDecl()) .default_app else .type_module;
             },
             .default_app => {
                 info.kind = .default_app;
@@ -1238,60 +1305,48 @@ pub const BuildEnv = struct {
 
     fn makeAbsolute(self: *BuildEnv, path: []const u8) ![]const u8 {
         if (std.fs.path.isAbsolute(path)) return try std.fs.path.resolve(self.gpa, &.{path});
-
-        // Resolve relative to process cwd, then canonicalize
-        const cwd_tmp = try std.process.getCwdAlloc(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(cwd_tmp);
-        return try std.fs.path.resolve(self.gpa, &.{ cwd_tmp, path });
+        return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
 
-    fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
-        const raw_data = if (self.file_provider) |fp|
-            if (try fp.read(fp.ctx, path, self.gpa)) |data| data else null
-        else
-            null;
-
-        const data = raw_data orelse try std.fs.cwd().readFileAlloc(self.gpa, path, max_bytes);
+    fn readFile(self: *BuildEnv, path: []const u8) ![]u8 {
+        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.FileNotFound,
+        };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
-        // This reallocates to the correct size if normalization occurs, ensuring
-        // proper memory management when the buffer is freed later.
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
-    /// Check if a path is a URL (http:// or https://)
-    fn isUrl(path: []const u8) bool {
-        return std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
-    }
-
     /// Cross-platform environment variable lookup.
-    /// Uses std.process.getEnvVarOwned which works on both POSIX and Windows,
-    /// unlike std.posix.getenv which only works on POSIX systems.
-    fn getEnvVar(allocator: Allocator, key: []const u8) ?[]const u8 {
-        return std.process.getEnvVarOwned(allocator, key) catch null;
+    /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
+    /// (unlike std.posix.getenv which only works on POSIX systems).
+    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) ?[]const u8 {
+        return self.filesystem.getEnvVar(key, allocator) catch null;
     }
 
     /// Get the roc cache directory for downloaded packages.
     /// Standard cache locations by platform:
     /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
     /// - Windows: %LOCALAPPDATA%\roc\packages\
-    fn getRocCacheDir(allocator: Allocator) ![]const u8 {
+    fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) ![]const u8 {
         // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        if (self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
         }
 
         // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
         if (comptime builtin.os.tag == .windows) {
-            if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+            if (self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
                 defer allocator.free(local_app_data);
                 return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
             }
         }
 
         // Fall back to ~/.cache/roc/packages (Unix)
-        if (getEnvVar(allocator, "HOME")) |home| {
+        if (self.getEnvVar(allocator, "HOME")) |home| {
             defer allocator.free(home);
             return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
         }
@@ -1302,17 +1357,23 @@ pub const BuildEnv = struct {
     /// Resolve a URL package by downloading and caching it.
     /// Returns the local path to the cached package's main.roc or platform.roc file.
     fn resolveUrlPackage(self: *BuildEnv, url: []const u8) ![]const u8 {
+        if (comptime is_freestanding)
+            return error.DownloadFailed;
         const download = unbundle.download;
 
         // Validate URL and extract hash
         const base58_hash = download.validateUrl(url) catch |err| {
-            std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            if (comptime !is_freestanding) {
+                std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            }
             return error.InvalidUrl;
         };
 
         // Get cache directory
-        const cache_dir_path = getRocCacheDir(self.gpa) catch {
-            std.log.err("Could not determine cache directory", .{});
+        const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
+            if (comptime !is_freestanding) {
+                std.log.err("Could not determine cache directory", .{});
+            }
             return error.NoCacheDir;
         };
         defer self.gpa.free(cache_dir_path);
@@ -1321,50 +1382,58 @@ pub const BuildEnv = struct {
         errdefer self.gpa.free(package_dir_path);
 
         // Check if already cached
-        var package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => blk: {
-                // Not cached - need to download
-                std.log.info("Downloading package from {s}...", .{url});
-
-                // Create cache directory structure
-                std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
-                    std.log.err("Failed to create cache directory: {}", .{make_err});
+        const already_cached = blk: {
+            var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
+                error.FileNotFound => break :blk false,
+                else => {
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to access package directory: {}", .{err});
+                    }
                     return error.FileError;
-                };
-
-                // Create package directory
-                std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
-                    error.PathAlreadyExists => {}, // Race condition, another process created it
-                    else => {
-                        std.log.err("Failed to create package directory: {}", .{make_err});
-                        return error.FileError;
-                    },
-                };
-
-                var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |open_err| {
-                    std.log.err("Failed to open package directory: {}", .{open_err});
-                    return error.FileError;
-                };
-
-                // Download and extract
-                var gpa_copy = self.gpa;
-                download.downloadAndExtract(&gpa_copy, url, new_package_dir) catch |download_err| {
-                    // Clean up failed download
-                    new_package_dir.close();
-                    std.fs.cwd().deleteTree(package_dir_path) catch {};
-                    std.log.err("Failed to download package: {}", .{download_err});
-                    return error.DownloadFailed;
-                };
-
-                std.log.info("Package cached at {s}", .{package_dir_path});
-                break :blk new_package_dir;
-            },
-            else => {
-                std.log.err("Failed to access package directory: {}", .{err});
-                return error.FileError;
-            },
+                },
+            };
+            d.close();
+            break :blk true;
         };
-        defer package_dir.close();
+
+        if (!already_cached) {
+            // Not cached - need to download
+            if (comptime !is_freestanding) {
+                std.log.info("Downloading package from {s}...", .{url});
+            }
+
+            // Create cache directory structure
+            std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to create cache directory: {}", .{make_err});
+                }
+                return error.FileError;
+            };
+
+            // Create package directory
+            std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
+                error.PathAlreadyExists => {}, // Race condition, another process created it
+                else => {
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to create package directory: {}", .{make_err});
+                    }
+                    return error.FileError;
+                },
+            };
+
+            // Download and extract via io vtable (path-based, no Dir handle needed)
+            self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
+                std.fs.cwd().deleteTree(package_dir_path) catch {};
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                }
+                return error.DownloadFailed;
+            };
+
+            if (comptime !is_freestanding) {
+                std.log.info("Package cached at {s}", .{package_dir_path});
+            }
+        }
 
         // Packages must have a main.roc entry point
         const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {
@@ -1372,7 +1441,9 @@ pub const BuildEnv = struct {
         };
         std.fs.cwd().access(source_path, .{}) catch {
             self.gpa.free(source_path);
-            std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            if (comptime !is_freestanding) {
+                std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            }
             return error.NoPackageSource;
         };
         self.gpa.free(package_dir_path);
@@ -1468,22 +1539,21 @@ pub const BuildEnv = struct {
             try self.schedule_ctxs.append(sc);
 
             const sched = try self.gpa.create(PackageEnv);
-            const schedule_hook: ScheduleHook = if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded)
-                ScheduleHook{ .ctx = &self.global_queue, .onSchedule = GlobalQueue.hookOnSchedule }
-            else
-                ScheduleHook{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule };
+            // The coordinator handles all scheduling now, so we use a no-op hook
+            const schedule_hook = ScheduleHook{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule };
             sched.* = PackageEnv.initWithResolver(
                 self.gpa,
                 name,
                 pkg.root_dir,
                 self.mode,
                 self.max_threads,
+                self.target,
                 .{ .ctx = ps, .emitFn = PkgSinkCtx.emit },
                 resolver,
                 schedule_hook,
                 self.compiler_version,
                 self.builtin_modules,
-                self.file_provider,
+                self.filesystem,
             );
 
             const key = try self.gpa.dupe(u8, name);
@@ -1516,7 +1586,7 @@ pub const BuildEnv = struct {
 
             const p_path = info.platform_path.?;
 
-            const abs = if (isUrl(p_path))
+            const abs = if (base.url.isSafeUrl(p_path))
                 try self.resolveUrlPackage(p_path)
             else
                 try self.makeAbsolute(p_path);
@@ -1533,6 +1603,21 @@ pub const BuildEnv = struct {
             const dep_key = try self.gpa.dupe(u8, alias);
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
+
+            // Transfer provides entries and targets_config from parsed header to platform package
+            if (self.packages.getPtr(alias)) |plat_pkg| {
+                if (plat_pkg.provides_entries.items.len == 0) {
+                    plat_pkg.provides_entries = child_info.provides_entries;
+                    child_info.provides_entries = .{}; // Prevent double-free in deinit
+                }
+                if (plat_pkg.targets_config == null) {
+                    plat_pkg.targets_config = child_info.targets_config;
+                    child_info.targets_config = null; // Prevent double-free in deinit
+                }
+            }
+
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
 
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
@@ -1565,6 +1650,9 @@ pub const BuildEnv = struct {
                     try self.ensurePackage(module_name, .module, module_path);
                 }
 
+                // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+                pack = self.packages.getPtr(pkg_name).?;
+
                 // Also add to app's shorthands so imports resolve correctly
                 const mod_key = try self.gpa.dupe(u8, module_name);
                 if (pack.shorthands.fetchRemove(mod_key)) |old_entry| {
@@ -1594,7 +1682,7 @@ pub const BuildEnv = struct {
             const alias = e.key_ptr.*;
             const path = e.value_ptr.*;
 
-            const abs = if (isUrl(path))
+            const abs = if (base.url.isSafeUrl(path))
                 try self.resolveUrlPackage(path)
             else
                 try self.makeAbsolute(path);
@@ -1626,6 +1714,19 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
+
+            // Transfer provides entries from parsed header to platform package
+            if (child_info.kind == .platform) {
+                if (self.packages.getPtr(alias)) |plat_pkg| {
+                    if (plat_pkg.provides_entries.items.len == 0) {
+                        plat_pkg.provides_entries = child_info.provides_entries;
+                        child_info.provides_entries = .{}; // Prevent double-free in deinit
+                    }
+                }
+            }
+
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
 
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
@@ -1666,7 +1767,7 @@ pub const BuildEnv = struct {
         while (it.next()) |e| {
             const pkg_name = e.key_ptr.*;
             const sched = e.value_ptr.*;
-            _ = self.packages.get(pkg_name).?;
+            std.debug.assert(self.packages.get(pkg_name) != null);
             var mi = sched.moduleNamesIterator();
             while (mi.next()) |me| {
                 const mod = me.key_ptr.*;
@@ -1684,6 +1785,14 @@ pub const BuildEnv = struct {
         // Now that order is built, mark ready reports as emitted so they can be drained
         self.sink.lock.lock();
         defer self.sink.lock.unlock();
+        // Mark entries without reports as emitted BEFORE calling tryEmitLocked
+        // so they don't block other entries from being emitted.
+        for (self.sink.entries.items) |*e| {
+            if (e.reports.items.len == 0) {
+                e.ready = true;
+                e.emitted = true;
+            }
+        }
         self.sink.tryEmitLocked();
     }
 
@@ -1715,6 +1824,34 @@ pub const BuildEnv = struct {
         return out;
     }
 
+    /// Free memory allocated by drainReports.
+    /// This frees the abs_path strings, deinits each report, frees the reports slices, and frees the outer slice.
+    /// Safe to call with empty slices from catch handlers.
+    pub fn freeDrainedReports(self: *BuildEnv, drained: []const DrainedModuleReports) void {
+        // Skip if this is an empty slice (could be compile-time constant from catch handler)
+        if (drained.len == 0) return;
+        for (drained) |mod| {
+            self.gpa.free(mod.abs_path);
+            // Deinit each report and free the reports slice
+            for (mod.reports) |*report| {
+                @constCast(report).deinit();
+            }
+            self.gpa.free(mod.reports);
+        }
+        // Cast to non-const for freeing (safe since we allocated this ourselves)
+        self.gpa.free(@constCast(drained));
+    }
+
+    /// Free memory from drainReports when reports ownership is transferred elsewhere.
+    /// Only frees abs_path strings and outer slice, NOT the reports (caller now owns them).
+    pub fn freeDrainedReportsPathsOnly(self: *BuildEnv, drained: []const DrainedModuleReports) void {
+        if (drained.len == 0) return;
+        for (drained) |mod| {
+            self.gpa.free(mod.abs_path);
+        }
+        self.gpa.free(@constCast(drained));
+    }
+
     /// Get accumulated timing information from all ModuleBuild instances
     pub fn getTimingInfo(self: *BuildEnv) ModuleTimingInfo {
         var total = ModuleTimingInfo{
@@ -1738,6 +1875,510 @@ pub const BuildEnv = struct {
 
         return total;
     }
+
+    /// Build statistics collected during compilation
+    pub const BuildStats = struct {
+        /// Total modules processed (cached + compiled)
+        modules_total: u32 = 0,
+        /// Modules loaded from cache
+        cache_hits: u32 = 0,
+        /// Modules that needed compilation (cache misses)
+        cache_misses: u32 = 0,
+
+        /// Number of modules that were compiled (not cached)
+        modules_compiled: u32 = 0,
+
+        /// Module compile time tracking (for non-cached modules)
+        /// Time is for full module compilation: parse -> canonicalize -> type-check
+        module_time_min_ns: u64 = std.math.maxInt(u64),
+        module_time_max_ns: u64 = 0,
+        module_time_sum_ns: u64 = 0,
+
+        /// Record a module's compilation time
+        pub fn recordModuleTime(self: *BuildStats, time_ns: u64) void {
+            self.modules_compiled += 1;
+            self.module_time_sum_ns += time_ns;
+            if (time_ns < self.module_time_min_ns) self.module_time_min_ns = time_ns;
+            if (time_ns > self.module_time_max_ns) self.module_time_max_ns = time_ns;
+        }
+
+        /// Get average module compile time in nanoseconds
+        pub fn moduleTimeAvgNs(self: BuildStats) u64 {
+            if (self.modules_compiled == 0) return 0;
+            return self.module_time_sum_ns / self.modules_compiled;
+        }
+
+        /// Get module time min in milliseconds (rounded)
+        pub fn moduleTimeMinMs(self: BuildStats) u32 {
+            if (self.modules_compiled == 0) return 0;
+            return @intCast((self.module_time_min_ns + 500_000) / 1_000_000);
+        }
+
+        /// Get module time max in milliseconds (rounded)
+        pub fn moduleTimeMaxMs(self: BuildStats) u32 {
+            if (self.modules_compiled == 0) return 0;
+            return @intCast((self.module_time_max_ns + 500_000) / 1_000_000);
+        }
+
+        /// Get module time average in milliseconds (rounded)
+        pub fn moduleTimeAvgMs(self: BuildStats) u32 {
+            if (self.modules_compiled == 0) return 0;
+            return @intCast((self.moduleTimeAvgNs() + 500_000) / 1_000_000);
+        }
+
+        /// Get cache hit rate as percentage (0-100)
+        pub fn cacheHitPercent(self: BuildStats) u32 {
+            const total = self.cache_hits + self.cache_misses;
+            if (total == 0) return 0;
+            return @intCast((@as(u64, self.cache_hits) * 100 + total / 2) / total);
+        }
+    };
+
+    /// Get build statistics from the coordinator
+    pub fn getBuildStats(self: *BuildEnv) BuildStats {
+        if (self.coordinator) |coord| {
+            return coord.getBuildStats();
+        }
+        return .{};
+    }
+
+    /// Information about a compiled module, ready for serialization.
+    /// All pointers reference data owned by the BuildEnv/Coordinator.
+    pub const CompiledModuleInfo = struct {
+        /// Module name (e.g., "Main", "Stdout")
+        name: []const u8,
+        /// Source file path for reporting and CLI diagnostics.
+        path: []const u8,
+        /// Paired semantic data retained after type checking
+        semantic: SemanticModuleData,
+        /// Source code of the module
+        source: []const u8,
+        /// Package name this module belongs to
+        package_name: []const u8,
+        /// True if this is the platform's main.roc
+        is_platform_main: bool,
+        /// True if this is the app module
+        is_app: bool,
+        /// True if this is a platform sibling module (e.g., Stdout, Stderr)
+        is_platform_sibling: bool,
+        /// Dependency depth from root
+        depth: u32,
+        /// Platform provides entries (only populated for platform main modules)
+        provides_entries: []const ProvidesEntry = &.{},
+    };
+
+    /// Get all compiled modules from the schedulers (after build completes).
+    /// Returns modules in arbitrary order - use getModulesInSerializationOrder() for sorted order.
+    ///
+    /// IMPORTANT: This reads from schedulers, not the coordinator, because
+    /// transferCoordinatorResults() moves env ownership to schedulers.
+    pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) ![]CompiledModuleInfo {
+        // Assert we have a coordinator (build was called)
+        std.debug.assert(self.coordinator != null);
+
+        var modules = std.ArrayList(CompiledModuleInfo).empty;
+        errdefer modules.deinit(allocator);
+
+        // Read from schedulers since transferCoordinatorResults moved data there
+        var sched_it = self.schedulers.iterator();
+        while (sched_it.next()) |sched_entry| {
+            const pkg_name = sched_entry.key_ptr.*;
+            const sched = sched_entry.value_ptr.*;
+
+            // Determine package kind
+            const pkg_ptr = self.packages.getPtr(pkg_name);
+            const is_platform_pkg = pkg_ptr != null and pkg_ptr.?.kind == .platform;
+            const is_app_pkg = pkg_ptr != null and (pkg_ptr.?.kind == .app or pkg_ptr.?.kind == .default_app);
+
+            for (sched.modules.items, 0..) |*sched_mod, mod_idx| {
+                // Skip modules without env (not compiled or failed)
+                if (sched_mod.semantic) |*semantic| {
+                    const env_ptr: *ModuleEnv = if (semantic.checked_artifact) |*artifact|
+                        artifact.moduleEnv()
+                    else
+                        semantic.module_env orelse continue;
+                    const source = env_ptr.common.source;
+
+                    // Determine if this is platform main or sibling
+                    const is_root = sched.root_module_id != null and sched.root_module_id.? == mod_idx;
+                    const is_platform_main = is_platform_pkg and is_root;
+                    const is_platform_sibling = is_platform_pkg and !is_root;
+                    const is_app = is_app_pkg and is_root;
+
+                    try modules.append(allocator, .{
+                        .name = sched_mod.name,
+                        .path = sched_mod.path,
+                        .semantic = .{
+                            .env = env_ptr,
+                            .checked_artifact = if (semantic.checked_artifact) |*artifact| artifact else null,
+                        },
+                        .source = source,
+                        .package_name = pkg_name,
+                        .is_platform_main = is_platform_main,
+                        .is_app = is_app,
+                        .is_platform_sibling = is_platform_sibling,
+                        .depth = sched_mod.depth,
+                        .provides_entries = if (is_platform_main or is_app)
+                            if (pkg_ptr) |p| p.provides_entries.items else &.{}
+                        else
+                            &.{},
+                    });
+                }
+            }
+        }
+
+        return modules.toOwnedSlice(allocator);
+    }
+
+    /// Get modules in serialization order: platform siblings → platform main → app siblings → app.
+    /// This order ensures dependencies are serialized before dependents.
+    pub fn getModulesInSerializationOrder(self: *BuildEnv, allocator: Allocator) ![]CompiledModuleInfo {
+        const all_modules = try self.getCompiledModules(allocator);
+        errdefer allocator.free(all_modules);
+
+        if (all_modules.len == 0) return all_modules;
+
+        // Separate into categories
+        var platform_siblings = std.ArrayList(CompiledModuleInfo).empty;
+        defer platform_siblings.deinit(allocator);
+        var platform_main: ?CompiledModuleInfo = null;
+        var app_siblings = std.ArrayList(CompiledModuleInfo).empty;
+        defer app_siblings.deinit(allocator);
+        var app_main: ?CompiledModuleInfo = null;
+
+        for (all_modules) |mod| {
+            if (mod.is_platform_sibling) {
+                try platform_siblings.append(allocator, mod);
+            } else if (mod.is_platform_main) {
+                platform_main = mod;
+            } else if (mod.is_app) {
+                app_main = mod;
+            } else {
+                // App sibling module
+                try app_siblings.append(allocator, mod);
+            }
+        }
+
+        // Sort platform siblings by depth then name
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: CompiledModuleInfo, b: CompiledModuleInfo) bool {
+                if (a.depth != b.depth) return a.depth < b.depth;
+                return std.mem.order(u8, a.name, b.name) == .lt;
+            }
+        };
+        std.mem.sort(CompiledModuleInfo, platform_siblings.items, {}, SortContext.lessThan);
+        std.mem.sort(CompiledModuleInfo, app_siblings.items, {}, SortContext.lessThan);
+
+        // Build result in order: platform siblings → platform main → app siblings → app
+        var result = std.ArrayList(CompiledModuleInfo).empty;
+        errdefer result.deinit(allocator);
+
+        for (platform_siblings.items) |mod| {
+            try result.append(allocator, mod);
+        }
+        if (platform_main) |mod| {
+            try result.append(allocator, mod);
+        }
+        for (app_siblings.items) |mod| {
+            try result.append(allocator, mod);
+        }
+        if (app_main) |mod| {
+            try result.append(allocator, mod);
+        }
+
+        allocator.free(all_modules);
+        return result.toOwnedSlice(allocator);
+    }
+
+    /// Find the index of the primary module (platform main if present, otherwise app) in a module list.
+    pub fn findPrimaryModuleIndex(modules: []const CompiledModuleInfo) ?usize {
+        // First look for platform main
+        for (modules, 0..) |mod, i| {
+            if (mod.is_platform_main) return i;
+        }
+        // Fall back to app
+        for (modules, 0..) |mod, i| {
+            if (mod.is_app) return i;
+        }
+        return null;
+    }
+
+    /// Find the index of the app module in a module list.
+    pub fn findAppModuleIndex(modules: []const CompiledModuleInfo) ?usize {
+        for (modules, 0..) |mod, i| {
+            if (mod.is_app) return i;
+        }
+        return null;
+    }
+
+    /// Get the root semantic data for the app package (convenience method).
+    pub fn getAppSemanticData(self: *BuildEnv) ?SemanticModuleData {
+        const sched = self.schedulers.get("app") orelse return null;
+        return sched.getRootSemanticData();
+    }
+
+    /// Get the root semantic data for the platform package (convenience method).
+    pub fn getPlatformSemanticData(self: *BuildEnv) ?SemanticModuleData {
+        // Find platform package name
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                const sched = self.schedulers.get(entry.key_ptr.*) orelse continue;
+                return sched.getRootSemanticData();
+            }
+        }
+        return null;
+    }
+
+    pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
+        if (self.getPlatformSemanticData()) |platform| {
+            if (platform.checked_artifact) |artifact| {
+                if (artifact.platform_required_bindings.bindings.len > 0 or
+                    artifact.root_requests.requests.len > 0 or
+                    artifact.provided_exports.exports.len > 0)
+                {
+                    return platform;
+                }
+            }
+        }
+        return self.getAppSemanticData();
+    }
+
+    pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
+        const semantic = self.getExecutableRootSemanticData() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("build env invariant violated: executable root semantic data is missing", .{});
+            }
+            unreachable;
+        };
+        return semantic.checked_artifact orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("build env invariant violated: executable root has no checked artifact", .{});
+            }
+            unreachable;
+        };
+    }
+
+    pub fn collectImportedArtifactViews(
+        self: *BuildEnv,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) ![]check.CheckedArtifact.ImportedModuleView {
+        const modules = try self.getCompiledModules(allocator);
+        defer allocator.free(modules);
+
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        try appendImportedArtifactViewIfMissing(
+            &views,
+            allocator,
+            root_artifact.key,
+            &self.builtin_modules.checked_artifact,
+        );
+
+        for (modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse continue;
+            if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
+            try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
+        }
+        try self.appendRelationClosureDependencyViews(&views, allocator, modules, root_artifact);
+
+        return views.toOwnedSlice(allocator);
+    }
+
+    pub fn collectRelationArtifactViews(
+        self: *BuildEnv,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) ![]check.CheckedArtifact.ImportedModuleView {
+        const modules = try self.getCompiledModules(allocator);
+        defer allocator.free(modules);
+
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const artifact = artifactByKey(modules, binding.app_value.artifact) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("build env invariant violated: missing relation artifact", .{});
+                }
+                unreachable;
+            };
+            var seen = false;
+            for (views.items) |view| {
+                if (checkedArtifactKeysEqual(view.key, artifact.key)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+        }
+
+        return views.toOwnedSlice(allocator);
+    }
+
+    fn checkedArtifactKeysEqual(
+        a: check.CheckedArtifact.CheckedModuleArtifactKey,
+        b: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        return std.mem.eql(u8, &a.bytes, &b.bytes);
+    }
+
+    fn appendImportedArtifactViewIfMissing(
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        if (checkedArtifactKeysEqual(artifact.key, root_key)) return;
+        for (views.items) |view| {
+            if (checkedArtifactKeysEqual(view.key, artifact.key)) return;
+        }
+        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+    }
+
+    fn rootRelationContainsArtifact(
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            if (checkedArtifactKeysEqual(binding.app_value.artifact, key)) return true;
+        }
+        return false;
+    }
+
+    fn appendRelationClosureDependencyViews(
+        self: *BuildEnv,
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        modules: []const CompiledModuleInfo,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        var keys = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifactKey).empty;
+        defer keys.deinit(allocator);
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const relation_artifact = artifactByKey(modules, binding.app_value.artifact) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("build env invariant violated: platform relation references unavailable app artifact", .{});
+                }
+                unreachable;
+            };
+            try check.CheckedArtifact.appendPlatformRelationDependencyArtifactKeys(
+                allocator,
+                &keys,
+                relation_artifact,
+                binding,
+            );
+        }
+
+        for (keys.items) |key| {
+            if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
+            if (rootRelationContainsArtifact(root_artifact, key)) continue;
+            if (checkedArtifactKeysEqual(key, self.builtin_modules.checked_artifact.key)) {
+                try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, &self.builtin_modules.checked_artifact);
+                continue;
+            }
+            const artifact = artifactByKey(modules, key) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("build env invariant violated: platform relation closure references unavailable checked artifact", .{});
+                }
+                unreachable;
+            };
+            try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, artifact);
+        }
+    }
+
+    fn artifactByKey(
+        modules: []const CompiledModuleInfo,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        for (modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse continue;
+            if (checkedArtifactKeysEqual(artifact.key, key)) return artifact;
+        }
+        return null;
+    }
+
+    /// Drain reports and render them to a writer. Returns error/warning counts.
+    /// Replaces the repeated drain → iterate → render boilerplate pattern.
+    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) RenderDiagnosticsResult {
+        const drained = self.drainReports() catch &[_]DrainedModuleReports{};
+        defer self.freeDrainedReports(drained);
+
+        var total_error_count: usize = 0;
+        var total_warning_count: usize = 0;
+
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                switch (report.severity) {
+                    .info => {},
+                    .runtime_error, .fatal => total_error_count += 1,
+                    .warning => total_warning_count += 1,
+                }
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, writer, palette, config) catch {};
+            }
+        }
+
+        return .{
+            .errors = total_error_count,
+            .warnings = total_warning_count,
+        };
+    }
+
+    pub const RenderDiagnosticsResult = struct {
+        errors: usize,
+        warnings: usize,
+    };
+
+    /// Get compiled module envs ready for backend use: Builtin at [0], imports resolved.
+    /// Replaces the repeated pattern of getCompiledModules + build array + resolveImports.
+    pub fn getResolvedModuleEnvs(self: *BuildEnv, allocator: Allocator) !ResolvedModules {
+        const modules = try self.getCompiledModules(allocator);
+        if (modules.len == 0) return error.NoModulesCompiled;
+
+        const builtin_env = self.builtin_modules.builtin_module.env;
+        var all_module_envs = try allocator.alloc(*ModuleEnv, modules.len + 1);
+        all_module_envs[0] = builtin_env;
+        for (modules, 0..) |mod, i| {
+            all_module_envs[i + 1] = mod.semantic.env;
+        }
+
+        // Resolve imports directly from the assembled module env array.
+        for (all_module_envs) |module| {
+            module.imports.clearResolvedModules();
+            for (module.imports.imports.items.items, 0..) |str_idx, i| {
+                const import_name = module.getString(str_idx);
+                for (all_module_envs, 0..) |candidate_env, module_idx| {
+                    if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
+                        module.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                        break;
+                    }
+                }
+            }
+        }
+
+        return .{
+            .all_module_envs = all_module_envs,
+            .compiled_modules = modules,
+        };
+    }
+
+    /// Result of getResolvedModuleEnvs: compiled modules with Builtin at [0] and imports resolved.
+    pub const ResolvedModules = struct {
+        /// Module envs array with Builtin at index 0, ready for backend use.
+        all_module_envs: []*ModuleEnv,
+        /// Metadata for each compiled module (indices correspond to all_module_envs[1..]).
+        compiled_modules: []CompiledModuleInfo,
+
+        /// Get module envs excluding Builtin (for closure pipeline, etc.)
+        pub fn compiledModuleEnvs(self: *const ResolvedModules) []*ModuleEnv {
+            return self.all_module_envs[1..];
+        }
+    };
 };
 
 // OrderedSink buffers reports and emits them in a deterministic global order.
@@ -1826,18 +2467,27 @@ pub const OrderedSink = struct {
 
     // Build deterministic order once: caller provides package names, module names, and depths
     pub fn buildOrder(self: *OrderedSink, pkg_names: []const []const u8, module_names: []const []const u8, depths: []const u32) !void {
+        if (comptime trace_build) {
+            std.debug.print("[SINK] buildOrder: {} modules\n", .{pkg_names.len});
+        }
         try self.order.ensureTotalCapacity(pkg_names.len);
         try self.entries.ensureTotalCapacity(pkg_names.len);
         try self.index.ensureTotalCapacity(@as(u32, @intCast(pkg_names.len)));
 
-        // Rebuild order; allow pre-registered entries (from early emits) and update their metadata
+        // Refresh order; allow pre-registered entries (from early emits) and update their metadata
         self.order.items.len = 0;
 
         var i: usize = 0;
         while (i < pkg_names.len) : (i += 1) {
+            if (comptime trace_build) {
+                std.debug.print("[SINK] buildOrder: checking pkg=\"{s}\" module=\"{s}\" depth={}\n", .{ pkg_names[i], module_names[i], depths[i] });
+            }
             const key = ModuleKey{ .pkg = pkg_names[i], .module = module_names[i] };
             var entry_index: usize = undefined;
             if (self.index.get(key)) |idx| {
+                if (comptime trace_build) {
+                    std.debug.print("[SINK] buildOrder: found entry at idx={}, ready={} depth={}\n", .{ idx, self.entries.items[idx].ready, depths[i] });
+                }
                 entry_index = idx;
                 // Update depth
                 self.entries.items[entry_index].depth = depths[i];
@@ -1897,10 +2547,17 @@ pub const OrderedSink = struct {
         self.lock.lock();
         defer self.lock.unlock();
 
+        if (comptime trace_build) {
+            std.debug.print("[SINK] emitReport: pkg=\"{s}\" module=\"{s}\" title=\"{s}\"\n", .{ pkg_name, module_name, report.title });
+        }
+
         // Lookup entry; auto-register if needed so we can buffer before order is built
         const key = ModuleKey{ .pkg = pkg_name, .module = module_name };
         var entry_index: usize = undefined;
         if (self.index.get(key)) |idx| {
+            if (comptime trace_build) {
+                std.debug.print("[SINK] emitReport: found existing entry at idx={}\n", .{idx});
+            }
             entry_index = idx;
         } else {
             entry_index = self.entries.items.len;
@@ -1916,7 +2573,7 @@ pub const OrderedSink = struct {
             if (self.index.put(key, entry_index) catch null == null) {
                 return;
             }
-            // Note: do not append to order here; buildOrder will rebuild and sort later
+            // Note: do not append to order here; buildOrder will populate and sort later
         }
 
         // Record report; take ownership by appending to per-module list
@@ -1940,19 +2597,37 @@ pub const OrderedSink = struct {
 
     // Attempt to emit entries in order prefix while next entries are ready.
     fn tryEmitLocked(self: *OrderedSink) void {
+        if (comptime trace_build) {
+            std.debug.print("[SINK] tryEmitLocked: order.len={}\n", .{self.order.items.len});
+        }
         var i: usize = 0;
         while (i < self.order.items.len) : (i += 1) {
             const entry_idx = self.order.items[i];
             const e = &self.entries.items[entry_idx];
 
+            if (comptime trace_build) {
+                std.debug.print("[SINK] tryEmitLocked: i={} entry_idx={} pkg={s} mod={s} ready={} emitted={}\n", .{ i, entry_idx, e.pkg_name, e.module_name, e.ready, e.emitted });
+            }
+
             // Prefix gating: stop at first entry that is not yet ready and not yet emitted
-            if (!e.ready and !e.emitted) break;
+            if (!e.ready and !e.emitted) {
+                if (comptime trace_build) {
+                    std.debug.print("[SINK] tryEmitLocked: breaking at i={} (not ready and not emitted)\n", .{i});
+                }
+                break;
+            }
 
             // Skip already-emitted entries
             if (e.emitted) continue;
 
             // Emit this ready entry
+            if (comptime trace_build) {
+                std.debug.print("[SINK] tryEmitLocked: marking i={} as emitted\n", .{i});
+            }
             e.emitted = true;
+        }
+        if (comptime trace_build) {
+            std.debug.print("[SINK] tryEmitLocked: done, processed {} entries\n", .{i});
         }
     }
     pub const Drained = struct {
@@ -1973,24 +2648,45 @@ pub const OrderedSink = struct {
             if (!e.emitted) break;
         }
 
-        const count: usize = if (i >= self.drain_cursor) (i - self.drain_cursor) else 0;
-        if (count == 0) {
+        // Count only entries with reports (skip empty entries)
+        var reports_count: usize = 0;
+        {
+            var k: usize = self.drain_cursor;
+            while (k < i) : (k += 1) {
+                const entry_idx = self.order.items[k];
+                const e = &self.entries.items[entry_idx];
+                if (e.reports.items.len > 0) {
+                    reports_count += 1;
+                }
+            }
+        }
+
+        if (reports_count == 0) {
+            self.drain_cursor = i;
             return try gpa.alloc(Drained, 0);
         }
 
-        var out = try gpa.alloc(Drained, count);
+        var out = try gpa.alloc(Drained, reports_count);
         var j: usize = 0;
-        while (j < count) : (j += 1) {
-            const entry_idx = self.order.items[self.drain_cursor + j];
+        var k: usize = self.drain_cursor;
+        while (k < i) : (k += 1) {
+            const entry_idx = self.order.items[k];
             const e = &self.entries.items[entry_idx];
+
+            // Skip entries with no reports
+            if (e.reports.items.len == 0) {
+                e.ready = false;
+                e.emitted = false;
+                continue;
+            }
 
             // Move reports out; reset readiness for potential future appends
             const reps = e.reports.toOwnedSlice() catch {
                 // Back out partially allocated results on failure
-                var k: usize = 0;
-                while (k < j) : (k += 1) {
-                    for (out[k].reports) |*r| r.deinit();
-                    gpa.free(out[k].reports);
+                var m: usize = 0;
+                while (m < j) : (m += 1) {
+                    for (out[m].reports) |*r| r.deinit();
+                    gpa.free(out[m].reports);
                 }
                 gpa.free(out);
                 return error.OutOfMemory;
@@ -2001,6 +2697,7 @@ pub const OrderedSink = struct {
                 .module_name = e.module_name,
                 .reports = reps,
             };
+            j += 1;
 
             // Reinitialize the reports ArrayList since toOwnedSlice() moved ownership
             e.reports = std.array_list.Managed(Report).init(self.gpa);

@@ -1,11 +1,110 @@
 //! Lists that make it easier to avoid incorrect indexing.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
+
+/// Recursively zero all padding bytes in a value for deterministic serialization.
+/// Handles tagged unions (tail padding, variant overshoot), auto-layout structs
+/// (inter-field gaps), and optionals (null payload). Recurses into nested types.
+fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
+    const vinfo = @typeInfo(V);
+    const vsize = @sizeOf(V);
+    if (vsize == 0) return;
+
+    if (vinfo == .@"union") {
+        const uinfo = vinfo.@"union";
+        if (uinfo.tag_type) |TagType| {
+            const tag_size = @sizeOf(TagType);
+            const max_payload = comptime blk: {
+                var max: usize = 0;
+                for (uinfo.fields) |f| max = @max(max, @sizeOf(f.type));
+                break :blk max;
+            };
+            const meaningful = max_payload + tag_size;
+
+            // Zero tail padding (after tag + max_payload)
+            if (meaningful < vsize) {
+                @memset(ptr[meaningful..vsize], 0);
+            }
+
+            // Per-variant: zero overshoot + recurse into variant payload
+            const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+            switch (item.*) {
+                inline else => |_, tag| {
+                    const VariantType = uinfo.fields[@intFromEnum(tag)].type;
+                    const active_size = @sizeOf(VariantType);
+                    // Recurse into variant payload (handles nested struct/union padding)
+                    zeroValuePadding(VariantType, ptr);
+                    // Zero overshoot (unused payload between active variant and max)
+                    if (active_size < max_payload) {
+                        @memset(ptr[active_size..max_payload], 0);
+                    }
+                },
+            }
+        }
+    } else if (vinfo == .optional) {
+        // For optionals: when null, the payload area contains garbage — zero it all.
+        // When non-null, recurse into the payload to zero its internal padding,
+        // then zero any trailing padding after payload + tag.
+        const ChildType = vinfo.optional.child;
+        const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+        if (item.* == null) {
+            @memset(ptr[0..vsize], 0);
+        } else {
+            // Payload is at offset 0 (auto layout puts highest-alignment first)
+            const child_size = @sizeOf(ChildType);
+            if (child_size > 0) {
+                zeroValuePadding(ChildType, ptr);
+            }
+            // Zero padding after payload + 1-byte tag
+            const meaningful = child_size + 1;
+            if (meaningful < vsize) {
+                @memset(ptr[meaningful..vsize], 0);
+            }
+        }
+    } else if (vinfo == .@"struct" and vinfo.@"struct".layout == .auto) {
+        // Zero inter-field gaps
+        const covered = comptime blk: {
+            var mask = [_]bool{false} ** vsize;
+            for (vinfo.@"struct".fields) |field| {
+                const start = @offsetOf(V, field.name);
+                const end = start + @sizeOf(field.type);
+                for (start..end) |j| mask[j] = true;
+            }
+            break :blk mask;
+        };
+        const has_padding = comptime blk: {
+            for (covered) |c| {
+                if (!c) break :blk true;
+            }
+            break :blk false;
+        };
+        if (has_padding) {
+            inline for (0..vsize) |j| {
+                if (!covered[j]) ptr[j] = 0;
+            }
+        }
+        // Recurse into struct fields that may have internal padding
+        inline for (vinfo.@"struct".fields) |field| {
+            const FType = field.type;
+            const ftype_info = @typeInfo(FType);
+            if (@sizeOf(FType) > 0) {
+                const needs_recursion = (ftype_info == .@"union" and ftype_info.@"union".tag_type != null) or
+                    (ftype_info == .@"struct" and ftype_info.@"struct".layout == .auto) or
+                    (ftype_info == .optional);
+                if (needs_recursion) {
+                    zeroValuePadding(FType, ptr + @offsetOf(V, field.name));
+                }
+            }
+        }
+    }
+    // Primitives, enums, extern structs: no padding to zero.
+}
 
 /// Represents a type safe range in a list; [start, end)
 ///
@@ -125,6 +224,20 @@ pub fn SafeList(comptime T: type) type {
             nonempty: Range,
         };
 
+        /// Zero all padding bytes in a slice of T items for deterministic serialization.
+        /// Delegates to zeroValuePadding which recursively handles unions (tail padding,
+        /// variant overshoot) and structs (inter-field gaps, nested types).
+        fn zeroPadding(buf: []T) void {
+            const info = @typeInfo(T);
+            if (@sizeOf(T) == 0) return;
+            const needs_zeroing = (info == .@"union" and info.@"union".tag_type != null) or
+                (info == .@"struct" and info.@"struct".layout == .auto);
+            if (!needs_zeroing) return;
+            for (buf) |*item| {
+                zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
+            }
+        }
+
         /// Serialized representation of a SafeList
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
@@ -149,8 +262,25 @@ pub fn SafeList(comptime T: type) type {
 
                 // Append the raw data without further padding.
                 if (items.len > 0) {
+                    // Ensure deterministic serialization by zeroing padding bytes.
+                    // Auto-layout structs/unions have undefined padding that varies
+                    // between runs (ASLR, stack contents). Assignment copies ALL bytes
+                    // including padding, so we must explicitly zero padding AFTER copy.
+                    const buf = try allocator.alloc(T, items.len);
+                    for (items, 0..) |item, i| {
+                        buf[i] = item;
+                    }
+                    zeroPadding(buf);
+
+                    // Track the allocated memory for cleanup by the writer
+                    try writer.allocated_memory.append(allocator, .{
+                        .ptr = @ptrCast(buf.ptr),
+                        .size = items.len * @sizeOf(T),
+                        .alignment = @alignOf(T),
+                    });
+
                     try writer.iovecs.append(allocator, .{
-                        .iov_base = @ptrCast(items.ptr),
+                        .iov_base = @ptrCast(buf.ptr),
                         .iov_len = items.len * @sizeOf(T),
                     });
                     writer.total_bytes += items.len * @sizeOf(T);
@@ -161,31 +291,51 @@ pub fn SafeList(comptime T: type) type {
                 self.capacity = items.len;
             }
 
-            /// Deserialize this Serialized struct into a SafeList
+            /// Deserialize into a SafeList value (no in-place modification of cache buffer).
             /// The base parameter is the base address of the serialized buffer in memory.
-            pub fn deserialize(self: *Serialized, base: usize) *SafeList(T) {
-                // Note: Serialized may be smaller than the runtime struct.
-                // We deserialize by overwriting the Serialized memory with the runtime struct.
-                const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
-
+            /// WARNING: The returned SafeList points into the cache buffer and CANNOT be grown.
+            /// Use deserializeWithCopy() if the list needs to be mutable.
+            pub fn deserializeInto(self: *const Serialized, base: usize) SafeList(T) {
                 // Handle empty list case
                 if (self.len == 0) {
-                    safe_list.* = SafeList(T){
-                        .items = .{},
-                    };
-                } else {
-                    // Apply the base address to convert from serialized offset to actual pointer
-                    const items_ptr: [*]T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
-
-                    safe_list.* = SafeList(T){
-                        .items = .{
-                            .items = items_ptr[0..@intCast(self.len)],
-                            .capacity = @intCast(self.capacity),
-                        },
-                    };
+                    return SafeList(T){ .items = .{} };
                 }
 
-                return safe_list;
+                // Apply the base address to convert from serialized offset to actual pointer
+                const items_ptr: [*]T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
+
+                return SafeList(T){
+                    .items = .{
+                        .items = items_ptr[0..@intCast(self.len)],
+                        .capacity = @intCast(self.capacity),
+                    },
+                };
+            }
+
+            /// Deserialize into a SafeList value with fresh memory allocation.
+            /// The returned SafeList owns its memory and can be safely grown/mutated.
+            pub fn deserializeWithCopy(self: *const Serialized, base: usize, gpa: Allocator) Allocator.Error!SafeList(T) {
+                // Handle empty list case
+                if (self.len == 0) {
+                    return SafeList(T){ .items = .{} };
+                }
+
+                // Get pointer to source data in cache buffer
+                const src_ptr: [*]const T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
+                const item_len: usize = @intCast(self.len);
+                const item_capacity: usize = @intCast(self.capacity);
+                const src_slice = src_ptr[0..item_len];
+
+                // Allocate fresh memory with full capacity
+                const fresh_items = try gpa.alloc(T, item_capacity);
+                @memcpy(fresh_items[0..item_len], src_slice);
+
+                return SafeList(T){
+                    .items = .{
+                        .items = fresh_items[0..item_len],
+                        .capacity = item_capacity,
+                    },
+                };
             }
         };
 
@@ -199,6 +349,14 @@ pub fn SafeList(comptime T: type) type {
         /// Deinitialize the memory of this `SafeList`.
         pub fn deinit(self: *SafeList(T), gpa: Allocator) void {
             self.items.deinit(gpa);
+        }
+
+        /// Clone this list into fresh owned memory.
+        pub fn clone(self: *const SafeList(T), gpa: Allocator) Allocator.Error!SafeList(T) {
+            var cloned = try SafeList(T).initCapacity(gpa, self.items.capacity);
+            errdefer cloned.deinit(gpa);
+            try cloned.items.appendSlice(gpa, self.items.items);
+            return cloned;
         }
 
         /// Get the length of this list.
@@ -286,7 +444,26 @@ pub fn SafeList(comptime T: type) type {
 
             const offset_self = try writer.appendAlloc(allocator, SafeList(T));
 
-            const slice = try writer.appendSlice(allocator, items);
+            // Create a copy with zeroed padding for deterministic serialization.
+            // See Serialized.serialize for rationale.
+            const clean_items = if (items.len > 0 and @sizeOf(T) > 0) blk: {
+                const buf = try allocator.alloc(T, items.len);
+                for (items, 0..) |item, i| {
+                    buf[i] = item;
+                }
+                zeroPadding(buf);
+
+                // Track the allocated memory for cleanup by the writer
+                try writer.allocated_memory.append(allocator, .{
+                    .ptr = @ptrCast(buf.ptr),
+                    .size = items.len * @sizeOf(T),
+                    .alignment = @alignOf(T),
+                });
+
+                break :blk buf;
+            } else items;
+
+            const slice = try writer.appendSlice(allocator, clean_items);
 
             offset_self.* = .{
                 .items = .{
@@ -439,6 +616,26 @@ pub fn SafeMultiList(comptime T: type) type {
             self.items.deinit(gpa);
         }
 
+        /// Clone this multilist into fresh owned memory.
+        pub fn clone(self: *const SafeMultiList(T), gpa: Allocator) Allocator.Error!SafeMultiList(T) {
+            if (self.items.len == 0) {
+                return SafeMultiList(T){ .items = .{} };
+            }
+
+            const MultiArrayListType = std.MultiArrayList(T);
+            const total_bytes = MultiArrayListType.capacityInBytes(self.items.capacity);
+            const fresh_bytes = try gpa.alignedAlloc(u8, .of(T), total_bytes);
+            @memcpy(fresh_bytes[0..total_bytes], self.items.bytes[0..total_bytes]);
+
+            return SafeMultiList(T){
+                .items = .{
+                    .bytes = @ptrCast(fresh_bytes.ptr),
+                    .len = self.items.len,
+                    .capacity = self.items.capacity,
+                },
+            };
+        }
+
         /// Get the length of this list.
         pub fn len(self: *const SafeMultiList(T)) u32 {
             return @intCast(self.items.len);
@@ -579,6 +776,9 @@ pub fn SafeMultiList(comptime T: type) type {
             allocator: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeMultiList(T) {
+            // Zero padding bytes in used elements for deterministic serialization.
+            Serialized.zeroFieldPadding(@constCast(self));
+
             // Write only len elements, not capacity, to avoid storing garbage memory.
             const data_offset = if (self.items.len > 0) blk: {
                 const slice = self.items.slice();
@@ -594,7 +794,12 @@ pub fn SafeMultiList(comptime T: type) type {
 
                     // Write the field data (only len elements' worth).
                     // appendSlice will take care of alignment padding.
-                    _ = try writer.appendSlice(allocator, field_ptr[0..self.items.len]);
+                    const written = try writer.appendSlice(allocator, field_ptr[0..self.items.len]);
+                    if (comptime builtin.mode == .Debug) {
+                        std.debug.assert(written.len == self.items.len);
+                    } else if (written.len != self.items.len) {
+                        unreachable;
+                    }
                 }
 
                 break :blk first_field_offset;
@@ -656,6 +861,31 @@ pub fn SafeMultiList(comptime T: type) type {
                 }
             }
 
+            /// Zero padding bytes within used field elements for deterministic serialization.
+            /// MultiArrayList stores each struct field as a separate contiguous array.
+            /// Delegates to zeroValuePadding which recursively handles all padding.
+            fn zeroFieldPadding(list: *SafeMultiList(T)) void {
+                const list_len = list.items.len;
+                if (list_len == 0) return;
+
+                const slice = list.items.slice();
+                inline for (std.meta.fields(T), 0..) |field_info, field_index| {
+                    const FieldType = field_info.type;
+                    const field_size = @sizeOf(FieldType);
+                    if (field_size == 0) continue;
+
+                    const finfo = @typeInfo(FieldType);
+                    const needs_zeroing = (finfo == .@"union" and finfo.@"union".tag_type != null) or
+                        (finfo == .@"struct" and finfo.@"struct".layout == .auto);
+                    if (needs_zeroing) {
+                        const field_ptr = slice.ptrs[field_index];
+                        for (0..list_len) |i| {
+                            zeroValuePadding(FieldType, field_ptr + i * field_size);
+                        }
+                    }
+                }
+            }
+
             /// Serialize a SafeMultiList into this Serialized struct, appending data to the writer
             pub fn serialize(
                 self: *Serialized,
@@ -665,7 +895,9 @@ pub fn SafeMultiList(comptime T: type) type {
             ) Allocator.Error!void {
                 // MultiArrayList reorders fields by alignment internally.
                 // We need to copy the raw bytes exactly as they are laid out.
-                zeroUnusedCapacity(@constCast(safe_multi_list));
+                const mutable = @constCast(safe_multi_list);
+                zeroUnusedCapacity(mutable);
+                zeroFieldPadding(mutable);
 
                 const data_offset = if (safe_multi_list.items.len > 0) blk: {
                     const MultiArrayListType = std.MultiArrayList(T);
@@ -695,36 +927,63 @@ pub fn SafeMultiList(comptime T: type) type {
                 self.capacity = safe_multi_list.items.capacity;
             }
 
-            /// Deserialize this Serialized struct into a SafeMultiList
+            /// Deserialize into a SafeMultiList value (Option F: no in-place modification).
             /// The base parameter is the base address of the serialized buffer in memory.
-            pub fn deserialize(self: *Serialized, base: usize) *SafeMultiList(T) {
-                // Note: Serialized may be smaller than the runtime struct.
-                // We deserialize by overwriting the Serialized memory with the runtime struct.
-                const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
-
+            /// WARNING: The returned SafeMultiList points into the cache buffer and CANNOT be grown.
+            pub fn deserializeInto(self: *const Serialized, base: usize) SafeMultiList(T) {
                 // Handle empty list case
                 if (self.len == 0) {
-                    multi_list.* = SafeMultiList(T){
-                        .items = .{},
-                    };
-                } else {
-                    // We need to reconstruct the MultiArrayList from the serialized field arrays
-                    // MultiArrayList stores fields separately by type, and we serialized them in field order
-                    const current_ptr = @as([*]u8, @ptrFromInt(base +% @as(usize, @intCast(self.offset))));
-
-                    // Allocate aligned memory for the MultiArrayList bytes
-                    const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(current_ptr)));
-
-                    multi_list.* = SafeMultiList(T){
-                        .items = .{
-                            .bytes = bytes_ptr,
-                            .len = @as(usize, @intCast(self.len)),
-                            .capacity = @as(usize, @intCast(self.capacity)),
-                        },
-                    };
+                    return SafeMultiList(T){ .items = .{} };
                 }
 
-                return multi_list;
+                // We need to reconstruct the MultiArrayList from the serialized field arrays
+                // MultiArrayList stores fields separately by type, and we serialized them in field order
+                const current_ptr = @as([*]u8, @ptrFromInt(base +% @as(usize, @intCast(self.offset))));
+
+                // Allocate aligned memory for the MultiArrayList bytes
+                const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(current_ptr)));
+
+                return SafeMultiList(T){
+                    .items = .{
+                        .bytes = bytes_ptr,
+                        .len = @as(usize, @intCast(self.len)),
+                        .capacity = @as(usize, @intCast(self.capacity)),
+                    },
+                };
+            }
+
+            /// Deserialize into a SafeMultiList value with fresh memory allocation.
+            /// The returned SafeMultiList owns its memory and can be safely grown/mutated.
+            pub fn deserializeWithCopy(self: *const Serialized, base: usize, gpa: Allocator) Allocator.Error!SafeMultiList(T) {
+                // Handle empty list case
+                if (self.len == 0) {
+                    return SafeMultiList(T){ .items = .{} };
+                }
+
+                // Get source bytes from cache buffer
+                const src_ptr = @as([*]const u8, @ptrFromInt(base +% @as(usize, @intCast(self.offset))));
+                const item_capacity: usize = @intCast(self.capacity);
+                const item_len: usize = @intCast(self.len);
+
+                // Calculate total bytes using MultiArrayList's SoA layout
+                // (sum of field sizes * capacity, not @sizeOf(T) * capacity)
+                // IMPORTANT: We must copy the full capacity bytes because SoA layout
+                // stores each field array contiguously. capacityInBytes(len) would
+                // copy the wrong bytes due to the field array offsets.
+                const MultiArrayListType = std.MultiArrayList(T);
+                const total_bytes = MultiArrayListType.capacityInBytes(item_capacity);
+
+                // Allocate fresh memory and copy full capacity to preserve SoA layout
+                const fresh_bytes = try gpa.alignedAlloc(u8, .of(T), total_bytes);
+                @memcpy(fresh_bytes[0..total_bytes], src_ptr[0..total_bytes]);
+
+                return SafeMultiList(T){
+                    .items = .{
+                        .bytes = @ptrCast(fresh_bytes.ptr),
+                        .len = item_len,
+                        .capacity = item_capacity,
+                    },
+                };
             }
         };
     };
@@ -843,13 +1102,15 @@ test "SafeMultiList empty range at end" {
     defer multilist.deinit(gpa);
 
     // Add 5 items to fill the list
-    _ = try multilist.appendSlice(gpa, &[_]Struct{
+    const added_range = try multilist.appendSlice(gpa, &[_]Struct{
         .{ .num = 100, .char = 'a' },
         .{ .num = 200, .char = 'b' },
         .{ .num = 300, .char = 'c' },
         .{ .num = 400, .char = 'd' },
         .{ .num = 500, .char = 'e' },
     });
+    try testing.expectEqual(@as(usize, 5), added_range.count);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(added_range.start));
 
     // Create an empty range at the end (start=5, end=5 for a list of length 5)
     const empty_range = StructMultiList.Range{ .start = @enumFromInt(5), .count = 0 };
@@ -896,12 +1157,13 @@ test "SafeList empty list CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Cast to SafeList.Serialized and deserialize - empty list should still work
     const serialized_offset = writer.total_bytes - serialized_size;
     const serialized_ptr = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.len());
@@ -923,10 +1185,11 @@ test "SafeList edge cases serialization" {
 
         const buffer = try gpa.alloc(u8, writer.total_bytes);
         defer gpa.free(buffer);
-        _ = try writer.writeToBuffer(buffer);
+        const written = try writer.writeToBuffer(buffer);
+        try testing.expectEqual(buffer.len, written.len);
 
         const serialized_ptr = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 0), deserialized.len());
     }
@@ -948,13 +1211,11 @@ test "SafeList edge cases serialization" {
                     try self.list_u8.serialize(&container.list_u8, allocator, writer);
                 }
 
-                pub fn deserialize(self: *Serialized, base: usize) *Self {
-                    const container = @as(*Self, @ptrFromInt(@intFromPtr(self)));
-                    container.* = Self{
-                        .list_u32 = self.list_u32.deserialize(base).*,
-                        .list_u8 = self.list_u8.deserialize(base).*,
+                pub fn deserializeInto(self: *const Serialized, base: usize) Self {
+                    return Self{
+                        .list_u32 = self.list_u32.deserializeInto(base),
+                        .list_u8 = self.list_u8.deserializeInto(base),
                     };
-                    return container;
                 }
             };
         };
@@ -966,7 +1227,8 @@ test "SafeList edge cases serialization" {
         defer container.list_u32.deinit(gpa);
         defer container.list_u8.deinit(gpa);
 
-        _ = try container.list_u8.append(gpa, 123);
+        const container_idx = try container.list_u8.append(gpa, 123);
+        try testing.expectEqual(@as(usize, 0), @intFromEnum(container_idx));
 
         var writer = CompactWriter.init();
         defer writer.deinit(gpa);
@@ -976,10 +1238,11 @@ test "SafeList edge cases serialization" {
 
         const buffer = try gpa.alloc(u8, writer.total_bytes);
         defer gpa.free(buffer);
-        _ = try writer.writeToBuffer(buffer);
+        const written = try writer.writeToBuffer(buffer);
+        try testing.expectEqual(buffer.len, written.len);
 
-        const serialized_ptr = @as(*Container.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+        const serialized_ptr: *const Container.Serialized = @ptrCast(@alignCast(buffer.ptr));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 0), deserialized.list_u32.len());
         try testing.expectEqual(@as(usize, 1), deserialized.list_u8.len());
@@ -995,10 +1258,14 @@ test "SafeList CompactWriter verify offset calculation" {
     var list = try SafeList(u16).initCapacity(gpa, 4);
     defer list.deinit(gpa);
 
-    _ = try list.append(gpa, 100);
-    _ = try list.append(gpa, 200);
-    _ = try list.append(gpa, 300);
-    _ = try list.append(gpa, 400);
+    const idx0 = try list.append(gpa, 100);
+    const idx1 = try list.append(gpa, 200);
+    const idx2 = try list.append(gpa, 300);
+    const idx3 = try list.append(gpa, 400);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(idx2));
+    try testing.expectEqual(@as(usize, 3), @intFromEnum(idx3));
 
     var writer = CompactWriter{
         .iovecs = .{},
@@ -1024,10 +1291,14 @@ test "SafeList CompactWriter complete roundtrip example" {
     var original = try SafeList(u32).initCapacity(gpa, 4);
     defer original.deinit(gpa);
 
-    _ = try original.append(gpa, 100);
-    _ = try original.append(gpa, 200);
-    _ = try original.append(gpa, 300);
-    _ = try original.append(gpa, 400);
+    const orig_idx0 = try original.append(gpa, 100);
+    const orig_idx1 = try original.append(gpa, 200);
+    const orig_idx2 = try original.append(gpa, 300);
+    const orig_idx3 = try original.append(gpa, 400);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(orig_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(orig_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(orig_idx2));
+    try testing.expectEqual(@as(usize, 3), @intFromEnum(orig_idx3));
 
     // Step 2: Create temp file and CompactWriter
     var tmp_dir = testing.tmpDir(.{});
@@ -1059,13 +1330,14 @@ test "SafeList CompactWriter complete roundtrip example" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(u32)), @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Step 6: Cast buffer to SafeList.Serialized - the struct is at the beginning
     const serialized_ptr = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
     // Step 7: Deserialize - convert offset to pointer
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Step 8: Verify data is accessible and correct
     const Idx = SafeList(u32).Idx;
@@ -1084,29 +1356,40 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 1. SafeList(u8) - 1 byte alignment
     var list_u8 = try SafeList(u8).initCapacity(gpa, 3);
     defer list_u8.deinit(gpa);
-    _ = try list_u8.append(gpa, 10);
-    _ = try list_u8.append(gpa, 20);
-    _ = try list_u8.append(gpa, 30);
+    const u8_idx0 = try list_u8.append(gpa, 10);
+    const u8_idx1 = try list_u8.append(gpa, 20);
+    const u8_idx2 = try list_u8.append(gpa, 30);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(u8_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(u8_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(u8_idx2));
 
     // 2. SafeList(u16) - 2 byte alignment
     var list_u16 = try SafeList(u16).initCapacity(gpa, 2);
     defer list_u16.deinit(gpa);
-    _ = try list_u16.append(gpa, 1000);
-    _ = try list_u16.append(gpa, 2000);
+    const u16_idx0 = try list_u16.append(gpa, 1000);
+    const u16_idx1 = try list_u16.append(gpa, 2000);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(u16_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(u16_idx1));
 
     // 3. SafeList(u32) - 4 byte alignment
     var list_u32 = try SafeList(u32).initCapacity(gpa, 4);
     defer list_u32.deinit(gpa);
-    _ = try list_u32.append(gpa, 100_000);
-    _ = try list_u32.append(gpa, 200_000);
-    _ = try list_u32.append(gpa, 300_000);
-    _ = try list_u32.append(gpa, 400_000);
+    const u32_idx0 = try list_u32.append(gpa, 100_000);
+    const u32_idx1 = try list_u32.append(gpa, 200_000);
+    const u32_idx2 = try list_u32.append(gpa, 300_000);
+    const u32_idx3 = try list_u32.append(gpa, 400_000);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(u32_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(u32_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(u32_idx2));
+    try testing.expectEqual(@as(usize, 3), @intFromEnum(u32_idx3));
 
     // 4. SafeList(u64) - 8 byte alignment
     var list_u64 = try SafeList(u64).initCapacity(gpa, 2);
     defer list_u64.deinit(gpa);
-    _ = try list_u64.append(gpa, 10_000_000_000);
-    _ = try list_u64.append(gpa, 20_000_000_000);
+    const u64_idx0 = try list_u64.append(gpa, 10_000_000_000);
+    const u64_idx1 = try list_u64.append(gpa, 20_000_000_000);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(u64_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(u64_idx1));
 
     // 5. SafeList with a struct type
     const AlignedStruct = struct {
@@ -1116,8 +1399,10 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     };
     var list_struct = try SafeList(AlignedStruct).initCapacity(gpa, 2);
     defer list_struct.deinit(gpa);
-    _ = try list_struct.append(gpa, .{ .x = 42, .y = 1337, .z = 255 });
-    _ = try list_struct.append(gpa, .{ .x = 99, .y = 9999, .z = 128 });
+    const struct_idx0 = try list_struct.append(gpa, .{ .x = 42, .y = 1337, .z = 255 });
+    const struct_idx1 = try list_struct.append(gpa, .{ .x = 99, .y = 9999, .z = 128 });
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(struct_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(struct_idx1));
 
     // Create temp file and CompactWriter
     var tmp_dir = testing.tmpDir(.{});
@@ -1158,7 +1443,8 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Deserialize all lists
     const base_addr = @intFromPtr(buffer.ptr);
@@ -1170,7 +1456,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // SafeList(u8).Serialized has 8-byte alignment due to u64 fields
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u8).Serialized));
     const s_u8 = @as(*SafeList(u8).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u8 = s_u8.deserialize(base_addr);
+    const deser_u8 = s_u8.deserializeInto(base_addr);
     offset += @sizeOf(SafeList(u8).Serialized);
     // Skip the u8 data (3 bytes)
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
@@ -1185,7 +1471,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 2. Deserialize u16 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
     const s_u16 = @as(*SafeList(u16).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u16 = s_u16.deserialize(base_addr);
+    const deser_u16 = s_u16.deserializeInto(base_addr);
     offset += @sizeOf(SafeList(u16).Serialized);
     // Skip the u16 data (2 items)
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
@@ -1199,7 +1485,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 3. Deserialize u32 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
     const s_u32 = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u32 = s_u32.deserialize(base_addr);
+    const deser_u32 = s_u32.deserializeInto(base_addr);
     offset += @sizeOf(SafeList(u32).Serialized);
     // Skip the u32 data (4 items)
     offset = std.mem.alignForward(usize, offset, @alignOf(u32));
@@ -1215,7 +1501,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 4. Deserialize u64 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
     const s_u64 = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u64 = s_u64.deserialize(base_addr);
+    const deser_u64 = s_u64.deserializeInto(base_addr);
     offset += @sizeOf(SafeList(u64).Serialized);
     // Skip the u64 data (2 items)
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
@@ -1229,7 +1515,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 5. Deserialize struct list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(AlignedStruct).Serialized));
     const s_struct = @as(*SafeList(AlignedStruct).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_struct = s_struct.deserialize(base_addr);
+    const deser_struct = s_struct.deserializeInto(base_addr);
 
     const StructIdx = SafeList(AlignedStruct).Idx;
     try testing.expectEqual(@as(usize, 2), deser_struct.len());
@@ -1273,9 +1559,12 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 1. u8 list (1-byte aligned, 3 elements = 3 bytes)
     var list1 = try SafeList(u8).initCapacity(gpa, 3);
     defer list1.deinit(gpa);
-    _ = try list1.append(gpa, 1);
-    _ = try list1.append(gpa, 2);
-    _ = try list1.append(gpa, 3);
+    const list1_idx0 = try list1.append(gpa, 1);
+    const list1_idx1 = try list1.append(gpa, 2);
+    const list1_idx2 = try list1.append(gpa, 3);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(list1_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(list1_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(list1_idx2));
 
     const start1 = writer.total_bytes;
     try offsets.append(gpa, start1); // Serialized struct is placed at current position
@@ -1285,8 +1574,10 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 2. u64 list (8-byte aligned, forces significant padding)
     var list2 = try SafeList(u64).initCapacity(gpa, 2);
     defer list2.deinit(gpa);
-    _ = try list2.append(gpa, 1_000_000);
-    _ = try list2.append(gpa, 2_000_000);
+    const list2_idx0 = try list2.append(gpa, 1_000_000);
+    const list2_idx1 = try list2.append(gpa, 2_000_000);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(list2_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(list2_idx1));
 
     const start2 = writer.total_bytes;
     try offsets.append(gpa, start2); // Serialized struct is placed at current position
@@ -1300,10 +1591,14 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 3. u16 list (2-byte aligned)
     var list3 = try SafeList(u16).initCapacity(gpa, 4);
     defer list3.deinit(gpa);
-    _ = try list3.append(gpa, 100);
-    _ = try list3.append(gpa, 200);
-    _ = try list3.append(gpa, 300);
-    _ = try list3.append(gpa, 400);
+    const list3_idx0 = try list3.append(gpa, 100);
+    const list3_idx1 = try list3.append(gpa, 200);
+    const list3_idx2 = try list3.append(gpa, 300);
+    const list3_idx3 = try list3.append(gpa, 400);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(list3_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(list3_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(list3_idx2));
+    try testing.expectEqual(@as(usize, 3), @intFromEnum(list3_idx3));
 
     const start3 = writer.total_bytes;
     try offsets.append(gpa, start3); // Serialized struct is placed at current position
@@ -1313,7 +1608,8 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 4. u32 list (4-byte aligned)
     var list4 = try SafeList(u32).initCapacity(gpa, 1);
     defer list4.deinit(gpa);
-    _ = try list4.append(gpa, 42);
+    const list4_idx0 = try list4.append(gpa, 42);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(list4_idx0));
 
     const start4 = writer.total_bytes;
     try offsets.append(gpa, start4); // Serialized struct is placed at current position
@@ -1328,7 +1624,8 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     const file_size = try file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     const base = @intFromPtr(buffer.ptr);
 
@@ -1339,7 +1636,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 1. First list - u8
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u8).Serialized));
     const s1 = @as(*SafeList(u8).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d1 = s1.deserialize(base);
+    const d1 = s1.deserializeInto(base);
     offset += @sizeOf(SafeList(u8).Serialized);
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
     offset += 3; // 3 u8 elements
@@ -1353,7 +1650,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 2. Second list - u64
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
     const s2 = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d2 = s2.deserialize(base);
+    const d2 = s2.deserializeInto(base);
     offset += @sizeOf(SafeList(u64).Serialized);
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
     offset += 2 * @sizeOf(u64); // 2 u64 elements
@@ -1366,7 +1663,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 3. Third list - u16
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
     const s3 = @as(*SafeList(u16).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d3 = s3.deserialize(base);
+    const d3 = s3.deserializeInto(base);
     offset += @sizeOf(SafeList(u16).Serialized);
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
     offset += 4 * @sizeOf(u16); // 4 u16 elements
@@ -1381,7 +1678,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 4. Fourth list - u32
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
     const s4 = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d4 = s4.deserialize(base);
+    const d4 = s4.deserializeInto(base);
 
     try testing.expectEqual(@as(usize, 1), d4.len());
     try testing.expectEqual(@as(u32, 42), d4.get(.first).*);
@@ -1421,7 +1718,8 @@ test "SafeList CompactWriter brute-force alignment verification" {
 
             var i: usize = 0;
             while (i < length) : (i += 1) {
-                _ = try list1.append(gpa, @as(T, @intCast(i + 1)));
+                const idx = try list1.append(gpa, @as(T, @intCast(i + 1)));
+                try testing.expectEqual(i, @intFromEnum(idx));
             }
 
             // Also create a second list with different data
@@ -1436,13 +1734,15 @@ test "SafeList CompactWriter brute-force alignment verification" {
                     u16 => 1000,
                     else => 100000,
                 };
-                _ = try list2.append(gpa, @as(T, @intCast(i + 1)) * multiplier);
+                const idx = try list2.append(gpa, @as(T, @intCast(i + 1)) * multiplier);
+                try testing.expectEqual(i, @intFromEnum(idx));
             }
 
             // Create a u8 list to add between them (to test alignment)
             var list_u8 = SafeList(u8){};
             defer list_u8.deinit(gpa);
-            _ = try list_u8.append(gpa, 42);
+            const list_u8_idx = try list_u8.append(gpa, 42);
+            try testing.expectEqual(@as(usize, 0), @intFromEnum(list_u8_idx));
 
             // Serialize everything
             var writer = CompactWriter{
@@ -1472,7 +1772,8 @@ test "SafeList CompactWriter brute-force alignment verification" {
             const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
             defer gpa.free(buffer);
 
-            _ = try file.read(buffer);
+            const read_len = try file.readAll(buffer);
+            try testing.expectEqual(buffer.len, read_len);
 
             // Deserialize and verify
             const base = @intFromPtr(buffer.ptr);
@@ -1483,7 +1784,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             // First list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(T).Serialized));
             const s1 = @as(*SafeList(T).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-            const d1 = s1.deserialize(base);
+            const d1 = s1.deserializeInto(base);
             offset += @sizeOf(SafeList(T).Serialized);
             offset = std.mem.alignForward(usize, offset, @alignOf(T));
             offset += length * @sizeOf(T);
@@ -1499,7 +1800,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             // u8 list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u8).Serialized));
             const s_u8 = @as(*SafeList(u8).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-            const d_u8 = s_u8.deserialize(base);
+            const d_u8 = s_u8.deserializeInto(base);
             offset += @sizeOf(SafeList(u8).Serialized);
             offset = std.mem.alignForward(usize, offset, @alignOf(u8));
             offset += 1; // 1 u8 element
@@ -1510,7 +1811,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             // Second list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(T).Serialized));
             const s2 = @as(*SafeList(T).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-            const d2 = s2.deserialize(base);
+            const d2 = s2.deserializeInto(base);
 
             try testing.expectEqual(length, d2.len());
             i = 0;
@@ -1542,10 +1843,14 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     var original = try SafeMultiList(TestStruct).initCapacity(gpa, 4);
     defer original.deinit(gpa);
 
-    _ = try original.append(gpa, .{ .id = 100, .value = 1000, .flag = true, .data = 10 });
-    _ = try original.append(gpa, .{ .id = 200, .value = 2000, .flag = false, .data = 20 });
-    _ = try original.append(gpa, .{ .id = 300, .value = 3000, .flag = true, .data = 30 });
-    _ = try original.append(gpa, .{ .id = 400, .value = 4000, .flag = false, .data = 40 });
+    const orig_idx0 = try original.append(gpa, .{ .id = 100, .value = 1000, .flag = true, .data = 10 });
+    const orig_idx1 = try original.append(gpa, .{ .id = 200, .value = 2000, .flag = false, .data = 20 });
+    const orig_idx2 = try original.append(gpa, .{ .id = 300, .value = 3000, .flag = true, .data = 30 });
+    const orig_idx3 = try original.append(gpa, .{ .id = 400, .value = 4000, .flag = false, .data = 40 });
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(orig_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(orig_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(orig_idx2));
+    try testing.expectEqual(@as(usize, 3), @intFromEnum(orig_idx3));
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -1570,14 +1875,15 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // The memory layout from CompactWriter is:
     // 1. SafeMultiList.Serialized struct (appended first by appendAlloc)
     // 2. Field data (appended by serialize method)
     // So the Serialized struct is at the beginning
     const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify the data
     const Idx = SafeMultiList(TestStruct).Idx;
@@ -1643,11 +1949,12 @@ test "SafeMultiList empty list CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // The Serialized struct is at the beginning of the buffer
     const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.len());
@@ -1675,19 +1982,26 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
 
     var list1 = try SafeMultiList(Type1).initCapacity(gpa, 10);
     defer list1.deinit(gpa);
-    _ = try list1.append(gpa, .{ .a = 10, .b = 100 });
-    _ = try list1.append(gpa, .{ .a = 20, .b = 200 });
-    _ = try list1.append(gpa, .{ .a = 30, .b = 300 });
+    const list1_idx0 = try list1.append(gpa, .{ .a = 10, .b = 100 });
+    const list1_idx1 = try list1.append(gpa, .{ .a = 20, .b = 200 });
+    const list1_idx2 = try list1.append(gpa, .{ .a = 30, .b = 300 });
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(list1_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(list1_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(list1_idx2));
 
     var list2 = try SafeMultiList(Type2).initCapacity(gpa, 2);
     defer list2.deinit(gpa);
-    _ = try list2.append(gpa, .{ .x = 1000, .y = 10000 });
-    _ = try list2.append(gpa, .{ .x = 2000, .y = 20000 });
+    const list2_idx0 = try list2.append(gpa, .{ .x = 1000, .y = 10000 });
+    const list2_idx1 = try list2.append(gpa, .{ .x = 2000, .y = 20000 });
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(list2_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(list2_idx1));
 
     var list3 = try SafeMultiList(Type3).initCapacity(gpa, 2);
     defer list3.deinit(gpa);
-    _ = try list3.append(gpa, .{ .id = 999, .data = 42, .flag = true });
-    _ = try list3.append(gpa, .{ .id = 888, .data = 84, .flag = false });
+    const list3_idx0 = try list3.append(gpa, .{ .id = 999, .data = 42, .flag = true });
+    const list3_idx1 = try list3.append(gpa, .{ .id = 888, .data = 84, .flag = false });
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(list3_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(list3_idx1));
 
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -1730,14 +2044,15 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     const base = @intFromPtr(buffer.ptr);
 
     // Deserialize list1 (at offset1)
     const D1Idx = SafeMultiList(Type1).Idx;
     const d1_serialized = @as(*SafeMultiList(Type1).Serialized, @ptrCast(@alignCast(buffer.ptr + offset1)));
-    const d1 = d1_serialized.deserialize(base);
+    const d1 = d1_serialized.deserializeInto(base);
     try testing.expectEqual(@as(usize, 3), d1.len());
     try testing.expectEqual(@as(u8, 10), d1.get(.first).a);
     try testing.expectEqual(@as(u16, 100), d1.get(.first).b);
@@ -1748,14 +2063,14 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
 
     // Deserialize list2 (at offset2)
     const d2_serialized = @as(*SafeMultiList(Type2).Serialized, @ptrCast(@alignCast(buffer.ptr + offset2)));
-    const d2 = d2_serialized.deserialize(base);
+    const d2 = d2_serialized.deserializeInto(base);
     try testing.expectEqual(@as(usize, 2), d2.len());
     try testing.expectEqual(@as(u32, 1000), d2.get(.first).x);
     try testing.expectEqual(@as(u64, 10000), d2.get(.first).y);
 
     // Deserialize list3 (at offset3)
     const d3_serialized = @as(*SafeMultiList(Type3).Serialized, @ptrCast(@alignCast(buffer.ptr + offset3)));
-    const d3 = d3_serialized.deserialize(base);
+    const d3 = d3_serialized.deserializeInto(base);
     try testing.expectEqual(@as(usize, 2), d3.len());
     try testing.expectEqual(@as(u64, 999), d3.get(.first).id);
     try testing.expectEqual(@as(u8, 42), d3.get(.first).data);
@@ -1790,11 +2105,12 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
 
         var i: usize = 0;
         while (i < length) : (i += 1) {
-            _ = try list.append(gpa, .{
+            const idx = try list.append(gpa, .{
                 .a = @as(u8, @intCast(i)),
                 .b = @as(u32, @intCast(i * 100)),
                 .c = @as(u64, @intCast(i * 1000)),
             });
+            try testing.expectEqual(i, @intFromEnum(idx));
         }
 
         // Verify we have extra capacity that shouldn't be serialized
@@ -1804,7 +2120,8 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         var list2 = SafeMultiList(TestType){};
         defer list2.deinit(gpa);
         if (length > 0) {
-            _ = try list2.append(gpa, .{ .a = 255, .b = 999999, .c = 888888888 });
+            const list2_idx = try list2.append(gpa, .{ .a = 255, .b = 999999, .c = 888888888 });
+            try testing.expectEqual(@as(usize, 0), @intFromEnum(list2_idx));
         }
 
         // Serialize
@@ -1828,13 +2145,14 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
         defer gpa.free(buffer);
 
-        _ = try file.read(buffer);
+        const read_len = try file.readAll(buffer);
+        try testing.expectEqual(buffer.len, read_len);
 
         const base = @intFromPtr(buffer.ptr);
 
         // Verify first list
         const d1_serialized = @as(*SafeMultiList(TestType).Serialized, @ptrCast(@alignCast(buffer.ptr + offset1)));
-        const d1 = d1_serialized.deserialize(base);
+        const d1 = d1_serialized.deserializeInto(base);
         try testing.expectEqual(length, d1.len());
 
         i = 0;
@@ -1847,7 +2165,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
 
         // Verify second list
         const d2_serialized = @as(*SafeMultiList(TestType).Serialized, @ptrCast(@alignCast(buffer.ptr + offset2)));
-        const d2 = d2_serialized.deserialize(base);
+        const d2 = d2_serialized.deserializeInto(base);
         if (length > 0) {
             const d2_first_idx: SafeMultiList(TestType).Idx = .first;
             try testing.expectEqual(@as(usize, 1), d2.len());
@@ -1902,7 +2220,8 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
                     };
                     @field(item, field.name) = value;
                 }
-                _ = try list.append(gpa, item);
+                const idx = try list.append(gpa, item);
+                try testing.expectEqual(i, @intFromEnum(idx));
             }
 
             // Serialize and deserialize
@@ -1925,11 +2244,12 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
             const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
             defer gpa.free(buffer);
 
-            _ = try file.read(buffer);
+            const read_len = try file.readAll(buffer);
+            try testing.expectEqual(buffer.len, read_len);
 
             // Deserialize
             const serialized_ptr = @as(*SafeMultiList(TestType).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-            const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+            const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
             // Verify
             try testing.expectEqual(len, deserialized.len());
@@ -1968,12 +2288,13 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
 
         var i: usize = 0;
         while (i < len) : (i += 1) {
-            _ = try original.append(gpa, .{
+            const idx = try original.append(gpa, .{
                 .a = @as(u8, @intCast(i + 10)),
                 .b = @as(u32, @intCast(i + 100)),
                 .c = @as(u16, @intCast(i + 1000)),
                 .d = @as(u64, @intCast(i + 10000)),
             });
+            try testing.expectEqual(i, @intFromEnum(idx));
         }
 
         // Manually create the expected memory layout
@@ -2084,7 +2405,8 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
         const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
         defer gpa.free(buffer);
 
-        _ = try file.read(buffer);
+        const read_len = try file.readAll(buffer);
+        try testing.expectEqual(buffer.len, read_len);
 
         // Extract the data portion (after the Serialized struct)
         const data_size = std.MultiArrayList(TestStruct).capacityInBytes(original.items.capacity);
@@ -2099,7 +2421,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
 
         // Also verify it deserializes correctly
         const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         // Verify all data is accessible
         i = 0;
@@ -2141,7 +2463,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
         // Fill with data
         var i: usize = 0;
         while (i < len) : (i += 1) {
-            _ = try list.append(gpa, .{
+            const idx = try list.append(gpa, .{
                 .flag1 = (i % 2) == 0,
                 .byte1 = @as(u8, @intCast(i * 2)),
                 .short1 = @as(u16, @intCast(i * 10)),
@@ -2155,6 +2477,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
                 .int2 = @as(u32, @intCast(i * 200)),
                 .double1 = @as(f64, @floatFromInt(i)) * 2.5,
             });
+            try testing.expectEqual(i, @intFromEnum(idx));
         }
 
         var tmp_dir = testing.tmpDir(.{});
@@ -2176,11 +2499,12 @@ test "SafeMultiList CompactWriter stress test many field types" {
         const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
         defer gpa.free(buffer);
 
-        _ = try file.read(buffer);
+        const read_len = try file.readAll(buffer);
+        try testing.expectEqual(buffer.len, read_len);
 
         // Deserialize
         const serialized_ptr = @as(*SafeMultiList(ComplexStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         // Verify
         try testing.expectEqual(len, deserialized.len());
@@ -2242,11 +2566,12 @@ test "SafeMultiList CompactWriter empty with capacity" {
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Deserialize
     const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify it's still empty
     try testing.expectEqual(@as(usize, 0), deserialized.len());
@@ -2267,9 +2592,12 @@ test "SafeMultiList.Serialized roundtrip" {
     var original = SafeMultiList(TestStruct){};
     defer original.deinit(gpa);
 
-    _ = try original.append(gpa, .{ .a = 100, .b = 1.5, .c = 255 });
-    _ = try original.append(gpa, .{ .a = 200, .b = 2.5, .c = 128 });
-    _ = try original.append(gpa, .{ .a = 300, .b = 3.5, .c = 64 });
+    const orig_idx0 = try original.append(gpa, .{ .a = 100, .b = 1.5, .c = 255 });
+    const orig_idx1 = try original.append(gpa, .{ .a = 200, .b = 2.5, .c = 128 });
+    const orig_idx2 = try original.append(gpa, .{ .a = 300, .b = 3.5, .c = 64 });
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(orig_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(orig_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(orig_idx2));
 
     // Create a CompactWriter and arena
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -2295,11 +2623,12 @@ test "SafeMultiList.Serialized roundtrip" {
     const file_size = try tmp_file.getEndPos();
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    const read_len = try tmp_file.pread(buffer, 0);
+    try testing.expectEqual(buffer.len, read_len);
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const list = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const list = deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify the items are accessible
     try testing.expectEqual(@as(u32, 3), list.len());
@@ -2339,9 +2668,12 @@ test "SafeList deserialization with high address (issue 8728)" {
     // Create a simple SafeList with some data
     var original = try SafeList(u64).initCapacity(gpa, 3);
     defer original.deinit(gpa);
-    _ = try original.append(gpa, 100);
-    _ = try original.append(gpa, 200);
-    _ = try original.append(gpa, 300);
+    const orig_idx0 = try original.append(gpa, 100);
+    const orig_idx1 = try original.append(gpa, 200);
+    const orig_idx2 = try original.append(gpa, 300);
+    try testing.expectEqual(@as(usize, 0), @intFromEnum(orig_idx0));
+    try testing.expectEqual(@as(usize, 1), @intFromEnum(orig_idx1));
+    try testing.expectEqual(@as(usize, 2), @intFromEnum(orig_idx2));
 
     // Serialize it
     var writer = CompactWriter.init();
@@ -2353,14 +2685,15 @@ test "SafeList deserialization with high address (issue 8728)" {
     // Write to a buffer
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer gpa.free(buffer);
-    _ = try writer.writeToBuffer(buffer);
+    const written = try writer.writeToBuffer(buffer);
+    try testing.expectEqual(buffer.len, written.len);
 
     // Get the serialized struct
     const serialized_ptr = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
     // Test with the actual buffer address (should work on any system)
     const actual_base = @intFromPtr(buffer.ptr);
-    const deserialized1 = serialized_ptr.deserialize(actual_base);
+    const deserialized1 = serialized_ptr.deserializeInto(actual_base);
     try testing.expectEqual(@as(usize, 3), deserialized1.len());
 
     // Now test the math that would occur with a high address.

@@ -103,7 +103,17 @@ pub const CliProblem = union(enum) {
         platform_spec: []const u8,
     },
 
+    /// Invalid app header - missing platform package declaration
+    invalid_app_header: struct {
+        app_path: []const u8,
+    },
+
     // Build/Compilation Problems
+
+    /// `roc build` is not supported for headerless apps
+    build_not_supported_for_headerless: struct {
+        app_path: []const u8,
+    },
 
     /// Compilation produced errors
     compilation_failed: struct {
@@ -126,12 +136,6 @@ pub const CliProblem = union(enum) {
     /// Shim generation failed
     shim_generation_failed: struct {
         err: anyerror,
-    },
-
-    /// Entrypoint extraction failed
-    entrypoint_extraction_failed: struct {
-        path: []const u8,
-        reason: []const u8,
     },
 
     // URL/Download Problems
@@ -219,6 +223,7 @@ pub const CliProblem = union(enum) {
             .file_not_found,
             .platform_not_found,
             .no_platform_found,
+            .build_not_supported_for_headerless,
             .compilation_failed,
             .linker_failed,
             => .fatal,
@@ -236,9 +241,9 @@ pub const CliProblem = union(enum) {
             .circular_platform_dependency,
             .platform_validation_failed,
             .absolute_platform_path,
+            .invalid_app_header,
             .object_compilation_failed,
             .shim_generation_failed,
-            .entrypoint_extraction_failed,
             .invalid_url,
             .download_failed,
             .package_cache_error,
@@ -273,11 +278,12 @@ pub const CliProblem = union(enum) {
             .circular_platform_dependency => |info| try createCircularPlatformDependencyReport(allocator, info),
             .platform_validation_failed => |info| try createPlatformValidationFailedReport(allocator, info),
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
+            .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
+            .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
-            .entrypoint_extraction_failed => |info| try createEntrypointExtractionFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
             .download_failed => |info| try createDownloadFailedReport(allocator, info),
             .package_cache_error => |info| try createPackageCacheErrorReport(allocator, info),
@@ -526,6 +532,54 @@ fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) !Report
     return report;
 }
 
+fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) !Report {
+    var report = Report.init(allocator, "INVALID APP HEADER", .runtime_error);
+
+    try report.document.addText("The file ");
+    try report.document.addAnnotated(info.app_path, .path);
+    try report.document.addText(" does not have a valid app header with a platform declaration.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Expected an app header like:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    app [main] { pf: platform \"...\" }");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("The platform package name (e.g., ");
+    try report.document.addAnnotated("pf", .emphasized);
+    try report.document.addText(") is used to qualify imports from the package like ");
+    try report.document.addAnnotated("pf.Stdout", .emphasized);
+    try report.document.addText(".");
+
+    return report;
+}
+
+fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) !Report {
+    var report = Report.init(allocator, "BUILD NOT SUPPORTED", .fatal);
+
+    try report.document.addText("The file ");
+    try report.document.addAnnotated(info.app_path, .path);
+    try report.document.addText(" is a headerless app, which uses a simple builtin platform");
+    try report.document.addLineBreak();
+    try report.document.addText("designed for tutorials and cannot be compiled to a standalone executable.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("To run this file, use:");
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
+        \\roc <path>
+    );
+    try report.document.addLineBreak();
+    try report.document.addText("To build a standalone executable, add an app header with a platform:");
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
+        \\app [main!] { pf: platform "https://..." }
+    );
+
+    return report;
+}
+
 fn createCompilationFailedReport(allocator: Allocator, info: anytype) !Report {
     var report = Report.init(allocator, "COMPILATION FAILED", .fatal);
 
@@ -582,19 +636,6 @@ fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) !Report
     return report;
 }
 
-fn createEntrypointExtractionFailedReport(allocator: Allocator, info: anytype) !Report {
-    var report = Report.init(allocator, "ENTRYPOINT EXTRACTION FAILED", .runtime_error);
-
-    try report.document.addText("Failed to extract entrypoint from ");
-    try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
-    try report.document.addText("Reason: ");
-    try report.document.addText(info.reason);
-
-    return report;
-}
-
 fn createInvalidUrlReport(allocator: Allocator, info: anytype) !Report {
     var report = Report.init(allocator, "INVALID URL", .runtime_error);
 
@@ -611,12 +652,42 @@ fn createInvalidUrlReport(allocator: Allocator, info: anytype) !Report {
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) !Report {
     var report = Report.init(allocator, "DOWNLOAD FAILED", .runtime_error);
 
-    try report.document.addText("Failed to download from ");
-    try report.document.addAnnotated(info.url, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
+    switch (info.err) {
+        error.InvalidHash => {
+            try report.document.addText("Error: ");
+            try report.document.addError(@errorName(info.err));
+            try report.document.addLineBreak();
+            try report.document.addText("The url contains an invalid hash.");
+            try report.document.addLineBreaks(2);
+
+            try report.document.addText("Platform Url: ");
+            try report.document.addAnnotated(info.url, .emphasized);
+            try report.document.addLineBreaks(2);
+
+            try report.document.addText("Possible Reasons: ");
+            try report.document.addLineBreak();
+            try report.document.addText("1. The ");
+            try report.document.addAnnotated("platform was built with the old Roc", .error_highlight);
+            try report.document.addText(" (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler. The new compiler is available at https://github.com/roc-lang/nightlies");
+            try report.document.addLineBreak();
+            try report.document.addText("2. The Hash portion of the URL is malformed.");
+
+            try report.document.addLineBreaks(2);
+            try report.document.addText("Tips:");
+            try report.document.addLineBreak();
+            try report.document.addSuggestion("1. If there is a newer version of the platform available, try updating.");
+            try report.document.addLineBreak();
+            try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release.");
+            try report.document.addLineBreak();
+        },
+        else => {
+            try report.document.addText("Failed to download from ");
+            try report.document.addAnnotated(info.url, .emphasized);
+            try report.document.addLineBreaks(2);
+            try report.document.addText("Error: ");
+            try report.document.addText(@errorName(info.err));
+        },
+    }
 
     return report;
 }
@@ -710,6 +781,21 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) !Report {
     try report.document.addLineBreak();
     try report.document.addText("but found: ");
     try report.document.addAnnotated(info.found, .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("An app header looks like:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
+        \\app [main!] { pf: platform "..." }
+    );
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Tip: Maybe you wanted to run ");
+    try report.document.addAnnotated("roc test", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("roc check", .emphasized);
+    try report.document.addText("?");
 
     return report;
 }

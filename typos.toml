@@ -1,25 +1,41 @@
 [files]
 extend-exclude = [
     ".git/",
-    "design/language/Abilities.md",
     "src/snapshots/fuzz_crash",
     "crates/vendor/",
+    "vendor/",
     "authors",
     "crates",
     "examples/static-site-gen/input/",
-    "COPYRIGHT",
-    "crates/compiler/checkmate/www/package-lock.json",
     "src/build/zig_llvm.h",
     "test/snapshots/",
     "build.zig.zon",
+    "build.zig.zon.nix",
     "src/cli/darwin/",
+    "src/backend/llvm/",
+    "src/backend/dev/object/",
 ]
 
 [default]
 extend-ignore-identifiers-re = [".*_SME_.*"]
+extend-ignore-re = [
+    # Ignore the line after `# spellchecker:ignore-next-line`:
+    "(#|//)\\s*spellchecker:ignore-next-line\\n.*",
+    # Ignore blocks between `# spellchecker:off` and `# spellchecker:on`
+    "(?s)(#|//)\\s*spellchecker:off.*?\\n\\s*(#|//)\\s*spellchecker:on",
+]
 
 [default.extend-words]
-typ = "typ"
-ba = "ba"
+ANF = "ANF" # A-normal form
+ba = "ba" # Binop apply
+caf = "caf" # Part of the word "café"
+clos = "clos" # Closure
+ful = "ful" # Suffix, as in "effectful"
+rela = "rela" # Relative
+SEH = "SEH" # Structured Exception Handling
+ser = "ser" # Part of the word "serializing"
 sigfault = "sigfault"
-nd = "nd"
+typ = "typ" # Common internal abbreviation for type
+
+[default.extend-identifiers]
+CMOVcc = "CMOVcc"

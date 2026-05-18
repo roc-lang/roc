@@ -28,10 +28,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-return
-		(e-nominal-external
-			(builtin)
-			(e-tag (name "True")))))
+	(s-runtime-error (tag "return_outside_fn")))
 ~~~
 # TYPES
 ~~~clojure

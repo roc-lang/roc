@@ -14,14 +14,14 @@ package
 
 value1 = \\This is a "string" with just one line
 
-value2 = 
+value2 =
 	\\This is a "string" with just one line
 
 value3 = \\This is a string
 	\\With multiple lines
 	\\${value1}
 
-value4 = 
+value4 =
 	\\This is a string
 	# A comment in between
 	\\With multiple lines
@@ -54,39 +54,10 @@ x = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - multiline_string_complex.md:37:3:37:4
-MISSING METHOD - multiline_string_complex.md:37:3:37:9
-- - :0:0:0:0
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
+MISSING METHOD - multiline_string_complex.md:37:3:37:9
+TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**multiline_string_complex.md:37:3:37:4:**
-```roc
-		0 - \\
-```
-		^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-The value before this **-** operator has a type that doesn't have a **minus** method:
-**multiline_string_complex.md:37:3:37:9:**
-```roc
-		0 - \\
-```
-		^^^^^^
-
-The value's type, which does not have a method named **minus**, is:
-
-    Str
-
-**Hint:**The **-** operator calls a method named **minus** on the value preceding it, passing the value after the operator as the one argument.
-
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
 **multiline_string_complex.md:40:5:40:8:**
@@ -100,6 +71,39 @@ The value's type, which does not have a method named **not**, is:
     Str
 
 **Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **-** operator has a type that doesn't have a **minus** method:
+**multiline_string_complex.md:37:3:37:9:**
+```roc
+		0 - \\
+```
+		^^^^^^
+
+The value's type, which does not have a method named **minus**, is:
+
+    Str
+
+**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**multiline_string_complex.md:37:3:37:4:**
+```roc
+		0 - \\
+```
+		^
+
+The type was determined to be non-numeric here:
+**multiline_string_complex.md:37:7:37:9:**
+```roc
+		0 - \\
+```
+		    ^^
+
+Other code expects this to have the type:
+
+    Error
 
 # TOKENS
 ~~~zig
@@ -215,7 +219,53 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package
+	[]
+	{
+		x: \\Multiline
+		,
+	}
+
+value1 = \\This is a "string" with just one line
+
+value2 = 
+	\\This is a "string" with just one line
+
+value3 = \\This is a string
+	\\With multiple lines
+	\\${value1}
+
+value4 = 
+	\\This is a string
+	# A comment in between
+	\\With multiple lines
+	\\${value2}
+
+value5 = {
+	a: \\Multiline
+	,
+	b: (
+		\\Multiline
+		,
+		\\Multiline
+		,
+	),
+	c: [
+		\\multiline
+		,
+	],
+	d: (
+		0 - \\
+		,
+	),
+	e: !\\
+	,
+}
+
+x = {
+	\\
+	\\
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -252,30 +302,7 @@ NO CHANGE
 				(p-assign (ident "value2")))))
 	(d-let
 		(p-assign (ident "value5"))
-		(e-record
-			(fields
-				(field (name "a")
-					(e-string
-						(e-literal (string "Multiline"))))
-				(field (name "b")
-					(e-tuple
-						(elems
-							(e-string
-								(e-literal (string "Multiline")))
-							(e-string
-								(e-literal (string "Multiline"))))))
-				(field (name "c")
-					(e-list
-						(elems
-							(e-string
-								(e-literal (string "multiline"))))))
-				(field (name "d")
-					(e-binop (op "sub")
-						(e-num (value "0"))
-						(e-string)))
-				(field (name "e")
-					(e-unary-not
-						(e-string))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block

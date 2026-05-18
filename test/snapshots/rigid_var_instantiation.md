@@ -170,37 +170,34 @@ main! = |_| {
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "identity")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "num"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-num (value "42"))))
-					(s-let
-						(p-assign (ident "str"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-string
-								(e-literal (string "hello")))))
-					(s-let
-						(p-assign (ident "lst"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-list
-								(elems
-									(e-num (value "1"))
-									(e-num (value "2"))
-									(e-num (value "3"))))))
-					(e-empty_record))))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "num"))
+					(e-call (constraint-fn-var 58)
+						(e-lookup-local
+							(p-assign (ident "identity")))
+						(e-num (value "42"))))
+				(s-let
+					(p-assign (ident "str"))
+					(e-call (constraint-fn-var 67)
+						(e-lookup-local
+							(p-assign (ident "identity")))
+						(e-string
+							(e-literal (string "hello")))))
+				(s-let
+					(p-assign (ident "lst"))
+					(e-call (constraint-fn-var 102)
+						(e-lookup-local
+							(p-assign (ident "identity")))
+						(e-list
+							(elems
+								(e-num (value "1"))
+								(e-num (value "2"))
+								(e-num (value "3"))))))
+				(e-empty_record)))))
 ~~~
 # TYPES
 ~~~clojure

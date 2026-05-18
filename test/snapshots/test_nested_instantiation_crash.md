@@ -35,7 +35,7 @@ It has the type:
 
     List(a)
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     Str
 
@@ -168,7 +168,7 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "r")))
-			(e-dot-access (field "value")
+			(e-field-access (field "value")
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "r"))))))
@@ -182,21 +182,16 @@ answer = composed([42])
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "composed"))
-		(e-closure
-			(captures
-				(capture (ident "get_value"))
-				(capture (ident "make_record")))
-			(e-lambda
-				(args
-					(p-assign (ident "n")))
-				(e-call
+		(e-lambda
+			(args
+				(p-assign (ident "n")))
+			(e-call (constraint-fn-var 118)
+				(e-lookup-local
+					(p-assign (ident "get_value")))
+				(e-call (constraint-fn-var 117)
 					(e-lookup-local
-						(p-assign (ident "get_value")))
-					(e-call
-						(e-lookup-local
-							(p-assign (ident "make_record")))
-						(e-lookup-local
-							(p-assign (ident "n")))))))
+						(p-assign (ident "make_record")))
+					(e-runtime-error (tag "erroneous_value_use")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -204,7 +199,7 @@ answer = composed([42])
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call
+		(e-call (constraint-fn-var 134)
 			(e-lookup-local
 				(p-assign (ident "composed")))
 			(e-list
@@ -222,6 +217,6 @@ answer = composed([42])
 	(expressions
 		(expr (type "a -> { tag: Str, value: a }"))
 		(expr (type "{ tag: Str, value: a } -> a"))
-		(expr (type "Error -> Error"))
+		(expr (type "List(a) -> Str"))
 		(expr (type "Str"))))
 ~~~

@@ -8,19 +8,9 @@ type=expr
 if bool 1 else 2
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_simple_minimal.md:1:4:1:8
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `bool` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**if_then_else_simple_minimal.md:1:4:1:8:**
-```roc
-if bool 1 else 2
-```
-   ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwIf,LowerIdent,Int,KwElse,Int,
@@ -49,5 +39,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "Dec"))
 ~~~

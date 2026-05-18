@@ -94,6 +94,7 @@ EndOfFile,
 
 
 a = 'a'
+
 b = 'a'
 ~~~
 # CANONICALIZE
@@ -110,9 +111,9 @@ b = 'a'
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))
+		(expr (type "Dec"))))
 ~~~

@@ -9,7 +9,7 @@ type=repl
 » List.sublist([Foo, Bar, Baz, Quux], {start: 1, len: 2})
 ~~~
 # OUTPUT
-[SomeTag("with String"), OtherTag(2), MyTag]
+[SomeTag("with String"), OtherTag(2.0), MyTag]
 ---
 [Bar, Baz]
 # PROBLEMS

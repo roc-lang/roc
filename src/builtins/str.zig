@@ -4,18 +4,6 @@
 //! operations for string manipulation, Unicode handling, formatting, and
 //! memory management. It defines the RocStr structure and associated functions
 //! that are called from compiled Roc code to handle string operations efficiently.
-//!
-//! ## Ownership Semantics
-//!
-//! See `OWNERSHIP.md` for the canonical terminology. Functions in this module
-//! follow these patterns:
-//!
-//! - **Borrow**: Function reads argument, caller retains ownership
-//! - **Consume**: Function takes ownership, caller loses access
-//! - **Copy-on-Write**: Consumes arg; if unique, mutates in place; if shared, allocates new
-//! - **Seamless Slice**: Result shares data with arg via incref'd slice
-//!
-//! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -25,6 +13,7 @@ const UpdateMode = @import("utils.zig").UpdateMode;
 const TestEnv = @import("utils.zig").TestEnv;
 
 const utils = @import("utils.zig");
+const compiler_rt_128 = @import("compiler_rt_128.zig");
 const ascii = std.ascii;
 const mem = std.mem;
 const unicode = std.unicode;
@@ -383,7 +372,7 @@ pub const RocStr = extern struct {
             const source_ptr = self.asU8ptr();
             const dest_ptr = result.asU8ptrMut();
 
-            @memcpy(dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.copyForwards(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
             @memset(dest_ptr[old_length..new_length], 0);
 
             self.decref(roc_ops);
@@ -399,7 +388,7 @@ pub const RocStr = extern struct {
 
             const source_ptr = self.asU8ptr();
 
-            @memcpy(dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.copyForwards(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
             @memset(dest_ptr[old_length..new_length], 0);
 
             self.decref(roc_ops);
@@ -592,9 +581,14 @@ fn strFromIntHelp(
     };
 
     var buf: [size]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
+    const result: []const u8 = if (T == i128)
+        compiler_rt_128.i128_to_str(&buf, int).str
+    else if (T == u128)
+        compiler_rt_128.u128_to_str(&buf, int).str
+    else
+        std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
 
-    return RocStr.init(&buf, result.len, roc_ops);
+    return RocStr.init(result.ptr, result.len, roc_ops);
 }
 
 // Str.fromFloat
@@ -620,10 +614,33 @@ fn strFromFloatHelp(
     float: T,
     roc_ops: *RocOps,
 ) RocStr {
-    var buf: [400]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
+    var buf: [32]u8 = undefined;
+    const val_bits: u64 = if (T == f32)
+        @as(u64, @as(u32, @bitCast(float)))
+    else
+        @bitCast(float);
+    const result = floatToStrBytes(&buf, val_bits, T == f32);
 
-    return RocStr.init(&buf, result.len, roc_ops);
+    return RocStr.init(result.ptr, result.len, roc_ops);
+}
+
+/// Format a Roc float into caller-owned scratch bytes.
+pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
+    return if (is_f32) blk: {
+        const f32_val: f32 = @bitCast(@as(u32, @truncate(val_bits)));
+        break :blk compiler_rt_128.f32_to_str(buf, f32_val);
+    } else blk: {
+        const f64_val: f64 = @bitCast(val_bits);
+        break :blk compiler_rt_128.f64_to_str(buf, f64_val);
+    };
+}
+
+/// Format a Roc float into a RocStr using the same implementation used by
+/// generated builtin calls.
+pub fn floatToStrFromBits(val_bits: u64, is_f32: bool, roc_ops: *RocOps) RocStr {
+    var buf: [400]u8 = undefined;
+    const result = floatToStrBytes(&buf, val_bits, is_f32);
+    return RocStr.init(result.ptr, result.len, roc_ops);
 }
 
 // Str.splitOn
@@ -935,7 +952,13 @@ pub fn strConcat(
         const combined_length = arg1.len() + arg2.len();
 
         var result = arg1.reallocate(combined_length, roc_ops);
-        @memcpy(result.asU8ptrMut()[arg1.len()..combined_length], arg2.asU8ptr()[0..arg2.len()]);
+        const src = arg2.asU8ptr()[0..arg2.len()];
+        const dest = result.asU8ptrMut()[arg1.len()..combined_length];
+        var i = src.len;
+        while (i > 0) {
+            i -= 1;
+            dest[i] = src[i];
+        }
 
         return result;
     }
@@ -1161,8 +1184,6 @@ pub fn fromUtf8Lossy(
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (list.len() == 0) {
-        // Free the empty list since we consume ownership
-        list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
         return RocStr.empty();
     }
 
@@ -1184,9 +1205,6 @@ pub fn fromUtf8Lossy(
     }
     str.setLen(end_index);
 
-    // Free the input list since we consume ownership
-    list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
-
     return str;
 }
 
@@ -1194,12 +1212,9 @@ pub fn fromUtf8Lossy(
 pub fn fromUtf8(
     list: RocList,
     update_mode: UpdateMode,
-    // TODO seems odd that we need this here
-    // maybe we should pass in undefined or something to list.decref?
     roc_ops: *RocOps,
 ) FromUtf8Try {
     if (list.len() == 0) {
-        list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
         return FromUtf8Try{
             .is_ok = true,
             .string = RocStr.empty(),
@@ -1210,7 +1225,10 @@ pub fn fromUtf8(
     const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
 
     if (isValidUnicode(bytes)) {
-        // Make a seamless slice of the input.
+        // Borrowed-call semantics: the returned string must own its bytes
+        // independently of the caller's list value. Increment first so
+        // `fromSubListUnsafe` cannot take over a unique list allocation.
+        list.incref(1, false, roc_ops);
         const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
         return FromUtf8Try{
             .is_ok = true,
@@ -1220,8 +1238,6 @@ pub fn fromUtf8(
         };
     } else {
         const temp = errorToProblem(bytes);
-
-        list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
 
         return FromUtf8Try{
             .is_ok = false,
@@ -1323,7 +1339,10 @@ pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeErr
     if (codepoint_end_index > bytes.len) {
         return error.UnexpectedEof;
     }
-    _ = try unicode.utf8Decode(bytes[index..codepoint_end_index]);
+    const codepoint = try unicode.utf8Decode(bytes[index..codepoint_end_index]);
+    if (codepoint > 0x10FFFF) {
+        return error.Utf8CodepointTooLarge;
+    }
     return codepoint_end_index - index;
 }
 
@@ -2602,6 +2621,58 @@ test "RocStr.concat: small concat small" {
     try std.testing.expect(roc_str3.eql(result));
 }
 
+test "RocStr.concat: concat result fed into concat again" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const first_a = RocStr.fromSliceSmall("a");
+    const first_b = RocStr.fromSliceSmall("b");
+    const second = RocStr.fromSliceSmall("c");
+
+    const first = strConcat(first_a, first_b, test_env.getOps());
+    defer first.decref(test_env.getOps());
+
+    const result = strConcat(first, second, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    const expected = RocStr.fromSliceSmall("abc");
+    try std.testing.expect(expected.eql(result));
+}
+
+test "RocStr.concat: big concat overlapping seamless suffix" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const original = RocStr.init("hello wonderful", 15, test_env.getOps());
+    const prefix = RocStr.fromSliceSmall("hello ");
+    const suffix = strDropPrefix(original, prefix, test_env.getOps());
+    defer suffix.decref(test_env.getOps());
+
+    const result = strConcat(original, suffix, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    const expected = RocStr.init("hello wonderfulwonderful", 24, test_env.getOps());
+    defer expected.decref(test_env.getOps());
+
+    try std.testing.expect(expected.eql(result));
+}
+
+test "RocStr.concat: big concat with self alias" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var original = RocStr.init("hello wonderful", 15, test_env.getOps());
+    original.incref(1, test_env.getOps());
+
+    const result = strConcat(original, original, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    const expected = RocStr.init("hello wonderfulhello wonderful", 30, test_env.getOps());
+    defer expected.decref(test_env.getOps());
+
+    try std.testing.expect(expected.eql(result));
+}
+
 test "RocStr.joinWith: result is big" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2711,7 +2782,7 @@ test "fromUtf8Lossy: ascii, emoji" {
     defer test_env.deinit();
 
     const list = RocList.fromSlice(u8, "r💖c", false, test_env.getOps());
-    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2922,7 +2993,7 @@ test "fromUtf8Lossy: invalid start byte" {
     defer test_env.deinit();
 
     const list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
-    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2936,7 +3007,7 @@ test "fromUtf8Lossy: overlong encoding" {
     defer test_env.deinit();
 
     const list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false, test_env.getOps());
-    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2950,7 +3021,7 @@ test "fromUtf8Lossy: expected continuation" {
     defer test_env.deinit();
 
     const list = RocList.fromSlice(u8, "r\xCFc", false, test_env.getOps());
-    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2964,7 +3035,7 @@ test "fromUtf8Lossy: unexpected end" {
     defer test_env.deinit();
 
     const list = RocList.fromSlice(u8, "r\xCF", false, test_env.getOps());
-    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2983,7 +3054,7 @@ test "fromUtf8Lossy: encodes surrogate" {
     //           1110_wwww   10_xxxx_yy   10_yy_zzzz
     //         0xED        0x90         0xBD
     const list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false, test_env.getOps());
-    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());

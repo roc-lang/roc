@@ -21,6 +21,8 @@ b! : Str => Str
 # EXPECTED
 EXPOSED BUT NOT DEFINED - package.md:3:3:3:5
 EXPOSED BUT NOT DEFINED - package.md:4:3:4:5
+DECLARATION HAS NO VALUE - package.md:11:1:11:16
+DECLARATION HAS NO VALUE - package.md:12:1:12:16
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `a!` is exposed, but it is not defined anywhere in this module.
@@ -41,6 +43,28 @@ The module header says that `b!` is exposed, but it is not defined anywhere in t
 ```
 		^^
 You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**package.md:11:1:11:16:**
+```roc
+a! : Str => Str
+```
+^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**package.md:12:1:12:16:**
+```roc
+b! : Str => Str
+```
+^^^^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -96,6 +120,7 @@ package
 	}
 
 a! : Str => Str
+
 b! : Str => Str
 ~~~
 # CANONICALIZE

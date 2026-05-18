@@ -15,8 +15,8 @@ Err("failed")
 ---
 Err("failed")
 ---
-Ok(50)
+Ok(50.0)
 ---
-Ok(50)
+Ok(50.0)
 # PROBLEMS
 NIL

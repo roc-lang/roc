@@ -46,6 +46,22 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// A top-level non-function value participates in a recursive SCC.
+    /// Only function values may be recursive.
+    circular_value_definition: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    /// This use-site was rewritten to crash because the referenced top-level
+    /// non-function value failed type checking earlier in the pipeline.
+    erroneous_value_use: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    /// This expression was rewritten to crash because it failed type checking.
+    erroneous_value_expr: struct {
+        region: Region,
+    },
     qualified_ident_does_not_exist: struct {
         ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
         region: Region,
@@ -93,6 +109,9 @@ pub const Diagnostic = union(enum) {
     where_clause_not_allowed_in_type_decl: struct {
         region: Region,
     },
+    open_ext_not_allowed_in_type_decl: struct {
+        region: Region,
+    },
     var_across_function_boundary: struct {
         region: Region,
     },
@@ -107,6 +126,18 @@ pub const Diagnostic = union(enum) {
         redeclared_region: Region,
     },
     tuple_elem_not_canonicalized: struct {
+        region: Region,
+    },
+    file_import_not_found: struct {
+        path: StringLiteral.Idx,
+        region: Region,
+    },
+    file_import_io_error: struct {
+        path: StringLiteral.Idx,
+        region: Region,
+    },
+    file_import_not_utf8: struct {
+        path: StringLiteral.Idx,
         region: Region,
     },
     module_not_found: struct {
@@ -142,6 +173,10 @@ pub const Diagnostic = union(enum) {
         nested_name: Ident.Idx,
         region: Region,
     },
+    record_builder_map2_not_found: struct {
+        type_name: Ident.Idx,
+        region: Region,
+    },
     too_many_exports: struct {
         count: u32,
         region: Region,
@@ -162,6 +197,10 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     type_module_missing_matching_type: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    type_module_has_alias_not_nominal: struct {
         module_name: Ident.Idx,
         region: Region,
     },
@@ -258,6 +297,19 @@ pub const Diagnostic = union(enum) {
     break_outside_loop: struct {
         region: Region,
     },
+    return_outside_fn: struct {
+        region: Region,
+        context: ReturnContext,
+
+        pub const ReturnContext = enum(u8) {
+            /// Explicit `return` statement
+            return_statement,
+            /// Return as final expression in a block
+            return_expr,
+            /// `?` suffix operator (try operator)
+            try_suffix,
+        };
+    },
     /// Two or more type aliases form a cycle where each references another.
     /// This is not allowed because type aliases are transparent synonyms.
     /// Use nominal types (:=) for recursive types.
@@ -266,6 +318,12 @@ pub const Diagnostic = union(enum) {
         other_name: Ident.Idx,
         region: Region,
         other_region: Region,
+    },
+    /// A number literal uses the deprecated suffix syntax (e.g., 123u64 instead of 123.U64)
+    deprecated_number_suffix: struct {
+        suffix: StringLiteral.Idx,
+        suggested: StringLiteral.Idx,
+        region: Region,
     },
 
     pub const Idx = enum(u32) { _ };
@@ -281,6 +339,9 @@ pub const Diagnostic = union(enum) {
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
             .self_referential_definition => |d| d.region,
+            .circular_value_definition => |d| d.region,
+            .erroneous_value_use => |d| d.region,
+            .erroneous_value_expr => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
@@ -295,10 +356,14 @@ pub const Diagnostic = union(enum) {
             .malformed_type_annotation => |d| d.region,
             .malformed_where_clause => |d| d.region,
             .where_clause_not_allowed_in_type_decl => |d| d.region,
+            .open_ext_not_allowed_in_type_decl => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
             .tuple_elem_not_canonicalized => |d| d.region,
+            .file_import_not_found => |d| d.region,
+            .file_import_io_error => |d| d.region,
+            .file_import_not_utf8 => |d| d.region,
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
@@ -335,7 +400,9 @@ pub const Diagnostic = union(enum) {
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
+            .return_outside_fn => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
+            .deprecated_number_suffix => |d| d.region,
         };
     }
 
@@ -679,7 +746,7 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(allocator, "INVALID INTERPOLATION", .runtime_error);
         try report.document.addReflowingText("This string interpolation is not valid.");
         try report.document.addLineBreak();
-        try report.document.addReflowingText("String interpolation should use the format: \"text $(expression) more text\"");
+        try report.document.addReflowingText("String interpolation should use the format: \"text ${expression} more text\"");
         return report;
     }
 
@@ -1415,6 +1482,101 @@ pub const Diagnostic = union(enum) {
 
         return report;
     }
+    /// Build a report for "file import not found" diagnostic
+    pub fn buildFileImportNotFoundReport(
+        allocator: Allocator,
+        path: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "FILE NOT FOUND", .runtime_error);
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addReflowingText("The file ");
+        try report.document.addModuleName(owned_path);
+        try report.document.addReflowingText(" was not found.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Make sure the file exists relative to your source file:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "file import IO error" diagnostic
+    pub fn buildFileImportIOErrorReport(
+        allocator: Allocator,
+        path: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "FILE IMPORT ERROR", .runtime_error);
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addReflowingText("Could not read the file ");
+        try report.document.addModuleName(owned_path);
+        try report.document.addReflowingText(".");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("An IO error occurred while trying to read this file:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "file import not UTF-8" diagnostic
+    pub fn buildFileImportNotUtf8Report(
+        allocator: Allocator,
+        path: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "FILE NOT UTF-8", .runtime_error);
+
+        const owned_path = try report.addOwnedString(path);
+        try report.document.addReflowingText("The file ");
+        try report.document.addModuleName(owned_path);
+        try report.document.addReflowingText(" is not valid UTF-8.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("To import binary files, use `List(U8)` instead of `Str`:");
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        return report;
+    }
+
     /// Build a report for "module not found" diagnostic
     pub fn buildModuleNotFoundReport(
         allocator: Allocator,
@@ -1765,6 +1927,44 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. ");
         try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like ");
         try report.document.addInlineCode("a");
+        try report.document.addReflowingText(" instead.");
+
+        return report;
+    }
+
+    /// Build a report for "deprecated number suffix" diagnostic
+    pub fn buildDeprecatedNumberSuffixReport(
+        allocator: Allocator,
+        suffix: []const u8,
+        suggested: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "DEPRECATED NUMBER SUFFIX", .runtime_error);
+
+        const owned_suffix = try report.addOwnedString(suffix);
+        const owned_suggested = try report.addOwnedString(suggested);
+
+        try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addInlineCode(owned_suffix);
+        try report.document.addReflowingText(" suffix is no longer supported. Use ");
+        try report.document.addInlineCode(owned_suggested);
         try report.document.addReflowingText(" instead.");
 
         return report;

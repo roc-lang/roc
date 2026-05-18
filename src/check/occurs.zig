@@ -8,11 +8,8 @@
 //! The main entrypoint is `occurs()`. It analyzes the type graph rooted at a variable
 //! and reports whether the structure is recursive, and if so, what kind of recursion.
 //!
-//! The traversal uses a shared `Scratch` value to track visited nodes, recursion
-//! chains, and to temporarily mark variables during analysis. This is reset between runs.
-//!
-//! The check only mutates the `Mark` field of descriptors in `Store`, and all marks
-//! are reset before returning. Other descriptor state remains unchanged.
+//! The traversal uses a shared `Scratch` value to track visited nodes and recursion
+//! chains. This is reset between runs. The check does not mutate the `Store`.
 
 const std = @import("std");
 const base = @import("base");
@@ -25,7 +22,6 @@ const Store = types.Store;
 const DescStoreIdx = types.DescStoreIdx;
 const ResolvedVarDesc = types.ResolvedVarDesc;
 const Content = types.Content;
-const Mark = types.Mark;
 const Var = types.Var;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
@@ -49,9 +45,7 @@ pub const Result = enum {
 /// If the result is `recursive_nominal`, you can use `scratch.err_chain_nominal_vars`
 /// to check what nominal vars were encountered
 ///
-/// This function accepts a mutable reference to `Store`, but guarantees that it
-/// _only_ modifies a variable's `Mark`. Before returning, all visited nodes'
-/// `Mark`s will be reset to `none`.
+/// This function does not modify the `Store`.
 pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
     scratch.reset();
 
@@ -85,11 +79,6 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocat
         },
     };
 
-    // Reset the marks for all visited nodes
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        types_store.setDescMark(visited_desc_idx, Mark.none);
-    }
-
     return result;
 }
 
@@ -113,9 +102,6 @@ const CheckOccurs = struct {
     /// Init CheckOccurs
     ///
     /// Note that this struct does not own any of it's fields
-    ///
-    /// This function accepts a mutable reference to `Store`, and _must_ only
-    /// modify a var's `Mark`
     fn init(types_store: *Store, scratch: *Scratch) Self {
         return .{ .types_store = types_store, .scratch = scratch };
     }
@@ -130,7 +116,7 @@ const CheckOccurs = struct {
         const root = self.types_store.resolveVar(var_);
         const root_var = root.var_;
 
-        if (root.desc.mark == .visited) {
+        if (self.scratch.hasVisited(root.desc_idx)) {
             // If we've already visited this var and not errored, then it's not recursive
             return;
         } else if (self.scratch.hasSeenVar(root_var)) {
@@ -213,10 +199,9 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex => {
+                .flex => |_| {
                     // Flex variables are not checked for cycles - they are allowed to have
                     // self-referential constraints. Only structural content is checked.
-                    // This matches the Rust compiler behavior (see subs.rs occurs function).
                 },
                 .rigid => {},
                 .err => {},
@@ -224,7 +209,6 @@ const CheckOccurs = struct {
             self.scratch.popSeen();
 
             self.scratch.appendVisited(root.desc_idx) catch return Error.AllocatorError;
-            self.types_store.setDescMark(root.desc_idx, Mark.visited);
         }
     }
 
@@ -323,6 +307,13 @@ pub const Scratch = struct {
     fn hasSeenVar(self: *const Self, var_: Var) bool {
         for (self.seen.items.items) |seen_var| {
             if (seen_var == var_) return true;
+        }
+        return false;
+    }
+
+    fn hasVisited(self: *const Self, desc_idx: DescStoreIdx) bool {
+        for (self.visited.items.items) |visited_idx| {
+            if (visited_idx == desc_idx) return true;
         }
         return false;
     }
@@ -458,6 +449,7 @@ test "occurs: recursive alias (v = Alias(List v))" {
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg},
+        Ident.Idx.NONE,
     ));
 
     const result = occurs(&types_store, &scratch, v);
@@ -484,6 +476,7 @@ test "occurs: alias with no recursion (v = Alias Str)" {
         types.TypeIdent{ .ident_idx = undefined },
         backing_var,
         &.{arg_var},
+        Ident.Idx.NONE,
     ));
 
     const result = occurs(&types_store, &scratch, alias_var);
@@ -519,10 +512,6 @@ test "occurs: recursive tag union (v = [ Cons(elem, v), Nil ]" {
     const err_chain = scratch.errChainSlice();
     try std.testing.expectEqual(1, err_chain.len);
     try std.testing.expectEqual(linked_list, err_chain[0]);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }
 test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     const gpa = std.testing.allocator;
@@ -565,10 +554,6 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     try std.testing.expect(err_chain.len == 2);
     try std.testing.expectEqual(err_chain[0], boxed_linked_list);
     try std.testing.expectEqual(err_chain[1], linked_list);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }
 
 test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
@@ -610,10 +595,6 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     try std.testing.expectEqual(1, err_chain_nominal1.len);
     try std.testing.expectEqual(nominal_type, err_chain_nominal1[0]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
-
     // assert that starting from the the tag union, it works
 
     const result2 = occurs(&types_store, &scratch, backing_var);
@@ -627,10 +608,6 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     const err_chain_nominal2 = scratch.errChainNominalVarsSlice();
     try std.testing.expectEqual(1, err_chain_nominal2.len);
     try std.testing.expectEqual(nominal_type, err_chain_nominal2[0]);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }
 
 test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB := [ Cons(Elem, TypeA), Nil ])" {
@@ -686,10 +663,6 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal1[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal1[1]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
-
     // assert that starting from the `TypeB` nominal, it works
 
     const result2 = occurs(&types_store, &scratch, type_b_nominal);
@@ -706,10 +679,6 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal2[0]);
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal2[1]);
 
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
-
     // assert that starting from the the tag union, it works
 
     const result3 = occurs(&types_store, &scratch, type_b_backing);
@@ -725,8 +694,4 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(2, err_chain_nominal3.len);
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal3[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal3[1]);
-
-    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
-        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
-    }
 }

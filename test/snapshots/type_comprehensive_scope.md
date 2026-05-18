@@ -44,11 +44,9 @@ Complex : {
 ~~~
 # EXPECTED
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
-TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:34
 UNDECLARED TYPE - type_comprehensive_scope.md:16:38:16:42
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
-TOO MANY ARGS - type_comprehensive_scope.md:29:10:29:24
 # PROBLEMS
 **MUTUALLY RECURSIVE TYPE ALIASES**
 The type alias _Node_ and _Tree_ form a recursive cycle.
@@ -68,24 +66,6 @@ And it references _Tree_ declared here:
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _Try_ is being redeclared.
-
-The redeclaration is here:
-**type_comprehensive_scope.md:10:1:10:34:**
-```roc
-Try(ok, err) : [Ok(ok), Err(err)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Try_ was already declared here:
-**type_comprehensive_scope.md:1:1:1:1:**
-```roc
-# Built-in types should work
-```
-^
 
 
 **UNDECLARED TYPE**
@@ -126,15 +106,6 @@ This type is referenced here:
 BadType : SomeUndeclaredType
 ```
           ^^^^^^^^^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects 0 arguments, but got 2 instead.
-**type_comprehensive_scope.md:29:10:29:24:**
-```roc
-MyDict : Dict(Str, U64)
-```
-         ^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -271,7 +242,9 @@ EndOfFile,
 ~~~roc
 # Built-in types should work
 MyU64 : U64
+
 MyString : Str
+
 MyBool : Bool
 
 # Simple user-defined type
@@ -297,6 +270,7 @@ BadType : SomeUndeclaredType
 
 # Using built-in types with parameters
 MyList : List(Str)
+
 MyDict : Dict(Str, U64)
 
 # Complex nested type using multiple declared types
@@ -357,7 +331,7 @@ Complex : {
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(s-alias-decl
 		(ty-header (name "MyTry"))
-		(ty-apply (name "Try") (builtin)
+		(ty-apply (name "Try") (local)
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -381,7 +355,7 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Try") (builtin)
+				(ty-apply (name "Try") (local)
 					(ty-lookup (name "Bool") (builtin))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")

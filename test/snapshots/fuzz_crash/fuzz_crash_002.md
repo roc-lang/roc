@@ -20,7 +20,7 @@ PARSE ERROR - fuzz_crash_002.md:1:21:1:23
 PARSE ERROR - fuzz_crash_002.md:1:23:1:24
 PARSE ERROR - fuzz_crash_002.md:1:24:1:25
 MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
-MISSING MAIN! FUNCTION - fuzz_crash_002.md:1:1:1:25
+DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **;** is not expected in a type annotation.
@@ -153,19 +153,16 @@ modu:;::::::::::::::le[%
      ^
 
 
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_crash_002.md:1:1:1:25:**
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_002.md:1:1:1:7:**
 ```roc
 modu:;::::::::::::::le[%
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^
 
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

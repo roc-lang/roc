@@ -9,21 +9,18 @@ type=file
 b:r
 ~~~
 # EXPECTED
-MISSING MAIN! FUNCTION - fuzz_crash_079.md:2:1:2:4
+DECLARATION HAS NO VALUE - fuzz_crash_079.md:2:1:2:4
 # PROBLEMS
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
 **fuzz_crash_079.md:2:1:2:4:**
 ```roc
 b:r
 ```
 ^^^
 
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

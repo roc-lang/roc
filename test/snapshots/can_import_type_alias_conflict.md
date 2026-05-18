@@ -13,26 +13,9 @@ JsonValue : U64
 main = 42
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
+NIL
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `JsonValue` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_type_alias_conflict.md:1:1:1:38:**
-```roc
-import json.Json exposing [JsonValue]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `JsonValue` was already defined here:
-**can_import_type_alias_conflict.md:1:1:1:1:**
-```roc
-import json.Json exposing [JsonValue]
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
@@ -77,10 +60,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "Dec")))
 	(type_decls
 		(alias (type "JsonValue")
 			(ty-header (name "JsonValue"))))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Dec"))))
 ~~~

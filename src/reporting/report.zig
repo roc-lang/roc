@@ -211,6 +211,14 @@ pub const Report = struct {
                         .end_col_idx = region_data.end_column,
                     };
                 },
+                .source_code_with_underlines => |underlines_data| {
+                    return RegionInfo{
+                        .start_line_idx = underlines_data.display_region.start_line,
+                        .start_col_idx = underlines_data.display_region.start_column,
+                        .end_line_idx = underlines_data.display_region.end_line,
+                        .end_col_idx = underlines_data.display_region.end_column,
+                    };
+                },
                 else => {},
             }
         }

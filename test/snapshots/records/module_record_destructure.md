@@ -89,7 +89,7 @@ extract_age = |person| {
 						(p-assign (ident "person"))))
 				(e-binop (op "sub")
 					(e-binop (op "add")
-						(e-dot-access (field "a")
+						(e-field-access (field "a")
 							(receiver
 								(e-record
 									(fields
@@ -97,7 +97,7 @@ extract_age = |person| {
 											(e-num (value "0")))))))
 						(e-lookup-local
 							(p-assign (ident "age"))))
-					(e-dot-access (field "a")
+					(e-field-access (field "a")
 						(receiver
 							(e-record
 								(fields

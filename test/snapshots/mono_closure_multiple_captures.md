@@ -9,19 +9,17 @@ func = |a, b| {
 	add_ab = |x| a + b + x
 	add_ab(10)
 }
+
 result = func(1, 2)
 ~~~
 # MONO
 ~~~roc
-c1_add_ab = |x, captures| captures.a + captures.b + x
-
 func = |a, b| {
-	add_ab = C1_add_ab({ a, b })
-	match add_ab {
-		C1_add_ab(captures) => c1_add_ab(10, captures)
-	}
+	add_ab = |x| a + b + x
+	add_ab(10)
 }
 
+result : Dec
 result = func(1, 2)
 ~~~
 # FORMATTED
@@ -86,36 +84,28 @@ EndOfFile,
 			(e-block
 				(s-let
 					(p-assign (ident "add_ab"))
-					(e-tag (name "#1_add_ab")
-						(args
-							(e-record
-								(fields
-									(field (name "a")
-										(e-lookup-local
-											(p-assign (ident "a"))))
-									(field (name "b")
-										(e-lookup-local
-											(p-assign (ident "b")))))))))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "add_ab"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-call
-										(e-lookup-local
-											(p-assign (ident "c1_add_ab")))
-										(e-num (value "10"))
-										(e-lookup-local
-											(p-assign (ident "captures"))))))))))))
+					(e-closure
+						(captures
+							(capture (ident "a"))
+							(capture (ident "b")))
+						(e-lambda
+							(args
+								(p-assign (ident "x")))
+							(e-binop (op "add")
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "a")))
+									(e-lookup-local
+										(p-assign (ident "b"))))
+								(e-lookup-local
+									(p-assign (ident "x")))))))
+				(e-call (constraint-fn-var 47)
+					(e-lookup-local
+						(p-assign (ident "add_ab")))
+					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
+		(e-call (constraint-fn-var 75)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "1"))
@@ -125,9 +115,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, c -> c where [c.from_numeral : c, c -> d, c.plus : c, c -> c]"))
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]")))
+		(patt (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec")))
 	(expressions
-		(expr (type "c, c -> _ret where [c.from_numeral : c, c -> _ret2, c.plus : c, c -> c]"))
-		(expr (type "_c where [_d.plus : e, e -> e, _f.from_numeral : e, e -> g]"))))
+		(expr (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))))
 ~~~

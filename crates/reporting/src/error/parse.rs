@@ -126,7 +126,7 @@ fn to_syntax_report<'a>(
         }
         SyntaxError::Eof(region) => {
             let doc = alloc.stack([
-                alloc.reflow("End of Field"),
+                alloc.reflow("End of File"),
                 alloc.region(lines.convert_region(*region), severity),
             ]);
 

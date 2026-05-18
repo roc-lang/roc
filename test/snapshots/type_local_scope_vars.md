@@ -39,15 +39,15 @@ test_scoped = |a, b| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_local_scope_vars.md:19:16:19:17
+TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**type_local_scope_vars.md:19:16:19:17:**
+**type_local_scope_vars.md:19:14:**
 ```roc
 		_result2 = f(b)
 ```
-		             ^
+               ^
 
 This argument has the type:
 
@@ -219,7 +219,7 @@ main! = |_| {}
 							(p-assign (ident "z")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call
+					(e-call (constraint-fn-var 74)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
@@ -229,11 +229,10 @@ main! = |_| {}
 					(e-call
 						(e-lookup-local
 							(p-assign (ident "f")))
-						(e-lookup-local
-							(p-assign (ident "b")))))
+						(e-runtime-error (tag "erroneous_value_use"))))
 				(s-let
 					(p-assign (ident "_result3"))
-					(e-call
+					(e-call (constraint-fn-var 81)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
@@ -243,8 +242,7 @@ main! = |_| {}
 					(e-call
 						(e-lookup-local
 							(p-assign (ident "g")))
-						(e-lookup-local
-							(p-assign (ident "b")))))
+						(e-runtime-error (tag "erroneous_value_use"))))
 				(e-lookup-local
 					(p-assign (ident "result")))))
 		(annotation
@@ -266,6 +264,6 @@ main! = |_| {}
 		(patt (type "a, b -> a"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "a, Error -> a"))
+		(expr (type "a, b -> a"))
 		(expr (type "_arg -> {}"))))
 ~~~

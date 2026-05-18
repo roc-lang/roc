@@ -20,7 +20,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 
 The value's type, which does not have a method named **not**, is:
 
-    [True, .._others]
+    [True, ..]
 
 # TOKENS
 ~~~zig
@@ -44,7 +44,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
+(e-call (constraint-fn-var 15)
 	(e-lambda
 		(args
 			(p-assign (ident "x")))

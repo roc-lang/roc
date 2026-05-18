@@ -341,8 +341,11 @@ identity = |xx| xx
 
 # Use more names to test the sequence
 b = "hello"
+
 c = 3.14
+
 d = True
+
 e = False
 
 # This should get type 'f -> f' since a,b,c,d,e are taken
@@ -354,25 +357,45 @@ combine = |first, second| (first, second)
 
 # Use even more names to test wraparound behavior
 f = 1
+
 g = 2
+
 h = 3
+
 i = 4
+
 j = 5
+
 k = 6
+
 l = 7
+
 m = 8
+
 n = 9
+
 o = 10
+
 p = 11
+
 q = 12
+
 r = 13
+
 s = 14
+
 t = 15
+
 u = 16
+
 v = 17
+
 w = 18
+
 x = 19
+
 y = 20
+
 z = 21
 
 # This should get type 'aa -> aa' since a-z are taken
@@ -380,6 +403,7 @@ yetAnotherIdentity = |arg| arg
 
 # Test that we still avoid collisions even with two-letter names
 aa = 100
+
 ab = 200
 
 # This should skip 'aa' and 'ab' and use 'ac -> ac'
@@ -527,130 +551,121 @@ main! = |_| {
 				(p-assign (ident "param")))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "identity"))
-				(capture (ident "anotherIdentity"))
-				(capture (ident "combine"))
-				(capture (ident "yetAnotherIdentity"))
-				(capture (ident "finalIdentity"))
-				(capture (ident "a"))
-				(capture (ident "f")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "result1"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "identity")))
-							(e-num (value "123"))))
-					(s-let
-						(p-assign (ident "result2"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "anotherIdentity")))
-							(e-string
-								(e-literal (string "test")))))
-					(s-let
-						(p-assign (ident "result3"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "combine")))
-							(e-lookup-local
-								(p-assign (ident "result1")))
-							(e-lookup-local
-								(p-assign (ident "result2")))))
-					(s-let
-						(p-assign (ident "result4"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "yetAnotherIdentity")))
-							(e-tag (name "True"))))
-					(s-let
-						(p-assign (ident "result5"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "finalIdentity")))
-							(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
-					(e-binop (op "add")
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "result1"))
+					(e-call (constraint-fn-var 427)
 						(e-lookup-local
-							(p-assign (ident "a")))
+							(p-assign (ident "identity")))
+						(e-num (value "123"))))
+				(s-let
+					(p-assign (ident "result2"))
+					(e-call (constraint-fn-var 436)
 						(e-lookup-local
-							(p-assign (ident "f")))))))))
+							(p-assign (ident "anotherIdentity")))
+						(e-string
+							(e-literal (string "test")))))
+				(s-let
+					(p-assign (ident "result3"))
+					(e-call (constraint-fn-var 441)
+						(e-lookup-local
+							(p-assign (ident "combine")))
+						(e-lookup-local
+							(p-assign (ident "result1")))
+						(e-lookup-local
+							(p-assign (ident "result2")))))
+				(s-let
+					(p-assign (ident "result4"))
+					(e-call (constraint-fn-var 445)
+						(e-lookup-local
+							(p-assign (ident "yetAnotherIdentity")))
+						(e-tag (name "True"))))
+				(s-let
+					(p-assign (ident "result5"))
+					(e-call (constraint-fn-var 458)
+						(e-lookup-local
+							(p-assign (ident "finalIdentity")))
+						(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "a")))
+					(e-lookup-local
+						(p-assign (ident "f"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
+		(patt (type "Dec"))
 		(patt (type "ac -> ac"))
 		(patt (type "Str"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "[True, .._others]"))
-		(patt (type "[False, .._others]"))
+		(patt (type "Dec"))
+		(patt (type "[True, ..]"))
+		(patt (type "[False, ..]"))
 		(patt (type "ac -> ac"))
 		(patt (type "ac, ad -> (ac, ad)"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "ac -> ac"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "ac -> ac"))
-		(patt (type "_arg2 -> ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]")))
+		(patt (type "_arg2 -> Dec")))
 	(expressions
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
+		(expr (type "Dec"))
 		(expr (type "ac -> ac"))
 		(expr (type "Str"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "[True, .._others]"))
-		(expr (type "[False, .._others]"))
+		(expr (type "Dec"))
+		(expr (type "[True, ..]"))
+		(expr (type "[False, ..]"))
 		(expr (type "ac -> ac"))
 		(expr (type "ac, ad -> (ac, ad)"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "ac -> ac"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "ac -> ac"))
-		(expr (type "_arg2 -> ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))))
+		(expr (type "_arg2 -> Dec"))))
 ~~~

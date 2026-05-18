@@ -117,12 +117,14 @@ pub const CommonIdents = extern struct {
     @"try": Ident.Idx,
     out_of_range: Ident.Idx,
     builtin_module: Ident.Idx,
+    main_bang: Ident.Idx,
     str: Ident.Idx,
     list: Ident.Idx,
     box: Ident.Idx,
 
     // Unqualified builtin type names (for checking if a type name shadows a builtin)
     num: Ident.Idx,
+    bool: Ident.Idx,
     u8: Ident.Idx,
     u16: Ident.Idx,
     u32: Ident.Idx,
@@ -141,6 +143,7 @@ pub const CommonIdents = extern struct {
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
+    builtin_str_inspect: Ident.Idx,
     u8_type: Ident.Idx,
     i8_type: Ident.Idx,
     u16_type: Ident.Idx,
@@ -154,6 +157,7 @@ pub const CommonIdents = extern struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    bool_type: Ident.Idx,
 
     // Field/tag names used during type checking and evaluation
     before_dot: Ident.Idx,
@@ -186,6 +190,8 @@ pub const CommonIdents = extern struct {
     // Synthetic identifiers for ? operator desugaring
     question_ok: Ident.Idx,
     question_err: Ident.Idx,
+    // Synthetic identifier for .. implicit rigids in open tag unions or records
+    open_ext: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -209,11 +215,13 @@ pub const CommonIdents = extern struct {
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
+            .main_bang = try common.insertIdent(gpa, Ident.for_text("main!")),
             .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
+            .bool = try common.insertIdent(gpa, Ident.for_text("Bool")),
             .u8 = try common.insertIdent(gpa, Ident.for_text("U8")),
             .u16 = try common.insertIdent(gpa, Ident.for_text("U16")),
             .u32 = try common.insertIdent(gpa, Ident.for_text("U32")),
@@ -227,9 +235,10 @@ pub const CommonIdents = extern struct {
             .f32 = try common.insertIdent(gpa, Ident.for_text("F32")),
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
-            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Try")),
-            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Num.Numeral")),
+            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
+            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
+            .builtin_str_inspect = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.inspect")),
             .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
             .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
             .u16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16")),
@@ -243,6 +252,7 @@ pub const CommonIdents = extern struct {
             .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
             .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
             .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
+            .bool_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Bool")),
             .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
             .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
             .provided_by_compiler = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler")),
@@ -273,6 +283,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = try common.insertIdent(gpa, Ident.for_text("#ok")),
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
         };
     }
 
@@ -299,11 +311,13 @@ pub const CommonIdents = extern struct {
             .@"try" = common.findIdent("Try") orelse unreachable,
             .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module = common.findIdent("Builtin") orelse unreachable,
+            .main_bang = common.findIdent("main!") orelse unreachable,
             .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
             // Unqualified builtin type names
             .num = common.findIdent("Num") orelse unreachable,
+            .bool = common.findIdent("Bool") orelse unreachable,
             .u8 = common.findIdent("U8") orelse unreachable,
             .u16 = common.findIdent("U16") orelse unreachable,
             .u32 = common.findIdent("U32") orelse unreachable,
@@ -317,9 +331,10 @@ pub const CommonIdents = extern struct {
             .f32 = common.findIdent("F32") orelse unreachable,
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
-            .builtin_try = common.findIdent("Try") orelse unreachable,
-            .builtin_numeral = common.findIdent("Num.Numeral") orelse unreachable,
+            .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
+            .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
+            .builtin_str_inspect = common.findIdent("Builtin.Str.inspect") orelse unreachable,
             .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
             .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
             .u16_type = common.findIdent("Builtin.Num.U16") orelse unreachable,
@@ -333,6 +348,7 @@ pub const CommonIdents = extern struct {
             .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
             .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
             .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .bool_type = common.findIdent("Builtin.Bool") orelse unreachable,
             .before_dot = common.findIdent("before_dot") orelse unreachable,
             .after_dot = common.findIdent("after_dot") orelse unreachable,
             .provided_by_compiler = common.findIdent("ProvidedByCompiler") orelse unreachable,
@@ -363,6 +379,8 @@ pub const CommonIdents = extern struct {
             // Synthetic identifiers for ? operator desugaring
             .question_ok = common.findIdent("#ok") orelse unreachable,
             .question_err = common.findIdent("#err") orelse unreachable,
+            // Synthetic identifier for .. implicit rigids in open tag unions or records
+            .open_ext = common.findIdent("#others") orelse unreachable,
         };
     }
 };
@@ -403,10 +421,9 @@ requires_types: RequiredType.SafeList,
 /// Type alias mappings from for-clauses in requires declarations.
 /// Stores (alias_name, rigid_name) pairs like (Model, model).
 for_clause_aliases: ForClauseAlias.SafeList,
-/// Rigid type variable mappings from platform for-clause after unification.
-/// Maps rigid names (e.g., "model") to their resolved type variables in the app's type store.
-/// Populated during checkPlatformRequirements when the platform has a for-clause.
-rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, TypeVar),
+/// Platform provides entries mapping Roc identifiers to FFI symbols.
+/// Populated during canonicalization for platform modules. Empty for non-platform modules.
+provides_entries: ProvidesEntry.SafeList,
 /// All builtin stmts (temporary until module imports are working)
 builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
@@ -416,8 +433,12 @@ imports: CIR.Import.Store,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
 module_name: []const u8,
-/// The module's name as an interned identifier (for fast comparisons)
-module_name_idx: Ident.Idx,
+/// The module's bare name as an interned identifier (e.g., "Color").
+/// Used for display, type module validation, and method name construction.
+display_module_name_idx: Ident.Idx,
+/// Package-qualified module identity (e.g., "pf.Color"). Used as origin_module on types
+/// for identity comparisons across packages. Set by the coordinator after parse or cache hit.
+qualified_module_ident: Ident.Idx,
 /// Diagnostics collected during canonicalization (optional)
 diagnostics: CIR.Diagnostic.Span,
 /// Stores the raw nodes which represent the intermediate representation
@@ -432,10 +453,6 @@ evaluation_order: ?*DependencyGraph.EvaluationOrder,
 /// Interned once during init to avoid repeated string comparisons.
 idents: CommonIdents,
 
-/// Deferred numeric literals collected during type checking
-/// These will be validated during comptime evaluation
-deferred_numeric_literals: DeferredNumericLiteral.SafeList,
-
 /// Import mapping for type display names in error messages.
 /// Maps fully-qualified type identifiers to their shortest display names based on imports.
 /// Built during canonicalization when processing import statements.
@@ -447,16 +464,6 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
 
-/// Deferred numeric literal for compile-time validation
-pub const DeferredNumericLiteral = struct {
-    expr_idx: CIR.Expr.Idx,
-    type_var: TypeVar,
-    constraint: types_mod.StaticDispatchConstraint,
-    region: Region,
-
-    pub const SafeList = collections.SafeList(@This());
-};
-
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
 pub const ForClauseAlias = struct {
@@ -466,6 +473,19 @@ pub const ForClauseAlias = struct {
     rigid_name: Ident.Idx,
     /// The type annotation of this alias stmt
     alias_stmt_idx: CIR.Statement.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Platform provides entry mapping a Roc identifier to its FFI symbol.
+/// Populated during canonicalization for platform modules from the provides clause.
+/// For example, `{ main_for_host!: "main" }` creates an entry with ident="main_for_host!"
+/// and ffi_symbol pointing to the interned string "main".
+pub const ProvidesEntry = struct {
+    /// The Roc identifier (e.g., "main_for_host!")
+    ident: Ident.Idx,
+    /// The FFI symbol string (e.g., "main")
+    ffi_symbol: StringLiteral.Idx,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -487,7 +507,8 @@ pub const RequiredType = struct {
 };
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
-/// This is used when loading a ModuleEnv from shared memory at a different address.
+/// This is used by serialized compiler artifacts whose internal pointers are
+/// stored relative to the artifact buffer.
 pub fn relocate(self: *Self, offset: isize) void {
     // Relocate all sub-structures that contain pointers
     self.common.relocate(offset);
@@ -495,9 +516,9 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.external_decls.relocate(offset);
     self.requires_types.relocate(offset);
     self.for_clause_aliases.relocate(offset);
+    self.provides_entries.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
-    self.deferred_numeric_literals.relocate(offset);
     self.method_idents.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
@@ -518,7 +539,8 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
-    self.module_name_idx = try self.insertIdent(Ident.for_text(module_name));
+    self.display_module_name_idx = try self.insertIdent(Ident.for_text(module_name));
+    self.qualified_module_ident = self.display_module_name_idx; // Default to bare name; coordinator later records the package-qualified name
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
@@ -550,17 +572,17 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
-        .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
+        .provides_entries = try ProvidesEntry.SafeList.initCapacity(gpa, 4),
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
-        .module_name = undefined, // Will be set later during canonicalization
-        .module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
+        .module_name = "", // May be set later during canonicalization
+        .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
+        .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
         .idents = idents,
-        .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
     };
@@ -573,9 +595,8 @@ pub fn deinit(self: *Self) void {
     self.external_decls.deinit(self.gpa);
     self.requires_types.deinit(self.gpa);
     self.for_clause_aliases.deinit(self.gpa);
-    self.rigid_vars.deinit(self.gpa);
+    self.provides_entries.deinit(self.gpa);
     self.imports.deinit(self.gpa);
-    self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
@@ -585,6 +606,39 @@ pub fn deinit(self: *Self) void {
         eval_order.deinit();
         self.gpa.destroy(eval_order);
     }
+}
+
+/// Deinitialize a cached module environment.
+/// This frees heap-allocated data from deserialization:
+/// - Hash maps (imports, import_mapping)
+/// - Type store arrays (when using deserializeWithMutableTypes)
+/// - NodeStore regions (when using deserializeWithMutableTypes)
+///
+/// After deserialization with deserializeWithMutableTypes, the type store
+/// arrays and NodeStore regions are heap-allocated and can be mutated.
+/// Other data (common env, nodes, etc.) still points into the cache buffer
+/// and must NOT be freed.
+///
+/// Call this instead of deinit() for modules loaded from cache.
+pub fn deinitCachedModule(self: *Self) void {
+    // Free the type store arrays (allocated by deserializeWithMutableTypes)
+    self.types.deinit();
+
+    // Free the NodeStore regions (allocated by deserializeWithMutableTypes)
+    self.store.regions.deinit(self.gpa);
+
+    // Only free the hash map that was allocated during deserialization
+    // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
+    self.imports.deinitMapOnly(self.gpa);
+
+    // import_mapping is initialized empty during deserialization and may have
+    // items added later, so we need to free it
+    self.import_mapping.deinit();
+
+    // If enableRuntimeInserts was called on the interner, it allocated new memory
+    // that needs to be freed. The interner.deinit checks supports_inserts internally
+    // and will only free if memory was actually allocated (not for pure cached data).
+    self.common.idents.interner.deinit(self.gpa);
 }
 
 // Module compilation functionality
@@ -623,13 +677,41 @@ pub const castIdx = CIR.castIdx;
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
-    const all_diagnostics = try self.store.diagnosticSpanFrom(0);
-    const diagnostic_indices = self.store.sliceDiagnostics(all_diagnostics);
+    const diagnostic_indices = self.store.sliceDiagnostics(self.diagnostics);
     const diagnostics = try self.gpa.alloc(CIR.Diagnostic, diagnostic_indices.len);
     for (diagnostic_indices, 0..) |diagnostic_idx, i| {
         diagnostics[i] = self.store.getDiagnostic(diagnostic_idx);
     }
     return diagnostics;
+}
+
+/// Publish diagnostics that have been recorded since the current diagnostic
+/// span was last finalized.
+pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
+    const scratch = self.store.scratch orelse return;
+    const new_top = scratch.diagnostics.top();
+    if (new_top == 0) return;
+
+    const existing = self.store.sliceDiagnostics(self.diagnostics);
+    const index_start = self.store.index_data.len();
+
+    for (existing) |diagnostic_idx| {
+        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+    }
+
+    var i: u32 = 0;
+    while (i < new_top) : (i += 1) {
+        const diagnostic_idx = scratch.diagnostics.items.items[@intCast(i)];
+        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+    }
+
+    scratch.diagnostics.clearFrom(0);
+    self.diagnostics = .{
+        .span = .{
+            .start = @intCast(index_start),
+            .len = @intCast(existing.len + new_top),
+        },
+    };
 }
 
 /// Compilation error report type for user-friendly error messages
@@ -714,6 +796,77 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .circular_value_definition => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "CIRCULAR VALUE DEFINITION", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The value ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is part of a recursive non-function definition cycle.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .erroneous_value_use => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "ERRONEOUS VALUE USE", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("This use of ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" was rewritten to crash because the referenced top-level value failed type checking earlier.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this value.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .erroneous_value_expr => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "ERRONEOUS VALUE", .runtime_error);
+            try report.document.addReflowingText("This expression was rewritten to crash because it failed type checking.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this expression.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1431,6 +1584,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_from_missing_module => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE NOT FOUND", .runtime_error);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is qualified by the module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(", but that module was not found in this Roc project.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .value_not_exposed => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -1457,6 +1642,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
 
             break :blk report;
+        },
+        .file_import_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotFoundReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_io_error => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportIOErrorReport(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .file_import_not_utf8 => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const path_text = self.common.getString(data.path);
+            break :blk try CIR.Diagnostic.buildFileImportNotUtf8Report(
+                allocator,
+                path_text,
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
         },
         .module_not_found => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
@@ -1596,6 +1817,40 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .record_builder_map2_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "RECORD BUILDER NOT SUPPORTED", .runtime_error);
+
+            const type_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_bytes);
+
+            // "The type `Foo` is used in a record builder expression, but does not implement `map2`:"
+            try report.document.addReflowingText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is used in a record builder expression, but does not implement ");
+            try report.document.addInlineCode("map2");
+            try report.document.addReflowingText(":");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+
+            // Hint
+            try report.document.addReflowingText("Hint: To use ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" as a record builder, add a ");
+            try report.document.addInlineCode("map2");
+            try report.document.addReflowingText(" method to its type module.");
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -1621,6 +1876,36 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .open_ext_not_allowed_in_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "OPEN EXT NOT ALLOWED IN TYPE DECLARATION", .warning);
+
+            // Format the message to match origin/main
+            try report.document.addText("You cannot use a ");
+            try report.document.addInlineCode("..");
+            try report.document.addReflowingText(" inside a type declaration:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" You need a named variable, like ");
+            try report.document.addInlineCode("..others");
+            try report.document.addReflowingText(", to use this here.");
+
+            break :blk report;
+        },
         .type_module_missing_matching_type => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -1629,33 +1914,96 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const module_name_bytes = self.getIdent(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
-            try report.document.addReflowingText("Type modules must have a type declaration matching the module name.");
+            try report.document.addReflowingText("Type modules must have a nominal type declaration matching the module name.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
             try report.document.addText("This file is named ");
             try report.document.addInlineCode(module_name);
-            try report.document.addReflowingText(".roc, but no top-level type declaration named ");
+            try report.document.addReflowingText(".roc, but no top-level nominal type named ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(" was found.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("Add either:");
+            try report.document.addReflowingText("Add a nominal type like:");
             try report.document.addLineBreak();
             const nominal_msg = try std.fmt.allocPrint(allocator, "{s} := ...", .{module_name_bytes});
             defer allocator.free(nominal_msg);
             const owned_nominal = try report.addOwnedString(nominal_msg);
             try report.document.addInlineCode(owned_nominal);
-            try report.document.addReflowingText(" (nominal type)");
             try report.document.addLineBreak();
             try report.document.addReflowingText("or:");
             try report.document.addLineBreak();
-            const alias_msg = try std.fmt.allocPrint(allocator, "{s} : ...", .{module_name_bytes});
-            defer allocator.free(alias_msg);
-            const owned_alias = try report.addOwnedString(alias_msg);
-            try report.document.addInlineCode(owned_alias);
-            try report.document.addReflowingText(" (type alias)");
+            const opaque_msg = try std.fmt.allocPrint(allocator, "{s} :: ...", .{module_name_bytes});
+            defer allocator.free(opaque_msg);
+            const owned_opaque = try report.addOwnedString(opaque_msg);
+            try report.document.addInlineCode(owned_opaque);
+            try report.document.addReflowingText(" (opaque nominal type)");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_module_has_alias_not_nominal => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE MODULE REQUIRES NOMINAL TYPE", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addText("This file is named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addText(".roc, and contains a type alias ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type modules must use nominal types (");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText(" or ");
+            try report.document.addInlineCode("::");
+            try report.document.addReflowingText("), not type aliases (");
+            try report.document.addInlineCode(":");
+            try report.document.addReflowingText(").");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Nominal types must be records or tag unions:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("# Record example:");
+            try report.document.addLineBreak();
+            const record_example = try std.fmt.allocPrint(allocator, "{s} := {{ data: List(U8) }}.{{}}", .{module_name_bytes});
+            defer allocator.free(record_example);
+            const owned_record = try report.addOwnedString(record_example);
+            try report.document.addInlineCode(owned_record);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("# Tag union example:");
+            try report.document.addLineBreak();
+            const tag_example = try std.fmt.allocPrint(allocator, "{s} := [ State(List(U8)) ].{{}}", .{module_name_bytes});
+            defer allocator.free(tag_example);
+            const owned_tag = try report.addOwnedString(tag_example);
+            try report.document.addInlineCode(owned_tag);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Tip: Nominal types have their own identity and can have associated functions. Type aliases (");
+            try report.document.addInlineCode(":");
+            try report.document.addReflowingText(") are just shorthand for another type and cannot define modules.");
             try report.document.addLineBreak();
 
             const owned_filename = try report.addOwnedString(filename);
@@ -1995,6 +2343,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .return_outside_fn => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = switch (data.context) {
+                .try_suffix => r: {
+                    var r = Report.init(allocator, "TRY OPERATOR OUTSIDE FUNCTION", .runtime_error);
+                    try r.document.addReflowingText("The ");
+                    try r.document.addAnnotated("?", .inline_code);
+                    try r.document.addReflowingText(" operator can only be used inside function bodies because it can cause an early return.");
+                    break :r r;
+                },
+                .return_statement, .return_expr => r: {
+                    var r = Report.init(allocator, "RETURN OUTSIDE FUNCTION", .runtime_error);
+                    try r.document.addReflowingText("The ");
+                    try r.document.addAnnotated("return", .inline_code);
+                    try r.document.addReflowingText(" keyword can only be used inside function bodies.");
+                    break :r r;
+                },
+            };
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .mutually_recursive_type_aliases => |data| blk: {
             const type_name = self.getIdent(data.name);
             const other_type_name = self.getIdent(data.other_name);
@@ -2046,7 +2426,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        else => unreachable, // All diagnostics must have explicit handlers
+        .deprecated_number_suffix => |data| blk: {
+            const suffix = self.getString(data.suffix);
+            const suggested = self.getString(data.suggested);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "DEPRECATED NUMBER SUFFIX", .runtime_error);
+            const owned_suffix = try report.addOwnedString(suffix);
+            const owned_suggested = try report.addOwnedString(suggested);
+
+            try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The ");
+            try report.document.addInlineCode(owned_suffix);
+            try report.document.addReflowingText(" suffix is no longer supported. Use ");
+            try report.document.addInlineCode(owned_suggested);
+            try report.document.addReflowingText(" instead.");
+
+            break :blk report;
+        },
+        else => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
 
@@ -2085,20 +2496,23 @@ pub const Serialized = extern struct {
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
-    rigid_vars_reserved: [4]u64, // Reserved space for rigid_vars (AutoHashMapUnmanaged is ~32 bytes), initialized at runtime
+    provides_entries: ProvidesEntry.SafeList.Serialized,
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
-    module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
+    display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
+    qualified_module_ident_reserved: u32, // Reserved space for qualified_module_ident field
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
-    deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
+    // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
+    _reserved_flags: [2]u8 = .{ 0, 0 },
+    _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -2119,6 +2533,7 @@ pub const Serialized = extern struct {
 
         try self.requires_types.serialize(&env.requires_types, allocator, writer);
         try self.for_clause_aliases.serialize(&env.for_clause_aliases, allocator, writer);
+        try self.provides_entries.serialize(&env.provides_entries, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
 
@@ -2127,74 +2542,107 @@ pub const Serialized = extern struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Serialize deferred numeric literals (will be empty during serialization since it's only used during type checking/evaluation)
-        try self.deferred_numeric_literals.serialize(&env.deferred_numeric_literals, allocator, writer);
-
-        // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved to zeros;
+        // Set gpa, module_name, evaluation_order_reserved to zeros;
         // these are runtime-only and will be set during deserialization.
+        // Preserve display_module_name_idx since the ident store is also serialized and indices remain valid.
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
-        self.module_name_idx_reserved = 0;
+        self.display_module_name_idx_reserved = @bitCast(env.display_module_name_idx);
+        self.qualified_module_ident_reserved = @bitCast(env.qualified_module_ident);
         self.evaluation_order_reserved = 0;
-        // rigid_vars is runtime-only and initialized fresh during deserialization
-        self.rigid_vars_reserved = .{ 0, 0, 0, 0 };
-
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
+
+        self._reserved_flags = .{ 0, 0 };
     }
 
-    /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    /// Deserialize into a freshly allocated ModuleEnv (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(
-        self: *Serialized,
+    /// WARNING: The returned ModuleEnv has data pointing into the cache buffer (read-only).
+    /// Use deserializeWithMutableTypes() if types/store need to be mutable.
+    pub fn deserializeInto(
+        self: *const Serialized,
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
     ) std.mem.Allocator.Error!*Self {
-        // Verify that Serialized is at least as large as the runtime struct.
-        // This is required because we're reusing the same memory location.
-        // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
-        // In Debug builds, Self may be larger due to debug-only store tracking fields, so skip this check.
-        comptime {
-            if (builtin.mode != .Debug) {
-                std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
-            }
-        }
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
-
-        // Deserialize common env first so we can look up identifiers
-        const common = self.common.deserialize(base_addr, source).*;
+        // Allocate a fresh ModuleEnv on the heap
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
 
         env.* = Self{
             .gpa = gpa,
-            .common = common,
-            .types = self.types.deserialize(base_addr, gpa).*,
+            .common = self.common.deserializeInto(base_addr, source),
+            .types = self.types.deserializeInto(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
-            .requires_types = self.requires_types.deserialize(base_addr).*,
-            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(base_addr).*,
-            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = try self.imports.deserializeInto(base_addr, gpa),
             .module_name = module_name,
-            .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(base_addr, gpa).*,
+            .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserialize(base_addr).*,
-            .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
+            .method_idents = self.method_idents.deserializeInto(base_addr),
+        };
+
+        return env;
+    }
+
+    /// Deserialize with mutable type store and node store for cache modules.
+    /// Allocates fresh memory for the type store and node store arrays,
+    /// allowing them to be mutated (e.g., during type checking).
+    /// Use this for disk cache modules that may need to add new types.
+    pub fn deserializeWithMutableTypes(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) std.mem.Allocator.Error!*Self {
+        // Allocate a fresh ModuleEnv on the heap
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
+
+        env.* = Self{
+            .gpa = gpa,
+            .common = self.common.deserializeInto(base_addr, source),
+            // Use deserializeWithCopy to get mutable type store
+            .types = try self.types.deserializeWithCopy(base_addr, gpa),
+            .module_kind = self.module_kind.decode(),
+            .all_defs = self.all_defs,
+            .all_statements = self.all_statements,
+            .exports = self.exports,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
+            .builtin_statements = self.builtin_statements,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = try self.imports.deserializeInto(base_addr, gpa),
+            .module_name = module_name,
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .diagnostics = self.diagnostics,
+            // Use deserializeWithCopy for NodeStore so regions can be extended
+            .store = try self.store.deserializeWithCopy(base_addr, gpa),
+            .evaluation_order = null,
+            .idents = self.idents,
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = self.method_idents.deserializeInto(base_addr),
         };
 
         return env;
@@ -2229,8 +2677,7 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 /// Get the exposed node index for a type given its statement index.
 /// This is used for auto-imported builtin types where we have the statement index pre-computed.
 /// For auto-imported types, the statement index IS the node/var index directly.
-pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
-    _ = self; // Not needed for this simplified implementation
+pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
 
     // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables
@@ -2454,6 +2901,30 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
 }
 
+/// Builds a mapping from platform for-clause alias ident indices to the
+/// equivalent ident indices in the app module's store.
+///
+/// This encapsulates all cross-module string-based ident resolution so that
+/// downstream code (e.g. in src/eval/) only needs to do index lookups via `map.get()`.
+pub fn buildPlatformToAppIdentMap(
+    self: *const Self,
+    gpa: std.mem.Allocator,
+    app_env: *const Self,
+) std.mem.Allocator.Error!std.AutoHashMap(Ident.Idx, Ident.Idx) {
+    var map = std.AutoHashMap(Ident.Idx, Ident.Idx).init(gpa);
+    errdefer map.deinit();
+    const all_aliases = self.for_clause_aliases.items.items;
+    for (self.requires_types.items.items) |required_type| {
+        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+        for (type_aliases_slice) |alias| {
+            if (app_env.common.findIdentFrom(&self.common, alias.alias_name)) |app_ident| {
+                try map.put(alias.alias_name, app_ident);
+            }
+        }
+    }
+    return map;
+}
+
 /// Helper function to generate the S-expression node for the entire module.
 /// If a single expression is provided, only that expression is returned.
 pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
@@ -2551,14 +3022,17 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                 else => continue, // Skip non-assign patterns (like destructuring)
             }
 
-            const pattern_var = varFrom(def.pattern);
+            // Use def_idx for type lookup, not def.pattern. During type checking,
+            // def_var and pattern_var are unified, but the type store may not have
+            // slots for all pattern indices. Def indices are always within bounds.
+            const def_var = varFrom(def_idx);
 
             // Get the region for this definition
             const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
             // Write the type to the buffer
-            try type_writer.write(pattern_var, .one_line);
+            try type_writer.write(def_var, .one_line);
 
             // Add the pattern type entry
             const patt_begin = tree.beginNode();
@@ -2790,76 +3264,6 @@ pub fn insertQualifiedIdent(
     }
 }
 
-/// Looks up a method identifier on a type by building the qualified method name.
-/// This handles cross-module method lookup by building names like "Builtin.Num.U64.from_numeral".
-///
-/// Parameters:
-/// - type_name: The type's identifier text (e.g., "Num.U64" or "Bool")
-/// - method_name: The unqualified method name (e.g., "from_numeral")
-///
-/// Returns the method's ident index if found, or null if the method doesn't exist.
-/// This is a read-only operation that doesn't modify the ident store.
-pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []const u8) ?Ident.Idx {
-    // Build the qualified method name: "{type_name}.{method_name}"
-    // The type_name may already include the module prefix (e.g., "Num.U64")
-    // or just be the type name (e.g., "Bool" for Builtin.Bool)
-    const total_len = self.module_name.len + 1 + type_name.len + 1 + method_name.len;
-
-    if (total_len <= 256) {
-        // Use stack buffer for small identifiers
-        var buf: [256]u8 = undefined;
-
-        // Check if type_name already starts with module_name
-        if (type_name.len > self.module_name.len and
-            std.mem.startsWith(u8, type_name, self.module_name) and
-            type_name[self.module_name.len] == '.')
-        {
-            // Type name is already qualified (e.g., "Builtin.Bool")
-            const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
-            return self.getIdentStoreConst().findByString(qualified);
-        } else if (std.mem.eql(u8, type_name, self.module_name)) {
-            // Type name IS the module name (e.g., looking up method on "Builtin" itself)
-            const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
-            return self.getIdentStoreConst().findByString(qualified);
-        } else {
-            // Try module-qualified name first (e.g., "Builtin.Num.U64.from_numeral")
-            const qualified = std.fmt.bufPrint(&buf, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
-            if (self.getIdentStoreConst().findByString(qualified)) |idx| {
-                return idx;
-            }
-            // Fallback: try without module prefix (e.g., "Color.as_str" for app-defined types)
-            // This handles the case where methods are registered with just the type-qualified name
-            const simple_qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
-            return self.getIdentStoreConst().findByString(simple_qualified);
-        }
-    } else {
-        // Use heap allocation for large identifiers (rare case)
-        // Try module-qualified name first
-        const qualified = if (type_name.len > self.module_name.len and
-            std.mem.startsWith(u8, type_name, self.module_name) and
-            type_name[self.module_name.len] == '.')
-            std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return null
-        else if (std.mem.eql(u8, type_name, self.module_name))
-            std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return null
-        else
-            std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
-        defer self.gpa.free(qualified);
-        if (self.getIdentStoreConst().findByString(qualified)) |idx| {
-            return idx;
-        }
-        // Fallback for the module-qualified case
-        if (type_name.len <= self.module_name.len or
-            !std.mem.startsWith(u8, type_name, self.module_name) or
-            type_name[self.module_name.len] != '.')
-        {
-            const simple_qualified = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return null;
-            defer self.gpa.free(simple_qualified);
-            return self.getIdentStoreConst().findByString(simple_qualified);
-        }
-        return null;
-    }
-}
-
 /// Registers a method identifier mapping for fast index-based lookup.
 /// This should be called during canonicalization when a method is defined in an associated block.
 ///
@@ -2903,7 +3307,6 @@ pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_i
 /// - method_ident: The method's identifier index in source_env
 ///
 /// Returns the qualified method's ident index if found, or null if the method doesn't exist.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     // First, try to find the type and method idents in our own ident store
     const type_name = source_env.getIdent(type_ident);
@@ -2913,19 +3316,11 @@ pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdent(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdent(local_type_ident, local_method_ident);
 }
 
 /// Const version of lookupMethodIdentFromEnv for use with immutable module environments.
 /// Safe to use on deserialized modules since method_idents is already sorted.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     // First, try to find the type and method idents in our own ident store
     const type_name = source_env.getIdent(type_ident);
@@ -2935,19 +3330,11 @@ pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self,
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
 }
 
 /// Looks up a method identifier when the type and method idents come from different source environments.
 /// This is needed when e.g. type_ident is from runtime layout store and method_ident is from CIR.
-/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
 pub fn lookupMethodIdentFromTwoEnvsConst(
     self: *const Self,
     type_source_env: *const Self,
@@ -2963,14 +3350,7 @@ pub fn lookupMethodIdentFromTwoEnvsConst(
     const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    // Try index-based lookup first (O(log n))
-    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
-        return result;
-    }
-
-    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
-    // that don't have method_idents populated. This can be removed once all modules are recompiled.
-    return self.getMethodIdent(type_name, method_name);
+    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

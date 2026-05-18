@@ -8,21 +8,26 @@ type=expr
 [42, 4.2, "hello"]
 ~~~
 # EXPECTED
-MISSING METHOD - let_polymorphism_error.md:1:6:1:9
+TYPE MISMATCH - let_polymorphism_error.md:1:6:1:9
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **let_polymorphism_error.md:1:6:1:9:**
 ```roc
 [42, 4.2, "hello"]
 ```
      ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**let_polymorphism_error.md:1:11:1:18:**
+```roc
+[42, 4.2, "hello"]
+```
+          ^^^^^^^
+
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -15,10 +15,6 @@ match items {
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
-UNDEFINED VARIABLE - list_rest_scoping.md:1:7:1:12
-UNUSED VARIABLE - list_rest_scoping.md:2:15:2:15
-UNUSED VARIABLE - list_rest_scoping.md:3:8:3:8
-UNUSED VARIABLE - list_rest_scoping.md:4:11:4:11
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -51,53 +47,6 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
     [x, ..rest, y] => x + y
 ```
         ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_rest_scoping.md:1:7:1:12:**
-```roc
-match items {
-```
-      ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping.md:2:15:2:15:**
-```roc
-    [first, ..rest] => first + 1
-```
-              ^
-
-
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping.md:3:8:3:8:**
-```roc
-    [..rest, last] => last + 2
-```
-       ^
-
-
-**UNUSED VARIABLE**
-Variable `rest` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping.md:4:11:4:11:**
-```roc
-    [x, ..rest, y] => x + y
-```
-          ^
 
 
 # TOKENS
@@ -196,5 +145,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+(expr (type "a where [a.plus : a, a -> a]"))
 ~~~

@@ -8,32 +8,9 @@ type=expr
 get_name!({}) ?? "Bob"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10
-NOT IMPLEMENTED - double_question_binop.md:1:1:1:23
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `get_name!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**double_question_binop.md:1:1:1:10:**
-```roc
-get_name!({}) ?? "Bob"
-```
-^^^^^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: unsupported operator
-
-**double_question_binop.md:1:1:1:23:**
-```roc
-get_name!({}) ?? "Bob"
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,CloseRound,OpDoubleQuestion,StringStart,StringPart,StringEnd,
@@ -54,9 +31,31 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match
+	(match
+		(cond
+			(e-call
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-empty_record)))
+		(branches
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
+				(value
+					(e-lookup-local
+						(p-assign (ident "#ok")))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
+				(value
+					(e-string
+						(e-literal (string "Bob"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

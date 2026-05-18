@@ -14,6 +14,6 @@ assigned `x`
 ---
 assigned `y`
 ---
-3
+3.0
 # PROBLEMS
 NIL

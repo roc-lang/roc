@@ -8,21 +8,9 @@ type=expr
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
 # EXPECTED
-DOES NOT EXIST - record_mixed_types.md:1:35:1:44
+NIL
 # PROBLEMS
-**DOES NOT EXIST**
-`Bool.true` does not exist.
-
-`Bool` is in scope, but it has no associated `true`.
-
-It's referenced here:
-**record_mixed_types.md:1:35:1:44:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                                  ^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,UpperIdent,NoSpaceDotLowerIdent,Comma,LowerIdent,OpColon,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,Comma,LowerIdent,OpColon,Float,CloseCurly,
@@ -72,5 +60,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: Error, age: a, balance: b, name: Str, scores: List(c) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+(expr (type "{ active: Error, age: Dec, balance: Dec, name: Str, scores: List(Dec) }"))
 ~~~

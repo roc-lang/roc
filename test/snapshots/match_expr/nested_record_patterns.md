@@ -123,10 +123,10 @@ EndOfFile,
 				(e-string-part (raw ""))
 				(e-ident (raw "name"))
 				(e-string-part (raw " ("))
-				(e-field-access
-					(e-ident (raw "age"))
-					(e-apply
-						(e-ident (raw "to_str"))))
+				(e-method-call (method ".to_str")
+					(receiver
+						(e-ident (raw "age")))
+					(args))
 				(e-string-part (raw ") from "))
 				(e-ident (raw "city"))
 				(e-string-part (raw ""))))
@@ -228,7 +228,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "name")))
 						(e-literal (string " ("))
-						(e-dot-access (field "to_str")
+						(e-dispatch-call (method "to_str") (constraint-fn-var 114)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "age"))))

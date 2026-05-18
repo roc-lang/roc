@@ -204,51 +204,45 @@ main! = |_| {
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-closure
-			(captures
-				(capture (ident "unused_regular"))
-				(capture (ident "used_underscore"))
-				(capture (ident "unused_underscore"))
-				(capture (ident "used_regular")))
-			(e-lambda
-				(args
-					(p-underscore))
-				(e-block
-					(s-let
-						(p-assign (ident "a"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "unused_regular")))
-							(e-num (value "5"))))
-					(s-let
-						(p-assign (ident "b"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "used_underscore")))
-							(e-num (value "10"))))
-					(s-let
-						(p-assign (ident "c"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "unused_underscore")))
-							(e-num (value "15"))))
-					(s-let
-						(p-assign (ident "d"))
-						(e-call
-							(e-lookup-local
-								(p-assign (ident "used_regular")))
-							(e-num (value "20"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-let
+					(p-assign (ident "a"))
+					(e-call (constraint-fn-var 110)
+						(e-lookup-local
+							(p-assign (ident "unused_regular")))
+						(e-num (value "5"))))
+				(s-let
+					(p-assign (ident "b"))
+					(e-call (constraint-fn-var 123)
+						(e-lookup-local
+							(p-assign (ident "used_underscore")))
+						(e-num (value "10"))))
+				(s-let
+					(p-assign (ident "c"))
+					(e-call (constraint-fn-var 140)
+						(e-lookup-local
+							(p-assign (ident "unused_underscore")))
+						(e-num (value "15"))))
+				(s-let
+					(p-assign (ident "d"))
+					(e-call (constraint-fn-var 158)
+						(e-lookup-local
+							(p-assign (ident "used_regular")))
+						(e-num (value "20"))))
+				(e-binop (op "add")
 					(e-binop (op "add")
 						(e-binop (op "add")
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "a")))
-								(e-lookup-local
-									(p-assign (ident "b"))))
 							(e-lookup-local
-								(p-assign (ident "c"))))
+								(p-assign (ident "a")))
+							(e-lookup-local
+								(p-assign (ident "b"))))
 						(e-lookup-local
-							(p-assign (ident "d")))))))))
+							(p-assign (ident "c"))))
+					(e-lookup-local
+						(p-assign (ident "d"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -257,12 +251,12 @@ main! = |_| {
 		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e -> e"))
 		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
+		(patt (type "e -> e where [e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]")))
 	(expressions
 		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e -> e"))
 		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
+		(expr (type "e -> e where [e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))))
 ~~~

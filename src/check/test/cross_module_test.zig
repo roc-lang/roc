@@ -204,3 +204,39 @@ test "displayNameIsBetter - shorter names are preferred" {
     try testing.expect(!displayNameIsBetter("Same", "Same"));
     try testing.expect(!displayNameIsBetter("", ""));
 }
+
+test "cross-module - check type - nested module access" {
+    // Test access to nested modules across files (issue #9074)
+    // When a module Outer contains a nested module Inner with a value inner,
+    // accessing Outer.Inner.inner from another file that imports Outer should work.
+    const source_outer =
+        \\Outer := [].{
+        \\    outer : I64
+        \\    outer = 20
+        \\    Inner := [].{
+        \\        inner : I64
+        \\        inner = 10
+        \\    }
+        \\}
+    ;
+    var test_env_outer = try TestEnv.init("Outer", source_outer);
+    defer test_env_outer.deinit();
+    try test_env_outer.assertDefType("Outer.outer", "I64");
+    try test_env_outer.assertDefType("Outer.Inner.inner", "I64");
+
+    const source_main =
+        \\import Outer
+        \\
+        \\test1 : I64
+        \\test1 = Outer.outer
+        \\test2 : I64
+        \\test2 = Outer.Inner.inner
+        \\main : I64
+        \\main = test1 + test2
+    ;
+    var test_env_main = try TestEnv.initWithImport("Main", source_main, "Outer", &test_env_outer);
+    defer test_env_main.deinit();
+    try test_env_main.assertDefType("test1", "I64");
+    try test_env_main.assertDefType("test2", "I64");
+    try test_env_main.assertDefType("main", "I64");
+}

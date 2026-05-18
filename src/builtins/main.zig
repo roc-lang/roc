@@ -3,14 +3,14 @@
 //! This module provides C-compatible functions for Roc's built-in functionality.
 //! All functions are exported and follow C calling conventions.
 //!
-//! The exported functions are available in the static library `libroc_builtins.a`
+//! The exported functions are available in the object file `roc_builtins.o`
 //! and can be used by including the appropriate header file.
 //!
 //! ## Usage from C
 //!
 //! ```c
 //! #include "roc_builtins.h"
-//! // Link against libroc_builtins.a
+//! // Link against roc_builtins.o
 //! ```
 const builtin = @import("builtin");
 const utils = @import("utils.zig");
@@ -78,7 +78,6 @@ comptime {
     exportListFn(list.listReserve, "reserve");
     exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listWithCapacity, "with_capacity");
-    exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listSublist, "sublist");
     exportListFn(list.listDropAt, "drop_at");
@@ -132,6 +131,8 @@ comptime {
     for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
+        num.exportDivTrunc(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_trunc.");
+        num.exportRemTrunc(T, ROC_BUILTINS ++ "." ++ NUM ++ ".rem_trunc.");
 
         num.exportRound(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
         num.exportRound(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
@@ -256,6 +257,9 @@ comptime {
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
+    exportUtilsFn(@import("erased_callable.zig").incref, "erased_callable.incref");
+    exportUtilsFn(@import("erased_callable.zig").decref, "erased_callable.decref");
+    exportUtilsFn(@import("erased_callable.zig").free, "erased_callable.free");
 }
 
 // Export helpers - Must be run inside a comptime

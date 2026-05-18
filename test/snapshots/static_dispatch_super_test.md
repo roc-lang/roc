@@ -8,31 +8,9 @@ type=expr
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
-UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `some_fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**static_dispatch_super_test.md:1:1:1:8:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `arg1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**static_dispatch_super_test.md:1:9:1:13:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-        ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpQuestion,
@@ -43,17 +21,17 @@ EndOfFile,
 (e-question-suffix
 	(e-field-access
 		(e-question-suffix
-			(e-field-access
-				(e-question-suffix
-					(e-field-access
-						(e-question-suffix
-							(e-apply
-								(e-ident (raw "some_fn"))
-								(e-ident (raw "arg1"))))
-						(e-apply
-							(e-ident (raw "static_dispatch_method")))))
-				(e-apply
-					(e-ident (raw "next_static_dispatch_method")))))
+			(e-method-call (method ".next_static_dispatch_method")
+				(receiver
+					(e-question-suffix
+						(e-method-call (method ".static_dispatch_method")
+							(receiver
+								(e-question-suffix
+									(e-apply
+										(e-ident (raw "some_fn"))
+										(e-ident (raw "arg1")))))
+							(args))))
+				(args)))
 		(e-ident (raw "record_field"))))
 ~~~
 # FORMATTED
@@ -65,17 +43,17 @@ NO CHANGE
 (e-match
 	(match
 		(cond
-			(e-dot-access (field "record_field")
+			(e-field-access (field "record_field")
 				(receiver
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "next_static_dispatch_method")
+								(e-method-call (method "next_static_dispatch_method")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "static_dispatch_method")
+													(e-method-call (method "static_dispatch_method")
 														(receiver
 															(e-match
 																(match
@@ -87,78 +65,70 @@ NO CHANGE
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)
-																					(p-applied-tag)))
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
 																			(value
 																				(e-lookup-local
 																					(p-assign (ident "#ok")))))
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)
-																					(p-applied-tag)))
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
 																			(value
-																				(e-return
-																					(e-tag (name "Err")
-																						(args
-																							(e-lookup-local
-																								(p-assign (ident "#err"))))))))))))
+																				(e-runtime-error (tag "return_outside_fn"))))))))
 														(args)))
 												(branches
 													(branch
 														(patterns
 															(pattern (degenerate false)
-																(p-applied-tag)))
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
 														(value
 															(e-lookup-local
 																(p-assign (ident "#ok")))))
 													(branch
 														(patterns
 															(pattern (degenerate false)
-																(p-applied-tag)))
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
 														(value
-															(e-return
-																(e-tag (name "Err")
-																	(args
-																		(e-lookup-local
-																			(p-assign (ident "#err"))))))))))))
+															(e-runtime-error (tag "return_outside_fn"))))))))
 									(args)))
 							(branches
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag)))
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
 									(value
 										(e-lookup-local
 											(p-assign (ident "#ok")))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag)))
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
 									(value
-										(e-return
-											(e-tag (name "Err")
-												(args
-													(e-lookup-local
-														(p-assign (ident "#err"))))))))))))))
+										(e-runtime-error (tag "return_outside_fn"))))))))))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
 					(e-lookup-local
 						(p-assign (ident "#ok")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
-					(e-return
-						(e-tag (name "Err")
-							(args
-								(e-lookup-local
-									(p-assign (ident "#err")))))))))))
+					(e-runtime-error (tag "return_outside_fn")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "ok"))
+(expr (type "Error"))
 ~~~

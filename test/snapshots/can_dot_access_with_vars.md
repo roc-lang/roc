@@ -42,10 +42,10 @@ EndOfFile,
 				(e-binop (op "+")
 					(e-ident (raw "x"))
 					(e-int (raw "1")))))
-		(e-field-access
-			(e-ident (raw "list"))
-			(e-apply
-				(e-ident (raw "map"))
+		(e-method-call (method ".map")
+			(receiver
+				(e-ident (raw "list")))
+			(args
 				(e-ident (raw "fn"))))))
 ~~~
 # FORMATTED
@@ -75,7 +75,7 @@ EndOfFile,
 				(e-lookup-local
 					(p-assign (ident "x")))
 				(e-num (value "1")))))
-	(e-dot-access (field "map")
+	(e-dispatch-call (method "map") (constraint-fn-var 74)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "list"))))
@@ -85,5 +85,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(b) where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, b -> b]"))
+(expr (type "List(Dec)"))
 ~~~

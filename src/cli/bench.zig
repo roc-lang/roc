@@ -3,12 +3,14 @@
 const std = @import("std");
 const parse = @import("parse");
 const can = @import("can");
+const base = @import("base");
 
 const tracy = @import("tracy");
 const builtin = @import("builtin");
 
 const tokenize = parse.tokenize;
 const ModuleEnv = can.ModuleEnv;
+const Allocators = base.Allocators;
 
 const Allocator = std.mem.Allocator;
 
@@ -105,9 +107,13 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
                 var parse_env = try ModuleEnv.init(gpa, source_copy);
 
-                var ir = try parse.parse(&parse_env.common, gpa);
+                var allocators: Allocators = undefined;
+                allocators.initInPlace(gpa);
+                defer allocators.deinit();
+
+                const ir = try parse.parse(&allocators, &parse_env.common);
                 iteration_tokens += ir.tokens.tokens.len;
-                ir.deinit(gpa);
+                ir.deinit();
                 parse_env.deinit();
                 parse_arena.deinit();
             } else {

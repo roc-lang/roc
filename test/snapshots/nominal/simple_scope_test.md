@@ -109,7 +109,7 @@ Outer := [A].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "Dec"))
 		(patt (type "_a")))
 	(type_decls
 		(nominal (type "Outer")
@@ -117,6 +117,6 @@ Outer := [A].{
 		(nominal (type "Outer.Inner")
 			(ty-header (name "simple_scope_test.Outer.Inner"))))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "Dec"))
 		(expr (type "_a"))))
 ~~~

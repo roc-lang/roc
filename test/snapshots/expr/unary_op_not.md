@@ -8,19 +8,9 @@ type=expr
 !isValid
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_op_not.md:1:2:1:9
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `isValid` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unary_op_not.md:1:2:1:9:**
-```roc
-!isValid
-```
- ^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpBang,LowerIdent,

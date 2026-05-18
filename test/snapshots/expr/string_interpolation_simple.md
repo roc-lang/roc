@@ -8,19 +8,9 @@ type=expr
 "Hello ${name}!"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - string_interpolation_simple.md:1:10:1:14
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**string_interpolation_simple.md:1:10:1:14:**
-```roc
-"Hello ${name}!"
-```
-         ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 StringStart,StringPart,OpenStringInterpolation,LowerIdent,CloseStringInterpolation,StringPart,StringEnd,

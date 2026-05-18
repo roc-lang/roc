@@ -57,7 +57,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
+(e-call (constraint-fn-var 65)
 	(e-lambda
 		(args
 			(p-assign (ident "base")))
@@ -77,7 +77,7 @@ EndOfFile,
 								(e-lookup-local
 									(p-assign (ident "x"))))
 							(e-num (value "1"))))))
-			(e-call
+			(e-call (constraint-fn-var 54)
 				(e-lookup-local
 					(p-assign (ident "simple")))
 				(e-num (value "1")))))
@@ -85,5 +85,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
+(expr (type "Dec"))
 ~~~

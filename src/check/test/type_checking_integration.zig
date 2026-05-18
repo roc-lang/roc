@@ -3,8 +3,23 @@
 
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
+const canonical = @import("../canonical_names.zig");
+const checked_ids = @import("../checked_ids.zig");
+const static_dispatch = @import("../static_dispatch_registry.zig");
+const TypedCIR = @import("../typed_cir.zig");
+const types = @import("types");
 
 const testing = std.testing;
+
+const MethodRegistryTestCheckedTypes = struct {
+    pub fn rootForSourceVar(
+        _: *const @This(),
+        _: TypedCIR.Module,
+        _: types.Var,
+    ) ?checked_ids.CheckedTypeId {
+        unreachable;
+    }
+};
 
 // primitives - nums //
 
@@ -15,20 +30,28 @@ test "check type - num - unbound" {
     try checkTypesExpr(
         source,
         .pass,
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
 test "check type - num - int suffix 1" {
     const source =
-        \\10u8
+        \\{
+        \\  x = 10.U8
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "U8");
 }
 
 test "check type - num - int suffix 2" {
     const source =
-        \\10i128
+        \\{
+        \\  x = 10.I128
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "I128");
 }
@@ -52,27 +75,42 @@ test "check type - num - float" {
     try checkTypesExpr(
         source,
         .pass,
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
 test "check type - num - float suffix 1" {
     const source =
-        \\10.1f32
+        \\{
+        \\  x : F32
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "F32");
 }
 
 test "check type - num - float suffix 2" {
     const source =
-        \\10.1f64
+        \\{
+        \\  x : F64
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "F64");
 }
 
 test "check type - num - float suffix 3" {
     const source =
-        \\10.1dec
+        \\{
+        \\  x : Dec
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "Dec");
 }
@@ -99,7 +137,8 @@ test "check type - number annotation mismatch with string" {
         \\x : Str
         \\x = 42
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - i64 annotation with fractional literal passes type checking" {
@@ -114,9 +153,9 @@ test "check type - i64 annotation with fractional literal passes type checking" 
 }
 
 test "check type - string plus number should fail" {
-    // Str + number: when we unify Str with numeric flex, the flex's from_numeral constraint
-    // gets applied to Str. Since Str doesn't have from_numeral, we get MISSING METHOD.
-    // The plus dispatch on Str also fails with MISSING METHOD.
+    // Str + number: the `+` operator desugars to calling the `.plus` method on the left operand.
+    // Since Str doesn't have a `plus` method, we get MISSING METHOD before even checking
+    // the from_numeral constraint on the number literal.
     const source =
         \\x = "hello" + 123
     ;
@@ -134,35 +173,52 @@ test "check type - string plus string should fail (no plus method)" {
 
 test "check type - binop operands must have same type - I64 plus I32 should fail" {
     const source =
-        \\x = 1i64 + 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a + b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - I64 minus I32 should fail" {
     const source =
-        \\x = 1i64 - 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a - b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - I64 times I32 should fail" {
     const source =
-        \\x = 1i64 * 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a * b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - F64 divide F32 should fail" {
     const source =
-        \\x = 1.0f64 / 2.0f32
+        \\a : F64
+        \\a = 1.0
+        \\b : F32
+        \\b = 2.0
+        \\x = a / b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands same type works - I64 plus I64" {
     const source =
-        \\x = 1i64 + 2i64
+        \\x : I64
+        \\x = 1 + 2
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }
@@ -174,25 +230,28 @@ test "check type - binop operands same type works - unbound plus unbound" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
     const source =
-        \\x = 1i64 == 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a == b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - comparison operands must have same type - I64 lt I32 should fail" {
     const source =
-        \\x = 1i64 < 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a < b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
@@ -220,20 +279,30 @@ test "check type - list - same elems 2" {
     try checkTypesExpr(
         source,
         .pass,
-        "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "List(Dec)",
     );
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
     const source =
-        \\[100u64, 200]
+        \\{
+        \\  x : U64
+        \\  x = 100
+        \\
+        \\  [x, 200]
+        \\}
     ;
     try checkTypesExpr(source, .pass, "List(U64)");
 }
 
 test "check type - list - 2nd elem more specific coreces 1st elem" {
     const source =
-        \\[100, 200u32]
+        \\{
+        \\  x : U32
+        \\  x = 200
+        \\
+        \\  [100, x]
+        \\}
     ;
     try checkTypesExpr(source, .pass, "List(U32)");
 }
@@ -242,7 +311,8 @@ test "check type - list  - diff elems 1" {
     const source =
         \\["hello", 10]
     ;
-    try checkTypesExpr(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected (first elem determines list type)
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 // number requirements //
@@ -265,9 +335,108 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try checkTypesExpr(source, .pass,
-        \\{ hello: Str, world: a }
-        \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    try checkTypesExpr(
+        source,
+        .pass,
+        "{ hello: Str, world: Dec }",
+    );
+}
+
+test "check type - record - field typo" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { helo : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:31:**
+        \\```roc
+        \\my_record = { helo : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { helo: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord
+        \\
+        \\**Hint:** Maybe `helo` should be `hello`?
+        \\
+        \\
+    );
+    // spellchecker:on
+}
+
+test "check type - record - field missing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str, world: U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:32:**
+        \\```roc
+        \\my_record = { hello : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { hello: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord
+        \\
+        \\**Hint:** This record is missing the field: `world`
+        \\
+        \\
+    );
+}
+
+test "check type - record - ext - field missing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord(ext) : {  hello: Str, ..ext }
+        \\
+        \\my_record : MyRecord({ world: U8 })
+        \\my_record = { hello : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:32:**
+        \\```roc
+        \\my_record = { hello : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { hello: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord({ world: U8 })
+        \\
+        \\**Hint:** This record is missing the field: `world`
+        \\
+        \\
     );
 }
 
@@ -464,7 +633,7 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag, .._others]");
+    try checkTypesExpr(source, .pass, "[MyTag, ..]");
 }
 
 test "check type - tag - args" {
@@ -474,9 +643,71 @@ test "check type - tag - args" {
     try checkTypesExpr(
         source,
         .pass,
-        \\[MyTag(Str, a), .._others]
-        \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-        ,
+        "[MyTag(Str, Dec), ..]",
+    );
+}
+
+test "check type - tag union - tag typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color : [Red, Green, Blue]
+        \\
+        \\color : Color
+        \\color = Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:9:6:15:**
+        \\```roc
+        \\color = Greeen
+        \\```
+        \\        ^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [Greeen, ..]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    Color
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
+    );
+}
+
+test "check type - tag - ext - typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color(ext) : [Red, Blue, ..ext]
+        \\
+        \\color : Color([Green])
+        \\color = Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:9:6:15:**
+        \\```roc
+        \\color = Greeen
+        \\```
+        \\        ^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [Greeen, ..]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    Color([Green])
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
     );
 }
 
@@ -524,6 +755,9 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
+    // Numeric literals inside generalized functions stay overloaded so each
+    // call site can choose the concrete numeric type. Non-function values still
+    // default to Dec after checking.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
@@ -564,7 +798,8 @@ test "check type - def - func with annotation 2" {
     ;
     // The type annotation says _a is unconstrained, but the implementation returns
     // a numeric literal which requires from_numeral method. This is a type error.
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where unconstrained type is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - def - nested lambda" {
@@ -574,12 +809,7 @@ test "check type - def - nested lambda" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\d
-        \\  where [
-        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        \\    d.plus : d, d -> d,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -616,6 +846,39 @@ test "check type - def - nested lambda with wrong annotation" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - def - wrong arg" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\func : Str, U8 -> U8
+        \\func = |_str, u8| u8
+        \\
+        \\test = func("hello", "world")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:6:8:**
+        \\```roc
+        \\test = func("hello", "world")
+        \\```
+        \\                     ^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Str
+        \\
+        \\But `func` needs the second argument to be:
+        \\
+        \\    U8
+        \\
+        \\
+        ,
+    );
+}
+
 // calling functions
 
 test "check type - def - monomorphic id" {
@@ -638,7 +901,7 @@ test "check type - def - polymorphic id 1" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "x where [x.from_numeral : Numeral -> Try(x, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -652,13 +915,11 @@ test "check type - def - polymorphic id 2" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "(x, Str) where [x.from_numeral : Numeral -> Try(x, [InvalidNumeral(Str)])]",
+        "(Dec, Str)",
     );
 }
 
 test "check type - def - out of order" {
-    // Currently errors out in czer
-
     const source =
         \\id_1 : x -> x
         \\id_1 = |x| id_2(x)
@@ -691,7 +952,7 @@ test "check type - top level polymorphic function is generalized" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -707,7 +968,7 @@ test "check type - let-def polymorphic function is generalized" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -722,7 +983,265 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 42 used where Str is expected (function type unified from both calls)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - def - call with wrong fn arity - too many" {
+    const source =
+        \\idStr : Str -> Str
+        \\idStr = |x| x
+        \\
+        \\test = idStr("hello", 10.U8)
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TOO MANY ARGS**
+        \\The `idStr` function expects 1 argument, but it got 2 instead:
+        \\**test:4:8:4:29:**
+        \\```roc
+        \\test = idStr("hello", 10.U8)
+        \\```
+        \\       ^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\The `idStr` function has the type:
+        \\
+        \\    Str -> Str
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call with wrong fn arity - too few" {
+    const source =
+        \\idStr : Str, U8 -> Str
+        \\idStr = |x, _| x
+        \\
+        \\test = idStr("hello")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TOO FEW ARGS**
+        \\The `idStr` function expects 2 arguments, but it got 1 instead:
+        \\**test:4:8:4:22:**
+        \\```roc
+        \\test = idStr("hello")
+        \\```
+        \\       ^^^^^^^^^^^^^^
+        \\
+        \\The `idStr` function has the type:
+        \\
+        \\    Str, U8 -> Str
+        \\
+        \\Are there any missing commas?
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call with mismatch arg" {
+    const source =
+        \\idStr : Str, U8 -> Str
+        \\idStr = |x, _| x
+        \\
+        \\test = idStr("hello", "world")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:4:8:**
+        \\```roc
+        \\test = idStr("hello", "world")
+        \\```
+        \\                      ^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Str
+        \\
+        \\But `idStr` needs the second argument to be:
+        \\
+        \\    U8
+        \\
+        \\
+        ,
+    );
+}
+
+// value restriction //
+
+test "check type - value restriction - out of order 1" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\x = 10
+        \\
+        \\process = |y| {
+        \\  [x, y]
+        \\}
+        \\
+        \\test = {
+        \\  _a = process(1.U8)
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> List(U8)" },
+        },
+    );
+}
+
+test "check type - value restriction - out of order 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  _a = process(1.U8, "x")
+        \\  _b = process(1.U8, Bool.False)
+        \\}
+        \\
+        \\process = |y, _z| {
+        \\  _blah = [x, y] # Force x and y to be the same type
+        \\  y
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8, _arg -> U8" },
+        },
+    );
+}
+
+test "check type - value restriction - curried 1" {
+    // Each inline `process(1.U8)` call creates a fresh instantiation, so the
+    // two inner applications with differently-typed ignored arguments are
+    // independent and both type-check successfully (mirrors curried 2).
+
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  _a = process(1.U8)("x")
+        \\  _b = process(1.U8)(Bool.False)
+        \\}
+        \\
+        \\process = |y| {
+        \\  |_z| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> (_arg -> List(U8))" },
+        },
+    );
+}
+test "check type - value restriction - curried 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  fn_a = process(1.U8)
+        \\  _a = fn_a("x")
+        \\
+        \\  fn_b = process(2.U8)
+        \\  _b = fn_b(Bool.False)
+        \\}
+        \\
+        \\process = |y| {
+        \\  |_z| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> (_arg -> List(U8))" },
+        },
+    );
+}
+
+test "check type - value restriction - out of order 3" {
+    // Currently errors out in czer
+
+    const source =
+        \\main! = |_| {}
+        \\
+        \\A := [A].{
+        \\  exec : A, I64 -> I64
+        \\  exec = |A, _| 10
+        \\}
+        \\
+        \\test = {
+        \\  _a = run_exec(A.A, "hello")
+        \\  _b = run_exec(A.A, Try.Ok("nice"))
+        \\}
+        \\
+        \\run_exec = |y, _z| {
+        \\  y.exec(x)
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "I64" },
+            .{ .def = "run_exec", .expected = "a, _arg -> b where [a.exec : a, I64 -> b]" },
+        },
+    );
+}
+
+test "check type - value restriction - should fail 1" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\x = 10
+        \\
+        \\process = |y| { [x, y] }
+        \\
+        \\test = {
+        \\  _a = process(1.U8)
+        \\  _b = process(1.I64) # Should error: U8 != I64
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - value restriction - should fail 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\A := [A].{
+        \\  process = |_a, y| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+        \\
+        \\test = {
+        \\  val = A.A
+        \\  _a = val.process(1.U8)
+        \\  _b = val.process(1.I64) # Should error: U8 != I64
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // type aliases //
@@ -758,7 +1277,32 @@ test "check type - alias with mismatch arg" {
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 15 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - alias open tag union" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyAlias(others) : [A, B, ..others]
+        \\
+        \\x : {} -> MyAlias([C])
+        \\x = |{}| C
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias([C])");
+}
+
+test "check type - alias open record" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyAlias(others) : { a: Str, ..others }
+        \\
+        \\x : {} -> MyAlias({b: U8})
+        \\x = |{}| {a: "hello", b: 10} 
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias({ b: U8 })");
 }
 
 // nominal types //
@@ -773,6 +1317,50 @@ test "check type - basic nominal" {
         \\x = MyNominal.MyNominal
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal");
+}
+
+test "checked artifact method registry skips nominal associated values" {
+    const source =
+        \\Basic := [Val(Str)].{
+        \\  rec = { foo: "hello", bar: 42 }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+        .{ .precompiled = test_env.builtin_module.env },
+    };
+    var modules = try TypedCIR.Modules.init(testing.allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+
+    const by_def = try testing.allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
+    defer testing.allocator.free(by_def);
+    @memset(by_def, null);
+
+    const template_lookup = static_dispatch.ProcedureTemplateLookup{
+        .module_idx = module.moduleIndex(),
+        .by_def = by_def,
+    };
+    const checked_types = MethodRegistryTestCheckedTypes{};
+
+    var names = canonical.CanonicalNameStore.init(testing.allocator);
+    defer names.deinit();
+
+    var registry = try static_dispatch.MethodRegistry.fromModule(
+        testing.allocator,
+        module,
+        &names,
+        &template_lookup,
+        &checked_types,
+    );
+    defer registry.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), registry.entries.len);
 }
 
 test "check type - nominal with tag arg" {
@@ -878,7 +1466,8 @@ test "check type - nominal recursive type wrong type" {
         \\x : StrConsList
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -905,7 +1494,80 @@ test "check type - nominal w/ polymorphic function" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "Pair(Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Pair(Str, Dec)",
+    );
+}
+
+// nominal types //
+
+test "check type - nominal - local record value - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = |{}| {
+        \\  Utf8Format := {}.{
+        \\    encode_str : Utf8Format, Str -> List(U8)
+        \\    encode_str = |_fmt, s| Str.to_utf8(s)
+        \\  }
+        \\  fmt = {}
+        \\  Str.encode("hi", fmt)
+        \\}
+    ;
+    // TODO: Figure out why the arg `fmt` is not highlighted
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**MISSING METHOD**
+        \\This **encode_str** method is being called on a value whose type doesn't have that method:
+        \\**test:9:3:9:13:**
+        \\```roc
+        \\  Str.encode("hi", fmt)
+        \\```
+        \\  ^^^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named **encode_str**, is:
+        \\
+        \\    {}
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - nominal - local method type - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = |{}| {
+        \\  Utf8Format := [Fmt].{
+        \\    encode_str : Utf8Format, Str -> List(U8)
+        \\    encode_str = |_fmt, s| Str.to_utf8(s)
+        \\  }
+        \\  fmt = Utf8Format.Fmt
+        \\  Str.encode("hi", fmt)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The `encode_str` method on `Utf8Format` has an incompatible type:
+        \\**test:9:20:9:23:**
+        \\```roc
+        \\  Str.encode("hi", fmt)
+        \\```
+        \\                   ^^^
+        \\
+        \\The method `encode_str` has the type:
+        \\
+        \\    Utf8Format, Str -> List(U8)
+        \\
+        \\But I need it to have the type:
+        \\
+        \\    Utf8Format, Str -> Try(encoded, err)
+        \\
+        \\
+        ,
     );
 }
 
@@ -954,9 +1616,29 @@ test "check type - if else - qualified bool" {
 test "check type - if else - invalid condition 1" {
     const source =
         \\x : Str
-        \\x = if 5 "true" else "false"
+        \\x = if 5.I64 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 5 used where Bool is expected
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `if` condition must evaluate to a `Bool` – either `True` or `False`:
+        \\**test:2:8:2:13:**
+        \\```roc
+        \\x = if 5.I64 "true" else "false"
+        \\```
+        \\       ^^^^^
+        \\
+        \\It is:
+        \\
+        \\    I64
+        \\
+        \\But I need this to be a `Bool` value.
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - if else - invalid condition 2" {
@@ -964,7 +1646,8 @@ test "check type - if else - invalid condition 2" {
         \\x : Str
         \\x = if 10 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -972,28 +1655,51 @@ test "check type - if else - invalid condition 3" {
         \\x : Str
         \\x = if "True" "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 1" {
     const source =
-        \\x = if True "true" else 10
+        \\x = if True "true" else 10.U8
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second branch of this `if` does not match the previous branch :
+        \\**test:1:25:1:30:**
+        \\```roc
+        \\x = if True "true" else 10.U8
+        \\```
+        \\                        ^^^^^
+        \\
+        \\The second branch is:
+        \\
+        \\    U8
+        \\
+        \\But the previous branch results in:
+        \\
+        \\    Str
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - if else - different branch types 2" {
     const source =
         \\x = if True "true" else if False "false" else 10
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 3" {
     const source =
         \\x = if True "true" else if False 10 else "last"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // match
@@ -1017,7 +1723,33 @@ test "check type - match - diff cond types 1" {
         \\    False => "false"
         \\  }
     ;
-    try checkTypesModule(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first pattern in this `match` is incompatible:
+        \\**test:2:3:**
+        \\```roc
+        \\  match "hello" {
+        \\    True => "true"
+        \\    False => "false"
+        \\  }
+        \\```
+        \\    ^^^^
+        \\
+        \\The first pattern is trying to match:
+        \\
+        \\    [True, ..]
+        \\
+        \\But the expression between the `match` parenthesis has the type:
+        \\
+        \\    Str
+        \\
+        \\These can never match! Either the pattern or expression has a problem.
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - match - diff branch types" {
@@ -1028,7 +1760,55 @@ test "check type - match - diff branch types" {
         \\    False => 100
         \\  }
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 100 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - match alternative binders unify when compatible" {
+    const source =
+        \\value = if True Ok(1.U8) else Err(2.U8)
+        \\result =
+        \\  match value {
+        \\    Ok(v) | Err(v) => v
+        \\  }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "U8");
+}
+
+test "check type - match alternative binders reject incompatible types" {
+    const source =
+        \\value = if True A(1.U8) else B("x")
+        \\result =
+        \\  match value {
+        \\    A(v) | B(v) => v
+        \\  }
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The `v` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
+        \\**test:3:3:**
+        \\```roc
+        \\  match value {
+        \\    A(v) | B(v) => v
+        \\  }
+        \\```
+        \\             ^
+        \\
+        \\In the second pattern, `v` is:
+        \\
+        \\    Str
+        \\
+        \\But in the first pattern, `v` is:
+        \\
+        \\    U8
+        \\
+        \\A name shared across `|` patterns in the same `match` branch must have one compatible type.
+        \\
+        \\
+        ,
+    );
 }
 
 // unary not
@@ -1056,7 +1836,7 @@ test "check type - unary minus" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -1073,9 +1853,16 @@ test "check type - unary minus mismatch" {
 
 test "check type - binops math plus" {
     const source =
-        \\x = 10 + 10u32
+        \\y : U32
+        \\y = 10
+        \\x = 10 + y
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U32");
+    // With flexible binops, the lhs stays polymorphic until constraint resolution
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "U32",
+    );
 }
 
 test "check type - binops math sub" {
@@ -1085,20 +1872,20 @@ test "check type - binops math sub" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.minus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
 test "check type - binops ord" {
     const source =
-        \\x = 10.0f32 > 15
+        \\{
+        \\  a : F32
+        \\  a = 10.0
+        \\
+        \\  a > 15
+        \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+    try checkTypesExpr(source, .pass, "Bool");
 }
 
 test "check type - binops and" {
@@ -1112,7 +1899,7 @@ test "check type - binops and mismatch" {
     const source =
         \\x = "Hello" and False
     ;
-    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binops or" {
@@ -1126,7 +1913,7 @@ test "check type - binops or mismatch" {
     const source =
         \\x = "Hello" or False
     ;
-    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // record access
@@ -1144,11 +1931,45 @@ test "check type - record - access" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
+test "check type - record access - field typo" {
+    // spellchecker:off
+    const source =
+        \\main! = |_| {}
+        \\
+        \\r =
+        \\  {
+        \\    hello: "Hello",
+        \\    world: 10,
+        \\  }
+        \\
+        \\x = r.helo
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This record does not have a `helo` field:
+        \\**test:9:6:9:11:**
+        \\```roc
+        \\x = r.helo
+        \\```
+        \\     ^^^^^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `hello`
+        \\    - `world`
+        \\
+        \\So maybe `helo` should be `hello`?
+        \\
+        \\
+    );
+    // spellchecker:on
+}
+
 test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a } -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a, .. } -> a");
 }
 
 test "check type - record - access - not a record" {
@@ -1169,7 +1990,7 @@ test "check type - record - update 1" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "update_data" } },
-        "{ ..a, data: b }, b -> { ..a, data: b }",
+        "{ data: a, ..b }, a -> { data: a, ..b }",
     );
 }
 
@@ -1186,25 +2007,220 @@ test "check type - record - update 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "final" } },
-        \\({ data: a }, { data: b, other: Str }, { data: Str })
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "({ data: Dec }, { data: Dec, other: Str }, { data: Str })",
     );
 }
 
-test "check type - record - update fail" {
+test "check type - record - update - fold" {
     const source =
-        \\set_data = |container, new_value| { ..container, data: new_value }
-        \\
-        \\updated = set_data({ data: "hello" }, 10)
+        \\test = List.fold([1.U8, 2, 3], {sum: 0.U8, count: 0.U8}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})
     ;
     try checkTypesModule(
         source,
-        .fail,
-        "MISSING METHOD",
+        .{ .pass = .{ .def = "test" } },
+        "{ count: U8, sum: U8 }",
+    );
+}
+
+test "check type - record - update - fail - empty record" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = {}
+        \\  { ..r, hello: 10.U8 }
+        \\}
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The `r` record does not have a `hello` field:
+        \\**test:5:7:5:8:**
+        \\```roc
+        \\  { ..r, hello: 10.U8 }
+        \\```
+        \\      ^
+        \\
+        \\It is actually a record with no fields.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - missing field" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world" }
+        \\  { ..r, hllo: "goodbye" }
+        \\}
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This record does not have a `hllo` field:
+        \\**test:5:7:5:8:**
+        \\```roc
+        \\  { ..r, hllo: "goodbye" }
+        \\```
+        \\      ^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `hello`
+        \\
+        \\So maybe `hllo` should be `hello`?
+        \\
+        \\__Note:__ You cannot add new fields to a record with the record update syntax.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world" }
+        \\  { ..r, hello: 10.U8 }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `hello` is incompatible:
+        \\**test:5:17:5:22:**
+        \\```roc
+        \\  { ..r, hello: 10.U8 }
+        \\```
+        \\                ^^^^^
+        \\
+        \\You are trying to update the `hello` field to be the type:
+        \\
+        \\    U8
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    Str
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world", nice: 10.U8 }
+        \\  { ..r, hello: 10.Dec }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `hello` is incompatible:
+        \\**test:5:17:5:23:**
+        \\```roc
+        \\  { ..r, hello: 10.Dec }
+        \\```
+        \\                ^^^^^^
+        \\
+        \\You are trying to update the `hello` field to be the type:
+        \\
+        \\    Dec
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    Str
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch 3" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world", nice: 10.U8 }
+        \\  { ..r, nice: 10.Dec }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `nice` is incompatible:
+        \\**test:5:16:5:22:**
+        \\```roc
+        \\  { ..r, nice: 10.Dec }
+        \\```
+        \\               ^^^^^^
+        \\
+        \\You are trying to update the `nice` field to be the type:
+        \\
+        \\    Dec
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    U8
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `nice` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail 2" {
+    const source =
+        \\set_data = |container, new_value| { ..container, data: new_value }
+        \\
+        \\updated = set_data({ data: "hello" }, 10.U8)
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:3:11:**
+        \\```roc
+        \\updated = set_data({ data: "hello" }, 10.U8)
+        \\```
+        \\                                      ^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    U8
+        \\
+        \\But `set_data` needs the second argument to be:
+        \\
+        \\    Str
+        \\
+        \\
+    );
+}
+
+test "check type - record - pattern destructure rest 1" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ name: _field, .. } -> a",
+    );
+}
+
+test "check type - record - pattern destructure rest 2" {
+    const source =
+        \\strip_name = |{ name: _, ..rest}| rest.age
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "strip_name" } },
+        "{ age: a, name: _field, .. } -> a",
     );
 }
 
@@ -1220,7 +2236,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns tag without payload" {
@@ -1262,7 +2278,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns str" {
@@ -1294,26 +2310,31 @@ test "check type - patterns num" {
 }
 
 test "check type - patterns int mismatch" {
+    // Test that matching a tag against incompatible tag patterns fails
     const source =
         \\{
-        \\  x = 10u8
+        \\  x : [Ok(I64), Err(Str)]
+        \\  x = Ok(42)
         \\
         \\  match(x) {
-        \\    10u32 => "true",
-        \\    _ => "false",
+        \\    Some(_) => "found",
+        \\    None => "empty",
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns frac 1" {
     const source =
         \\{
-        \\  match(20) {
-        \\    10dec as x => x,
+        \\  result : Dec
+        \\  result = match(20) {
+        \\    10 as x => x,
         \\    _ => 15,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "Dec");
@@ -1322,10 +2343,13 @@ test "check type - patterns frac 1" {
 test "check type - patterns frac 2" {
     const source =
         \\{
-        \\  match(10) {
-        \\    10f32 as x => x,
+        \\  result : F32
+        \\  result = match(10) {
+        \\    10 as x => x,
         \\    _ => 15,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "F32");
@@ -1334,11 +2358,14 @@ test "check type - patterns frac 2" {
 test "check type - patterns frac 3" {
     const source =
         \\{
-        \\  match(50) {
+        \\  result : F64
+        \\  result = match(50) {
         \\    10 as x => x,
-        \\    15f64 as x => x,
+        \\    15 as x => x,
         \\    _ => 20,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "F64");
@@ -1390,7 +2417,7 @@ test "check type - patterns record 2" {
     try checkTypesExpr(
         source,
         .pass,
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "Dec",
     );
 }
 
@@ -1405,7 +2432,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 // vars + reassignment //
@@ -1421,12 +2448,7 @@ test "check type - var reassignment" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -1446,24 +2468,39 @@ test "check type - expect" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.is_eq : a, a -> Bool,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
 test "check type - expect not bool" {
     const source =
         \\main = {
-        \\  x = 1
+        \\  x = 1.U8
         \\  expect x
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Bool is expected
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`:
+        \\**test:3:10:3:11:**
+        \\```roc
+        \\  expect x
+        \\```
+        \\         ^
+        \\
+        \\It is:
+        \\
+        \\    U8
+        \\
+        \\But I need this to be a `Bool` value.
+        \\
+        \\
+        ,
+    );
 }
 
 // crash //
@@ -1480,6 +2517,7 @@ test "check type - crash" {
         \\  x + y
         \\}
     ;
+    // With flexible binops, lhs stays polymorphic
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
@@ -1511,6 +2549,45 @@ test "check type - dbg" {
     );
 }
 
+// type modules //
+
+test "check type - type module - fn declarations " {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Person := [].{
+        \\    name : Str
+        \\    name = "Alice"
+        \\
+        \\    age : I32
+        \\    age = 25
+        \\
+        \\    height : Dec
+        \\    height = 5.8
+        \\
+        \\    is_active : Bool
+        \\    is_active = True
+        \\
+        \\    colors : List(Str)
+        \\    colors = ["red", "green", "blue"]
+        \\
+        \\    numbers : List(I32)
+        \\    numbers = [1, 2, 3, 4, 5]
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Person.name", .expected = "Str" },
+            .{ .def = "Test.Person.age", .expected = "I32" },
+            .{ .def = "Test.Person.height", .expected = "Dec" },
+            .{ .def = "Test.Person.is_active", .expected = "Bool" },
+            .{ .def = "Test.Person.colors", .expected = "List(Str)" },
+            .{ .def = "Test.Person.numbers", .expected = "List(I32)" },
+        },
+    );
+}
+
 // for //
 
 test "check type - for" {
@@ -1526,19 +2603,15 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
 test "check type - for mismatch" {
     const source =
+        \\main : I64
         \\main = {
-        \\  var result = 0u8
+        \\  var result = 0.I64
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
         \\  }
@@ -1547,7 +2620,7 @@ test "check type - for mismatch" {
     ;
     try checkTypesModule(
         source,
-        .fail,
+        .fail_first,
         "TYPE MISMATCH",
     );
 }
@@ -1847,7 +2920,7 @@ test "check type - comprehensive - multiple layers of let-polymorphism" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "(a, Str, Bool) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        "(Dec, Str, Bool)",
     );
 }
 
@@ -1867,12 +2940,7 @@ test "check type - comprehensive - multiple layers of lambdas" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -1923,12 +2991,7 @@ test "check type - comprehensive - static dispatch with multiple methods 1" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -1982,12 +3045,7 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        \\Container(b)
-        \\  where [
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, b -> b,
-        \\  ]
-        ,
+        "Container(Dec)",
     );
 }
 
@@ -1999,7 +3057,8 @@ test "check type - segfault minimal 1 - just annotated plus" {
         \\my_plus : a, a -> a where [a.plus : a, a -> a]
         \\my_plus = |x, y| x + y
         \\
-        \\func = my_plus(1u32, 2u32)
+        \\func : U32
+        \\func = my_plus(1, 2)
     ;
     try checkTypesModule(
         source,
@@ -2017,7 +3076,8 @@ test "check type - segfault minimal 2 - plus with inferred caller" {
         \\
         \\add_two = |a, b| my_plus(a, b)
         \\
-        \\func = add_two(1u32, 2u32)
+        \\func : U32
+        \\func = add_two(1, 2)
     ;
     try checkTypesModule(
         source,
@@ -2033,7 +3093,8 @@ test "check type - segfault minimal 3a - nested direct - SEGFAULTS" {
         \\my_plus : a, a -> a where [a.plus : a, a -> a]
         \\my_plus = |x, y| x + y
         \\
-        \\func = my_plus(my_plus(1u32, 2u32), 3u32)
+        \\func : U32
+        \\func = my_plus(my_plus(1, 2), 3)
     ;
     try checkTypesModule(
         source,
@@ -2051,7 +3112,8 @@ test "check type - segfault minimal 3b - nested in lambda - SEGFAULTS" {
         \\
         \\add_three = |a, b, c| my_plus(my_plus(a, b), c)
         \\
-        \\func = add_three(1u32, 2u32, 3u32)
+        \\func : U32
+        \\func = add_three(1, 2, 3)
     ;
     try checkTypesModule(
         source,
@@ -2073,9 +3135,9 @@ test "check type - segfault minimal 4 - full original - SEGFAULTS" {
         \\
         \\# Annotated function using inferred one
         \\compute : U32 -> U32
-        \\compute = |x| add_three(x, 1u32, 2u32)
+        \\compute = |x| add_three(x, 1, 2)
         \\
-        \\func = compute(10u32)
+        \\func = compute(10)
     ;
     try checkTypesModule(
         source,
@@ -2149,7 +3211,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
         \\# Fifth layer: combine everything
         \\main = {
         \\  # Let-polymorphism layer 1
-        \\  # TODO INLINE ANNOS
+        \\  # TODO LOCAL ANNOS
         \\  # id : a -> a
         \\  id = |x| x
         \\
@@ -2201,20 +3263,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        // TODO: Look at why constraints are not deduped!
-        \\{ chained: b, final: b, id_results: (e, Str, Bool), processed: c, transformed: a }
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, b -> b,
-        \\    b.plus : b, b -> b,
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\    c.plus : c, c -> c,
-        \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
-        \\  ]
-        ,
+        "{ chained: Dec, final: Dec, id_results: (Dec, Str, Bool), processed: Dec, transformed: Dec }",
     );
 }
 
@@ -2413,12 +3462,7 @@ test "List.fold works as builtin associated item" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "x" } },
-        \\item
-        \\  where [
-        \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
-        \\    item.plus : item, item -> item,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2445,7 +3489,7 @@ test "associated item: type annotation followed by body should not create duplic
 
     // Verify the types
     try test_env.assertDefType("Test.apply", "(a -> b), a -> b");
-    try test_env.assertDefType("result", "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    try test_env.assertDefType("result", "Dec");
 }
 
 // TODO: Move this test to can
@@ -2491,17 +3535,92 @@ test "top-level: type annotation followed by body should not create duplicate de
     }
 }
 
+// recursive errors //
+
+test "check type - recursive type - infinite" {
+    const source =
+        \\func = |a| func([a])
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**INFINITE TYPE**
+        \\I am inferring a weird self-referential type:
+        \\**test:1:1:1:21:**
+        \\```roc
+        \\func = |a| func([a])
+        \\```
+        \\^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+        \\
+        \\    List(<RecursiveType>)
+        \\
+        \\
+        \\
+    );
+}
+
+test "check type - recursive type - recursive alias" {
+    const source =
+        \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**RECURSIVE ALIAS**
+        \\The type alias _LinkedList_ references itself, which is not allowed:
+        \\**test:1:31:1:44:**
+        \\```roc
+        \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
+        \\```
+        \\                              ^^^^^^^^^^^^^
+        \\
+        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias `:`.
+        \\
+        \\
+    );
+}
+
+test "check type - recursive type - anonymous recursion" {
+    const source =
+        \\len = |linked_list|
+        \\  match linked_list {
+        \\    Cons(_a, rest) => 1 + len(rest)
+        \\    Nil => 0.U8
+        \\  }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**ANONYMOUS RECURSION**
+        \\I am inferring a recursive type that has no name somewhere in `len`:
+        \\**test:1:1:5:4:**
+        \\```roc
+        \\len = |linked_list|
+        \\  match linked_list {
+        \\    Cons(_a, rest) => 1 + len(rest)
+        \\    Nil => 0.U8
+        \\  }
+        \\```
+        \\
+        \\Here is the type I'm inferring. You will see `<RecursiveType>` for parts of the type that repeat.
+        \\
+        \\    [Cons(_a, <RecursiveType>), Nil]
+        \\
+        \\**Hint:** Recursive types are only allowed through nominal types. If you need a recursive data structure, define a nominal type using `:=`.
+        \\
+        \\
+    );
+}
+
 // equirecursive static dispatch //
 
 test "check type - equirecursive static dispatch" {
     // Tests that method dispatch works with numeric literals
-    // The expression (|x| x.plus(5))(7) should type-check successfully
+    // The expression (|x| x.plus(5))(7) should type-check successfully.
+    // Both 5 and 7 are from_numeral flex vars that default to Dec,
+    // and Dec.plus : Dec, Dec -> Dec, so the result is Dec.
     const source = "(|x| x.plus(5))(7)";
 
     try checkTypesExpr(
         source,
         .pass,
-        "_a",
+        "Dec",
     );
 }
 
@@ -2542,11 +3661,112 @@ test "check type - static dispatch method type mismatch - REGRESSION TEST" {
         \\fn : a, a -> Bool where [a.is_eq : a, a -> Bool]
         \\fn = |x, y| x.is_eq(y)
         \\
-        \\result = fn(1u64, 2u64) == fn(3u64, 4u64)
+        \\a : U64
+        \\a = 1
+        \\b : U64
+        \\b = 2
+        \\c : U64
+        \\c = 3
+        \\d : U64
+        \\d = 4
+        \\
+        \\result = fn(a, b) == fn(c, d)
     ;
 
     // This should pass - both calls use the same types
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+// --- Bool diagnostic tests ---
+// These tests verify type-checking of Bool expressions from failing REPL snapshots.
+// If all pass, the Bool inversion bug is in LIR lowering or codegen, not type-checking.
+
+test "check type - bool diagnostic - Bool.True" {
+    try checkTypesExpr("Bool.True", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.False" {
+    try checkTypesExpr("Bool.False", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.not(True)" {
+    try checkTypesExpr("Bool.not(True)", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.not(False)" {
+    try checkTypesExpr("Bool.not(False)", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.True" {
+    const source =
+        \\x = !Bool.True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.False" {
+    const source =
+        \\x = !Bool.False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - Bool.True and Bool.False" {
+    try checkTypesExpr("Bool.True and Bool.False", .pass, "Bool");
+}
+
+test "check type - bool diagnostic - !Bool.True or !Bool.True" {
+    const source =
+        \\x = !Bool.True or !Bool.True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool diagnostic - lambda negation applied to Bool.True" {
+    try checkTypesExpr("(|x| !x)(Bool.True)", .pass, "Bool");
+}
+
+// --- Nominal Bool vs structural tag union tests ---
+// CRITICAL DISTINCTION: In Roc, bare tags like `True` and `False` are structural tag unions,
+// NOT Bool primitives. They only become nominal `Bool` when unified with a Bool annotation
+// or a qualified reference like `Bool.True`. This is by design.
+// See also: corresponding lowering coverage in eval/backend integration tests.
+
+test "check type - nominal Bool - annotated True is Bool" {
+    const source =
+        \\x : Bool
+        \\x = True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - nominal Bool - annotated False is Bool" {
+    const source =
+        \\x : Bool
+        \\x = False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - structural tag - bare True is open tag union" {
+    const source =
+        \\x = True
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[True, ..]");
+}
+
+test "check type - structural tag - bare False is open tag union" {
+    const source =
+        \\x = False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[False, ..]");
+}
+
+test "check type - structural tag - if True True else False is open tag union" {
+    const source =
+        \\x = if True True else False
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[False, True, ..]");
 }
 
 // helpers - module //
@@ -2555,6 +3775,7 @@ const ModuleExpectation = union(enum) {
     pass: DefExpectation,
     fail,
     fail_first, // Allows multiple errors, checks first error title
+    fail_with,
 };
 
 const DefExpectation = union(enum) {
@@ -2589,12 +3810,30 @@ fn checkTypesModule(
         .fail => {
             return test_env.assertOneTypeError(expected);
         },
+        .fail_with => {
+            return test_env.assertOneTypeErrorMsg(expected);
+        },
         .fail_first => {
             return test_env.assertFirstTypeError(expected);
         },
     }
+}
 
-    return test_env.assertLastDefType(expected);
+const DefAndExpectation = struct {
+    def: []const u8,
+    expected: []const u8,
+};
+
+fn checkTypesModuleDefs(
+    comptime source_expr: []const u8,
+    comptime expectations: []const DefAndExpectation,
+) !void {
+    var test_env = try TestEnv.init("Test", source_expr);
+    defer test_env.deinit();
+
+    inline for (expectations) |expectation| {
+        try test_env.assertDefType(expectation.def, expectation.expected);
+    }
 }
 
 // helpers - expr //
@@ -2602,6 +3841,7 @@ fn checkTypesModule(
 const ExprExpectation = union(enum) {
     pass,
     fail,
+    fail_with,
 };
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
@@ -2624,6 +3864,9 @@ fn checkTypesExpr(
         .fail => {
             return test_env.assertOneTypeError(expected);
         },
+        .fail_with => {
+            return test_env.assertOneTypeErrorMsg(expected);
+        },
     }
 
     return test_env.assertLastDefType(expected);
@@ -2644,7 +3887,7 @@ test "check type - effectful zero-arg function annotation" {
     // If the parser bug exists, this would fail with TYPE MISMATCH because:
     // - annotation parses as: (()) => {} (one empty-tuple arg)
     // - lambda infers as: ({}) -> {} (zero args, pure)
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {  }");
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {}");
 }
 
 test "check type - pure zero-arg function annotation" {
@@ -2655,7 +3898,7 @@ test "check type - pure zero-arg function annotation" {
         \\foo = || {}
     ;
     // Expected: zero-arg pure function returning empty record
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
+    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {}");
 }
 
 test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
@@ -2698,19 +3941,7 @@ test "qualified imports don't produce MODULE NOT FOUND during canonicalization" 
         \\}
     ;
 
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    const diagnostics = try test_env.module_env.getDiagnostics();
-    defer test_env.gpa.free(diagnostics);
-
-    // Count MODULE NOT FOUND errors
-    var module_not_found_count: usize = 0;
-    for (diagnostics) |diag| {
-        if (diag == .module_not_found) {
-            module_not_found_count += 1;
-        }
-    }
+    const module_not_found_count = try TestEnv.countModuleNotFoundDiagnosticsAfterCanonicalization("Test", source);
 
     // Qualified imports (json.Json, http.Client, utils.String) should NOT produce
     // MODULE NOT FOUND errors - they're handled by the workspace resolver
@@ -2733,14 +3964,14 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Str, [Impossible, ListWasEmpty, ..])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
     // Regression test for https://github.com/roc-lang/roc/issues/8646
     // The `?` suffix on `strings.first()` should apply to the entire method call expression,
-    // not just to the right side of the field access. Previously, the parser was attaching
-    // `?` to `first()` before creating the field_access node, causing a type mismatch error
+    // not just to the callee fragment. Previously, the parser was attaching
+    // `?` to `first()` before creating the method_call node, causing a type mismatch error
     // that expected `{ unknown: _field }`.
     const source =
         \\question_fail : List(Str) -> Try(Str, _)
@@ -2749,7 +3980,7 @@ test "check type - try operator on method call should apply to whole expression 
         \\    Ok(first_str)
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
 // record extension in type annotations //
@@ -2760,7 +3991,7 @@ test "check type - record extension - basic open record annotation" {
         \\getName : { name: Str, ..others } -> Str
         \\getName = |record| record.name
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, name: Str } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ name: Str, ..others } -> Str");
 }
 
 test "check type - record extension - closed record satisfies open record" {
@@ -2780,7 +4011,7 @@ test "check type - record extension - multiple fields with extension" {
         \\getFullName : { first: Str, last: Str, ..others } -> Str
         \\getFullName = |record| Str.concat(Str.concat(record.first, " "), record.last)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, first: Str, last: Str } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ first: Str, last: Str, ..others } -> Str");
 }
 
 test "check type - record extension - nested records with extension" {
@@ -2789,7 +4020,7 @@ test "check type - record extension - nested records with extension" {
         \\getPersonName : { person: { name: Str, ..inner }, ..outer } -> Str
         \\getPersonName = |record| record.person.name
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..outer, person: { ..inner, name: Str } } -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ person: { name: Str, ..inner }, ..outer } -> Str");
 }
 
 test "check type - record extension - empty record with extension" {
@@ -2799,6 +4030,19 @@ test "check type - record extension - empty record with extension" {
         \\takeAnyRecord = |_record| "got a record"
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others } -> Str");
+}
+
+test "check type - record extension - named flex ext from instantiation" {
+    // When a function with a named extension annotation (..others) is aliased
+    // by another def, rigid vars become flex vars with names during instantiation.
+    // Verify the extension prints correctly after fields (no trailing comma).
+    const source =
+        \\use_record : { name: Str, ..others } -> Str
+        \\use_record = |record| record.name
+        \\
+        \\bar = use_record
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "bar" } }, "{ name: Str, ..others } -> Str");
 }
 
 test "check type - record extension - mismatch should fail" {
@@ -2812,6 +4056,42 @@ test "check type - record extension - mismatch should fail" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - record ext - arg inferred as open" {
+    const source =
+        \\main! = |_args| {
+        \\    rec = create_record()
+        \\    use_record(rec)
+        \\}
+        \\create_record = || {
+        \\    {foo: "bar"}
+        \\}
+        \\use_record = |rec| {
+        \\    Str.is_empty(rec.blah)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:3:5:**
+        \\```roc
+        \\    use_record(rec)
+        \\```
+        \\               ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    { foo: Str }
+        \\
+        \\But `use_record` needs the first argument to be:
+        \\
+        \\    { blah: Str, .. }
+        \\
+        \\**Hint:** This record is missing the field: `blah`
+        \\
+        \\
+    );
+}
+
 // List method syntax tests
 
 test "check type - List.get method syntax" {
@@ -2822,9 +4102,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [OutOfBounds, .._others])
-        \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
-        ,
+        "Try(Dec, [OutOfBounds, ..])",
     );
 }
 
@@ -2862,7 +4140,7 @@ test "check type - nested error in function return should use annotation" {
         \\get_nested : {} -> Try(Try(I64, Str), Bool)
         \\get_nested = |{}| Ok(Err("inner error"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Try(I64, Str), Bool)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Try(I64, Str), Bool)");
 }
 
 // List.first method syntax tests - REGRESSION TEST for cycle detection bug
@@ -2873,7 +4151,7 @@ test "check type - List.first method syntax should not create cyclic types" {
     // cyclic rigid var mappings in the TypeScope when building layouts.
     //
     // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
-    // When the return type is Try(item, [ListWasEmpty, .._others]) with an open tag union,
+    // When the return type is Try(item, [ListWasEmpty, ..]) with an open tag union,
     // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
     //
     // Method syntax: [1].first()
@@ -2884,13 +4162,11 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(item, [ListWasEmpty, .._others]) with item having from_numeral constraint
+    // Expected: Try(Dec, [ListWasEmpty, ..]) after from_numeral resolution
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [ListWasEmpty, .._others])
-        \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
-        ,
+        "Try(Dec, [ListWasEmpty, ..])",
     );
 }
 
@@ -2903,16 +4179,11 @@ test "check type - lambda capturing top-level constant with plus - mono_pure_lam
         \\add_one = |x| x + one
         \\result = add_one(5)
     ;
-    // Expected: result should have numeric type with from_numeral and plus constraints
+    // Expected: result should have numeric type resolved to Dec
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "result" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2922,16 +4193,11 @@ test "check type - simple function call should have return type" {
         \\add_one = |x| x + 1
         \\result = add_one(5)
     ;
-    // Both add_one and result should have numeric types with from_numeral and plus constraints
+    // Both add_one and result should have numeric types resolved to Dec
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "result" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\  ]
-        ,
+        "Dec",
     );
 }
 
@@ -2952,18 +4218,2077 @@ test "check type - range inferred" {
         \\  $answer
         \\}
     ;
+    // The literal `1` must remain overloaded in this generalized helper. Builtin
+    // integer range methods reuse this shape for U8, I8, I16, etc.; defaulting
+    // it once at the template level would make later instantiations invalid.
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
         \\a, a -> List(a)
         \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, b -> a,
         \\    a.to_u64 : a -> U64,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
+    );
+}
+
+test "check type - issue8934 recursive nominal type unification" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8934
+    // The bug was that the compiler would stack overflow when type-checking
+    // recursive nominal types with nested recursive calls, like:
+    //   Node(a) := [One(a), Many(List(Node(a)))]
+    //   flatten_aux(rest, flatten_aux(e, acc))
+    //
+    // The root cause was that unifyNominalType didn't do an early merge before
+    // unifying type arguments, causing infinite recursion when the nominal type
+    // referenced itself through the tag union backing type.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Node(a) := [One(a), Many(List(Node(a)))]
+        \\
+        \\flatten : List(Node(a)) -> List(a)
+        \\flatten = |input| {
+        \\  flatten_aux = |l, acc| {
+        \\    match l {
+        \\      [] => acc
+        \\      [One(e), .. as rest] => flatten_aux(rest, List.append(acc, e))
+        \\      [Many(e), .. as rest] => flatten_aux(rest, flatten_aux(e, acc))
+        \\    }
+        \\  }
+        \\  flatten_aux(input, [])
+        \\}
+    ;
+    // The key thing is that the compiler should NOT crash with stack overflow.
+    // It should successfully type-check the file.
+    try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
+}
+
+test "check type - nested same-module mutually recursive nominal types" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Tree := [Leaf, Branch(Tree.Forest)].{
+        \\    Forest := [Empty, More(Tree, Forest)]
+        \\}
+        \\
+        \\mk : {} -> Tree
+        \\mk = |_| Tree.Branch(Tree.Forest.More(Tree.Leaf, Tree.Forest.Empty))
+    ;
+
+    try checkTypesModule(source, .{ .pass = .{ .def = "mk" } }, "{} -> Tree");
+}
+
+// early return //
+
+test "check type - early return - pass" {
+    const source =
+        \\|bool| {
+        \\  if bool {
+        \\    return []
+        \\  }
+        \\
+        \\ []
+        \\}
+    ;
+    try checkTypesExpr(source, .pass, "Bool -> List(_a)");
+}
+
+test "check type - early return - fail" {
+    const source =
+        \\|bool| {
+        \\  if bool {
+        \\    return "hello"
+        \\  }
+        \\
+        \\ []
+        \\}
+    ;
+    try checkTypesExpr(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `return` does not match the function's return type:
+        \\**test:3:12:3:19:**
+        \\```roc
+        \\    return "hello"
+        \\```
+        \\           ^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
+        \\
+        \\But the function's return type is:
+        \\
+        \\    List(_a)
+        \\
+        \\**Hint:** All `return` statements and the final expression in a function must have the same type.
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - early return - ? - fail" {
+    const source =
+        \\|| {
+        \\  _val = Try.Err("hello")?
+        \\  Try.Err(Bool.True)
+        \\}
+    ;
+    try checkTypesExpr(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `?` may return early with a type that doesn't match the function body:
+        \\**test:2:10:2:27:**
+        \\```roc
+        \\  _val = Try.Err("hello")?
+        \\```
+        \\         ^^^^^^^^^^^^^^^^^
+        \\
+        \\On error, this would return:
+        \\
+        \\    Try(ok, Str)
+        \\
+        \\But the function body evaluates to:
+        \\
+        \\    Try(ok, Bool)
+        \\
+        \\**Hint:** The error types from all `?` operators and the function body must be compatible since any of them could be the actual return value.
+        \\
+        \\
+        ,
+    );
+}
+
+// recursive functions //
+
+test "check type - self recursive function - fibonacci - pass" {
+    const source =
+        \\fib = |n| {
+        \\  if n <= 1.U8 {
+        \\    n
+        \\  } else {
+        \\    fib(n - 1.U8) + fib(n - 2.U8)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fib" } }, "U8 -> U8");
+}
+
+test "check type - mutually recursive functions - constraint propagation" {
+    const source =
+        \\f = |x| { a: x, b: g(x) }
+        \\g = |y| f(y).a
+        \\test = (f ,g)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "(c -> { a: c, b: c }, d -> d)" },
+        },
+    );
+}
+
+test "check type - self recursive function - fibonacci - fail" {
+    const source =
+        \\fib = |n| {
+        \\  if n <= 1.U8 {
+        \\    n
+        \\  } else {
+        \\    fib("bad arg") + fib(n - 2.U8)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The recursive definition `fib` is used in an unexpected way:
+        \\**test:5:5:5:8:**
+        \\```roc
+        \\    fib("bad arg") + fib(n - 2.U8)
+        \\```
+        \\    ^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str -> U8
+        \\
+        \\But other places expect it to be:
+        \\
+        \\    U8 -> U8
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - mutually recursive functions - is_even and is_odd" {
+    const source =
+        \\is_even = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.True
+        \\  } else {
+        \\    is_odd(n - 1.U64)
+        \\  }
+        \\}
+        \\
+        \\is_odd = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.False
+        \\  } else {
+        \\    is_even(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "is_odd" } }, "U64 -> Bool");
+}
+
+// self recursive functions - additional //
+
+test "check type - self recursive function - factorial" {
+    const source =
+        \\fact = |n| {
+        \\  if n <= 1.U64 {
+        \\    1.U64
+        \\  } else {
+        \\    n * fact(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fact" } }, "U64 -> U64");
+}
+
+test "check type - self recursive function - multiple args" {
+    const source =
+        \\power = |base, exp| {
+        \\  if exp <= 0.U64 {
+        \\    1.U64
+        \\  } else {
+        \\    base * power(base, exp - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "power" } }, "U64, U64 -> U64");
+}
+
+test "check type - self recursive function - with accumulator" {
+    const source =
+        \\sum_to : U64, U64 -> U64
+        \\sum_to = |n, acc| {
+        \\  if n <= 0.U64 {
+        \\    acc
+        \\  } else {
+        \\    sum_to(n - 1.U64, acc + n)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "sum_to" } }, "U64, U64 -> U64");
+}
+
+test "check type - self recursive function - returning record" {
+    const source =
+        \\count = |n| {
+        \\  if n <= 0.U64 {
+        \\    { value: 0.U64, calls: 1.U64 }
+        \\  } else {
+        \\    prev = count(n - 1.U64)
+        \\    { value: prev.value + n, calls: prev.calls + 1.U64 }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "count" } }, "U64 -> { calls: U64, value: U64 }");
+}
+
+test "check type - self recursive function - polymorphic after generalization" {
+    const source =
+        \\const_rec = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    const_rec(n - 1.U64, x)
+        \\  }
+        \\}
+        \\test = (const_rec(1.U64, "hello"), const_rec(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "const_rec", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - self recursive function - inner lambda calls outer" {
+    const source =
+        \\apply_recursive = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    (|x| apply_recursive(x))(n - 1.U64) + 1.U64
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "apply_recursive" } }, "U64 -> U64");
+}
+
+test "check type - self recursive function - with annotation" {
+    const source =
+        \\fact : U64 -> U64
+        \\fact = |n| {
+        \\  if n <= 1.U64 {
+        \\    1.U64
+        \\  } else {
+        \\    n * fact(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fact" } }, "U64 -> U64");
+}
+
+test "check type - self recursive function - wrong arg type" {
+    const source =
+        \\bad = |x| {
+        \\  if x == 0.U64 {
+        \\    x
+        \\  } else {
+        \\    bad(Bool.True)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
+}
+
+// self recursive static dispatch //
+
+test "check type - self recursive static dispatch - method calls itself" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  count_down = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Counter.Val(n - 1.U64).count_down()
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main = Counter.Val(5.U64).count_down()
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Counter.count_down", .expected = "Counter -> U64" },
+            .{ .def = "main", .expected = "U64" },
+        },
+    );
+}
+
+test "check type - self recursive static dispatch - method with args" {
+    const source =
+        \\Acc := [Val(U64)].{
+        \\  add_n = |Acc.Val(current), n| {
+        \\    if n == 0.U64 {
+        \\      Acc.Val(current)
+        \\    } else {
+        \\      Acc.Val(current + 1.U64).add_n(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main = Acc.Val(0.U64).add_n(5.U64)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Acc.add_n", .expected = "Acc, U64 -> Acc" },
+            .{ .def = "main", .expected = "Acc" },
+        },
+    );
+}
+
+// mutually recursive static dispatch //
+
+test "check type - mutually recursive static dispatch - methods on same type" {
+    const source =
+        \\Checker := [Val(U64)].{
+        \\  is_even = |Checker.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      Bool.True
+        \\    } else {
+        \\      Checker.Val(n - 1.U64).is_odd()
+        \\    }
+        \\  }
+        \\  is_odd = |Checker.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      Bool.False
+        \\    } else {
+        \\      Checker.Val(n - 1.U64).is_even()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Checker.is_even", .expected = "Checker -> Bool" },
+            .{ .def = "Test.Checker.is_odd", .expected = "Checker -> Bool" },
+        },
+    );
+}
+
+test "check type - self recursive static dispatch - with annotation" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  count_down : Counter -> U64
+        \\  count_down = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Counter.Val(n - 1.U64).count_down()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.Counter.count_down" } },
+        "Counter -> U64",
+    );
+}
+
+test "check type - self recursive static dispatch - returning record" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  count_info = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      { done: Bool.True, value: n }
+        \\    } else {
+        \\      Counter.Val(n - 1.U64).count_info()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.Counter.count_info" } },
+        "Counter -> { done: Bool, value: U64 }",
+    );
+}
+
+test "check type - self recursive static dispatch - polymorphic" {
+    const source =
+        \\Wrapper(a) := [Val(a)].{
+        \\  apply_n = |Wrapper.Val(x), f, n| {
+        \\    if n == 0.U64 {
+        \\      Wrapper.Val(x)
+        \\    } else {
+        \\      Wrapper.Val(f(x)).apply_n(f, n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\test = (Wrapper.Val(1.U64).apply_n(|x| x + 1.U64, 3.U64), Wrapper.Val("hi").apply_n(|s| s, 1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Wrapper.apply_n", .expected = "Wrapper(a), (a -> a), U64 -> Wrapper(a)" },
+            .{ .def = "test", .expected = "(Wrapper(U64), Wrapper(Str))" },
+        },
+    );
+}
+
+test "check type - self recursive static dispatch - wrong arg type" {
+    const source =
+        \\Counter := [Val(U64)].{
+        \\  bad_count = |Counter.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Counter.Val("bad").bad_count()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "INVALID NOMINAL TAG",
+    );
+}
+
+// mutually recursive functions - additional //
+
+test "check type - mutually recursive functions - three-way cycle" {
+    const source =
+        \\f = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    g(n - 1.U64)
+        \\  }
+        \\}
+        \\g = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    h(n - 1.U64)
+        \\  }
+        \\}
+        \\h = |n| {
+        \\  if n <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    f(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "h", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - polymorphic" {
+    const source =
+        \\ping = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    pong(n - 1.U64, x)
+        \\  }
+        \\}
+        \\pong = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    ping(n - 1.U64, x)
+        \\  }
+        \\}
+        \\test = (ping(2.U64, "hello"), pong(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - record constraint propagation" {
+    const source =
+        \\make_pair = |x| { fst: x, snd: get_fst(x) }
+        \\get_fst = |y| make_pair(y).fst
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "make_pair", .expected = "a -> { fst: a, snd: a }" },
+            .{ .def = "get_fst", .expected = "a -> a" },
+        },
+    );
+}
+
+// mutually recursive static dispatch - additional //
+
+test "check type - mutually recursive static dispatch - three-way cycle" {
+    const source =
+        \\Triple := [Val(U64)].{
+        \\  step_a = |Triple.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Triple.Val(n - 1.U64).step_b()
+        \\    }
+        \\  }
+        \\  step_b = |Triple.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Triple.Val(n - 1.U64).step_c()
+        \\    }
+        \\  }
+        \\  step_c = |Triple.Val(n)| {
+        \\    if n == 0.U64 {
+        \\      0.U64
+        \\    } else {
+        \\      Triple.Val(n - 1.U64).step_a()
+        \\    }
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Triple.step_a", .expected = "Triple -> U64" },
+            .{ .def = "Test.Triple.step_b", .expected = "Triple -> U64" },
+            .{ .def = "Test.Triple.step_c", .expected = "Triple -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - polymorphic" {
+    const source =
+        \\Stepper(a) := [Val(a)].{
+        \\  step_even = |Stepper.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Stepper.Val(x).step_odd(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_odd = |Stepper.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Stepper.Val(x).step_even(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\test = (Stepper.Val(1.U64).step_even(2.U64), Stepper.Val("hi").step_odd(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Stepper.step_even", .expected = "Stepper(a), U64 -> a" },
+            .{ .def = "Test.Stepper.step_odd", .expected = "Stepper(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
+test "check type - associated items with operators - no mutual recursion regression" {
+    const source =
+        \\MyType := [C].{
+        \\  a = b + c
+        \\  b = 10
+        \\  c = d + 5
+        \\  d = 20
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.MyType.a", .expected = "Dec" },
+            .{ .def = "Test.MyType.b", .expected = "Dec" },
+            .{ .def = "Test.MyType.c", .expected = "Dec" },
+            .{ .def = "Test.MyType.d", .expected = "Dec" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - type mismatch error" {
+    const source =
+        \\f = |n| {
+        \\  if n <= 0.U64 {
+        \\    "hello"
+        \\  } else {
+        \\    g(n - 1.U64)
+        \\  }
+        \\}
+        \\g = |n| {
+        \\  if n <= 0.U64 {
+        \\    42.U64
+        \\  } else {
+        \\    f(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check can - recursive non-function top-level cycle is rejected before type checking" {
+    const source =
+        \\force : ({} -> I64) -> I64
+        \\force = |thunk| thunk(0)
+        \\
+        \\t1 = |_| force(|_| t2)
+        \\t2 = t1(0)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("CIRCULAR VALUE DEFINITION");
+}
+
+test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {
+    const source =
+        \\x = 5
+        \\a : I64
+        \\a = x
+        \\b : U8
+        \\b = x
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - monomorphic top-level empty list cannot be used at multiple element types" {
+    const source =
+        \\xs = []
+        \\a : List(I64)
+        \\a = xs
+        \\b : List(Str)
+        \\b = xs
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - mutually recursive functions - three-way polymorphic" {
+    const source =
+        \\f = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    g(n - 1.U64, x)
+        \\  }
+        \\}
+        \\g = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    h(n - 1.U64, x)
+        \\  }
+        \\}
+        \\h = |n, x| {
+        \\  if n <= 0.U64 {
+        \\    x
+        \\  } else {
+        \\    f(n - 1.U64, x)
+        \\  }
+        \\}
+        \\test = (f(3.U64, "hi"), g(2.U64, 42.U8), h(1.U64, Bool.True))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64, a -> a" },
+            .{ .def = "g", .expected = "U64, a -> a" },
+            .{ .def = "h", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8, Bool)" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - three-way polymorphic" {
+    const source =
+        \\Relay(a) := [Val(a)].{
+        \\  step_a = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_b(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_b = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_c(n - 1.U64)
+        \\    }
+        \\  }
+        \\  step_c = |Relay.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else {
+        \\      Relay.Val(x).step_a(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\test = (Relay.Val(1.U64).step_a(2.U64), Relay.Val("hi").step_c(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Relay.step_a", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "Test.Relay.step_b", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "Test.Relay.step_c", .expected = "Relay(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - annotated" {
+    const source =
+        \\is_even : U64 -> Bool
+        \\is_even = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.True
+        \\  } else {
+        \\    is_odd(n - 1.U64)
+        \\  }
+        \\}
+        \\is_odd : U64 -> Bool
+        \\is_odd = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.False
+        \\  } else {
+        \\    is_even(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "is_even", .expected = "U64 -> Bool" },
+            .{ .def = "is_odd", .expected = "U64 -> Bool" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - different arities" {
+    const source =
+        \\f = |a| {
+        \\  if a <= 0.U64 {
+        \\    0.U64
+        \\  } else {
+        \\    g(a - 1.U64, a)
+        \\  }
+        \\}
+        \\g = |a, b| {
+        \\  if a <= 0.U64 {
+        \\    b
+        \\  } else {
+        \\    f(a - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64, U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - diamond pattern" {
+    const source =
+        \\f = |n| if n <= 0.U64 { 0.U64 } else { g(n - 1.U64) + h(n - 1.U64) }
+        \\g = |n| if n <= 0.U64 { 0.U64 } else { shared(n - 1.U64) }
+        \\h = |n| if n <= 0.U64 { 0.U64 } else { shared(n - 1.U64) }
+        \\shared = |n| if n <= 0.U64 { 0.U64 } else { f(n - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "h", .expected = "U64 -> U64" },
+            .{ .def = "shared", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - mixed function and value defs" {
+    const source =
+        \\f = |x| if x <= 0.U64 { 0.U64 } else { g(x - 1.U64) }
+        \\g = |x| if x <= 0.U64 { 0.U64 } else { f(x - 1.U64) }
+        \\val = f(10.U64)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+            .{ .def = "val", .expected = "U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - entry order independence" {
+    const source =
+        \\ping = |n, x| if n <= 0.U64 { x } else { pong(n - 1.U64, x) }
+        \\pong = |n, x| if n <= 0.U64 { x } else { ping(n - 1.U64, x) }
+        \\use_ping = ping(1.U64, "hello")
+        \\use_pong = pong(1.U64, 42.U8)
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "use_ping", .expected = "Str" },
+            .{ .def = "use_pong", .expected = "U8" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - polymorphic diamond" {
+    const source =
+        \\wrap = |n, x| if n <= 0.U64 { x } else { via_a(n - 1.U64, x) }
+        \\via_a = |n, x| if n <= 0.U64 { x } else { core(n - 1.U64, x) }
+        \\via_b = |n, x| if n <= 0.U64 { x } else { core(n - 1.U64, x) }
+        \\core = |n, x| if n <= 0.U64 { x } else { wrap(n - 1.U64, x) }
+        \\test = (wrap(1.U64, "hi"), via_b(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "wrap", .expected = "U64, a -> a" },
+            .{ .def = "via_a", .expected = "U64, a -> a" },
+            .{ .def = "via_b", .expected = "U64, a -> a" },
+            .{ .def = "core", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive static dispatch - diamond pattern" {
+    const source =
+        \\Router(a) := [Val(a)].{
+        \\  route = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).path_a(n - 1.U64) }
+        \\  path_a = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).hub(n - 1.U64) }
+        \\  path_b = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).hub(n - 1.U64) }
+        \\  hub = |Router.Val(x), n| if n == 0.U64 { x } else { Router.Val(x).route(n - 1.U64) }
+        \\}
+        \\test = (Router.Val(1.U64).route(2.U64), Router.Val("hi").path_b(1.U64))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Router.route", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.path_a", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.path_b", .expected = "Router(a), U64 -> a" },
+            .{ .def = "Test.Router.hub", .expected = "Router(a), U64 -> a" },
+            .{ .def = "test", .expected = "(U64, Str)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - partially annotated" {
+    const source =
+        \\f : U64 -> U64
+        \\f = |x| if x <= 0.U64 { 0.U64 } else { g(x - 1.U64) }
+        \\g = |x| if x <= 0.U64 { 0.U64 } else { f(x - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - partially annotated polymorphic" {
+    const source =
+        \\ping : U64, a -> a
+        \\ping = |n, x| if n <= 0.U64 { x } else { pong(n - 1.U64, x) }
+        \\pong = |n, x| if n <= 0.U64 { x } else { ping(n - 1.U64, x) }
+        \\test = (ping(1.U64, "hi"), pong(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "ping", .expected = "U64, a -> a" },
+            .{ .def = "pong", .expected = "U64, a -> a" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
+    // Inner let-def lambda should generalize normally even while
+    // defer_generalize is active for the outer cycle.
+    const source =
+        \\f = |n| {
+        \\    id = |x| x
+        \\    _unused = id("hello")
+        \\    if n <= 0.U64 { 0.U64 } else { id(g(n - 1.U64)) }
+        \\}
+        \\g = |n| if n <= 0.U64 { 0.U64 } else { f(n - 1.U64) }
+    ;
+    // If id weren't generalized, using it at both Str and U64 would fail.
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "f", .expected = "U64 -> U64" },
+            .{ .def = "g", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+// repros //
+
+test "check type - zulip repro" {
+    const source =
+        \\main! = |_args| {
+        \\    rec = create_record()
+        \\    use_record(rec)
+        \\}
+        \\create_record = || {
+        \\    {foo: "bar"}
+        \\}
+        \\use_record = |rec| {
+        \\    Str.is_empty(rec.blah)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:3:5:**
+        \\```roc
+        \\    use_record(rec)
+        \\```
+        \\               ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    { foo: Str }
+        \\
+        \\But `use_record` needs the first argument to be:
+        \\
+        \\    { blah: Str, .. }
+        \\
+        \\**Hint:** This record is missing the field: `blah`
+        \\
+        \\
+    );
+}
+
+// polarity //
+
+test "check type - polarity - output is inferred as open" {
+    const source =
+        \\mk_my_tag = || MyTag
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag, ..]" },
+        },
+    );
+}
+
+test "check type - polarity - input is inferred as closed" {
+    const source =
+        \\mk_my_tag = |MyTag as a| a
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "mk_my_tag", .expected = "[MyTag] -> [MyTag]" },
+        },
+    );
+}
+
+test "check type - wildcard match is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\    _ => Try.Err("Not red")
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], Str)" },
+        },
+    );
+}
+
+test "check type - exhaustive match is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red] -> Try([Red], err)" },
+        },
+    );
+}
+
+test "check type - annotation with named open ext prevents closing" {
+    // Using a named ext var `..a` links both occurrences to the same rigid,
+    // so the annotation unification succeeds and the match cannot close it.
+    // A wildcard is needed because the rigid ext means unknown tags could exist.
+    const source =
+        \\test : [Red, ..a] -> Try([Red, ..a], err)
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\    _ => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], err)" },
+        },
+    );
+}
+
+test "check type - annotation with open ext without wildcard is non-exhaustive" {
+    // The annotation says [Red, ..a] so matching only Red without a wildcard
+    // is non-exhaustive — unknown tags could exist.
+    const source =
+        \\test : [Red, ..a] -> Try([Red, ..a], err)
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Try.Ok(x)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "NON-EXHAUSTIVE MATCH");
+}
+
+test "check type - exhaustive match with nested payload is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Red) => "red"
+        \\    Ok(Blue) => "blue"
+        \\    Err(msg) => msg
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with nested payload with wildcard is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Red) => "red"
+        \\    Ok(Blue) => "blue"
+        \\    Ok(_) => "unknown"
+        \\    Err(msg) => msg
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red, ..])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with multiple tags is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\    Green => "green"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Blue, Green, Red] -> Str" },
+        },
+    );
+}
+
+test "check type - match with underscore binding is inferred as open" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => "red"
+        \\    _ => "not red"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with deeply nested tags is inferred as closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Outer(Inner(Leaf)) => "leaf"
+        \\    Outer(Inner(Node)) => "node"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Outer([Inner([Leaf, Node])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match mixed nested closure" {
+    // Outer is closed (Ok + Err exhaustive), inner Ok payload is closed (A + B),
+    // inner Err payload stays open (variable binding)
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(A) => "a"
+        \\    Ok(B) => "b"
+        \\    Err(e) => e
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(Str), Ok([A, B])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with multi-arg tag mixed open closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Pair(Red, _y) => "red"
+        \\    Pair(Blue, _y) => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // First arg: Red, Blue (no wildcard -> closed)
+            // Second arg: _y, _y (variable bindings -> open)
+            .{ .def = "test", .expected = "[Pair([Blue, Red], _a)] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match nested wildcard keeps inner open" {
+    // Inner wildcard means inner tag union stays open, but outer is still closed
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Wrapper(Red) => "red"
+        \\    Wrapper(_) => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Wrapper([Red, ..])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match single tag no payload is closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Done => "done"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Done] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with underscore-as keeps tag union open" {
+    // `_ as x` should unwrap to `_` via unwrapAsPatternIdx,
+    // triggering the catch-all early return and keeping the union open.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Red => Red
+        \\    _ as other => other
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..a] -> [Red, ..a]" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union inside tuple element" {
+    // The tag union [Red, Blue] lives inside the first tuple element.
+    // Closure must traverse through the tuple pattern to find and close it.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    (Red, _) => "r"
+        \\    (Blue, _) => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "([Blue, Red], _field) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union inside record field" {
+    // The tag union [Active, Inactive] lives inside the record's `status` field.
+    // Closure must traverse through the record destructure to find and close it.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { status: Active } => "active"
+        \\    { status: Inactive } => "inactive"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ status: [Active, Inactive], .. } -> Str" },
+        },
+    );
+}
+
+test "check type - wildcard in record field keeps nested tag union open" {
+    // Same structure as above but with a wildcard — the traversal through the
+    // record finds the wildcard and correctly keeps the tag union open.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { status: Active } => "active"
+        \\    { status: _ } => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ status: [Active, ..], .. } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tag then tuple" {
+    // Path to closure: tag payload (Ok/Err) -> tuple element -> tag union (Red/Blue).
+    // Tests that closure traverses tag -> tuple -> tag union correctly.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok((Red, _a)) => "ok-red"
+        \\    Ok((Blue, _a)) => "ok-blue"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(_a), Ok(([Blue, Red], _field))] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tag then record" {
+    // Path to closure: tag payload (Ok/Err) -> record field (status) -> tag union (On/Off).
+    // Tests that closure traverses tag -> record -> tag union correctly.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ status: On }) => "ok-on"
+        \\    Ok({ status: Off }) => "ok-off"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On], .. })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match opens and closes tag unions through tag then record then tuple" {
+    // Two record fields inside Ok's payload: `status` is exhaustively matched (On/Off)
+    // so it should be closed, while `mode` always has a wildcard so it stays open.
+    // Tests that closure traverses tag -> record -> field independently per field.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ status: On, mode: (Big, Fast) }) => "ok-on"
+        \\    Ok({ status: Off, mode: (Big, _) }) => "ok-off"
+        \\    Err(_e) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On], .. })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through tuple then record" {
+    // Path: tuple element -> record field -> tag union.
+    // First tuple element is a record whose `color` field has an exhaustive tag union.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    ({ color: Red }, _) => "r"
+        \\    ({ color: Blue }, _) => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "({ color: [Blue, Red], .. }, _field) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match closes tag union through record then tuple" {
+    // Path: record field -> tuple -> tag union.
+    // The record's `pair` field is a tuple, and the tag union inside the first
+    // tuple element should be closed.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { pair: (On, _) } => "on"
+        \\    { pair: (Off, _) } => "off"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "{ pair: ([Off, On], _field), .. } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) => "ok-high"
+        \\    Ok({ level: Low }) => "ok-low"
+        \\    Err(Critical) => "err-crit"
+        \\    Err(Warning) => "err-warn"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low], .. })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag, mixed" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) => "ok-high"
+        \\    Ok({ level: _ }) => "ok-low"
+        \\    Err(Critical) => "err-crit"
+        \\    Err(_) => "err-warn"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match with different payload structures per tag, mixed, with same branches" {
+    // Ok has a record payload, Err has a plain tag payload.
+    // The outer tag union ends up as a chained extension due to different payload types,
+    // but the closure logic follows the ext var chain to close all levels.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok({ level: High }) | Ok({ level: _ }) => "ok"
+        \\    Err(Critical) | Err(_) => "err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match deeply nested 3 levels mixed open closed" {
+    // 3 levels of tags: outer closed, one middle branch closed, one middle open
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    L1a(L2a(L3a)) => "aaa"
+        \\    L1a(L2a(L3b)) => "aab"
+        \\    L1a(L2b(_y)) => "ab"
+        \\    L1b => "b"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Outer [L1a, L1b]: closed
+            // Middle [L2a, L2b]: closed
+            // L2a's payload [L3a, L3b]: closed (both listed)
+            // L2b's payload _y: open (variable binding)
+            .{ .def = "test", .expected = "[L1a([L2a([L3a, L3b]), L2b(_a)]), L1b] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match 4 levels deep all closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    W(X(Y(Z))) => "wxyz"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[W([X([Y([Z])])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match 4 levels deep all but top closed" {
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    W(X(Y(Z))) | W(A) => "wxyz"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[W([A, X([Y([Z])])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same tag name at multiple nesting levels" {
+    // "Ok" appears at both level 1 and level 2.
+    // The closure logic must not confuse the two — each level filters
+    // only the patterns passed to it by the parent.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    Ok(Ok(A)) => "ok-ok-a"
+        \\    Ok(Ok(B)) => "ok-ok-b"
+        \\    Ok(Err(C)) => "ok-err-c"
+        \\    Ok(Err(D)) => "ok-err-d"
+        \\    Err(Ok(E)) => "err-ok-e"
+        \\    Err(Err(_)) => "err-err"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Outer [Ok, Err]: closed (both listed, no catch-all)
+            // Ok's payload [Ok, Err]: closed
+            // Ok>Ok payload [A, B]: closed
+            // Ok>Err payload [C, D]: closed
+            // Err's payload [Ok, Err]: closed
+            // Err>Ok payload [E]: closed (only one tag but exhaustive)
+            // Err>Err payload _: open (catch-all)
+            .{ .def = "test", .expected = "[Err([Err(_a), Ok([E])]), Ok([Err([C, D]), Ok([A, B])])] -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same record field at multiple nesting levels" {
+    // Field "a" appears in both outer and inner record destructures.
+    // Each level should independently close the tag union in its own "a" field.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    { a: { a: Red } } => "red"
+        \\    { a: { a: Blue } } => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Inner "a" field's tag union [Red, Blue]: closed
+            .{ .def = "test", .expected = "{ a: { a: [Blue, Red], .. }, .. } -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match same tuple position at multiple nesting levels" {
+    // Position 0 used at both outer and inner tuple levels.
+    // Each level independently closes tag unions at its own position.
+    // All branches destructure both levels so closure can recurse through.
+    const source =
+        \\test = |x| {
+        \\  match(x) {
+        \\    ((Red, On), (A, B)) => "1"
+        \\    ((Red, Off), (A, B)) => "2"
+        \\    ((Blue, On), (A, B)) => "3"
+        \\    ((Blue, Off), (A, B)) => "4"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            // Inner tuple pos 0: [Red, Blue] closed, pos 1: [On, Off] closed
+            // Outer tuple pos 1: single-element tuple with [A] closed
+            .{ .def = "test", .expected = "(([Blue, Red], [Off, On]), ([A], [B])) -> Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match does not over-close static dispatch return type" {
+    // A static dispatch method returns a tag (inferred as open tag union).
+    // The caller pattern matches it exhaustively without wildcards.
+    // Each call site gets a fresh instantiation, so closing at one site
+    // should not affect the type at another.
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\narrow = {
+        \\  val = Maker.get(Maker)
+        \\  match val {
+        \\    Red => "red"
+        \\  }
+        \\}
+        \\
+        \\broad = {
+        \\  val = Maker.get(Maker)
+        \\  match val {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "narrow", .expected = "Str" },
+            .{ .def = "broad", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match close does not leak through shared variable" {
+    // A value is returned from a match AND also used after the match.
+    // The match closes the tag union, but the value is the same variable
+    // used in both places. This tests that closing at the match site
+    // doesn't prevent the value from being used at a broader type.
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  matched = match val {
+        \\    Red => "red"
+        \\  }
+        \\  matched
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "_arg -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - exhaustive match close with value reuse after match" {
+    // The match condition variable is used both in the match and passed
+    // to a function that expects a broader union type.
+    //
+    // Exhaustively matching `val` without a wildcard closes its tag union
+    // to [Red]. When `val` is then passed to `accept_broad` (which expects
+    // [Blue, Red]), the closed [Red] can't unify with [Blue, Red].
+    // This is the correct Roc semantics (confirmed by the Rust compiler).
+    const source =
+        \\Maker := {}.{
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:17:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - exhaustive match close with value reuse - no static dispatch" {
+    // Same closing behavior as above, without static dispatch.
+    // Exhaustively matching without a wildcard closes the tag union,
+    // preventing it from unifying with a broader type afterward.
+    const source =
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:15:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - annotation keeps tag union open despite exhaustive match" {
+    // The function annotation declares an open return type [Red, ..].
+    // Even though the caller matches exhaustively without a wildcard,
+    // the rigid ext var from the annotation prevents closing.
+    // Each call site gets an instantiation with the rigid ext var,
+    // so the value can still be used at a broader type.
+    const source =
+        \\make : {} -> [Red, ..]
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "make", .expected = "{} -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - annotated open arg not closed by exhaustive match in body" {
+    // The function arg is annotated as open [Red, ..].
+    // Matching all known tags in the body doesn't close it because
+    // the ext var is rigid (from annotation), not flex.
+    const source =
+        \\test : [Red, ..] -> Str
+        \\test = |x| {
+        \\  match x {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "test", .expected = "[Red, ..] -> Str" },
+        },
+    );
+}
+
+test "check type - annotated open return type preserved after caller exhaustive match" {
+    // Static dispatch method annotated with open return type.
+    // Caller matches exhaustively then reuses the value — the annotation
+    // prevents closing, so the second use at a broader type succeeds.
+    const source =
+        \\Maker := [Maker].{
+        \\  get : Maker -> [Red, ..]
+        \\  get = |_maker| Red
+        \\}
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = Maker.get(Maker)
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Maker.get", .expected = "Maker -> [Red, ..]" },
+            .{ .def = "test", .expected = "Str" },
+        },
+    );
+}
+
+test "check type - annotated open return type still closed by exhaustive match without wildcard" {
+    // `make` is annotated as returning [Red, ..] (open), but when instantiated
+    // at the call site, the rigid ext var becomes flex. The exhaustive match
+    // without a wildcard closes that flex var, so `val` becomes [Red] (closed)
+    // and can't unify with [Blue, Red]. Confirmed by Rust compiler.
+    const source =
+        \\make : {} -> [Red, ..]
+        \\make = |{}| Red
+        \\
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test = {
+        \\  val = make({})
+        \\  _narrow_result = match val {
+        \\    Red => "red"
+        \\  }
+        \\  broad_result = accept_broad(val)
+        \\  broad_result
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:16:18:**
+        \\```roc
+        \\  broad_result = accept_broad(val)
+        \\```
+        \\                              ^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\
+    );
+}
+
+test "check type - annotated open arg not closed even with exhaustive match" {
+    // Function arg annotated as [Red, ..] (open). The `..` creates a rigid
+    // ext var that the exhaustive match cannot close. The arg stays open as
+    // [Red, ..], which still can't unify with [Blue, Red] (closed) because
+    // the rigid ext prevents adding Blue.
+    // A wildcard is needed in the match because the rigid ext makes it non-exhaustive.
+    const source =
+        \\accept_broad = |color| {
+        \\  match color {
+        \\    Red => "red"
+        \\    Blue => "blue"
+        \\  }
+        \\}
+        \\
+        \\test : [Red, ..] -> Str
+        \\test = |x| {
+        \\  _narrow_result = match x {
+        \\    Red => "red"
+        \\    _ => "other"
+        \\  }
+        \\  accept_broad(x)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first argument being passed to this function has the wrong type:
+        \\**test:14:3:**
+        \\```roc
+        \\  accept_broad(x)
+        \\```
+        \\               ^
+        \\
+        \\This argument has the type:
+        \\
+        \\    [Red, ..]
+        \\
+        \\But `accept_broad` needs the first argument to be:
+        \\
+        \\    [Blue, Red]
+        \\
+        \\**Hint:** This tag union open, but I expected it to be closed.
+        \\
+        \\
+    );
+}
+
+test "check type - tag union - ext hints 1" {
+    const source =
+        \\bar : [A, B] -> [X, Y]
+        \\bar = |_| X
+        \\
+        \\foo : [A, B] -> [X, Y, ..]
+        \\foo = |tag| bar(tag)
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:5:13:5:21:**
+        \\```roc
+        \\foo = |tag| bar(tag)
+        \\```
+        \\            ^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [X, Y]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    [X, Y, ..]
+        \\
+        \\**Hint:** This tag union is closed, but I expected it to be open.
+        \\
+        \\
+    );
+}
+
+test "check type - tag union - ext hints 2" {
+    const source =
+        \\foo : [A, B, ..] -> [A, B]
+        \\foo = |a| a
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:2:11:2:12:**
+        \\```roc
+        \\foo = |a| a
+        \\```
+        \\          ^
+        \\
+        \\It has the type:
+        \\
+        \\    [A, B, ..]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    [A, B]
+        \\
+        \\**Hint:** This tag union open, but I expected it to be closed.
+        \\
+        \\
     );
 }

@@ -11,9 +11,9 @@ type=repl
 » Try.map_err!(Try.Ok("hello"), |_| "world")
 ~~~
 # OUTPUT
-Err(51)
+Err(51.0)
 ---
-Err(51)
+Err(51.0)
 ---
 Ok("hello")
 ---

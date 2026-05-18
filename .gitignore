@@ -50,6 +50,13 @@ zig-out
 *.ll
 *.bc
 
+# Force-include musl runtime files that are checked into the repo with
+# `git add -f`. The build copies these from test/fx into other test
+# platforms (e.g. test/static-data-host), so they need to exist in any
+# filtered source view (e.g. nix's gitignoreSource).
+!test/fx/platform/targets/*musl/crt1.o
+!test/fx/platform/targets/*musl/libc.a
+
 # valgrind
 vgcore.*
 
@@ -68,6 +75,7 @@ metadata
 .vimrc
 .nvimrc
 .zed/
+.vs/
 
 # rust cache (sccache folder)
 sccache_dir
@@ -91,6 +99,7 @@ roc_linux_x86_64.tar.gz
 
 # nix
 result
+build.zig.zon2json-lock
 
 # Only keep Cargo.lock dependencies for the main compiler.
 # Examples and test only crates should be fine to be unlocked.
@@ -138,6 +147,9 @@ perf.data.old
 profile.json
 flamegraph.svg
 
+# Coverage output
+kcov-output/
+
 # Ignore html files in the snapshot directory
 src/snapshots/**/*.html
 
@@ -146,3 +158,9 @@ src/snapshots/**/*.html
 
 *.bak
 kcov-output/
+
+.direnv
+.mcp.json
+
+# Generated glue output files
+test/glue/*/roc_platform_abi.zig

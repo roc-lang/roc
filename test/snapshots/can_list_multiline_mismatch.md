@@ -12,36 +12,39 @@ type=expr
 ]
 ~~~
 # EXPECTED
-MISSING METHOD - can_list_multiline_mismatch.md:2:5:2:7
-MISSING METHOD - can_list_multiline_mismatch.md:4:5:4:8
+TYPE MISMATCH - can_list_multiline_mismatch.md:2:5:2:7
+TYPE MISMATCH - can_list_multiline_mismatch.md:4:5:4:8
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **can_list_multiline_mismatch.md:2:5:2:7:**
 ```roc
     42,
 ```
     ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**can_list_multiline_mismatch.md:3:5:3:18:**
+```roc
+    "hello world",
+```
+    ^^^^^^^^^^^^^
+
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **can_list_multiline_mismatch.md:4:5:4:8:**
 ```roc
     100
 ```
     ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

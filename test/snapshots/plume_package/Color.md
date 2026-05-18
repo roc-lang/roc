@@ -87,7 +87,6 @@ DOES NOT EXIST - Color.md:51:39:51:49
 DOES NOT EXIST - Color.md:51:57:51:67
 DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
-DOES NOT EXIST - Color.md:68:14:68:27
 MISSING METHOD - Color.md:22:17:22:24
 MISSING METHOD - Color.md:35:19:35:39
 MISSING METHOD - Color.md:36:23:36:43
@@ -198,19 +197,6 @@ The unused variable is declared here:
     Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
 ```
                                                                                             ^^^^^^^^^^
-
-
-**DOES NOT EXIST**
-`Set.from_list` does not exist.
-
-`Set` is in scope, but it has no associated `from_list`.
-
-It's referenced here:
-**Color.md:68:14:68:27:**
-```roc
-    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
-```
-             ^^^^^^^^^^^^^
 
 
 **MISSING METHOD**
@@ -493,10 +479,10 @@ EndOfFile,
 						(s-decl
 							(p-ident (raw "rounded"))
 							(e-binop (op "/")
-								(e-field-access
-									(e-ident (raw "a"))
-									(e-apply
-										(e-ident (raw "to_frac"))))
+								(e-method-call (method ".to_frac")
+									(receiver
+										(e-ident (raw "a")))
+									(args))
 								(e-frac (raw "255.0"))))
 						(e-apply
 							(e-tag (raw "Color.RGBA"))
@@ -524,10 +510,10 @@ EndOfFile,
 					(statements
 						(s-decl
 							(p-ident (raw "bytes"))
-							(e-field-access
-								(e-ident (raw "str"))
-								(e-apply
-									(e-ident (raw "to_utf8")))))
+							(e-method-call (method ".to_utf8")
+								(receiver
+									(e-ident (raw "str")))
+								(args)))
 						(s-decl
 							(p-ident (raw "is_char_in_hex_range"))
 							(e-lambda
@@ -576,34 +562,34 @@ EndOfFile,
 											(s-decl
 												(p-ident (raw "is_valid"))
 												(e-binop (op "and")
-													(e-field-access
-														(e-ident (raw "a"))
-														(e-apply
-															(e-ident (raw "is_char_in_hex_range"))))
+													(e-method-call (method ".is_char_in_hex_range")
+														(receiver
+															(e-ident (raw "a")))
+														(args))
 													(e-binop (op "and")
-														(e-field-access
-															(e-ident (raw "b"))
-															(e-apply
-																(e-ident (raw "is_char_in_hex_range"))))
+														(e-method-call (method ".is_char_in_hex_range")
+															(receiver
+																(e-ident (raw "b")))
+															(args))
 														(e-binop (op "and")
-															(e-field-access
-																(e-ident (raw "c"))
-																(e-apply
-																	(e-ident (raw "is_char_in_hex_range"))))
+															(e-method-call (method ".is_char_in_hex_range")
+																(receiver
+																	(e-ident (raw "c")))
+																(args))
 															(e-binop (op "and")
-																(e-field-access
-																	(e-ident (raw "d"))
-																	(e-apply
-																		(e-ident (raw "is_char_in_hex_range"))))
+																(e-method-call (method ".is_char_in_hex_range")
+																	(receiver
+																		(e-ident (raw "d")))
+																	(args))
 																(e-binop (op "and")
-																	(e-field-access
-																		(e-ident (raw "e"))
-																		(e-apply
-																			(e-ident (raw "is_char_in_hex_range"))))
-																	(e-field-access
-																		(e-ident (raw "f"))
-																		(e-apply
-																			(e-ident (raw "is_char_in_hex_range"))))))))))
+																	(e-method-call (method ".is_char_in_hex_range")
+																		(receiver
+																			(e-ident (raw "e")))
+																		(args))
+																	(e-method-call (method ".is_char_in_hex_range")
+																		(receiver
+																			(e-ident (raw "f")))
+																		(args))))))))
 											(e-if-then-else
 												(e-ident (raw "is_valid"))
 												(e-apply
@@ -694,38 +680,38 @@ EndOfFile,
 							(e-ident (raw "inner")))))))
 		(s-expect
 			(e-binop (op "==")
-				(e-field-access
-					(e-apply
-						(e-ident (raw "rgb"))
-						(e-int (raw "124"))
-						(e-int (raw "56"))
-						(e-int (raw "245")))
-					(e-apply
-						(e-ident (raw "to_str"))))
+				(e-method-call (method ".to_str")
+					(receiver
+						(e-apply
+							(e-ident (raw "rgb"))
+							(e-int (raw "124"))
+							(e-int (raw "56"))
+							(e-int (raw "245"))))
+					(args))
 				(e-string
 					(e-string-part (raw "rgb(124, 56, 245)")))))
 		(s-expect
 			(e-binop (op "==")
-				(e-field-access
-					(e-apply
-						(e-ident (raw "rgba"))
-						(e-int (raw "124"))
-						(e-int (raw "56"))
-						(e-int (raw "245"))
-						(e-int (raw "255")))
-					(e-apply
-						(e-ident (raw "to_str"))))
+				(e-method-call (method ".to_str")
+					(receiver
+						(e-apply
+							(e-ident (raw "rgba"))
+							(e-int (raw "124"))
+							(e-int (raw "56"))
+							(e-int (raw "245"))
+							(e-int (raw "255"))))
+					(args))
 				(e-string
 					(e-string-part (raw "rgba(124, 56, 245, 1.0)")))))
 		(s-expect
 			(e-binop (op "==")
-				(e-field-access
-					(e-apply
-						(e-ident (raw "hex"))
-						(e-string
-							(e-string-part (raw "#ff00ff"))))
-					(e-apply
-						(e-ident (raw "map_ok"))
+				(e-method-call (method ".map_ok")
+					(receiver
+						(e-apply
+							(e-ident (raw "hex"))
+							(e-string
+								(e-string-part (raw "#ff00ff")))))
+					(args
 						(e-ident (raw "to_str"))))
 				(e-apply
 					(e-tag (raw "Ok"))
@@ -748,10 +734,10 @@ EndOfFile,
 				(args
 					(p-ident (raw "str")))
 				(e-if-then-else
-					(e-field-access
-						(e-ident (raw "str"))
-						(e-apply
-							(e-ident (raw "is_named_color"))))
+					(e-method-call (method ".is_named_color")
+						(receiver
+							(e-ident (raw "str")))
+						(args))
 					(e-apply
 						(e-tag (raw "Ok"))
 						(e-apply
@@ -783,10 +769,10 @@ EndOfFile,
 										(e-string-part (raw "AntiqueWhite")))
 									(e-string
 										(e-string-part (raw "Aqua"))))))
-						(e-field-access
-							(e-ident (raw "colors"))
-							(e-apply
-								(e-ident (raw "contains"))
+						(e-method-call (method ".contains")
+							(receiver
+								(e-ident (raw "colors")))
+							(args
 								(e-ident (raw "str"))))))))))
 ~~~
 # FORMATTED
@@ -900,7 +886,7 @@ is_named_color = |str| {
 				(s-let
 					(p-assign (ident "rounded"))
 					(e-binop (op "div")
-						(e-dot-access (field "to_frac")
+						(e-dispatch-call (method "to_frac") (constraint-fn-var 556)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "a"))))
@@ -932,7 +918,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "bytes"))
-					(e-dot-access (field "to_utf8")
+					(e-dispatch-call (method "to_utf8") (constraint-fn-var 691)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "str"))))
@@ -994,36 +980,36 @@ is_named_color = |str| {
 										(s-let
 											(p-assign (ident "is_valid"))
 											(e-binop (op "and")
-												(e-dot-access (field "is_char_in_hex_range")
+												(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 860)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "a"))))
 													(args))
 												(e-binop (op "and")
-													(e-dot-access (field "is_char_in_hex_range")
+													(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 863)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))
 														(args))
 													(e-binop (op "and")
-														(e-dot-access (field "is_char_in_hex_range")
+														(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 866)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "c"))))
 															(args))
 														(e-binop (op "and")
-															(e-dot-access (field "is_char_in_hex_range")
+															(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 869)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "d"))))
 																(args))
 															(e-binop (op "and")
-																(e-dot-access (field "is_char_in_hex_range")
+																(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 872)
 																	(receiver
 																		(e-lookup-local
 																			(p-assign (ident "e"))))
 																	(args))
-																(e-dot-access (field "is_char_in_hex_range")
+																(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 875)
 																	(receiver
 																		(e-lookup-local
 																			(p-assign (ident "f"))))
@@ -1162,7 +1148,7 @@ is_named_color = |str| {
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dot-access (field "is_named_color")
+						(e-dispatch-call (method "is_named_color") (constraint-fn-var 1287)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "str"))))
@@ -1200,8 +1186,9 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "colors"))
-					(e-call
-						(e-runtime-error (tag "nested_value_not_found"))
+					(e-call (constraint-fn-var 1392)
+						(e-lookup-external
+							(builtin))
 						(e-list
 							(elems
 								(e-string
@@ -1210,7 +1197,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dot-access (field "contains")
+				(e-dispatch-call (method "contains") (constraint-fn-var 1413)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1235,9 +1222,9 @@ is_named_color = |str| {
 				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-binop (op "eq")
-			(e-dot-access (field "to_str")
+			(e-dispatch-call (method "to_str") (constraint-fn-var 1586)
 				(receiver
-					(e-call
+					(e-call (constraint-fn-var 1495)
 						(e-lookup-local
 							(p-assign (ident "rgb")))
 						(e-num (value "124"))
@@ -1248,9 +1235,9 @@ is_named_color = |str| {
 				(e-literal (string "rgb(124, 56, 245)")))))
 	(s-expect
 		(e-binop (op "eq")
-			(e-dot-access (field "to_str")
+			(e-dispatch-call (method "to_str") (constraint-fn-var 1764)
 				(receiver
-					(e-call
+					(e-call (constraint-fn-var 1643)
 						(e-lookup-local
 							(p-assign (ident "rgba")))
 						(e-num (value "124"))
@@ -1261,21 +1248,23 @@ is_named_color = |str| {
 			(e-string
 				(e-literal (string "rgba(124, 56, 245, 1.0)")))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-dot-access (field "map_ok")
-				(receiver
-					(e-call
+		(e-method-eq (negated "false")
+			(lhs
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 1788)
+					(receiver
+						(e-call (constraint-fn-var 1787)
+							(e-lookup-local
+								(p-assign (ident "hex")))
+							(e-string
+								(e-literal (string "#ff00ff")))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "hex")))
+							(p-assign (ident "to_str"))))))
+			(rhs
+				(e-tag (name "Ok")
+					(args
 						(e-string
-							(e-literal (string "#ff00ff")))))
-				(args
-					(e-lookup-local
-						(p-assign (ident "to_str")))))
-			(e-tag (name "Ok")
-				(args
-					(e-string
-						(e-literal (string "#ff00ff"))))))))
+							(e-literal (string "#ff00ff")))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -1286,7 +1275,7 @@ is_named_color = |str| {
 		(patt (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(patt (type "Color -> Str"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
-		(patt (type "_arg -> Error")))
+		(patt (type "Str -> Bool")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
@@ -1294,7 +1283,7 @@ is_named_color = |str| {
 		(expr (type "U8, U8, U8 -> Color"))
 		(expr (type "U8, U8, U8, U8 -> Color"))
 		(expr (type "Str -> Try(Color, [InvalidHex(Str)])"))
-		(expr (type "Color -> Error"))
+		(expr (type "Color -> Str"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "Str -> Bool"))))
 ~~~

@@ -113,6 +113,12 @@ pub const Tag = enum {
     /// * extra_data format(if aliased == 1): [alias upper_ident node index, [exposed node index]{num_exposes}]
     /// * extra_data format(if aliased == 0): [[exposed node index]{num_exposes}]
     import,
+    /// A file import statement
+    /// Example: `import "README.md" as readme : Str`
+    /// * main_token - StringPart token (file path)
+    /// * lhs - LowerIdent token (name)
+    /// * rhs - UpperIdent token | (is_bytes << 31)
+    file_import,
     /// A Type declaration for aliases
     /// Example: `Color := { red : U8, green: U8, blue: U8 }`
     /// Example: `Color := [Red, Green, Blue]`
@@ -332,6 +338,16 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     frac,
+    /// An integer with explicit type annotation: 123.U64
+    /// * main_token - Token index of the integer literal
+    /// * lhs - Token index of the type (e.g., .U64)
+    /// * rhs - Unused
+    typed_int,
+    /// A fractional with explicit type annotation: 3.14.Dec
+    /// * main_token - Token index of the fractional literal
+    /// * lhs - Token index of the type (e.g., .Dec)
+    /// * rhs - Unused
+    typed_frac,
     /// A character literal enclosed in single quotes
     /// Example: 'a'
     /// * main_token - Token index containing the character
@@ -394,16 +410,24 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     record_update,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// Record field access.
+    /// * lhs - receiver expr
+    /// * rhs - field ident expr
     field_access,
+    /// Method call syntax `a.foo(...)`.
+    /// * main_token - dotted method token
+    /// * lhs - receiver expr
+    /// * rhs - extra_data index storing [args_start, args_len]
+    method_call,
+    /// Tuple element access: tuple.0, tuple.1, etc.
+    /// * lhs - node index of tuple expression
+    /// * main_token - the element index token (NoSpaceDotInt or DotInt)
+    tuple_access,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    local_dispatch,
+    arrow_call,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - node index of left expression
@@ -462,8 +486,8 @@ pub const Tag = enum {
     /// * rhs - RHS DESCRIPTION
     ellipsis,
 
-    /// A branch is a when expression
-    /// Main token is ignored
+    /// A branch in a match expression
+    /// * main_token - Guard expression index (0 = no guard, raw value = @intFromEnum(guard) + 1)
     /// * lhs - Pattern index
     /// * rhs - Body index
     branch,

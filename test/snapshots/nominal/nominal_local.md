@@ -1,0 +1,166 @@
+# META
+~~~ini
+description=Local type declarations in block contexts
+type=snippet
+~~~
+# SOURCE
+~~~roc
+main! = |_| {}
+
+test = |{}| {
+    Utf8Format := {}.{
+        encode_str : Utf8Format, Str -> List(U8)
+        encode_str = |_fmt, s| Str.to_utf8(s)
+    }
+		fmt = Utf8Format
+    Str.encode("hi", fmt)
+}
+~~~
+# EXPECTED
+MISSING METHOD - nominal_local.md:9:5:9:15
+# PROBLEMS
+**MISSING METHOD**
+This **encode_str** method is being called on a value whose type doesn't have that method:
+**nominal_local.md:9:5:9:15:**
+```roc
+    Str.encode("hi", fmt)
+```
+    ^^^^^^^^^^
+
+The value's type, which does not have a method named **encode_str**, is:
+
+    [Utf8Format, ..]
+
+# TOKENS
+~~~zig
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,
+LowerIdent,OpAssign,OpBar,OpenCurly,CloseCurly,OpBar,OpenCurly,
+UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,NamedUnderscore,Comma,LowerIdent,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+CloseCurly,
+LowerIdent,OpAssign,UpperIdent,
+UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,Comma,LowerIdent,CloseRound,
+CloseCurly,
+EndOfFile,
+~~~
+# PARSE
+~~~clojure
+(file
+	(type-module)
+	(statements
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
+				(args
+					(p-underscore))
+				(e-record)))
+		(s-decl
+			(p-ident (raw "test"))
+			(e-lambda
+				(args
+					(p-record))
+				(e-block
+					(statements
+						(s-type-decl
+							(header (name "Utf8Format")
+								(args))
+							(ty-record)
+							(associated
+								(s-type-anno (name "encode_str")
+									(ty-fn
+										(ty (name "Utf8Format"))
+										(ty (name "Str"))
+										(ty-apply
+											(ty (name "List"))
+											(ty (name "U8")))))
+								(s-decl
+									(p-ident (raw "encode_str"))
+									(e-lambda
+										(args
+											(p-ident (raw "_fmt"))
+											(p-ident (raw "s")))
+										(e-apply
+											(e-ident (raw "Str.to_utf8"))
+											(e-ident (raw "s")))))))
+						(s-decl
+							(p-ident (raw "fmt"))
+							(e-tag (raw "Utf8Format")))
+						(e-apply
+							(e-ident (raw "Str.encode"))
+							(e-string
+								(e-string-part (raw "hi")))
+							(e-ident (raw "fmt")))))))))
+~~~
+# FORMATTED
+~~~roc
+main! = |_| {}
+
+test = |{}| {
+	Utf8Format := {}.{
+		encode_str : Utf8Format, Str -> List(U8)
+		encode_str = |_fmt, s| Str.to_utf8(s)
+	}
+	fmt = Utf8Format
+	Str.encode("hi", fmt)
+}
+~~~
+# CANONICALIZE
+~~~clojure
+(can-ir
+	(d-let
+		(p-assign (ident "echo!"))
+		(e-hosted-lambda (symbol "echo!")
+			(args
+				(p-assign (ident "_echo_arg"))))
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-record))))
+	(d-let
+		(p-assign (ident "main!"))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-empty_record)))
+	(d-let
+		(p-assign (ident "Utf8Format.encode_str"))
+		(e-lambda
+			(args
+				(p-assign (ident "_fmt"))
+				(p-assign (ident "s")))
+			(e-call (constraint-fn-var 114)
+				(e-lookup-external
+					(builtin))
+				(e-lookup-local
+					(p-assign (ident "s")))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Utf8Format") (local))
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "List") (builtin)
+					(ty-lookup (name "U8") (builtin))))))
+	(d-let
+		(p-assign (ident "test"))
+		(e-runtime-error (tag "erroneous_value_expr")))
+	(s-nominal-decl
+		(ty-header (name "Utf8Format"))
+		(ty-record)))
+~~~
+# TYPES
+~~~clojure
+(inferred-types
+	(defs
+		(patt (type "Str => {}"))
+		(patt (type "_arg -> {}"))
+		(patt (type "Utf8Format, Str -> List(U8)"))
+		(patt (type "{ .. } -> Error")))
+	(type_decls
+		(nominal (type "Utf8Format")
+			(ty-header (name "Utf8Format"))))
+	(expressions
+		(expr (type "Str => {}"))
+		(expr (type "_arg -> {}"))
+		(expr (type "Utf8Format, Str -> List(U8)"))
+		(expr (type "{ .. } -> Error"))))
+~~~

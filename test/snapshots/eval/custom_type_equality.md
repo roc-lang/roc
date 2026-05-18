@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Test == and != operators with custom user-defined types that have is_eq methods
+description=Test == operator with custom user-defined types that have is_eq methods
 type=snippet
 ~~~
 # SOURCE
@@ -39,7 +39,7 @@ c3 = Color.Blue
 # Test equality - same values should be equal
 expect c1 == c2
 
-# Test inequality - different values should not be equal
+# Test inequality - different values should not be equal 
 expect c1 != c3
 ~~~
 # EXPECTED
@@ -208,7 +208,7 @@ c3 = Color.Blue
 # Test equality - same values should be equal
 expect c1 == c2
 
-# Test inequality - different values should not be equal
+# Test inequality - different values should not be equal 
 expect c1 != c3
 ~~~
 # CANONICALIZE
@@ -343,17 +343,21 @@ expect c1 != c3
 			(ty-tag-name (name "Green"))
 			(ty-tag-name (name "Blue"))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "c1")))
-			(e-lookup-local
-				(p-assign (ident "c2")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "c1"))))
+			(rhs
+				(e-lookup-local
+					(p-assign (ident "c2"))))))
 	(s-expect
-		(e-binop (op "ne")
-			(e-lookup-local
-				(p-assign (ident "c1")))
-			(e-lookup-local
-				(p-assign (ident "c3"))))))
+		(e-method-eq (negated "true")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "c1"))))
+			(rhs
+				(e-lookup-local
+					(p-assign (ident "c3")))))))
 ~~~
 # TYPES
 ~~~clojure

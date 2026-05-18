@@ -11,19 +11,9 @@ match isReady {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - boolean_patterns.md:1:7:1:14
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `isReady` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**boolean_patterns.md:1:7:1:14:**
-```roc
-match isReady {
-```
-      ^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

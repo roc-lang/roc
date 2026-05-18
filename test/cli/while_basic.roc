@@ -1,8 +1,8 @@
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app [main!] { pf: platform "../fx/platform/main.roc" }
 
 import pf.Stdout
 
-main! = |_| {
+main! = || {
     var count = 0
     while count < 5 {
         count = count + 1

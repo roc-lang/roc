@@ -28,9 +28,9 @@ This expression is used in an unexpected way:
 
 It has the type:
 
-    { c: Str }
+    { c: Str, .. }
 
-But I expected it to be:
+But you are trying to use it as:
 
     Str
 
@@ -118,10 +118,10 @@ EndOfFile,
 				(e-string-part (raw "renamed nested: "))
 				(e-ident (raw "firstName"))
 				(e-string-part (raw " ("))
-				(e-field-access
-					(e-ident (raw "userAge"))
-					(e-apply
-						(e-ident (raw "to_str"))))
+				(e-method-call (method ".to_str")
+					(receiver
+						(e-ident (raw "userAge")))
+					(args))
 				(e-string-part (raw ")"))))
 		(branch
 			(p-record)
@@ -274,7 +274,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "firstName")))
 						(e-literal (string " ("))
-						(e-dot-access (field "to_str")
+						(e-dispatch-call (method "to_str") (constraint-fn-var 196)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "userAge"))))

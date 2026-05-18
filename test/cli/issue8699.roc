@@ -1,3 +1,5 @@
+module []
+
 chunks = |arr, n| {
 	var $res = []
 	var $chunk = []
@@ -20,7 +22,7 @@ chunks = |arr, n| {
 
 expect {
 	# This expect is designed to fail to verify that test failures
-	# are handled gracefully without panicking.
+	# are handled gracefully (no crashes).
 	# The actual result is [[1, 2, 3], [4]] but we expect something different.
 	chunks([1, 2, 3, 4], 3) == [[1, 2]]
 }

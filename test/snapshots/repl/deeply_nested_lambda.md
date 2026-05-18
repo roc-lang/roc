@@ -8,6 +8,6 @@ type=repl
 » (((|a| |b| |c| a + b + c)(100))(20))(3)
 ~~~
 # OUTPUT
-123
+123.0
 # PROBLEMS
 NIL

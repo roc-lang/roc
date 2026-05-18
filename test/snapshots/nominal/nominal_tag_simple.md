@@ -102,5 +102,5 @@ NO CHANGE
 			(ty-header (name "Color"))))
 	(expressions
 		(expr (type "Color"))
-		(expr (type "Error"))))
+		(expr (type "Color"))))
 ~~~

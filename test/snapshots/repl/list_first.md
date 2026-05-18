@@ -12,7 +12,7 @@ type=repl
 » List.first(List.with_capacity(10))
 ~~~
 # OUTPUT
-Ok(1)
+Ok(1.0)
 ---
 Ok("hello")
 ---

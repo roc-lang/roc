@@ -46,14 +46,14 @@ NO CHANGE
 					(required
 						(p-assign (ident "first_name"))))
 				(record-destruct (label "rest") (ident "rest")
-					(required
+					(rest-pattern
 						(p-assign (ident "rest")))))))
 	(e-string
 		(e-literal (string "Hello "))
 		(e-lookup-local
 			(p-assign (ident "first_name")))
 		(e-literal (string " "))
-		(e-dot-access (field "last_name")
+		(e-field-access (field "last_name")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "rest")))))
@@ -61,5 +61,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ first_name: Str, rest: { last_name: Str } } -> Str"))
+(expr (type "{ first_name: Str, last_name: Str, .. } -> Str"))
 ~~~
