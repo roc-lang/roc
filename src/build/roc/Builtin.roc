@@ -627,6 +627,30 @@ Builtin :: [].{
 			$new_list
 		}
 
+		## Apply a binary function to pairs of elements from two lists, returning a list of results.
+		## The result's length is the length of the shorter input list.
+		## ```
+		## expect [1, 2, 3].map2([10, 20, 30], |a, b| a + b) == [11, 22, 33]
+		## expect [1, 2, 3, 4, 5].map2([10, 20], |a, b| a + b) == [11, 22]
+		## ```
+		map2 : List(a), List(b), (a, b -> c) -> List(c)
+		map2 = |a_list, b_list, transform| {
+			var $result = []
+			var $index = 0
+			while ($index < a_list.len() and $index < b_list.len()) {
+				match (a_list.get($index), b_list.get($index)) {
+					(Ok(a), Ok(b)) => {
+						$result = $result.append(transform(a, b))
+					}
+					_ => {
+						break
+					}
+				}
+				$index = $index + 1
+			}
+			$result
+		}
+
 		## Run the given function on each element of a list, and return all the
 		## elements for which the function returned `Bool.True`.
 		## ```roc
@@ -933,6 +957,165 @@ Builtin :: [].{
 			Item.join_with(list, joiner)
 		}
 
+		## Find the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## ```
+		## expect [1, 2, 3, 4].find_first(|x| x % 2 == 0) == Ok(2)
+		## ```
+		find_first : List(a), (a -> Bool) -> Try(a, [NotFound])
+		find_first = |list, predicate| {
+			for item in list if predicate(item) {
+				return Ok(item)
+			}
+			return Err(NotFound)
+		}
+
+		## Find the last element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## ```
+		## expect [1, 2, 3, 4].find_last(|x| x % 2 == 0) == Ok(4)
+		## ```
+		find_last : List(a), (a -> Bool) -> Try(a, [NotFound])
+		find_last = |list, predicate| {
+			for item in list.rev() if predicate(item) {
+				return Ok(item)
+			}
+			return Err(NotFound)
+		}
+
+		## Find the index of the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## ```
+		## expect [1, 2, 3, 4].find_first_index(|x| x > 1) == Ok(1)
+		## ```
+		find_first_index : List(a), (a -> Bool) -> Try(U64, [NotFound])
+		find_first_index = |list, predicate| {
+			var $idx = 0
+			for item in list {
+				if predicate(item) {
+					return Ok($idx)
+				}
+				$idx = $idx + 1
+			}
+			return Err(NotFound)
+		}
+
+		## Find the index of the last element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
+		## ```
+		## expect [1, 2, 3, 4].find_last_index(|x| x < 4) == Ok(2)
+		## ```
+		find_last_index : List(a), (a -> Bool) -> Try(U64, [NotFound])
+		find_last_index = |list, predicate| {
+			var $idx = list.len()
+
+			while $idx > 0 {
+				$idx = $idx - 1
+				item = list_get_unsafe(list, $idx)
+				if predicate(item) {
+					return Ok($idx)
+				}
+			}
+			return Err(NotFound)
+		}
+
+		# Split a list into two parts at a specified index, returning the part before the index and the part from the index onward.
+		## ```
+		## expect [0, 1, 2, 3, 4].split_at(2) == { before: [0, 1], others: [2, 3, 4] }
+		## ```
+		split_at : List(a), U64 -> { before : List(a), others : List(a) }
+		split_at = |list, idx| {
+			before = list.sublist({ start: 0, len: idx })
+			len = list.len()
+			others = list.sublist({ start: idx, len: len - idx })
+			{ before, others }
+		}
+
+		## Split a list into sublists using a specified delimiter element.
+		##
+		## Consecutive delimiters and delimiters at the start or end of the list
+		## produce empty sublists at the corresponding positions.
+		## ```
+		## expect [1, 2, 1, 2, 3].split_on(1) == [[], [2], [2, 3]]
+		## expect [1, 1, 2].split_on(1) == [[], [], [2]]
+		## ```
+		split_on : List(a), a -> List(List(a)) where [a.is_eq : a, a -> Bool]
+		split_on = |list, delim| list->split_if(|x| x == delim)
+
+		## Split a list into sublists using a predicate function to identify delimiters.
+		##
+		## Consecutive delimiters and delimiters at the start or end of the list
+		## produce empty sublists at the corresponding positions.
+		## ```
+		## expect [0, 1, 2, 3, 4].split_if(|x| x % 2 == 0) == [[], [1], [3], []]
+		## ```
+		split_if : List(a), (a -> Bool) -> List(List(a))
+		split_if = |list, predicate| {
+			var $acc = []
+			var $current = []
+
+			for item in list {
+				if predicate(item) {
+					$acc = $acc.append($current)
+					$current = []
+				} else {
+					$current = $current.append(item)
+				}
+			}
+			$acc.append($current)
+		}
+
+		## Split a list into sublists using a specified delimiter list.
+		## ```
+		## expect [1, 2, 3, 4, 5].split_on_list([2, 3]) == [[1], [4, 5]]
+		## ```
+		split_on_list : List(a), List(a) -> List(List(a))
+			where [a.is_eq : a, a -> Bool]
+		split_on_list = |list, delim_l| {
+			if delim_l.is_empty() {
+				return [list]
+			}
+
+			delim_len = delim_l.len()
+			list_len = list.len()
+			var $lists = []
+			var $current = []
+			var $skip = 0
+			var $i = 0
+
+			for elem in list {
+				if $skip > 0 {
+					$skip = $skip - 1
+				} else if $i + delim_len <= list_len
+					and list.sublist({ start: $i, len: delim_len }) == delim_l {
+					$lists = $lists.append($current)
+					$current = []
+					$skip = delim_len - 1
+				} else {
+					$current = $current.append(elem)
+				}
+				$i = $i + 1
+			}
+
+			$lists.append($current)
+		}
+
+		## Split a list into two parts at the first occurrence of a specified delimiter element, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
+		## ```
+		## expect [0, 1, 2, 1, 2].split_first(2) == Ok({ before: [0, 1], after: [1, 2] })
+		## ```
+		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
+			where [a.is_eq : a, a -> Bool]
+		split_first = |list, delim| {
+			index = list->find_first_index(|x| x == delim)?
+			{ before, others } = list->split_at(index)
+			Ok({ before, after: others.drop_first(1) })
+		}
+
+		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
+			where [a.is_eq : a, a -> Bool]
+		split_last = |list, delim| {
+			index = list->find_last_index(|x| x == delim)?
+			{ before, others } = list->split_at(index)
+			Ok({ before, after: others.drop_first(1) })
+		}
+
 		## Build a list by repeating the given value `n` times.
 		## ```roc
 		## expect List.repeat(0, 3) == [0, 0, 0]
@@ -963,6 +1146,48 @@ Builtin :: [].{
 			Item : item
 			List.fold(list, Item.default(), |acc, elem| acc + elem)
 		}
+
+		## Find the minimum element in a list, or `Err(ListWasEmpty)` if the list is empty. 
+		## Works for any type that implements `min`. 
+		min : List(a) -> Try(a, [ListWasEmpty])
+		    where [a.min : a, a -> a]
+		min = |list|
+			match List.first(list) {
+				Ok(initial) =>
+					Ok(min_help(list, initial))
+
+				Err(ListWasEmpty) =>
+					Err(ListWasEmpty)
+			}
+
+		min_help : List(a), a -> a 
+			where [a.min : a, a -> a]
+		min_help = |list, initial|
+			List.fold(
+				list,
+				initial,
+				|best_so_far, elem| best_so_far.min(elem)
+			)
+
+		max : List(a) -> Try(a, [ListWasEmpty])
+		    where [a.max : a, a -> a]
+		max = |list|
+			match List.first(list) {
+				Ok(initial) =>
+					Ok(max_help(list, initial))
+
+				Err(ListWasEmpty) =>
+					Err(ListWasEmpty)
+			}
+
+		max_help : List(a), a -> a 
+			where [a.max : a, a -> a]
+		max_help = |list, initial|
+			List.fold(
+				list,
+				initial,
+				|best_so_far, elem| best_so_far.max(elem)
+			)
 
 		## Encode a list using a format that provides encode_list
 		encode : List(item), fmt -> Try(encoded, err)
