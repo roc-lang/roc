@@ -79,9 +79,9 @@ NO CHANGE
 		(e-num (value "22000000"))
 		(e-dec-small (numerator "0") (denominator-power-of-ten "1") (value "0"))
 		(e-dec-small (numerator "-1") (denominator-power-of-ten "1") (value "-0.1"))
-		(e-dec-small (numerator "20000") (denominator-power-of-ten "0") (value "20000"))
-		(e-dec-small (numerator "300") (denominator-power-of-ten "0") (value "300"))
-		(e-frac-dec (value "-0.002"))))
+		(e-num (value "20000"))
+		(e-num (value "300"))
+		(e-dec-small (numerator "-2") (denominator-power-of-ten "3") (value "-0.002"))))
 ~~~
 # TYPES
 ~~~clojure

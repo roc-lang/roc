@@ -465,6 +465,11 @@ const Builder = struct {
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
                 self.writeBool(num_literal.is_fractional);
+                self.writeBool(num_literal.frac_requirements != null);
+                if (num_literal.frac_requirements) |requirements| {
+                    self.writeBool(requirements.fits_in_f32);
+                    self.writeBool(requirements.fits_in_dec);
+                }
             }
         }
     }

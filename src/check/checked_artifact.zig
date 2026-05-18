@@ -16,6 +16,7 @@ const checked_ids = @import("checked_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
+const problem = @import("problem.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -332,6 +333,7 @@ pub const PublishInputs = struct {
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
+    problem_store: ?*problem.Store = null,
 };
 
 /// Public `CompileTimeFinalizer` declaration.
@@ -344,6 +346,7 @@ pub const CompileTimeFinalizer = struct {
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
+        problem_store: ?*problem.Store,
     ) anyerror!void,
 
     pub fn run(
@@ -353,8 +356,9 @@ pub const CompileTimeFinalizer = struct {
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
+        problem_store: ?*problem.Store,
     ) anyerror!void {
-        try self.finalize(self.context, allocator, artifact, imports, available_artifacts, relation_artifacts);
+        try self.finalize(self.context, allocator, artifact, imports, available_artifacts, relation_artifacts, problem_store);
     }
 };
 
@@ -3243,6 +3247,11 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
                 self.writeBool(num_literal.is_fractional);
+                self.writeBool(num_literal.frac_requirements != null);
+                if (num_literal.frac_requirements) |requirements| {
+                    self.writeBool(requirements.fits_in_f32);
+                    self.writeBool(requirements.fits_in_dec);
+                }
             }
         }
     }
@@ -19519,6 +19528,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         inputs.relation_artifacts,
+        inputs.problem_store,
     );
     artifact.verifyPublished();
     return artifact;

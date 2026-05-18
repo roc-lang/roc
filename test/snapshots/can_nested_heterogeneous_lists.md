@@ -9,6 +9,7 @@ type=expr
 ~~~
 # EXPECTED
 TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:3:1:4
+TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:17:1:18
 TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:20:1:21
 # PROBLEMS
 **TYPE MISMATCH**
@@ -25,6 +26,18 @@ The type was determined to be non-numeric here:
 [[1, "hello"], [2, 3]]
 ```
      ^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**can_nested_heterogeneous_lists.md:1:17:1:18:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+                ^
 
 Other code expects this to have the type:
 

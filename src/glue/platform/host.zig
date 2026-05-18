@@ -104,34 +104,6 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
     }
 }
 
-/// Error message to display on division by zero in a Roc program
-const DIVISION_BY_ZERO_MESSAGE = "\nThis Roc application divided by zero and crashed.\n\n";
-
-/// Callback for arithmetic errors (division by zero) in a Roc program
-fn handleRocArithmeticError() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-        };
-
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
-        kernel32.ExitProcess(136);
-    } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
-        posix.exit(136); // 128 + 8 (SIGFPE)
-    } else {
-        std.process.exit(136);
-    }
-}
-
 /// Tracking entry for a Roc allocation
 const RocAllocation = struct {
     ptr: [*]u8, // Base pointer (before user data, includes size metadata)
@@ -654,8 +626,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
         }
     }
 
-    // Install signal handlers
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    // Install signal handlers for stack overflow and access violations.
+    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation);
     if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
         builtins.utils.DebugRefcountTracker.enable();
     }

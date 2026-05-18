@@ -843,6 +843,105 @@ const Lowerer = struct {
         } });
     }
 
+    fn lowLevelNeedsIntegerZeroDenominatorCheck(op: LIR.LowLevel) bool {
+        return switch (op) {
+            .num_div_by,
+            .num_div_trunc_by,
+            .num_rem_by,
+            .num_mod_by,
+            => true,
+            else => false,
+        };
+    }
+
+    fn integerDivisionByZeroMessage(self: *const Lowerer, layout_idx: layout_mod.Idx) ?[]const u8 {
+        const layout = self.layouts.getLayout(layout_idx);
+        if (layout.tag != .scalar or layout.data.scalar.tag != .int) return null;
+        return switch (layout.data.scalar.data.int) {
+            .u8 => "U8 division by zero",
+            .i8 => "I8 division by zero",
+            .u16 => "U16 division by zero",
+            .i16 => "I16 division by zero",
+            .u32 => "U32 division by zero",
+            .i32 => "I32 division by zero",
+            .u64 => "U64 division by zero",
+            .i64 => "I64 division by zero",
+            .u128 => "U128 division by zero",
+            .i128 => "I128 division by zero",
+        };
+    }
+
+    fn lowerIntegerZeroDenominatorCheckedLowLevelInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        call: anytype,
+        next: LIR.CFStmtId,
+    ) LowerResourceError!LIR.CFStmtId {
+        const vars = self.input.store.sliceVarSpan(call.args);
+        if (vars.len != 2) {
+            lirInvariant("lir.lower_ir integer division/remainder expected exactly two arguments");
+        }
+
+        const lhs = try self.lowerVar(vars[0]);
+        const rhs = try self.lowerVar(vars[1]);
+        const rhs_layout = self.store.getLocal(rhs).layout_idx;
+        const crash_message = self.integerDivisionByZeroMessage(rhs_layout) orelse {
+            const args = [_]LIR.LocalId{ lhs, rhs };
+            return try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = call.op,
+                .rc_effect = call.rc_effect,
+                .args = try self.store.addLocalSpan(&args),
+                .next = next,
+            } });
+        };
+
+        const zero = try self.store.addLocal(.{ .layout_idx = rhs_layout });
+        const is_zero = try self.store.addLocal(.{ .layout_idx = .bool });
+
+        const div_args = [_]LIR.LocalId{ lhs, rhs };
+        const div_stmt = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = call.op,
+            .rc_effect = call.rc_effect,
+            .args = try self.store.addLocalSpan(&div_args),
+            .next = next,
+        } });
+
+        const crash_stmt = try self.store.addCFStmt(.{ .crash = .{
+            .msg = try self.store.insertString(crash_message),
+        } });
+
+        const branches = [_]LIR.CFSwitchBranch{.{
+            .value = 1,
+            .body = crash_stmt,
+        }};
+        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = is_zero,
+            .branches = try self.store.addCFSwitchBranches(&branches),
+            .default_branch = div_stmt,
+            .continuation = next,
+        } });
+
+        const eq_args = [_]LIR.LocalId{ rhs, zero };
+        const eq_stmt = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = is_zero,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.store.addLocalSpan(&eq_args),
+            .next = switch_stmt,
+        } });
+
+        return try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i128_literal = .{
+                .value = 0,
+                .layout_idx = rhs_layout,
+            } },
+            .next = eq_stmt,
+        } });
+    }
+
     fn lowerExprInto(self: *Lowerer, target: LIR.LocalId, expr: ir.Ast.Expr, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
         return switch (expr) {
             .var_ => |var_| try self.store.addCFStmt(.{ .assign_ref = .{
@@ -905,6 +1004,10 @@ const Lowerer = struct {
             .call_low_level => |call| blk: {
                 if (call.op == .list_get_unsafe) {
                     break :blk try self.lowerListGetUnsafeInto(target, call, next);
+                }
+
+                if (lowLevelNeedsIntegerZeroDenominatorCheck(call.op)) {
+                    break :blk try self.lowerIntegerZeroDenominatorCheckedLowLevelInto(target, call, next);
                 }
 
                 if (call.op == .box_box or call.op == .box_unbox) {

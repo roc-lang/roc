@@ -124,42 +124,13 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
     }
 }
 
-/// Error message to display on division by zero in a Roc program
-const DIVISION_BY_ZERO_MESSAGE = "\nThis Roc application divided by zero and crashed.\n\n";
-
-/// Callback for arithmetic errors (division by zero) in a Roc program
-fn handleRocArithmeticError() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-        };
-
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
-        kernel32.ExitProcess(136);
-    } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
-        posix.exit(136); // 128 + 8 (SIGFPE)
-    } else {
-        std.process.exit(136);
-    }
-}
-
 const HostSelfTest = enum {
     none,
     stack_overflow,
-    division_by_zero,
 };
 
 fn installRuntimeSignalHandlers() void {
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation);
 }
 
 fn triggerSelfTest(mode: HostSelfTest) noreturn {
@@ -167,7 +138,6 @@ fn triggerSelfTest(mode: HostSelfTest) noreturn {
 
     switch (mode) {
         .stack_overflow => triggerSelfTestStackOverflow(),
-        .division_by_zero => triggerSelfTestDivisionByZero(),
         .none => unreachable,
     }
 }
@@ -183,25 +153,6 @@ fn selfTestStackOverflow(depth: usize) usize {
     std.mem.doNotOptimizeAway(&padding);
 
     return selfTestStackOverflow(depth +% 1) + padding[0];
-}
-
-fn triggerSelfTestDivisionByZero() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const ULONG_PTR = usize;
-        const EXCEPTION_INT_DIVIDE_BY_ZERO: DWORD = 0xC0000094;
-
-        const kernel32 = struct {
-            extern "kernel32" fn RaiseException(dwExceptionCode: DWORD, dwExceptionFlags: DWORD, nNumberOfArguments: DWORD, lpArguments: ?[*]const ULONG_PTR) callconv(.winapi) noreturn;
-        };
-
-        kernel32.RaiseException(EXCEPTION_INT_DIVIDE_BY_ZERO, 0, 0, null);
-    } else if (comptime builtin.os.tag != .wasi) {
-        posix.raise(posix.SIG.FPE) catch {};
-        posix.exit(136);
-    } else {
-        std.process.exit(136);
-    }
 }
 
 /// Type of IO operation in test spec
@@ -642,13 +593,11 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
             }
         } else if (std.mem.eql(u8, arg, "--host-test-stack-overflow")) {
             self_test = .stack_overflow;
-        } else if (std.mem.eql(u8, arg, "--host-test-division-by-zero")) {
-            self_test = .division_by_zero;
         } else if (arg.len >= 2 and arg[0] == '-' and arg[1] == '-') {
             stderr_file.writeAll("Error: unknown flag '") catch {};
             stderr_file.writeAll(arg) catch {};
             stderr_file.writeAll("'\n") catch {};
-            stderr_file.writeAll("Usage: <app> [--test <spec>] [--test-verbose <spec>] [--host-test-stack-overflow] [--host-test-division-by-zero]\n") catch {};
+            stderr_file.writeAll("Usage: <app> [--test <spec>] [--test-verbose <spec>] [--host-test-stack-overflow]\n") catch {};
             return 1;
         }
     }
@@ -1321,7 +1270,7 @@ const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
 
 /// Platform host entrypoint
 fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
-    // Install signal handlers for stack overflow, access violations, and division by zero
+    // Install signal handlers for stack overflow and access violations
     // This allows us to display helpful error messages instead of crashing
     installRuntimeSignalHandlers();
 

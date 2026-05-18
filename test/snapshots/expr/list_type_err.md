@@ -8,8 +8,28 @@ type=expr
 [1, 2, "hello"]
 ~~~
 # EXPECTED
+TYPE MISMATCH - list_type_err.md:1:2:1:3
 TYPE MISMATCH - list_type_err.md:1:5:1:6
 # PROBLEMS
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**list_type_err.md:1:2:1:3:**
+```roc
+[1, 2, "hello"]
+```
+ ^
+
+The type was determined to be non-numeric here:
+**list_type_err.md:1:8:1:15:**
+```roc
+[1, 2, "hello"]
+```
+       ^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
 **list_type_err.md:1:5:1:6:**

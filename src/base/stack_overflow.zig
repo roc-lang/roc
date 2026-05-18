@@ -1,10 +1,10 @@
-//! Signal handling for the Roc compiler (stack overflow, segfault, division by zero).
+//! Signal handling for the Roc compiler (stack overflow and segfault).
 //!
 //! This module provides a thin wrapper around the generic signal handlers in
 //! builtins.handlers, configured with compiler-specific error messages.
 //!
 //! On POSIX systems (Linux, macOS), we use sigaltstack to set up an alternate
-//! signal stack and install handlers for SIGSEGV, SIGBUS, and SIGFPE.
+//! signal stack and install handlers for SIGSEGV and SIGBUS.
 //!
 //! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
 //!
@@ -61,47 +61,6 @@ fn handleStackOverflow() noreturn {
     } else {
         // WASI fallback
         std.process.exit(134);
-    }
-}
-
-/// Error message to display on arithmetic error (division by zero, etc.)
-const ARITHMETIC_ERROR_MESSAGE = "\nThe Roc compiler divided by zero and had to exit.\n\n";
-
-/// Callback for arithmetic errors (division by zero) in the compiler
-fn handleArithmeticError() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-        };
-
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
-        kernel32.ExitProcess(136);
-    } else if (comptime builtin.os.tag != .freestanding) {
-        const written = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch |err| {
-            if (comptime builtin.mode == .Debug) {
-                @panic(@errorName(err));
-            } else {
-                unreachable;
-            }
-        };
-        if (written != ARITHMETIC_ERROR_MESSAGE.len) {
-            if (comptime builtin.mode == .Debug) {
-                @panic("arithmetic error handler short write");
-            } else {
-                unreachable;
-            }
-        }
-        posix.exit(136); // 128 + 8 (SIGFPE)
-    } else {
-        std.process.exit(136);
     }
 }
 
@@ -191,11 +150,11 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
     }
 }
 
-/// Install signal handlers for stack overflow, segfault, and division by zero.
+/// Install signal handlers for stack overflow and segfault.
 /// This should be called early in main() before any significant work is done.
 /// Returns true if the handlers were installed successfully, false otherwise.
 pub fn install() bool {
-    return handlers.install(handleStackOverflow, handleAccessViolation, handleArithmeticError);
+    return handlers.install(handleStackOverflow, handleAccessViolation);
 }
 
 /// Test function that intentionally causes a stack overflow.

@@ -2385,6 +2385,17 @@ const Unifier = struct {
             const ord = std.mem.order(u8, self.getTypeIdentText(a_next.fn_name), self.getTypeIdentText(b_next.fn_name));
             switch (ord) {
                 .eq => {
+                    // Numeric literal constraints carry literal-specific bounds.
+                    // Two `from_numeral` constraints with the same dispatch name
+                    // are not interchangeable because each literal must be
+                    // validated against the eventual concrete number type.
+                    if (a_next.origin == .from_numeral and b_next.origin == .from_numeral) {
+                        _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
+                        _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
+                        a_i = a_i + 1;
+                        b_i = b_i + 1;
+                        continue;
+                    }
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{
                         .a = a_next,
                         .b = b_next,
