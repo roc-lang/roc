@@ -1310,29 +1310,42 @@ pub const MonoLlvmCodeGen = struct {
         const cond = try self.loadBool(self.slot(condition).ptr);
         _ = wip.brCond(cond, ok_block, fail_block, .then_likely) catch return error.CompilationFailed;
         wip.cursor = .{ .block = fail_block };
-        try self.emitStaticMessageCall("roc_builtins_roc_expect_failed", "expect failed");
+        try self.emitStaticRocOpsMessageCall(@offsetOf(builtins.host_abi.RocOps, "roc_expect_failed"), "expect failed");
         _ = wip.br(ok_block) catch return error.CompilationFailed;
         wip.cursor = .{ .block = ok_block };
     }
 
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
-        try self.emitStaticMessageCall("roc_builtins_roc_crashed", msg);
+        try self.emitStaticRocOpsMessageCall(@offsetOf(builtins.host_abi.RocOps, "roc_crashed"), msg);
         _ = wip.@"unreachable"() catch return error.CompilationFailed;
     }
 
-    fn emitStaticMessageCall(self: *MonoLlvmCodeGen, builtin_name: []const u8, msg: []const u8) Error!void {
+    fn emitStaticRocOpsMessageCall(self: *MonoLlvmCodeGen, callback_offset: usize, msg: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const ptr = try self.staticBytes(msg);
-        try self.callBuiltinVoid(
-            builtin_name,
-            &.{ try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() },
-            &.{
-                ptr,
-                builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
-                self.rocOps(),
-            },
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+
+        const args_ptr = wip.alloca(
+            .normal,
+            .i8,
+            builder.intValue(.i32, @sizeOf(builtins.host_abi.RocCrashed)) catch return error.OutOfMemory,
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.host_abi.RocCrashed)),
+            .default,
+            "roc_ops_msg",
+        ) catch return error.CompilationFailed;
+
+        try self.storePointer(args_ptr, try self.staticBytes(msg));
+        try self.storeUsize(
+            try self.offsetPtr(args_ptr, @offsetOf(builtins.host_abi.RocCrashed, "len")),
+            builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
         );
+
+        const env_ptr = try self.loadPointer(self.rocOps());
+        const callback_ptr_ptr = try self.offsetPtr(self.rocOps(), @intCast(callback_offset));
+        const callback_ptr = try self.loadPointer(callback_ptr_ptr);
+        const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+        _ = wip.call(.normal, .ccc, .none, fn_ty, callback_ptr, &.{ args_ptr, env_ptr }, "") catch return error.CompilationFailed;
     }
 
     fn copyLocal(self: *MonoLlvmCodeGen, target: LocalId, source: LocalId) Error!void {
@@ -2458,6 +2471,11 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn storePointer(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, value: LlvmBuilder.Value) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        _ = wip.store(.normal, value, ptr, LlvmBuilder.Alignment.fromByteUnits(@sizeOf(usize))) catch return error.CompilationFailed;
+    }
+
+    fn storeUsize(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, value: LlvmBuilder.Value) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         _ = wip.store(.normal, value, ptr, LlvmBuilder.Alignment.fromByteUnits(@sizeOf(usize))) catch return error.CompilationFailed;
     }

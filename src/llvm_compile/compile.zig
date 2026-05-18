@@ -12,6 +12,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const bindings = @import("bindings.zig");
+const llvm_embedded = @import("llvm_embedded");
 
 const Allocator = std.mem.Allocator;
 
@@ -148,7 +149,7 @@ fn emitMergedBitcodeToObjectFile(
     // Load and merge builtin bitcode into the user module.
     // This makes all builtin functions available.
     {
-        const builtin_bitcode = @embedFile("builtins.bc");
+        const builtin_bitcode = llvm_embedded.builtins_bc;
         const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
             builtin_bitcode.ptr,
             builtin_bitcode.len,
@@ -398,6 +399,17 @@ fn linkSharedLibraryMacos(
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
+    const darwin_compat_path = createTempPath(allocator, ".darwin_compat.o") catch return Error.TempFileError;
+    defer {
+        std.fs.cwd().deleteFile(std.mem.sliceTo(darwin_compat_path, 0)) catch {};
+        allocator.free(darwin_compat_path);
+    }
+
+    std.fs.cwd().writeFile(.{
+        .sub_path = std.mem.sliceTo(darwin_compat_path, 0),
+        .data = llvm_embedded.darwin_compat_o,
+    }) catch return Error.TempFileError;
+
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
@@ -408,7 +420,7 @@ fn linkSharedLibraryMacos(
             "-o",
             std.mem.sliceTo(shared_lib_path, 0),
             std.mem.sliceTo(object_path, 0),
-            "src/llvm_compile/darwin_compat.o",
+            std.mem.sliceTo(darwin_compat_path, 0),
         },
     }) catch return Error.LinkFailed;
     defer allocator.free(result.stdout);

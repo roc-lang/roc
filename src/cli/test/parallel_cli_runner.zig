@@ -282,8 +282,7 @@ fn cleanupOutputArtifacts(allocator: Allocator, output_name: []const u8) void {
     deleteOutputArtifacts(allocator, output_name) catch {};
 }
 
-fn runSingleTest(allocator: Allocator, spec: CliTestSpec, timeout_ms: u64) TestResult {
-    _ = timeout_ms;
+fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
     const cache_dirs = util.createIsolatedTestCacheDirs(allocator) catch
