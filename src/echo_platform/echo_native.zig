@@ -59,6 +59,9 @@ fn printUsageAndExit() noreturn {
     std.process.exit(2);
 }
 
+/// CLI entry point. Parses argv, reads the app source (and any
+/// `--with-file` modules), then drives `runner.runEcho` against a
+/// 128 MiB FixedBufferAllocator. Exits with the Roc program's exit code.
 pub fn main() !void {
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
