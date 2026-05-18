@@ -5188,6 +5188,7 @@ fn assignCallableEmissionPlans(
                 .group_publish_states = std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState).init(program.allocator),
                 .erased_groups = .empty,
                 .erased_group_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
+                .box_erasure_neighbors = null,
                 .function_roots = .empty,
                 .function_root_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
                 .mode = mode,
@@ -5250,6 +5251,7 @@ const CallableEmissionAssigner = struct {
     group_publish_states: std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState),
     erased_groups: std.ArrayList(ErasedGroupProvenance),
     erased_group_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
+    box_erasure_neighbors: ?[]std.ArrayList(repr.RepresentationGroupId),
     function_roots: std.ArrayList(FunctionRootForGroup),
     function_root_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
     mode: CallableEmissionAssignmentMode,
@@ -5258,6 +5260,12 @@ const CallableEmissionAssigner = struct {
     fn deinit(self: *CallableEmissionAssigner) void {
         self.function_root_index.deinit();
         self.function_roots.deinit(self.allocator);
+        if (self.box_erasure_neighbors) |neighbors| {
+            for (neighbors) |*group_neighbors| {
+                group_neighbors.deinit(self.allocator);
+            }
+            self.allocator.free(neighbors);
+        }
         for (self.erased_groups.items) |*entry| entry.provenance.deinit(self.allocator);
         self.erased_group_index.deinit();
         self.erased_groups.deinit(self.allocator);
@@ -5660,6 +5668,7 @@ const CallableEmissionAssigner = struct {
         provenance: repr.BoxErasureProvenance,
     ) Allocator.Error!void {
         const start_group = self.groupForRoot(root) orelse return;
+        const neighbors = try self.boxErasurePropagationNeighbors();
         var visited = std.AutoHashMap(repr.RepresentationGroupId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(repr.RepresentationGroupId).empty;
@@ -5671,32 +5680,71 @@ const CallableEmissionAssigner = struct {
             try visited.put(current, {});
             try self.addErasedGroupProvenance(current, provenance);
             try self.ensureTypeOnlyErasedFunctionGroupEmission(current);
-            for (self.representationStore().representation_edges.items) |edge| {
-                if (!edgePropagatesBoxErasure(edge.kind)) continue;
-                const from_root = self.endpointRootInSession(edge.from) orelse continue;
-                const to_root = self.endpointRootInSession(edge.to) orelse continue;
-                const from = self.groupForRoot(from_root) orelse continue;
-                const to = self.groupForRoot(to_root) orelse continue;
-                switch (edge.kind) {
-                    .child => |child| switch (child) {
-                        .function_arg => {
-                            if (to == current) try stack.append(self.allocator, from);
-                        },
-                        .box_payload => {
-                            if (from == current) try stack.append(self.allocator, to);
-                            if (to == current) try stack.append(self.allocator, from);
-                        },
-                        else => {
-                            if (from == current) try stack.append(self.allocator, to);
-                        },
-                    },
-                    else => {
-                        if (from == current) try stack.append(self.allocator, to);
-                    },
-                }
+            const current_index = @intFromEnum(current);
+            if (current_index >= neighbors.len) {
+                lambdaInvariant("lambda-solved box-erasure propagation reached out-of-range representation group");
+            }
+            for (neighbors[current_index].items) |next| {
+                try stack.append(self.allocator, next);
             }
         }
     }
+
+    fn boxErasurePropagationNeighbors(
+        self: *CallableEmissionAssigner,
+    ) Allocator.Error![]std.ArrayList(repr.RepresentationGroupId) {
+        if (self.box_erasure_neighbors) |neighbors| return neighbors;
+
+        const group_count: usize = @intCast(self.representationStore().groups_len);
+        const neighbors = try self.allocator.alloc(std.ArrayList(repr.RepresentationGroupId), group_count);
+        @memset(neighbors, .empty);
+        errdefer {
+            for (neighbors) |*group_neighbors| {
+                group_neighbors.deinit(self.allocator);
+            }
+            self.allocator.free(neighbors);
+        }
+
+        for (self.representationStore().representation_edges.items) |edge| {
+            if (!edgePropagatesBoxErasure(edge.kind)) continue;
+            const from_root = self.endpointRootInSession(edge.from) orelse continue;
+            const to_root = self.endpointRootInSession(edge.to) orelse continue;
+            const from = self.groupForRoot(from_root) orelse continue;
+            const to = self.groupForRoot(to_root) orelse continue;
+            switch (edge.kind) {
+                .child => |child| switch (child) {
+                    .function_arg => try self.appendBoxErasureNeighbor(neighbors, to, from),
+                    .box_payload => {
+                        try self.appendBoxErasureNeighbor(neighbors, from, to);
+                        try self.appendBoxErasureNeighbor(neighbors, to, from);
+                    },
+                    else => try self.appendBoxErasureNeighbor(neighbors, from, to),
+                },
+                else => try self.appendBoxErasureNeighbor(neighbors, from, to),
+            }
+        }
+
+        self.box_erasure_neighbors = neighbors;
+        return neighbors;
+    }
+
+    fn appendBoxErasureNeighbor(
+        self: *CallableEmissionAssigner,
+        neighbors: []std.ArrayList(repr.RepresentationGroupId),
+        from: repr.RepresentationGroupId,
+        to: repr.RepresentationGroupId,
+    ) Allocator.Error!void {
+        const from_index = @intFromEnum(from);
+        if (from_index >= neighbors.len) {
+            lambdaInvariant("lambda-solved box-erasure propagation indexed an out-of-range representation group");
+        }
+        const group_neighbors = &neighbors[from_index];
+        for (group_neighbors.items) |existing| {
+            if (existing == to) return;
+        }
+        try group_neighbors.append(self.allocator, to);
+    }
+
     fn ensureTypeOnlyErasedFunctionGroupEmission(
         self: *CallableEmissionAssigner,
         group: repr.RepresentationGroupId,
