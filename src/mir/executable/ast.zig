@@ -439,7 +439,7 @@ pub const Expr = struct {
         str_lit: ProgramLiteralId,
         unit,
         const_instance: check.CheckedArtifact.ConstInstanceRef,
-        const_ref: check.CheckedArtifact.ConstInstantiationKey,
+        const_ref: check.CheckedArtifact.ConstInstantiationRequest,
         tag: struct {
             union_shape: row.TagUnionShapeId,
             tag: row.TagId,

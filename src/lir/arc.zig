@@ -409,6 +409,7 @@ const Inserter = struct {
                 }
                 self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_tag = .{
                     .target = assign.target,
+                    .variant_index = assign.variant_index,
                     .discriminant = assign.discriminant,
                     .payload = assign.payload,
                     .next = next,
@@ -1309,6 +1310,7 @@ const ArcTest = struct {
     fn assignTag(self: *ArcTest, target: LIR.LocalId, discriminant: u16, payload: ?LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
+            .variant_index = discriminant,
             .discriminant = discriminant,
             .payload = payload,
             .next = next,
@@ -1334,7 +1336,7 @@ const ArcTest = struct {
     fn assignTagPayload(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .tag_payload = .{ .source = source, .payload_idx = 0, .tag_discriminant = 1 } },
+            .op = .{ .tag_payload = .{ .source = source, .payload_idx = 0, .variant_index = 1, .tag_discriminant = 1 } },
             .next = next,
         } });
     }

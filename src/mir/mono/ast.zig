@@ -166,8 +166,8 @@ pub const Expr = struct {
             field_index: u16,
         },
         const_instance: checked_artifact.ConstInstanceRef,
-        const_ref: checked_artifact.ConstInstantiationKey,
-        pending_callable_instance: checked_artifact.CallableBindingInstantiationKey,
+        const_ref: checked_artifact.ConstInstantiationRequest,
+        pending_callable_instance: checked_artifact.CallableBindingInstantiationRequest,
         pending_local_root: checked_artifact.ComptimeRootId,
         structural_eq: struct {
             lhs: ExprId,

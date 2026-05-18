@@ -31,6 +31,22 @@ pub const RequestedLayout = struct {
     layout_idx: layout_mod.Idx,
 };
 
+/// Runtime encoding for a callable-set member after layout commit.
+pub const CallableSetRuntimeEncodingMember = struct {
+    member: repr.CallableSetMemberId,
+    variant_index: u16,
+    discriminant: u16,
+    payload_layout: layout_mod.Idx,
+    payload_exec_key: ?repr.CanonicalExecValueTypeKey = null,
+};
+
+/// Runtime encoding for one callable-set value layout after layout commit.
+pub const CallableSetRuntimeEncoding = struct {
+    callable_set_key: repr.CanonicalCallableSetKey,
+    value_layout: layout_mod.Idx,
+    members: []const CallableSetRuntimeEncodingMember,
+};
+
 /// Public `Result` declaration.
 pub const Result = struct {
     canonical_names: mir.Hosted.CanonicalNameStore,
@@ -40,8 +56,11 @@ pub const Result = struct {
     root_metadata: std.ArrayList(mir.Ids.RootMetadata),
     proc_map: std.ArrayList(ProcMapEntry),
     requested_layouts: std.ArrayList(RequestedLayout),
+    callable_set_runtime_encodings: std.ArrayList(CallableSetRuntimeEncoding),
 
     pub fn deinit(self: *Result) void {
+        deinitCallableSetRuntimeEncodingContents(self.store.allocator, self.callable_set_runtime_encodings.items);
+        self.callable_set_runtime_encodings.deinit(self.store.allocator);
         self.requested_layouts.deinit(self.store.allocator);
         self.proc_map.deinit(self.store.allocator);
         self.root_metadata.deinit(self.store.allocator);
@@ -69,6 +88,23 @@ pub const Result = struct {
     }
 };
 
+pub fn deinitCallableSetRuntimeEncodings(
+    allocator: Allocator,
+    encodings: []const CallableSetRuntimeEncoding,
+) void {
+    deinitCallableSetRuntimeEncodingContents(allocator, encodings);
+    if (encodings.len > 0) allocator.free(encodings);
+}
+
+fn deinitCallableSetRuntimeEncodingContents(
+    allocator: Allocator,
+    encodings: []const CallableSetRuntimeEncoding,
+) void {
+    for (encodings) |encoding| {
+        if (encoding.members.len > 0) allocator.free(encoding.members);
+    }
+}
+
 /// Public `run` function.
 pub fn run(
     allocator: Allocator,
@@ -86,6 +122,7 @@ pub fn run(
     owned_input.canonical_names = mir.Hosted.CanonicalNameStore.init(allocator);
 
     try lowerer.registerProcPlaceholders();
+    try lowerer.lowerCallableSetRuntimeEncodings();
     try lowerer.lowerAllDefs();
     try lowerer.bindRoots(explicit_roots, explicit_root_metadata);
     try lowerer.lowerRequestedLayouts();
@@ -104,6 +141,7 @@ const Lowerer = struct {
     root_metadata: std.ArrayList(mir.Ids.RootMetadata),
     proc_map: std.ArrayList(ProcMapEntry),
     requested_layouts: std.ArrayList(RequestedLayout),
+    callable_set_runtime_encodings: std.ArrayList(CallableSetRuntimeEncoding),
     local_env: std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId),
     layout_ref_cache: std.AutoHashMap(u64, layout_mod.Idx),
     raw_layout_value_cache: std.AutoHashMap(layout_mod.Idx, layout_mod.Idx),
@@ -130,6 +168,7 @@ const Lowerer = struct {
             .root_metadata = .empty,
             .proc_map = .empty,
             .requested_layouts = .empty,
+            .callable_set_runtime_encodings = .empty,
             .break_targets = .empty,
             .next_join_point = 0,
             .local_env = std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId).init(allocator),
@@ -144,6 +183,10 @@ const Lowerer = struct {
         self.layout_ref_cache.deinit();
         self.local_env.deinit();
         self.proc_map.deinit(self.allocator);
+        for (self.callable_set_runtime_encodings.items) |encoding| {
+            if (encoding.members.len > 0) self.allocator.free(encoding.members);
+        }
+        self.callable_set_runtime_encodings.deinit(self.allocator);
         self.requested_layouts.deinit(self.allocator);
         self.root_metadata.deinit(self.allocator);
         self.root_procs.deinit(self.allocator);
@@ -161,6 +204,7 @@ const Lowerer = struct {
             .root_metadata = self.root_metadata,
             .proc_map = self.proc_map,
             .requested_layouts = self.requested_layouts,
+            .callable_set_runtime_encodings = self.callable_set_runtime_encodings,
         };
         self.local_env.deinit();
         self.layout_ref_cache.deinit();
@@ -173,6 +217,7 @@ const Lowerer = struct {
         self.root_metadata = .empty;
         self.proc_map = .empty;
         self.requested_layouts = .empty;
+        self.callable_set_runtime_encodings = .empty;
         self.break_targets = .empty;
         self.next_join_point = 0;
         self.local_env = std.AutoHashMap(ir.Ast.Symbol, LIR.LocalId).init(self.allocator);
@@ -284,6 +329,76 @@ const Lowerer = struct {
                 .layout_idx = try self.lowerLayoutRef(request.layout),
             });
         }
+    }
+
+    fn lowerCallableSetRuntimeEncodings(self: *Lowerer) LowerResourceError!void {
+        const encodings = self.input.callable_set_runtime_encodings.items;
+        if (encodings.len == 0) return;
+        try self.callable_set_runtime_encodings.ensureUnusedCapacity(self.allocator, encodings.len);
+        for (encodings) |encoding| {
+            const source_members = self.input.callable_set_runtime_encoding_members.items[encoding.members.start..][0..encoding.members.len];
+            const members = try self.allocator.alloc(CallableSetRuntimeEncodingMember, source_members.len);
+            errdefer self.allocator.free(members);
+            for (source_members, 0..) |member, i| {
+                members[i] = .{
+                    .member = member.member,
+                    .variant_index = member.variant_index,
+                    .discriminant = member.discriminant,
+                    .payload_layout = try self.lowerLayoutRef(member.payload_layout),
+                    .payload_exec_key = member.payload_exec_key,
+                };
+            }
+            const lowered = CallableSetRuntimeEncoding{
+                .callable_set_key = encoding.callable_set_key,
+                .value_layout = try self.lowerLayoutRef(encoding.value_layout),
+                .members = members,
+            };
+            self.verifyCallableSetRuntimeEncoding(lowered);
+            self.callable_set_runtime_encodings.appendAssumeCapacity(lowered);
+        }
+    }
+
+    fn verifyCallableSetRuntimeEncoding(self: *const Lowerer, encoding: CallableSetRuntimeEncoding) void {
+        for (encoding.members, 0..) |member, i| {
+            for (encoding.members[0..i]) |previous| {
+                if (previous.member == member.member) {
+                    lirInvariant("lir.lower_ir callable-set runtime encoding contained duplicate member");
+                }
+                if (previous.variant_index == member.variant_index) {
+                    lirInvariant("lir.lower_ir callable-set runtime encoding contained duplicate variant index");
+                }
+                if (previous.discriminant == member.discriminant) {
+                    lirInvariant("lir.lower_ir callable-set runtime encoding contained duplicate discriminant");
+                }
+            }
+        }
+
+        const value_layout = self.layouts.getLayout(encoding.value_layout);
+        if (value_layout.tag != .tag_union) {
+            if (encoding.members.len == 1 and self.isZstLayout(encoding.value_layout)) return;
+            lirInvariant("lir.lower_ir callable-set runtime encoding value layout was not a tag union");
+        }
+        const data = self.layouts.getTagUnionData(value_layout.data.tag_union.idx);
+        const variants = self.layouts.getTagUnionVariants(data);
+        for (encoding.members) |member| {
+            if (@as(usize, member.variant_index) >= variants.len) {
+                lirInvariant("lir.lower_ir callable-set runtime encoding variant index exceeded layout variants");
+            }
+            if (variants.get(@intCast(member.variant_index)).payload_layout != member.payload_layout) {
+                lirInvariant("lir.lower_ir callable-set runtime encoding payload layout differed from committed layout");
+            }
+        }
+    }
+
+    fn callableSetRuntimeEncoding(
+        self: *const Lowerer,
+        id: ir.Ast.CallableSetRuntimeEncodingId,
+    ) CallableSetRuntimeEncoding {
+        const index = @intFromEnum(id);
+        if (index >= self.callable_set_runtime_encodings.items.len) {
+            lirInvariant("lir.lower_ir callable-set runtime encoding id out of range");
+        }
+        return self.callable_set_runtime_encodings.items[index];
     }
 
     fn lowerBlock(self: *Lowerer, block_id: ir.Ast.BlockId) LowerResourceError!LIR.CFStmtId {
@@ -569,7 +684,7 @@ const Lowerer = struct {
         union_id: anytype,
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
-        switch (union_id.source) {
+        const expected_callable_set_encoding: ?CallableSetRuntimeEncoding = switch (union_id.source) {
             .known_singleton => |discriminant| {
                 return try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
@@ -580,11 +695,28 @@ const Lowerer = struct {
                     .next = next,
                 } });
             },
-            .runtime_tag_union, .runtime_callable_set => {},
-        }
+            .known_singleton_callable_set => |singleton| {
+                _ = self.callableSetRuntimeEncoding(singleton.encoding);
+                return try self.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i128_literal = .{
+                        .value = @intCast(singleton.discriminant),
+                        .layout_idx = self.store.getLocal(target).layout_idx,
+                    } },
+                    .next = next,
+                } });
+            },
+            .runtime_tag_union => null,
+            .runtime_callable_set => |encoding| self.callableSetRuntimeEncoding(encoding),
+        };
         const source = try self.lowerVar(union_id.value);
         const source_layout = self.store.getLocal(source).layout_idx;
         const source_union = try self.materializeTagUnionSource(source, source_layout);
+        if (expected_callable_set_encoding) |encoding| {
+            if (source_union.layout != encoding.value_layout) {
+                lirInvariant("lir.lower_ir callable-set discriminant source layout differed from runtime encoding layout");
+            }
+        }
         const read_discriminant = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .discriminant = .{
@@ -599,6 +731,7 @@ const Lowerer = struct {
         self: *Lowerer,
         target: LIR.LocalId,
         source: LIR.LocalId,
+        variant_index: u16,
         tag_discriminant: u16,
         next: LIR.CFStmtId,
     ) LowerResourceError!LIR.CFStmtId {
@@ -609,7 +742,7 @@ const Lowerer = struct {
             lirInvariant("lir.lower_ir tag payload access from zst source expected zst target");
         }
         const source_union = try self.materializeTagUnionSource(source, source_layout);
-        const payload_layout = self.tagUnionPayloadLayout(source_union.layout, tag_discriminant);
+        const payload_layout = self.tagUnionPayloadLayout(source_union.layout, variant_index);
         if (target_layout == payload_layout) {
             if (self.isZstLayout(target_layout)) {
                 const assign_zst = try self.assignZst(target, next);
@@ -619,6 +752,7 @@ const Lowerer = struct {
                 .target = target,
                 .op = .{ .tag_payload_struct = .{
                     .source = source_union.source,
+                    .variant_index = variant_index,
                     .tag_discriminant = tag_discriminant,
                 } },
                 .next = next,
@@ -632,6 +766,7 @@ const Lowerer = struct {
             .target = raw_payload,
             .op = .{ .tag_payload_struct = .{
                 .source = source_union.source,
+                .variant_index = variant_index,
                 .tag_discriminant = tag_discriminant,
             } },
             .next = after_extract,
@@ -710,7 +845,7 @@ const Lowerer = struct {
                 }
                 return try self.assignZst(target, next);
             }
-            const expected_payload_layout = self.tagPayloadLayoutForConstruction(target_layout, tag.discriminant) orelse
+            const expected_payload_layout = self.tagPayloadLayoutForConstruction(target_layout, tag.variant_index) orelse
                 lirInvariant("lir.lower_ir tag construction had payload for layout without payload storage");
             if (self.store.getLocal(source).layout_idx == expected_payload_layout) {
                 payload = source;
@@ -732,6 +867,7 @@ const Lowerer = struct {
 
         const assign_tag = try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
+            .variant_index = tag.variant_index,
             .discriminant = tag.discriminant,
             .payload = payload,
             .next = next,
@@ -872,6 +1008,7 @@ const Lowerer = struct {
             .get_union_struct => |payload| try self.lowerTagPayloadStructRefInto(
                 target,
                 try self.lowerVar(payload.value),
+                payload.variant_index,
                 payload.tag_discriminant,
                 next,
             ),
@@ -1178,6 +1315,7 @@ const Lowerer = struct {
             try self.store.addLocal(.{ .layout_idx = target_payload_layout });
         const assign_tag = try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
+            .variant_index = @intCast(variant_index),
             .discriminant = @intCast(variant_index),
             .payload = payload,
             .next = next,
@@ -1193,6 +1331,7 @@ const Lowerer = struct {
             .target = source_payload,
             .op = .{ .tag_payload_struct = .{
                 .source = source,
+                .variant_index = @intCast(variant_index),
                 .tag_discriminant = @intCast(variant_index),
             } },
             .next = after_extract,
@@ -1210,6 +1349,7 @@ const Lowerer = struct {
         if (self.isZstLayout(target_payload_layout)) {
             return try self.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
+                .variant_index = singleton.target_discriminant,
                 .discriminant = singleton.target_discriminant,
                 .payload = null,
                 .next = next,
@@ -1220,6 +1360,7 @@ const Lowerer = struct {
             const bridged = try self.store.addLocal(.{ .layout_idx = target_payload_layout });
             const assign_tag = try self.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
+                .variant_index = singleton.target_discriminant,
                 .discriminant = singleton.target_discriminant,
                 .payload = bridged,
                 .next = next,
@@ -1229,6 +1370,7 @@ const Lowerer = struct {
 
         return try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
+            .variant_index = singleton.target_discriminant,
             .discriminant = singleton.target_discriminant,
             .payload = source,
             .next = next,
@@ -1262,6 +1404,7 @@ const Lowerer = struct {
             .target = source_payload,
             .op = .{ .tag_payload_struct = .{
                 .source = source,
+                .variant_index = singleton.source_discriminant,
                 .tag_discriminant = singleton.source_discriminant,
             } },
             .next = after_extract,
@@ -1460,15 +1603,15 @@ const Lowerer = struct {
     fn tagPayloadLayoutForConstruction(
         self: *const Lowerer,
         target_layout_idx: layout_mod.Idx,
-        tag_discriminant: u16,
+        variant_index: u16,
     ) ?layout_mod.Idx {
         const target_layout = self.layouts.getLayout(target_layout_idx);
         return switch (target_layout.tag) {
-            .tag_union => self.tagUnionPayloadLayout(target_layout_idx, tag_discriminant),
+            .tag_union => self.tagUnionPayloadLayout(target_layout_idx, variant_index),
             .box => blk: {
                 const inner = self.layouts.getLayout(target_layout.data.box);
                 if (inner.tag != .tag_union) break :blk null;
-                break :blk self.tagUnionPayloadLayout(target_layout.data.box, tag_discriminant);
+                break :blk self.tagUnionPayloadLayout(target_layout.data.box, variant_index);
             },
             else => null,
         };

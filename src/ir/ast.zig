@@ -6,6 +6,7 @@ const mir = @import("mir");
 const symbol_mod = @import("symbol");
 const layout_mod = @import("layout.zig");
 const row = mir.MonoRow;
+const repr = mir.LambdaSolved.Representation;
 
 /// Interned symbol identifiers referenced by lowered IR nodes.
 pub const Symbol = symbol_mod.Symbol;
@@ -32,6 +33,8 @@ pub const BranchId = enum(u32) { _ };
 pub const DefId = enum(u32) { _ };
 /// Identifier for an explicit bridge plan.
 pub const BridgePlanId = enum(u32) { _ };
+/// Identifier for a callable-set runtime encoding published during IR lowering.
+pub const CallableSetRuntimeEncodingId = enum(u32) { _ };
 
 /// Slice metadata for contiguous ids stored in side arrays.
 pub fn Span(comptime _: type) type {
@@ -86,8 +89,28 @@ pub const BridgePlan = union(enum) {
 /// Explicit logical source for a discriminant read.
 pub const DiscriminantSource = union(enum) {
     runtime_tag_union: row.TagUnionShapeId,
-    runtime_callable_set,
+    runtime_callable_set: CallableSetRuntimeEncodingId,
     known_singleton: u16,
+    known_singleton_callable_set: struct {
+        encoding: CallableSetRuntimeEncodingId,
+        discriminant: u16,
+    },
+};
+
+/// Layout-owned runtime encoding for a callable-set member in IR layout refs.
+pub const CallableSetRuntimeEncodingMember = struct {
+    member: repr.CallableSetMemberId,
+    variant_index: u16,
+    discriminant: u16,
+    payload_layout: LayoutRef,
+    payload_exec_key: ?repr.CanonicalExecValueTypeKey = null,
+};
+
+/// Runtime encoding table for one callable-set value layout in lowered IR.
+pub const CallableSetRuntimeEncoding = struct {
+    callable_set_key: repr.CanonicalCallableSetKey,
+    value_layout: LayoutRef,
+    members: Span(CallableSetRuntimeEncodingMember),
 };
 
 /// Lowered IR expression node.
@@ -97,6 +120,7 @@ pub const Expr = union(enum) {
     fn_ptr: ProcRef,
     null_ptr,
     make_union: struct {
+        variant_index: u16,
         discriminant: u16,
         payload: ?Var,
         payload_bridge_plan: ?BridgePlanId,
@@ -107,6 +131,7 @@ pub const Expr = union(enum) {
     },
     get_union_struct: struct {
         value: Var,
+        variant_index: u16,
         tag_discriminant: u16,
     },
     make_struct: struct {

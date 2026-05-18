@@ -1376,6 +1376,123 @@ pub const CheckedTypeStoreView = struct {
     }
 };
 
+/// A checked type graph together with the canonical names that own its labels.
+pub const CheckedTypeSourceView = struct {
+    names: *const canonical.CanonicalNameStore,
+    view: CheckedTypeStoreView,
+};
+
+/// Compare record field labels that may come from different canonical name stores.
+pub fn recordFieldLabelsMatch(
+    source_names: *const canonical.CanonicalNameStore,
+    source_field: canonical.RecordFieldLabelId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_field: canonical.RecordFieldLabelId,
+) bool {
+    if (source_names == target_names and source_field == target_field) return true;
+    return Ident.textEql(
+        source_names.recordFieldLabelText(source_field),
+        target_names.recordFieldLabelText(target_field),
+    );
+}
+
+/// Compare tag labels that may come from different canonical name stores.
+pub fn tagLabelsMatch(
+    source_names: *const canonical.CanonicalNameStore,
+    source_tag: canonical.TagLabelId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_tag: canonical.TagLabelId,
+) bool {
+    if (source_names == target_names and source_tag == target_tag) return true;
+    return Ident.textEql(
+        source_names.tagLabelText(source_tag),
+        target_names.tagLabelText(target_tag),
+    );
+}
+
+/// Find a record field payload child by label while walking aliases and row tails.
+pub fn checkedTypeRecordFieldChild(
+    source: CheckedTypeSourceView,
+    root: CheckedTypeId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_field: canonical.RecordFieldLabelId,
+) ?CheckedTypeId {
+    var current = root;
+    while (true) {
+        const payload = checkedTypeViewResolvedPayload(source.view, current) orelse return null;
+        current = payload.root;
+        switch (payload.payload) {
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (recordFieldLabelsMatch(source.names, field.name, target_names, target_field)) return field.ty;
+                }
+                current = record.ext;
+            },
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    if (recordFieldLabelsMatch(source.names, field.name, target_names, target_field)) return field.ty;
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+}
+
+/// Find a tag payload child by tag label and payload index while walking aliases and row tails.
+pub fn checkedTypeTagPayloadChild(
+    source: CheckedTypeSourceView,
+    root: CheckedTypeId,
+    target_names: *const canonical.CanonicalNameStore,
+    target_tag: canonical.TagLabelId,
+    payload_index: u32,
+) ?CheckedTypeId {
+    const raw_payload_index: usize = @intCast(payload_index);
+    var current = root;
+    while (true) {
+        const payload = checkedTypeViewResolvedPayload(source.view, current) orelse return null;
+        current = payload.root;
+        switch (payload.payload) {
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    if (!tagLabelsMatch(source.names, tag.name, target_names, target_tag)) continue;
+                    if (raw_payload_index >= tag.args.len) return null;
+                    return tag.args[raw_payload_index];
+                }
+                current = tag_union.ext;
+            },
+            else => return null,
+        }
+    }
+}
+
+const ResolvedCheckedTypePayload = struct {
+    root: CheckedTypeId,
+    payload: CheckedTypePayload,
+};
+
+fn checkedTypeViewResolvedPayload(
+    view: CheckedTypeStoreView,
+    root: CheckedTypeId,
+) ?ResolvedCheckedTypePayload {
+    var current = root;
+    while (true) {
+        const index: usize = @intFromEnum(current);
+        if (index >= view.payloads.len) {
+            checkedArtifactInvariant("checked type source child lookup referenced a missing root", .{});
+        }
+        switch (view.payloads[index]) {
+            .alias => |alias| current = alias.backing,
+            .nominal => |nominal| current = nominal.backing,
+            .pending => checkedArtifactInvariant("checked type source child lookup reached a pending payload", .{}),
+            else => |payload| return .{
+                .root = current,
+                .payload = payload,
+            },
+        }
+    }
+}
+
 fn checkedTypeViewIsConcreteConstProducerSchemeInner(
     checked_types: CheckedTypeStoreView,
     root: CheckedTypeId,
@@ -1787,7 +1904,10 @@ pub const CheckedTypeStore = struct {
         }
 
         self.payloads[index] = payload;
-        errdefer deinitCheckedTypePayload(allocator, &self.payloads[index]);
+        errdefer {
+            deinitCheckedTypePayload(allocator, &self.payloads[index]);
+            self.payloads[index] = .pending;
+        }
         try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots[index].key);
     }
 
@@ -5178,7 +5298,7 @@ pub const PrivateCaptureRef = struct {
     artifact: CheckedModuleArtifactKey,
     owner: PromotedCaptureId,
     node: PrivateCaptureNodeId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_ty_payload: CheckedTypeId,
 };
 
 /// Public `PrivateCaptureInstantiationKey` declaration.
@@ -11342,8 +11462,6 @@ pub const ConstGraphReificationPlan = union(enum) {
 
 /// Public `SerializableCaptureLeafPlan` declaration.
 pub const SerializableCaptureLeafPlan = struct {
-    requested_source_ty: canonical.CanonicalTypeKey,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
     schema: ComptimeSchemaId,
     reification_plan: ConstGraphReificationPlanId,
 };
@@ -11405,9 +11523,8 @@ pub const PrivateCaptureTagNode = struct {
     payloads: []const PrivateCaptureTagPayload,
 };
 
-/// Public `CaptureSlotReificationPlan` declaration.
-pub const CaptureSlotReificationPlan = union(enum) {
-    pending,
+/// Public `CaptureSlotReificationKind` declaration.
+pub const CaptureSlotReificationKind = union(enum) {
     serializable_leaf: SerializableCaptureLeafPlan,
     callable_leaf: CallableResultPlanId,
     callable_schema: canonical.CanonicalTypeKey,
@@ -11423,6 +11540,20 @@ pub const CaptureSlotReificationPlan = union(enum) {
         backing: CaptureSlotReificationPlanId,
     },
     recursive_ref: CaptureSlotReificationPlanId,
+};
+
+/// Public `CaptureSlotReificationNode` declaration.
+pub const CaptureSlotReificationNode = struct {
+    source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: CheckedTypeId,
+    source_scheme: canonical.CanonicalTypeSchemeKey,
+    kind: CaptureSlotReificationKind,
+};
+
+/// Public `CaptureSlotReificationPlan` declaration.
+pub const CaptureSlotReificationPlan = union(enum) {
+    pending,
+    sealed: CaptureSlotReificationNode,
 };
 
 /// Public `CallableResultMemberPlan` declaration.
@@ -11756,7 +11887,7 @@ pub const CompileTimePlanStore = struct {
         for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, plan);
         for (self.callable_results.items) |plan| verifyCallableResultPlan(self, checked_types, plan);
         for (self.callable_promotions.items) |plan| verifyCallablePromotionPlan(self, plan);
-        for (self.capture_slots.items) |plan| verifyCaptureSlotReificationPlan(self, plan);
+        for (self.capture_slots.items) |plan| verifyCaptureSlotReificationPlan(self, checked_types, plan);
         for (self.private_captures.items) |node| verifyPrivateCaptureNode(self, callable_set_descriptors, node);
         for (self.erased_capture_executable_materialization_nodes.items) |node| verifyErasedCaptureExecutableMaterializationNode(self, callable_set_descriptors, node);
     }
@@ -11815,21 +11946,25 @@ fn deinitCallableResultMemberTargetPlan(
 
 fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReificationPlan) void {
     switch (plan.*) {
-        .pending,
-        .serializable_leaf,
-        .callable_leaf,
-        .callable_schema,
-        .box,
-        .nominal,
-        .recursive_ref,
-        => {},
-        .record => |fields| allocator.free(fields),
-        .tuple => |items| allocator.free(items),
-        .tag_union => |variants| {
-            for (variants) |variant| allocator.free(variant.payloads);
-            allocator.free(variants);
+        .pending => {},
+        .sealed => |node| {
+            switch (node.kind) {
+                .serializable_leaf,
+                .callable_leaf,
+                .callable_schema,
+                .box,
+                .nominal,
+                .recursive_ref,
+                => {},
+                .record => |fields| allocator.free(fields),
+                .tuple => |items| allocator.free(items),
+                .tag_union => |variants| {
+                    for (variants) |variant| allocator.free(variant.payloads);
+                    allocator.free(variants);
+                },
+                .list => {},
+            }
         },
-        .list => {},
     }
 }
 
@@ -12338,21 +12473,30 @@ fn verifyCallablePromotionPlan(store: *const CompileTimePlanStore, plan: Callabl
     }
 }
 
-fn verifyCaptureSlotReificationPlan(store: *const CompileTimePlanStore, plan: CaptureSlotReificationPlan) void {
+fn verifyCaptureSlotReificationPlan(
+    store: *const CompileTimePlanStore,
+    checked_types: *const CheckedTypeStore,
+    plan: CaptureSlotReificationPlan,
+) void {
     switch (plan) {
         .pending => std.debug.panic("checked artifact invariant violated: published capture slot reification plan is pending", .{}),
-        .serializable_leaf => {},
-        .callable_leaf => |callable| verifyCallableResultRef(store, callable),
-        .callable_schema => {},
-        .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
-        .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
-        .tag_union => |variants| for (variants) |variant| {
-            for (variant.payloads) |payload| verifyCaptureSlotRef(store, payload.value);
+        .sealed => |node| {
+            verifyCheckedTypePayloadKey(checked_types, node.source_ty_payload, node.source_ty, "capture slot source type payload differs from source type");
+            switch (node.kind) {
+                .serializable_leaf => {},
+                .callable_leaf => |callable| verifyCallableResultRef(store, callable),
+                .callable_schema => {},
+                .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
+                .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
+                .tag_union => |variants| for (variants) |variant| {
+                    for (variant.payloads) |payload| verifyCaptureSlotRef(store, payload.value);
+                },
+                .list => |list| verifyCaptureSlotRef(store, list.elem),
+                .box => |payload| verifyCaptureSlotRef(store, payload),
+                .nominal => |nominal| verifyCaptureSlotRef(store, nominal.backing),
+                .recursive_ref => |ref| verifyCaptureSlotRef(store, ref),
+            }
         },
-        .list => |list| verifyCaptureSlotRef(store, list.elem),
-        .box => |payload| verifyCaptureSlotRef(store, payload),
-        .nominal => |nominal| verifyCaptureSlotRef(store, nominal.backing),
-        .recursive_ref => |ref| verifyCaptureSlotRef(store, ref),
     }
 }
 
@@ -13474,8 +13618,8 @@ pub const ProcedureCallableDependency = struct {
 
 /// Public `ComptimeConcreteValueUse` declaration.
 pub const ComptimeConcreteValueUse = union(enum) {
-    const_instance: ConstInstantiationKey,
-    callable_binding_instance: CallableBindingInstantiationKey,
+    const_instance: ConstInstantiationRequest,
+    callable_binding_instance: CallableBindingInstantiationRequest,
     procedure_callable: canonical.ProcedureCallableRef,
     procedure_callable_with_payloads: ProcedureCallableDependency,
 };
@@ -15846,6 +15990,7 @@ pub const ConstInstantiationState = union(enum) {
 pub const ConstInstantiationRecord = struct {
     id: ConstInstanceId,
     key: ConstInstantiationKey,
+    requested_source_ty_payload: CheckedTypeId,
     state: ConstInstantiationState,
 };
 
@@ -15873,29 +16018,26 @@ pub const ConstInstantiationStore = struct {
         request: ConstInstantiationRequest,
     ) Allocator.Error!ConstInstanceRef {
         verifyConstInstantiationRequest(checked_types, request);
-        return try self.reserveKey(allocator, request.key);
-    }
-
-    fn reserveKey(
-        self: *ConstInstantiationStore,
-        allocator: Allocator,
-        key: ConstInstantiationKey,
-    ) Allocator.Error!ConstInstanceRef {
-        const key_hash = hashConstInstantiationKey(key);
+        const key_hash = hashConstInstantiationKey(request.key);
         if (self.by_key.get(key_hash)) |existing| {
-            return .{ .owner = self.owner, .key = key, .instance = existing };
+            const record = &self.instances.items[@intFromEnum(existing)];
+            if (record.requested_source_ty_payload != request.requested_source_ty_payload) {
+                checkedArtifactInvariant("constant instantiation request payload changed for an existing key", .{});
+            }
+            return .{ .owner = self.owner, .key = request.key, .instance = existing };
         }
 
         const id: ConstInstanceId = @enumFromInt(@as(u32, @intCast(self.instances.items.len)));
         try self.instances.append(allocator, .{
             .id = id,
-            .key = key,
+            .key = request.key,
+            .requested_source_ty_payload = request.requested_source_ty_payload,
             .state = .reserved,
         });
         errdefer _ = self.instances.pop();
         try self.by_key.put(allocator, key_hash, id);
 
-        return .{ .owner = self.owner, .key = key, .instance = id };
+        return .{ .owner = self.owner, .key = request.key, .instance = id };
     }
 
     pub fn markEvaluating(self: *ConstInstantiationStore, ref: ConstInstanceRef) void {
@@ -15922,6 +16064,14 @@ pub const ConstInstantiationStore = struct {
     pub fn lookup(self: *const ConstInstantiationStore, key: ConstInstantiationKey) ?ConstInstanceRef {
         const id = self.by_key.get(hashConstInstantiationKey(key)) orelse return null;
         return .{ .owner = self.owner, .key = key, .instance = id };
+    }
+
+    pub fn requestForRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstantiationRequest {
+        const record = self.recordForConstRef(ref);
+        return .{
+            .key = record.key,
+            .requested_source_ty_payload = record.requested_source_ty_payload,
+        };
     }
 
     pub fn stateForRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstantiationState {
@@ -16150,6 +16300,7 @@ pub const CallableBindingInstantiationState = union(enum) {
 pub const CallableBindingInstantiationRecord = struct {
     id: CallableBindingInstanceId,
     key: CallableBindingInstantiationKey,
+    requested_source_fn_ty_payload: CheckedTypeId,
     state: CallableBindingInstantiationState,
 };
 
@@ -16177,29 +16328,26 @@ pub const CallableBindingInstantiationStore = struct {
         request: CallableBindingInstantiationRequest,
     ) Allocator.Error!CallableBindingInstanceRef {
         verifyCallableBindingInstantiationRequest(checked_types, request);
-        return try self.reserveKey(allocator, request.key);
-    }
-
-    fn reserveKey(
-        self: *CallableBindingInstantiationStore,
-        allocator: Allocator,
-        key: CallableBindingInstantiationKey,
-    ) Allocator.Error!CallableBindingInstanceRef {
-        const key_hash = hashCallableBindingInstantiationKey(key);
+        const key_hash = hashCallableBindingInstantiationKey(request.key);
         if (self.by_key.get(key_hash)) |existing| {
-            return .{ .owner = self.owner, .key = key, .instance = existing };
+            const record = &self.instances.items[@intFromEnum(existing)];
+            if (record.requested_source_fn_ty_payload != request.requested_source_fn_ty_payload) {
+                checkedArtifactInvariant("callable binding instantiation request payload changed for an existing key", .{});
+            }
+            return .{ .owner = self.owner, .key = request.key, .instance = existing };
         }
 
         const id: CallableBindingInstanceId = @enumFromInt(@as(u32, @intCast(self.instances.items.len)));
         try self.instances.append(allocator, .{
             .id = id,
-            .key = key,
+            .key = request.key,
+            .requested_source_fn_ty_payload = request.requested_source_fn_ty_payload,
             .state = .reserved,
         });
         errdefer _ = self.instances.pop();
         try self.by_key.put(allocator, key_hash, id);
 
-        return .{ .owner = self.owner, .key = key, .instance = id };
+        return .{ .owner = self.owner, .key = request.key, .instance = id };
     }
 
     pub fn markEvaluating(self: *CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) void {
@@ -16229,6 +16377,14 @@ pub const CallableBindingInstantiationStore = struct {
     pub fn lookup(self: *const CallableBindingInstantiationStore, key: CallableBindingInstantiationKey) ?CallableBindingInstanceRef {
         const id = self.by_key.get(hashCallableBindingInstantiationKey(key)) orelse return null;
         return .{ .owner = self.owner, .key = key, .instance = id };
+    }
+
+    pub fn requestForRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstantiationRequest {
+        const record = self.recordForConstRef(ref);
+        return .{
+            .key = record.key,
+            .requested_source_fn_ty_payload = record.requested_source_fn_ty_payload,
+        };
     }
 
     pub fn stateForRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstantiationState {
@@ -18094,18 +18250,6 @@ pub const CheckedTypeProjector = struct {
         return null;
     }
 
-    pub fn projectImportedCheckedTypeForKey(
-        self: *CheckedTypeProjector,
-        imported: ImportedModuleView,
-        key: canonical.CanonicalTypeKey,
-    ) Allocator.Error!?CheckedTypeId {
-        const imported_root = for (imported.checked_types.roots) |root| {
-            if (std.meta.eql(root.key.bytes, key.bytes)) break root.id;
-        } else return null;
-
-        return try self.projectImportedCheckedType(imported, imported_root);
-    }
-
     pub fn projectCheckedTypeViewRoot(
         self: *CheckedTypeProjector,
         source: CheckedTypeStoreView,
@@ -18433,7 +18577,7 @@ pub const CheckedTypeProjector = struct {
         );
     }
 
-    fn projectImportedCheckedType(
+    pub fn projectImportedCheckedType(
         self: *CheckedTypeProjector,
         imported: ImportedModuleView,
         ty: CheckedTypeId,

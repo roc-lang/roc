@@ -5219,6 +5219,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
         .assign_tag => |assign| {
             try self.generateTag(.{
                 .union_layout = self.procLocalLayoutIdx(assign.target),
+                .variant_index = assign.variant_index,
                 .discriminant = assign.discriminant,
                 .payload = assign.payload,
             });
@@ -5860,13 +5861,13 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
-                    break :blk variants.get(payload.tag_discriminant).payload_layout;
+                    break :blk variants.get(payload.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner = ls.getLayout(union_layout.data.box);
                     if (inner.tag != .tag_union) break :blk .zst;
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.data.tag_union.idx));
-                    break :blk variants.get(payload.tag_discriminant).payload_layout;
+                    break :blk variants.get(payload.variant_index).payload_layout;
                 },
                 else => .zst,
             };
@@ -5896,13 +5897,13 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
-                    break :blk variants.get(payload.tag_discriminant).payload_layout;
+                    break :blk variants.get(payload.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner = ls.getLayout(union_layout.data.box);
                     if (inner.tag != .tag_union) break :blk .zst;
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.data.tag_union.idx));
-                    break :blk variants.get(payload.tag_discriminant).payload_layout;
+                    break :blk variants.get(payload.variant_index).payload_layout;
                 },
                 else => .zst,
             };
@@ -6799,6 +6800,18 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
     const tu_size = tu_layout.size;
     const disc_offset = tu_layout.discriminant_offset;
+    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+    const variants = ls.getTagUnionVariants(tu_data);
+    if (@as(usize, t.variant_index) >= variants.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "WASM/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
+                .{ t.variant_index, variants.len },
+            );
+        }
+        unreachable;
+    }
+    const variant_payload_layout = variants.get(t.variant_index).payload_layout;
     if (tu_size <= 4 and disc_offset == 0) {
         // Small tag union — discriminant only, no payload (enum).
         // Still evaluate payload for side effects (e.g., early_return from ? operator).
@@ -6824,7 +6837,13 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     // the payload slot, e.g. i64 for a u32 tag payload — the i64 store would
     // clobber the discriminant).
     if (t.payload) |payload_local| {
-        const payload_byte_size = self.procLocalByteSize(payload_local);
+        const payload_byte_size = self.layoutByteSize(variant_payload_layout);
+        if (builtin.mode == .Debug and self.procLocalLayoutIdx(payload_local) != variant_payload_layout) {
+            std.debug.panic(
+                "WASM/codegen invariant violated: tag payload local layout {d} did not match variant payload layout {d}",
+                .{ @intFromEnum(self.procLocalLayoutIdx(payload_local)), @intFromEnum(variant_payload_layout) },
+            );
+        }
         try self.emitProcLocal(payload_local);
         if (self.isCompositeLocal(payload_local)) {
             // Composite types (Str, List, records, etc.) produce a pointer on
@@ -10091,30 +10110,57 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 /// Generate numeric low-level operations (num_add, num_sub, etc.)
 /// Handles both scalar and composite (i128/Dec) types.
 fn emitNumericLowLevel(self: *Self, op: anytype, args: []const ProcLocalId, ret_layout: layout.Idx) Allocator.Error!void {
-    // For comparison ops, the operand type determines composite-ness, not ret_layout (which is bool)
-    const use_operand_layout = switch (op) {
-        .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_abs_diff => true,
+    const operand_layout = self.procLocalLayoutIdx(args[0]);
+    const requires_matching_operands = switch (op) {
+        .num_plus,
+        .num_minus,
+        .num_times,
+        .num_div_by,
+        .num_div_trunc_by,
+        .num_rem_by,
+        .num_mod_by,
+        .num_is_eq,
+        .num_is_gt,
+        .num_is_gte,
+        .num_is_lt,
+        .num_is_lte,
+        .num_abs_diff,
+        => true,
         else => false,
     };
+    if (requires_matching_operands and args.len >= 2) {
+        const rhs_layout = self.procLocalLayoutIdx(args[1]);
+        if (rhs_layout != operand_layout) {
+            if (rhs_layout == .zst or operand_layout == .zst) {
+                self.body.append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+                return;
+            }
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "wasm numeric lowering invariant violated: operand layouts differ for {s}: lhs={s} rhs={s}",
+                    .{ @tagName(op), @tagName(operand_layout), @tagName(rhs_layout) },
+                );
+            }
+            unreachable;
+        }
+    }
 
     // Check for composite types (i128/Dec)
-    const check_layout = if (use_operand_layout) self.procLocalLayoutIdx(args[0]) else ret_layout;
     const is_shift = op == .num_shift_left_by or op == .num_shift_right_by or op == .num_shift_right_zf_by;
-    if (!is_shift and (self.isCompositeLocal(args[0]) or self.isCompositeLayout(check_layout))) {
-        return self.emitCompositeNumericOp(op, args, ret_layout, check_layout);
+    if (!is_shift and (self.isCompositeLocal(args[0]) or self.isCompositeLayout(operand_layout))) {
+        return self.emitCompositeNumericOp(op, args, ret_layout, operand_layout);
     }
     // I128/U128 shifts: LHS is composite but RHS is U8 — needs dedicated handling.
-    if (is_shift and (self.isCompositeLocal(args[0]) or self.isCompositeLayout(check_layout))) {
+    if (is_shift and (self.isCompositeLocal(args[0]) or self.isCompositeLayout(operand_layout))) {
         return self.emitI128Shift(op, args);
     }
 
-    // For neg, also check composite via ret_layout
-    if (op == .num_negate and self.isCompositeLayout(ret_layout)) {
+    if (op == .num_negate and self.isCompositeLayout(operand_layout)) {
         return self.emitCompositeI128Negate(args[0], ret_layout);
     }
 
-    const vt = if (use_operand_layout) self.procLocalValType(args[0]) else self.resolveValType(ret_layout);
-    const layout_idx = self.procLocalLayoutIdx(args[0]);
+    const vt = self.procLocalValType(args[0]);
+    const layout_idx = operand_layout;
 
     switch (op) {
         .num_plus => {
@@ -10153,7 +10199,7 @@ fn emitNumericLowLevel(self: *Self, op: anytype, args: []const ProcLocalId, ret_
         .num_div_by => {
             try self.emitProcLocal(args[0]);
             try self.emitProcLocal(args[1]);
-            const is_unsigned = isUnsignedLayout(ret_layout);
+            const is_unsigned = isUnsignedLayout(operand_layout);
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
                 .i64 => if (is_unsigned) Op.i64_div_u else Op.i64_div_s,
@@ -10165,7 +10211,7 @@ fn emitNumericLowLevel(self: *Self, op: anytype, args: []const ProcLocalId, ret_
         .num_div_trunc_by => {
             try self.emitProcLocal(args[0]);
             try self.emitProcLocal(args[1]);
-            const is_unsigned = isUnsignedLayout(ret_layout);
+            const is_unsigned = isUnsignedLayout(operand_layout);
             const wasm_op: u8 = switch (vt) {
                 .i32 => if (is_unsigned) Op.i32_div_u else Op.i32_div_s,
                 .i64 => if (is_unsigned) Op.i64_div_u else Op.i64_div_s,
@@ -10177,7 +10223,7 @@ fn emitNumericLowLevel(self: *Self, op: anytype, args: []const ProcLocalId, ret_
         .num_rem_by => {
             try self.emitProcLocal(args[0]);
             try self.emitProcLocal(args[1]);
-            const is_unsigned = isUnsignedLayout(ret_layout);
+            const is_unsigned = isUnsignedLayout(operand_layout);
             switch (vt) {
                 .i32 => self.body.append(self.allocator, if (is_unsigned) Op.i32_rem_u else Op.i32_rem_s) catch return error.OutOfMemory,
                 .i64 => self.body.append(self.allocator, if (is_unsigned) Op.i64_rem_u else Op.i64_rem_s) catch return error.OutOfMemory,

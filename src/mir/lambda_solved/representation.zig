@@ -82,6 +82,7 @@ pub const ProcRepresentationInstanceId = enum(u32) { _ };
 pub const RepresentationSolveSessionId = enum(u32) { _ };
 /// Public `ValueInfoStoreId` declaration.
 pub const ValueInfoStoreId = enum(u32) { _ };
+/// Public `CallableSetMemberId` alias.
 pub const CallableSetMemberId = canonical.CallableSetMemberId;
 /// Public `ErasedAdapterId` declaration.
 pub const ErasedAdapterId = enum(u32) { _ };
@@ -142,10 +143,8 @@ pub const RepresentationRootTypeInfo = struct {
     source_root: ?ConcreteSourceType.ConcreteSourceTypeRoot = null,
 };
 
-/// Public `RepresentationEdgeKind` declaration.
-pub const RepresentationEdgeKind = union(enum) {
-    value_alias,
-    value_move,
+/// Public `RepresentationChildKind` declaration.
+pub const RepresentationChildKind = union(enum) {
     function_arg: u32,
     function_return,
     function_callable,
@@ -155,9 +154,19 @@ pub const RepresentationEdgeKind = union(enum) {
     list_elem,
     box_payload,
     nominal_backing: canonical.NominalTypeKey,
+};
+
+/// Public `RepresentationEdgeKind` declaration.
+pub const RepresentationEdgeKind = union(enum) {
+    value_alias,
+    value_move,
     branch_join,
     loop_phi,
     mutable_version,
+    call_arg: u32,
+    call_result,
+    capture_value,
+    child: RepresentationChildKind,
 };
 
 /// Public `ProcPublicRootRef` declaration.
@@ -189,6 +198,9 @@ pub const RepresentationEdge = struct {
 
 const StructuralChildKind = struct {
     tag: enum {
+        function_arg,
+        function_return,
+        function_callable,
         record_field,
         tuple_elem,
         tag_payload,
@@ -311,6 +323,12 @@ pub const CanonicalCallableSetMember = struct {
 pub const CanonicalCallableSetDescriptor = struct {
     key: CanonicalCallableSetKey,
     members: []const CanonicalCallableSetMember,
+};
+
+/// Public `CallableSetDescriptorInternResult` declaration.
+pub const CallableSetDescriptorInternResult = struct {
+    key: CanonicalCallableSetKey,
+    replaced_existing: bool,
 };
 
 /// Public `SessionExecutableTypePayloadId` declaration.
@@ -593,8 +611,14 @@ fn deinitSessionExecutableTypePayload(
     payload.* = undefined;
 }
 
-fn structuralChildKindFromEdgeKind(kind: RepresentationEdgeKind) ?StructuralChildKind {
+fn structuralChildKindFromChildKind(kind: RepresentationChildKind) StructuralChildKind {
     return switch (kind) {
+        .function_arg => |index| .{
+            .tag = .function_arg,
+            .a = index,
+        },
+        .function_return => .{ .tag = .function_return },
+        .function_callable => .{ .tag = .function_callable },
         .record_field => |field| .{
             .tag = .record_field,
             .a = @intFromEnum(field),
@@ -614,14 +638,20 @@ fn structuralChildKindFromEdgeKind(kind: RepresentationEdgeKind) ?StructuralChil
             .a = @intFromEnum(nominal.module_name),
             .b = @intFromEnum(nominal.type_name),
         },
+    };
+}
+
+fn structuralChildKindFromEdgeKind(kind: RepresentationEdgeKind) ?StructuralChildKind {
+    return switch (kind) {
+        .child => |child| structuralChildKindFromChildKind(child),
         .value_alias,
         .value_move,
-        .function_arg,
-        .function_return,
-        .function_callable,
         .branch_join,
         .loop_phi,
         .mutable_version,
+        .call_arg,
+        .call_result,
+        .capture_value,
         => null,
     };
 }
@@ -1796,7 +1826,7 @@ pub const RepresentationStore = struct {
     callable_emission_plans: []CallableValueEmissionPlan = &.{},
     finite_erased_adapter_demands: []FiniteErasedAdapterDemand = &.{},
     callable_construction_plans: []CallableSetConstructionPlan = &.{},
-    callable_set_descriptors: []const CanonicalCallableSetDescriptor = &.{},
+    callable_set_descriptors: []CanonicalCallableSetDescriptor = &.{},
     session_executable_type_payloads: SessionExecutableTypePayloadStore,
     erased_fn_abis: ErasedFnAbiStore = .{},
     box_payload_plans: []BoxPayloadRepresentationPlan = &.{},
@@ -2082,16 +2112,13 @@ pub const RepresentationStore = struct {
     pub fn solvedStructuralChildRoot(
         self: *const RepresentationStore,
         parent: RepRootId,
-        kind: RepresentationEdgeKind,
+        kind: RepresentationChildKind,
     ) ?RepRootId {
         if (!self.solved_structural_child_roots_published) {
             debug.invariant(false, "lambda-solved invariant violated: solved structural child roots are not published");
             unreachable;
         }
-        const child_kind = structuralChildKindFromEdgeKind(kind) orelse {
-            debug.invariant(false, "lambda-solved invariant violated: solved structural child root lookup used a non-structural edge kind");
-            unreachable;
-        };
+        const child_kind = structuralChildKindFromChildKind(kind);
         const parent_group = self.groupForRoot(parent);
         return self.solved_structural_child_roots.get(.{
             .parent_group = parent_group,
@@ -2777,7 +2804,7 @@ pub const RepresentationStore = struct {
         _ = try self.appendRepresentationEdge(.{
             .from = .{ .local = whole_function_root },
             .to = .{ .local = callable_root },
-            .kind = .function_callable,
+            .kind = .{ .child = .function_callable },
         });
         return .{
             .whole_function_root = whole_function_root,
@@ -3036,11 +3063,44 @@ pub const RepresentationStore = struct {
     pub fn internCallableSetDescriptor(
         self: *RepresentationStore,
         members: []const CanonicalCallableSetMember,
-    ) std.mem.Allocator.Error!CanonicalCallableSetKey {
+    ) std.mem.Allocator.Error!CallableSetDescriptorInternResult {
         if (members.len == 0) representationInvariant("lambda-solved attempted to intern an empty callable-set descriptor");
         const key = callableSetKeyForMembers(members);
-        if (self.callableSetDescriptor(key) != null) return key;
+        if (self.callableSetDescriptorIndex(key)) |existing_index| {
+            if (callableSetMembersEquivalent(self.callable_set_descriptors[existing_index].members, members)) {
+                return .{ .key = key, .replaced_existing = false };
+            }
 
+            const owned_members = try self.cloneCallableSetMembers(members);
+            self.freeCallableSetMembers(self.callable_set_descriptors[existing_index].members);
+            self.callable_set_descriptors[existing_index].members = owned_members;
+            return .{ .key = key, .replaced_existing = true };
+        }
+
+        const owned_members = try self.cloneCallableSetMembers(members);
+        errdefer self.freeCallableSetMembers(owned_members);
+
+        try self.appendCallableSetDescriptor(.{
+            .key = key,
+            .members = owned_members,
+        });
+        return .{ .key = key, .replaced_existing = false };
+    }
+
+    fn callableSetDescriptorIndex(
+        self: *const RepresentationStore,
+        key: CanonicalCallableSetKey,
+    ) ?usize {
+        for (self.callable_set_descriptors, 0..) |descriptor, index| {
+            if (callableSetKeyEql(descriptor.key, key)) return index;
+        }
+        return null;
+    }
+
+    fn cloneCallableSetMembers(
+        self: *RepresentationStore,
+        members: []const CanonicalCallableSetMember,
+    ) std.mem.Allocator.Error![]CanonicalCallableSetMember {
         const owned_members = try self.allocator.alloc(CanonicalCallableSetMember, members.len);
         for (owned_members) |*member| member.* = .{
             .member = undefined,
@@ -3078,11 +3138,17 @@ pub const RepresentationStore = struct {
             };
         }
 
-        try self.appendCallableSetDescriptor(.{
-            .key = key,
-            .members = owned_members,
-        });
-        return key;
+        return owned_members;
+    }
+
+    fn freeCallableSetMembers(
+        self: *RepresentationStore,
+        members: []const CanonicalCallableSetMember,
+    ) void {
+        for (members) |member| {
+            if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
+        }
+        if (members.len > 0) self.allocator.free(members);
     }
 
     pub fn captureSlotsForValues(
@@ -3126,7 +3192,12 @@ pub const RepresentationStore = struct {
         };
         const construction = self.callableConstructionPlan(construction_id);
         debug.invariant(construction.result == value_id, "lambda-solved invariant violated: callable construction plan is attached to the wrong value");
-        const emission_plan = self.callableEmissionPlan(callable.emission_plan);
+        const callable_group = self.groupForRoot(callable.callable_root);
+        const group_emission = self.callableGroupEmission(callable_group) orelse {
+            debug.invariant(false, "lambda-solved invariant violated: callable construction group has no emission plan");
+            return;
+        };
+        const emission_plan = self.callableEmissionPlan(group_emission);
         const emission_key = switch (emission_plan) {
             .finite => |key| key,
             .erase_finite_set => |erase| erase.adapter.callable_set_key,
@@ -3879,6 +3950,23 @@ pub fn captureShapeKeyForExecKeys(
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Public `captureShapeKeyForSlots` function.
+pub fn captureShapeKeyForSlots(
+    slots: []const CallableSetCaptureSlot,
+) CaptureShapeKey {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeHashTag(&hasher, "capture_shape");
+    writeHashU32(&hasher, @intCast(slots.len));
+    for (slots, 0..) |slot, i| {
+        if (slot.slot != @as(u32, @intCast(i))) {
+            representationInvariant("lambda-solved capture shape requested for non-canonical capture slots");
+        }
+        writeHashU32(&hasher, @intCast(i));
+        hasher.update(&slot.exec_value_ty.bytes);
+    }
+    return .{ .bytes = hasher.finalResult() };
+}
+
 /// Public `captureTupleExecKeyForSlots` function.
 pub fn captureTupleExecKeyForSlots(
     slots: []const CallableSetCaptureSlot,
@@ -4016,6 +4104,30 @@ pub fn sessionExecutableTypeEndpointForCallableSetIntoStore(
     return try builder.payloadForCallableSetType(callable_set_key, expected_key);
 }
 
+/// Public `sessionExecutableTypeEndpointForCaptureSlotsIntoStore` function.
+pub fn sessionExecutableTypeEndpointForCaptureSlotsIntoStore(
+    allocator: std.mem.Allocator,
+    names: *const canonical.CanonicalNameStore,
+    row_shapes: *row.Store,
+    types: *const type_mod.Store,
+    representation_store: *const RepresentationStore,
+    owner_payload_store: *SessionExecutableTypePayloadStore,
+    slots: []const CallableSetCaptureSlot,
+    expected_key: CanonicalExecValueTypeKey,
+) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
+    var builder = SessionExecutableTypePayloadBuilder.initWithPayloadStore(
+        allocator,
+        names,
+        row_shapes,
+        types,
+        representation_store,
+        owner_payload_store,
+        null,
+    );
+    defer builder.deinit();
+    return try builder.tuplePayloadForCaptureSlots(slots, expected_key);
+}
+
 const SessionExecutableTypePayloadBuilder = struct {
     allocator: std.mem.Allocator,
     names: *const canonical.CanonicalNameStore,
@@ -4030,6 +4142,11 @@ const SessionExecutableTypePayloadBuilder = struct {
     active_types: std.AutoHashMap(type_mod.TypeVarId, SessionExecutableTypePayloadId),
     active_root_types: std.AutoHashMap(CanonicalExecValueTypeKey, SessionExecutableTypePayloadId),
     active_values: std.AutoHashMap(ValueInfoId, SessionExecutableTypePayloadId),
+
+    const ErasedBoundaryActiveKey = struct {
+        root: type_mod.TypeVarId,
+        source_key: canonical.CanonicalTypeKey,
+    };
 
     fn init(
         allocator: std.mem.Allocator,
@@ -4091,14 +4208,188 @@ const SessionExecutableTypePayloadBuilder = struct {
         source: ErasedBoundarySourceCursor,
     ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
         const root = self.types.unlinkConst(ty);
-        const payload = try self.erasedBoundaryTypePayload(root, source);
-        const key = try self.keyForErasedBoundaryPayload(payload);
+        const key = try self.keyForErasedBoundaryType(root, source);
+        if (self.active_root_types.get(key)) |active| {
+            return .{ .ty = refFor(active), .key = key };
+        }
         if (self.payload_store.refForKey(key)) |existing| {
-            self.deinitTransientPayload(payload);
+            if (self.payload_store.isPending(existing.payload)) {
+                try self.active_root_types.put(key, existing.payload);
+                errdefer _ = self.active_root_types.remove(key);
+                const payload = try self.erasedBoundaryTypePayload(root, source);
+                self.payload_store.fill(self.allocator, existing.payload, payload);
+                _ = self.active_root_types.remove(key);
+            }
             return .{ .ty = existing, .key = key };
         }
-        const id = try self.payload_store.append(self.allocator, key, payload);
+
+        const id = try self.payload_store.reserve(self.allocator, key);
+        try self.active_root_types.put(key, id);
+        errdefer _ = self.active_root_types.remove(key);
+
+        const payload = try self.erasedBoundaryTypePayload(root, source);
+        self.payload_store.fill(self.allocator, id, payload);
+        _ = self.active_root_types.remove(key);
         return .{ .ty = refFor(id), .key = key };
+    }
+
+    fn keyForErasedBoundaryType(
+        self: *SessionExecutableTypePayloadBuilder,
+        root: type_mod.TypeVarId,
+        source: ErasedBoundarySourceCursor,
+    ) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
+        var active = std.AutoHashMap(ErasedBoundaryActiveKey, u32).init(self.allocator);
+        defer active.deinit();
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        try self.writeErasedBoundaryTypeKey(&hasher, root, source, &active);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    fn writeErasedBoundaryTypeKey(
+        self: *SessionExecutableTypePayloadBuilder,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        ty: type_mod.TypeVarId,
+        source: ErasedBoundarySourceCursor,
+        active: *std.AutoHashMap(ErasedBoundaryActiveKey, u32),
+    ) std.mem.Allocator.Error!void {
+        const root = self.types.unlinkConst(ty);
+        const active_key = ErasedBoundaryActiveKey{
+            .root = root,
+            .source_key = self.sourceCursorKey(source),
+        };
+        if (active.get(active_key)) |slot| {
+            writeHashTag(hasher, "erased_boundary_cycle");
+            writeHashU32(hasher, slot);
+            return;
+        }
+
+        const slot: u32 = @intCast(active.count());
+        try active.put(active_key, slot);
+        defer _ = active.remove(active_key);
+
+        switch (self.types.getNode(root)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => representationInvariant("erased boundary key reached unresolved lambda-solved type"),
+            .nominal => |nominal| {
+                writeHashTag(hasher, "nominal");
+                writeHashBytes(hasher, self.names.moduleNameText(nominal.nominal.module_name));
+                writeHashBytes(hasher, self.names.typeNameText(nominal.nominal.type_name));
+                hasher.update(&[_]u8{if (nominal.is_opaque) 1 else 0});
+                const backing_source = self.sourceNominalBacking(source) orelse ErasedBoundarySourceCursor{ .key_hint = nominal.source_ty };
+                try self.writeErasedBoundaryTypeKey(hasher, nominal.backing, backing_source, active);
+            },
+            .content => |content| try self.writeErasedBoundaryContentKey(hasher, root, content, source, active),
+        }
+    }
+
+    fn writeErasedBoundaryContentKey(
+        self: *SessionExecutableTypePayloadBuilder,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        root: type_mod.TypeVarId,
+        content: type_mod.Content,
+        source: ErasedBoundarySourceCursor,
+        active: *std.AutoHashMap(ErasedBoundaryActiveKey, u32),
+    ) std.mem.Allocator.Error!void {
+        switch (content) {
+            .primitive => |prim| {
+                writeHashTag(hasher, "primitive");
+                writeHashU32(hasher, @as(u32, @intCast(@intFromEnum(prim))));
+            },
+            .list => |elem| {
+                writeHashTag(hasher, "list");
+                try self.writeErasedBoundaryTypeKey(hasher, elem, self.sourceListElem(source), active);
+            },
+            .box => |elem| {
+                writeHashTag(hasher, "box");
+                try self.writeErasedBoundaryTypeKey(hasher, elem, self.sourceBoxPayload(source), active);
+            },
+            .tuple => |span| {
+                writeHashTag(hasher, "tuple");
+                const items = self.types.sliceTypeVarSpan(span);
+                writeHashU32(hasher, @intCast(items.len));
+                for (items, 0..) |item, i| {
+                    writeHashU32(hasher, @intCast(i));
+                    try self.writeErasedBoundaryTypeKey(hasher, item, self.sourceTupleElem(source, i), active);
+                }
+            },
+            .record => |record| {
+                writeHashTag(hasher, "record");
+                const fields = self.types.sliceFields(record.fields);
+                writeHashU32(hasher, @intCast(fields.len));
+                for (fields) |field| {
+                    writeHashBytes(hasher, self.names.recordFieldLabelText(field.name));
+                    try self.writeErasedBoundaryTypeKey(hasher, field.ty, self.sourceRecordField(source, field.name), active);
+                }
+            },
+            .tag_union => |tag_union| {
+                writeHashTag(hasher, "tag_union");
+                const tags = self.types.sliceTags(tag_union.tags);
+                writeHashU32(hasher, @intCast(tags.len));
+                for (tags) |tag| {
+                    writeHashBytes(hasher, self.names.tagLabelText(tag.name));
+                    const args = self.types.sliceTypeVarSpan(tag.args);
+                    writeHashU32(hasher, @intCast(args.len));
+                    for (args, 0..) |arg, i| {
+                        try self.writeErasedBoundaryTypeKey(hasher, arg, self.sourceTagPayload(source, tag.name, i), active);
+                    }
+                }
+            },
+            .func => |func| {
+                const sig_key = try self.erasedBoundaryFunctionSigKey(root, func, source, active);
+                writeHashTag(hasher, "erased_fn");
+                writeErasedFnSigKey(hasher, sig_key);
+            },
+        }
+    }
+
+    fn erasedBoundaryFunctionSigKey(
+        self: *SessionExecutableTypePayloadBuilder,
+        root: type_mod.TypeVarId,
+        func: type_mod.LambdaSolvedFnType,
+        source: ErasedBoundarySourceCursor,
+        active: *std.AutoHashMap(ErasedBoundaryActiveKey, u32),
+    ) std.mem.Allocator.Error!ErasedFnSigKey {
+        const args = self.types.sliceTypeVarSpan(func.args);
+        var arg_keys: []CanonicalExecValueTypeKey = if (args.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(CanonicalExecValueTypeKey, args.len);
+        defer if (arg_keys.len > 0) self.allocator.free(arg_keys);
+        var arg_abis: []canonical.ErasedValueAbi = if (args.len == 0)
+            &.{}
+        else
+            try self.allocator.alloc(canonical.ErasedValueAbi, args.len);
+        defer if (arg_abis.len > 0) self.allocator.free(arg_abis);
+
+        for (args, 0..) |arg, i| {
+            var arg_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            try self.writeErasedBoundaryTypeKey(&arg_hasher, arg, self.sourceFunctionArg(source, i), active);
+            arg_keys[i] = .{ .bytes = arg_hasher.finalResult() };
+            arg_abis[i] = .ordinary_roc_value;
+        }
+        var ret_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        try self.writeErasedBoundaryTypeKey(&ret_hasher, func.ret, self.sourceFunctionReturn(source), active);
+        const ret_key = CanonicalExecValueTypeKey{ .bytes = ret_hasher.finalResult() };
+
+        const abi_key = canonical.computeErasedFnAbiKey(.{
+            .fixed_arity = func.fixed_arity,
+            .arg_exec_keys = arg_keys,
+            .ret_exec_key = ret_key,
+            .arg_abis = arg_abis,
+            .capture_arg = .ordinary_roc_value,
+        });
+        const source_fn_ty = if (isEmptyCanonicalTypeKey(self.sourceCursorKey(source)))
+            try self.sourceTypeKeyForType(root)
+        else
+            self.sourceCursorKey(source);
+        return .{
+            .source_fn_ty = source_fn_ty,
+            .abi = abi_key,
+            .capture_ty = null,
+        };
     }
 
     fn erasedBoundaryTypePayload(
@@ -4196,32 +4487,6 @@ const SessionExecutableTypePayloadBuilder = struct {
         return view.payloads[index];
     }
 
-    fn sourceRecordFieldMatches(
-        self: *const SessionExecutableTypePayloadBuilder,
-        source_field: canonical.RecordFieldLabelId,
-        logical_field: canonical.RecordFieldLabelId,
-    ) bool {
-        const source_names = self.erased_source_names orelse self.names;
-        return std.mem.eql(
-            u8,
-            source_names.recordFieldLabelText(source_field),
-            self.names.recordFieldLabelText(logical_field),
-        );
-    }
-
-    fn sourceTagMatches(
-        self: *const SessionExecutableTypePayloadBuilder,
-        source_tag: canonical.TagLabelId,
-        logical_tag: canonical.TagLabelId,
-    ) bool {
-        const source_names = self.erased_source_names orelse self.names;
-        return std.mem.eql(
-            u8,
-            source_names.tagLabelText(source_tag),
-            self.names.tagLabelText(logical_tag),
-        );
-    }
-
     fn resolvedSourcePayload(
         self: *const SessionExecutableTypePayloadBuilder,
         source: ErasedBoundarySourceCursor,
@@ -4299,27 +4564,16 @@ const SessionExecutableTypePayloadBuilder = struct {
         source: ErasedBoundarySourceCursor,
         field: canonical.RecordFieldLabelId,
     ) ErasedBoundarySourceCursor {
-        var current = source;
-        var resolved = self.resolvedSourcePayload(current) orelse return .{};
-        while (true) {
-            switch (resolved.payload) {
-                .record => |record| {
-                    for (record.fields) |candidate| {
-                        if (self.sourceRecordFieldMatches(candidate.name, field)) return self.sourceCursorForCheckedRoot(candidate.ty);
-                    }
-                    current = self.sourceCursorForCheckedRoot(record.ext);
-                    resolved = self.resolvedSourcePayload(current) orelse return .{};
-                },
-                .record_unbound => |fields| {
-                    for (fields) |candidate| {
-                        if (self.sourceRecordFieldMatches(candidate.name, field)) return self.sourceCursorForCheckedRoot(candidate.ty);
-                    }
-                    representationInvariant("erased boundary record source payload is missing a field");
-                },
-                .empty_record => representationInvariant("erased boundary record source payload is missing a field"),
-                else => representationInvariant("erased boundary record source payload is not a record"),
-            }
-        }
+        const root = source.root orelse return .{};
+        const view = self.erased_source_types orelse representationInvariant("erased boundary source root has no checked source type view");
+        const names = self.erased_source_names orelse self.names;
+        const child = checked_artifact.checkedTypeRecordFieldChild(
+            .{ .names = names, .view = view },
+            root,
+            self.names,
+            field,
+        ) orelse representationInvariant("erased boundary record source payload is missing a field");
+        return self.sourceCursorForCheckedRoot(child);
     }
 
     fn sourceTagPayload(
@@ -4328,23 +4582,17 @@ const SessionExecutableTypePayloadBuilder = struct {
         tag: canonical.TagLabelId,
         index: usize,
     ) ErasedBoundarySourceCursor {
-        var current = source;
-        var resolved = self.resolvedSourcePayload(current) orelse return .{};
-        while (true) {
-            switch (resolved.payload) {
-                .tag_union => |tag_union| {
-                    for (tag_union.tags) |candidate| {
-                        if (!self.sourceTagMatches(candidate.name, tag)) continue;
-                        if (index >= candidate.args.len) representationInvariant("erased boundary tag source payload arity mismatch");
-                        return self.sourceCursorForCheckedRoot(candidate.args[index]);
-                    }
-                    current = self.sourceCursorForCheckedRoot(tag_union.ext);
-                    resolved = self.resolvedSourcePayload(current) orelse return .{};
-                },
-                .empty_tag_union => representationInvariant("erased boundary tag-union source payload is missing a tag"),
-                else => representationInvariant("erased boundary tag-union source payload is not a tag union"),
-            }
-        }
+        const root = source.root orelse return .{};
+        const view = self.erased_source_types orelse representationInvariant("erased boundary source root has no checked source type view");
+        const names = self.erased_source_names orelse self.names;
+        const child = checked_artifact.checkedTypeTagPayloadChild(
+            .{ .names = names, .view = view },
+            root,
+            self.names,
+            tag,
+            @intCast(index),
+        ) orelse representationInvariant("erased boundary tag-union source payload is missing a tag payload");
+        return self.sourceCursorForCheckedRoot(child);
     }
 
     fn resolvedFunctionSourcePayload(
@@ -4563,84 +4811,6 @@ const SessionExecutableTypePayloadBuilder = struct {
         return out;
     }
 
-    fn keyForErasedBoundaryPayload(
-        self: *SessionExecutableTypePayloadBuilder,
-        payload: SessionExecutableTypePayload,
-    ) std.mem.Allocator.Error!CanonicalExecValueTypeKey {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        try self.hashErasedBoundaryPayload(&hasher, payload);
-        return .{ .bytes = hasher.finalResult() };
-    }
-
-    fn hashErasedBoundaryPayload(
-        self: *SessionExecutableTypePayloadBuilder,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        payload: SessionExecutableTypePayload,
-    ) std.mem.Allocator.Error!void {
-        switch (payload) {
-            .pending,
-            .recursive_ref,
-            => representationInvariant("erased boundary key reached incomplete payload"),
-            .primitive => |prim| {
-                writeHashTag(hasher, "primitive");
-                writeHashU32(hasher, @intCast(@intFromEnum(prim)));
-            },
-            .callable_set => |set| {
-                writeHashTag(hasher, "callable_set");
-                hasher.update(&set.key.bytes);
-            },
-            .erased_fn => |erased| {
-                writeHashTag(hasher, "erased_fn");
-                writeErasedFnSigKey(hasher, erased.sig_key);
-            },
-            .vacant_callable_slot => writeHashTag(hasher, "vacant_callable_slot"),
-            .list => |child| {
-                writeHashTag(hasher, "list");
-                hasher.update(&child.key.bytes);
-            },
-            .box => |child| {
-                writeHashTag(hasher, "box");
-                hasher.update(&child.key.bytes);
-            },
-            .tuple => |items| {
-                writeHashTag(hasher, "tuple");
-                writeHashU32(hasher, @intCast(items.len));
-                for (items) |item| {
-                    writeHashU32(hasher, item.index);
-                    hasher.update(&item.key.bytes);
-                }
-            },
-            .record => |record| {
-                writeHashTag(hasher, "record");
-                writeHashU32(hasher, @intCast(record.fields.len));
-                for (record.fields) |field| {
-                    const label = self.row_shapes.recordField(field.field).label;
-                    writeHashBytes(hasher, self.names.recordFieldLabelText(label));
-                    hasher.update(&field.key.bytes);
-                }
-            },
-            .tag_union => |tag_union| {
-                writeHashTag(hasher, "tag_union");
-                writeHashU32(hasher, @intCast(tag_union.variants.len));
-                for (tag_union.variants) |variant| {
-                    const tag = self.row_shapes.tag(variant.tag);
-                    writeHashBytes(hasher, self.names.tagLabelText(tag.label));
-                    writeHashU32(hasher, @intCast(variant.payloads.len));
-                    for (variant.payloads) |payload_item| {
-                        hasher.update(&payload_item.key.bytes);
-                    }
-                }
-            },
-            .nominal => |nominal| {
-                writeHashTag(hasher, "nominal");
-                writeHashBytes(hasher, self.names.moduleNameText(nominal.nominal.module_name));
-                writeHashBytes(hasher, self.names.typeNameText(nominal.nominal.type_name));
-                writeHashU32(hasher, @intFromBool(nominal.is_opaque));
-                hasher.update(&nominal.backing_key.bytes);
-            },
-        }
-    }
-
     fn sourceTypeKeyForType(
         self: *SessionExecutableTypePayloadBuilder,
         ty: type_mod.TypeVarId,
@@ -4650,24 +4820,6 @@ const SessionExecutableTypePayloadBuilder = struct {
         key_builder.writeTag("lambda_solved_source_type");
         try key_builder.writeSourceTypeAllowFunctions(ty);
         return .{ .bytes = key_builder.hasher.finalResult() };
-    }
-
-    fn deinitTransientPayload(
-        self: *SessionExecutableTypePayloadBuilder,
-        payload: SessionExecutableTypePayload,
-    ) void {
-        switch (payload) {
-            .record => |record| if (record.fields.len > 0) self.allocator.free(record.fields),
-            .tuple => |items| if (items.len > 0) self.allocator.free(items),
-            .tag_union => |tag_union| {
-                for (tag_union.variants) |variant| {
-                    if (variant.payloads.len > 0) self.allocator.free(variant.payloads);
-                }
-                if (tag_union.variants.len > 0) self.allocator.free(tag_union.variants);
-            },
-            .callable_set => |callable_set| if (callable_set.members.len > 0) self.allocator.free(callable_set.members),
-            else => {},
-        }
     }
 
     fn endpointForValue(self: *SessionExecutableTypePayloadBuilder, value: ValueInfoId) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
@@ -4710,7 +4862,11 @@ const SessionExecutableTypePayloadBuilder = struct {
         }
 
         if (info.callable == null and info.boxed == null and info.aggregate == null and self.valueHasFunctionType(info.logical_ty)) {
-            return try self.endpointForCallableGroup(info.solved_group orelse representationInvariant("session executable function value has no solved group"));
+            const group = self.callableGroupForFunctionRoot(info.root);
+            if (self.representation_store.callableGroupEmission(group)) |emission_plan| {
+                return try self.endpointForCallableEmissionPlan(emission_plan);
+            }
+            return try self.endpointForVacantCallableSlot(key);
         }
 
         const id = try self.payload_store.reserve(self.allocator, key);
@@ -4827,7 +4983,7 @@ const SessionExecutableTypePayloadBuilder = struct {
             ty,
         );
         if (self.valueHasFunctionType(ty)) {
-            const group = self.representation_store.groupForRoot(root);
+            const group = self.callableGroupForFunctionRoot(root);
             if (self.representation_store.callableGroupEmission(group)) |emission_plan| {
                 return try self.endpointForCallableEmissionPlan(emission_plan);
             }
@@ -5062,7 +5218,7 @@ const SessionExecutableTypePayloadBuilder = struct {
     fn structuralChildRoot(
         self: *SessionExecutableTypePayloadBuilder,
         parent: RepRootId,
-        kind: RepresentationEdgeKind,
+        kind: RepresentationChildKind,
     ) RepRootId {
         if (self.representation_store.solvedStructuralChildRoot(parent, kind)) |child| return child;
         representationInvariant("session executable root payload has no published structural child root");
@@ -5216,17 +5372,19 @@ const SessionExecutableTypePayloadBuilder = struct {
     }
 
     fn callablePayload(self: *SessionExecutableTypePayloadBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!SessionExecutableTypePayload {
-        return try self.callablePayloadForEmissionPlan(callable.emission_plan);
+        const group = self.representation_store.groupForRoot(callable.callable_root);
+        const emission_plan = self.representation_store.callableGroupEmission(group) orelse {
+            representationInvariant("session executable callable value group has no callable emission plan");
+        };
+        return try self.callablePayloadForEmissionPlan(emission_plan);
     }
 
-    fn endpointForCallableGroup(
+    fn callableGroupForFunctionRoot(
         self: *SessionExecutableTypePayloadBuilder,
-        group: RepresentationGroupId,
-    ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
-        const emission_plan = self.representation_store.callableGroupEmission(group) orelse {
-            representationInvariant("session executable function value group has no callable emission plan");
-        };
-        return try self.endpointForCallableEmissionPlan(emission_plan);
+        root: RepRootId,
+    ) RepresentationGroupId {
+        const callable_root = self.representation_store.solvedStructuralChildRoot(root, .function_callable) orelse root;
+        return self.representation_store.groupForRoot(callable_root);
     }
 
     fn endpointForCallableEmissionPlan(
@@ -5808,20 +5966,13 @@ const SessionExecutableTypePayloadBuilder = struct {
 pub fn singletonCallableSetKey(
     source_proc: canonical.MirProcedureRef,
     proc_callable: canonical.ProcedureCallableRef,
-    capture_shape_key: CaptureShapeKey,
-    capture_slots: []const CallableSetCaptureSlot,
+    target_instance: ProcRepresentationInstanceId,
 ) CanonicalCallableSetKey {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeHashTag(&hasher, "singleton_callable_set");
     writeMirProcedureRef(&hasher, source_proc);
     writeProcedureCallableRef(&hasher, proc_callable);
-    hasher.update(&capture_shape_key.bytes);
-    writeHashU32(&hasher, @intCast(capture_slots.len));
-    for (capture_slots) |slot| {
-        writeHashU32(&hasher, slot.slot);
-        hasher.update(&slot.source_ty.bytes);
-        hasher.update(&slot.exec_value_ty.bytes);
-    }
+    writeHashU32(&hasher, @intFromEnum(target_instance));
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -5833,8 +5984,7 @@ pub fn callableSetKeyForMembers(
         return singletonCallableSetKey(
             members[0].source_proc,
             members[0].proc_value,
-            members[0].capture_shape_key,
-            members[0].capture_slots,
+            members[0].target_instance,
         );
     }
 
@@ -5846,15 +5996,39 @@ pub fn callableSetKeyForMembers(
         writeMirProcedureRef(&hasher, member.source_proc);
         writeProcedureCallableRef(&hasher, member.proc_value);
         writeHashU32(&hasher, @intFromEnum(member.target_instance));
-        hasher.update(&member.capture_shape_key.bytes);
-        writeHashU32(&hasher, @intCast(member.capture_slots.len));
-        for (member.capture_slots) |slot| {
-            writeHashU32(&hasher, slot.slot);
-            hasher.update(&slot.source_ty.bytes);
-            hasher.update(&slot.exec_value_ty.bytes);
-        }
     }
     return .{ .bytes = hasher.finalResult() };
+}
+
+fn callableSetMembersEquivalent(
+    existing: []const CanonicalCallableSetMember,
+    updated: []const CanonicalCallableSetMember,
+) bool {
+    if (existing.len != updated.len) return false;
+    for (existing, updated) |left, right| {
+        if (left.member != right.member) return false;
+        if (!canonical.procedureCallableRefEql(left.proc_value, right.proc_value)) return false;
+        if (left.source_fn_ty_payload != right.source_fn_ty_payload) return false;
+        if (!canonical.mirProcedureRefEql(left.source_proc, right.source_proc)) return false;
+        if ((left.published_proc_value == null) != (right.published_proc_value == null)) return false;
+        if (left.published_proc_value) |left_proc_value| {
+            if (!canonical.procedureCallableRefEql(left_proc_value, right.published_proc_value.?)) return false;
+        }
+        if ((left.published_source_proc == null) != (right.published_source_proc == null)) return false;
+        if (left.published_source_proc) |left_source_proc| {
+            if (!canonical.mirProcedureRefEql(left_source_proc, right.published_source_proc.?)) return false;
+        }
+        if (left.lifted_owner_source_fn_ty_payload != right.lifted_owner_source_fn_ty_payload) return false;
+        if (left.target_instance != right.target_instance) return false;
+        if (!captureShapeKeyEql(left.capture_shape_key, right.capture_shape_key)) return false;
+        if (left.capture_slots.len != right.capture_slots.len) return false;
+        for (left.capture_slots, right.capture_slots) |left_slot, right_slot| {
+            if (left_slot.slot != right_slot.slot) return false;
+            if (!canonicalTypeKeyEql(left_slot.source_ty, right_slot.source_ty)) return false;
+            if (!canonicalExecValueTypeKeyEql(left_slot.exec_value_ty, right_slot.exec_value_ty)) return false;
+        }
+    }
+    return true;
 }
 
 const ExecValueTypeKeyBuilder = struct {
@@ -6061,7 +6235,11 @@ const ExecValueTypeKeyBuilder = struct {
 
     fn writeCallableValue(self: *ExecValueTypeKeyBuilder, callable: CallableValueInfo) std.mem.Allocator.Error!void {
         const representations = self.representation_store orelse representationInvariant("executable value type key for callable has no representation store");
-        try self.writeCallableEmissionPlan(callable.emission_plan, representations);
+        const group = representations.groupForRoot(callable.callable_root);
+        const emission = representations.callableGroupEmission(group) orelse {
+            representationInvariant("executable value type key callable group has no emission plan");
+        };
+        try self.writeCallableEmissionPlan(emission, representations);
     }
 
     fn writeAggregateValue(
@@ -6186,7 +6364,7 @@ const ExecValueTypeKeyBuilder = struct {
         const root = self.types.unlinkConst(id);
         if (self.valueHasFunctionType(root)) {
             const representations = self.representationStore();
-            const group = representations.groupForRoot(rep_root);
+            const group = self.callableGroupForFunctionRoot(rep_root);
             if (representations.callableGroupEmission(group)) |emission| {
                 try self.writeCallableEmissionPlan(emission, representations);
             } else {
@@ -6287,6 +6465,15 @@ const ExecValueTypeKeyBuilder = struct {
             },
             .func => representationInvariant("executable value type key requires callable representation for function root"),
         }
+    }
+
+    fn callableGroupForFunctionRoot(
+        self: *ExecValueTypeKeyBuilder,
+        root: RepRootId,
+    ) RepresentationGroupId {
+        const representations = self.representationStore();
+        const callable_root = representations.solvedStructuralChildRoot(root, .function_callable) orelse root;
+        return representations.groupForRoot(callable_root);
     }
 
     fn writeCallableEmissionPlan(
@@ -6519,7 +6706,7 @@ const ExecValueTypeKeyBuilder = struct {
     fn structuralChildRoot(
         self: *ExecValueTypeKeyBuilder,
         parent: RepRootId,
-        kind: RepresentationEdgeKind,
+        kind: RepresentationChildKind,
     ) RepRootId {
         if (self.representationStore().solvedStructuralChildRoot(parent, kind)) |child| return child;
         representationInvariant("executable value type key root has no published structural child root");

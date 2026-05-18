@@ -427,6 +427,7 @@ fn populateBuiltinAutoImportedTypes(
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
         .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
         .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
         .{ "Box", builtin_indices.box_type, builtin_indices.box_ident },
         .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
@@ -478,6 +479,7 @@ pub fn populateModuleEnvs(
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
         .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
         .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
         .{ "Box", builtin_indices.box_type, builtin_indices.box_ident },
         .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
@@ -514,7 +516,7 @@ pub fn populateModuleEnvs(
     }
 }
 
-/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, and numeric types) from the Builtin module.
+/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, Iter, and numeric types) from the Builtin module.
 /// Used for all modules EXCEPT Builtin itself.
 pub fn setupAutoImportedBuiltinTypes(
     self: *Self,
@@ -536,7 +538,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
+    const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
@@ -3237,21 +3239,52 @@ fn poisonRecursiveNonFunctionDefs(
     self: *Self,
     eval_order: *const @import("DependencyGraph.zig").EvaluationOrder,
 ) std.mem.Allocator.Error!void {
+    const RecursiveNonFunctionDef = struct {
+        def_idx: CIR.Def.Idx,
+        ident: Ident.Idx,
+        region: Region,
+    };
+
     for (eval_order.sccs) |scc| {
         if (!scc.is_recursive) continue;
+
+        var defs_to_poison = std.ArrayList(RecursiveNonFunctionDef){};
+        defer defs_to_poison.deinit(self.env.gpa);
 
         for (scc.defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (isRecursiveFunctionDefExpr(self.env.store.getExpr(def.expr))) continue;
 
             const ident = defPatternIdent(&self.env.store, def.pattern) orelse continue;
+            try defs_to_poison.append(self.env.gpa, .{
+                .def_idx = def_idx,
+                .ident = ident,
+                .region = self.env.store.getPatternRegion(def.pattern),
+            });
+        }
+
+        std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
+            fn lessThan(_: void, a: RecursiveNonFunctionDef, b: RecursiveNonFunctionDef) bool {
+                if (a.region.start.offset != b.region.start.offset) {
+                    return a.region.start.offset < b.region.start.offset;
+                }
+
+                if (a.region.end.offset != b.region.end.offset) {
+                    return a.region.end.offset < b.region.end.offset;
+                }
+
+                return @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx);
+            }
+        }.lessThan);
+
+        for (defs_to_poison.items) |def_to_poison| {
             const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, Diagnostic{
                 .circular_value_definition = .{
-                    .ident = ident,
-                    .region = self.env.store.getPatternRegion(def.pattern),
+                    .ident = def_to_poison.ident,
+                    .region = def_to_poison.region,
                 },
             });
-            self.env.store.setDefExpr(def_idx, malformed_idx);
+            self.env.store.setDefExpr(def_to_poison.def_idx, malformed_idx);
         }
     }
 }

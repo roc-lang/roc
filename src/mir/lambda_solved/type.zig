@@ -182,7 +182,7 @@ pub const Store = struct {
 
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span(Tag) {
         if (values.len == 0) return Span(Tag).empty();
-        assertDistinctSortedTags(values);
+        assertDistinctTags(values);
         const start: u32 = @intCast(self.tags.items.len);
         try self.tags.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
@@ -218,18 +218,13 @@ pub const Store = struct {
     }
 };
 
-fn assertDistinctSortedTags(values: []const Tag) void {
-    if (values.len <= 1) return;
-    var prev = values[0];
-    for (values[1..]) |tag| {
-        if (@intFromEnum(tag.name) > @intFromEnum(prev.name)) {
-            prev = tag;
-            continue;
+fn assertDistinctTags(values: []const Tag) void {
+    for (values, 0..) |tag, i| {
+        for (values[i + 1 ..]) |other| {
+            if (tag.name == other.name) {
+                debugPanic("lambda_solved.type duplicate tag constructor reached addTags");
+            }
         }
-        if (@intFromEnum(tag.name) < @intFromEnum(prev.name)) {
-            debugPanic("lambda_solved.type tag constructors were not pre-sorted");
-        }
-        debugPanic("lambda_solved.type duplicate tag constructor reached addTags");
     }
 }
 

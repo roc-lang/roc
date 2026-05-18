@@ -1158,7 +1158,18 @@ const StaticDataBuilder = struct {
             staticDataInvariant("static erased capture finite callable set key differs from expected type");
         }
 
-        const member_index: usize = @intFromEnum(finite.selected_member);
+        const lowered = self.lowered orelse {
+            staticDataInvariant("static erased capture finite callable set requires lowered callable-set runtime encodings");
+        };
+        const runtime_encoding = lir.CheckedPipeline.callableSetRuntimeEncodingForKey(
+            lowered.callable_set_runtime_encodings,
+            finite.callable_set_key,
+        ) orelse {
+            staticDataInvariant("static erased capture finite callable set runtime encoding was not preserved");
+        };
+        const runtime_member = lir.CheckedPipeline.callableSetRuntimeMember(runtime_encoding, finite.selected_member) orelse {
+            staticDataInvariant("static erased capture finite callable set selected member missing from runtime encoding");
+        };
         const selected_member = findCallableSetMemberPayload(callable_set.members, finite.selected_member) orelse {
             staticDataInvariant("static erased capture finite callable set selected member missing from expected type");
         };
@@ -1168,10 +1179,13 @@ const StaticDataBuilder = struct {
             staticDataInvariant("static erased capture finite callable set did not lower to tag union layout");
         }
         const tag_info = layouts.getTagUnionInfo(layout);
-        if (member_index >= tag_info.variants.len) {
+        if (@as(usize, runtime_member.variant_index) >= tag_info.variants.len) {
             staticDataInvariant("static erased capture finite callable set selected member exceeds layout variants");
         }
-        const payload_layout_idx = tag_info.variants.get(@intCast(member_index)).payload_layout;
+        const payload_layout_idx = tag_info.variants.get(@intCast(runtime_member.variant_index)).payload_layout;
+        if (payload_layout_idx != runtime_member.payload_layout) {
+            staticDataInvariant("static erased capture finite callable set runtime encoding payload layout differs from layout store");
+        }
         if (finite.captures.len == 0) {
             if (selected_member.payload_ty != null) {
                 staticDataInvariant("static erased capture finite callable set has no captures but member expects payload");
@@ -1209,7 +1223,7 @@ const StaticDataBuilder = struct {
                 bytes,
                 base_offset + tag_data.discriminant_offset,
                 tag_data.discriminant_size,
-                @intCast(member_index),
+                runtime_member.discriminant,
             );
         }
     }

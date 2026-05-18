@@ -123,10 +123,12 @@ pub const RefOp = union(enum) {
     tag_payload: struct {
         source: LocalId,
         payload_idx: u16,
+        variant_index: u16,
         tag_discriminant: u16,
     },
     tag_payload_struct: struct {
         source: LocalId,
+        variant_index: u16,
         tag_discriminant: u16,
     },
     list_reinterpret: struct {
@@ -238,6 +240,7 @@ pub const CFStmt = union(enum) {
     },
     assign_tag: struct {
         target: LocalId,
+        variant_index: u16,
         discriminant: u16,
         payload: ?LocalId,
         next: CFStmtId,

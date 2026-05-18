@@ -2979,10 +2979,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .num_abs_diff => {
                     // |a - b|: compare and subtract in the correct order to avoid wrap/overflow
-                    const arg_layout = self.valueLayout(args[0]);
+                    if (args.len != 2) unreachable;
+                    const lhs_layout = self.valueLayout(args[0]);
+                    const rhs_layout = self.valueLayout(args[1]);
+                    if (lhs_layout != rhs_layout) {
+                        if (builtin.mode == .Debug) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: num_abs_diff argument layouts differ: lhs={s} rhs={s}",
+                                .{ @tagName(lhs_layout), @tagName(rhs_layout) },
+                            );
+                        }
+                        unreachable;
+                    }
                     const a_loc = try self.emitValueLocal(args[0]);
                     const b_loc = try self.emitValueLocal(args[1]);
-                    return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, arg_layout);
+                    return try self.generateAbsDiff(a_loc, b_loc, ll.ret_layout, lhs_layout);
                 },
 
                 // Numeric arithmetic and comparison ops — route to existing binop helpers
@@ -4835,11 +4846,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag_payload => |payload| try self.generateTagPayloadAccess(.{
                     .source = payload.source,
                     .payload_idx = payload.payload_idx,
+                    .variant_index = payload.variant_index,
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
                 .tag_payload_struct => |payload| try self.generateTagPayloadStructAccess(.{
                     .source = payload.source,
+                    .variant_index = payload.variant_index,
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
@@ -7003,7 +7016,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// For floats, uses float sub + float abs.
         /// For integers: compares a and b, then subtracts the smaller from the larger.
         /// This avoids wrapping/overflow issues that abs(a - b) would cause.
-        fn generateAbsDiff(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) Allocator.Error!ValueLocation {
+        fn generateAbsDiff(self: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, operand_layout: layout.Idx) Allocator.Error!ValueLocation {
             // Float: subtract then take float absolute value
             if (ret_layout == .f32 or ret_layout == .f64) {
                 const a_reg = try self.ensureInFloatReg(a_loc);
@@ -7016,17 +7029,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .float_reg = result_reg };
             }
 
-            const input_layout = self.inferAbsDiffInputLayout(a_loc, b_loc, ret_layout, arg_layout);
-
             // 128-bit (I128, U128, Dec)
             if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                return try self.generateAbsDiff128(a_loc, b_loc, input_layout);
+                return try self.generateAbsDiff128(a_loc, b_loc, operand_layout);
             }
 
             // 64-bit or smaller integers: CMP, compute both a-b and b-a, CSEL/CMOV
-            // Use arg_layout for signedness since abs_diff returns unsigned (e.g.
+            // Use operand layout for signedness since abs_diff returns unsigned (e.g.
             // I8.abs_diff returns U8), but the comparison must be signed.
-            const is_signed = switch (input_layout) {
+            const is_signed = switch (operand_layout) {
                 .i8, .i16, .i32, .i64 => true,
                 .u8, .u16, .u32, .u64 => false,
                 else => false,
@@ -7040,7 +7051,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // E.g. I8 value -5 is stored as 0xFB (251); without sign extension,
             // a 64-bit signed compare treats it as 251 > 10 instead of -5 < 10.
             if (is_signed) {
-                const shift_amount: u6 = switch (input_layout) {
+                const shift_amount: u6 = switch (operand_layout) {
                     .i8 => 56,
                     .i16 => 48,
                     .i32 => 32,
@@ -7083,37 +7094,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(b_reg);
             self.codegen.freeGeneral(neg_reg);
             return .{ .general_reg = diff_reg };
-        }
-
-        fn immediateIsNegative(loc: ValueLocation) bool {
-            return switch (loc) {
-                .immediate_i64 => |v| v < 0,
-                .immediate_i128 => |v| v < 0,
-                else => false,
-            };
-        }
-
-        fn signedCounterpartLayout(l: layout.Idx) ?layout.Idx {
-            return switch (l) {
-                .u8 => .i8,
-                .u16 => .i16,
-                .u32 => .i32,
-                .u64 => .i64,
-                .u128 => .i128,
-                else => null,
-            };
-        }
-
-        fn inferAbsDiffInputLayout(_: *Self, a_loc: ValueLocation, b_loc: ValueLocation, ret_layout: layout.Idx, arg_layout: ?layout.Idx) layout.Idx {
-            if (arg_layout) |al| return al;
-
-            if (immediateIsNegative(a_loc) or immediateIsNegative(b_loc)) {
-                if (signedCounterpartLayout(ret_layout)) |signed_layout| {
-                    return signed_layout;
-                }
-            }
-
-            return ret_layout;
         }
 
         /// Generate 128-bit |a - b| using SUBS/SBCS for comparison flags.
@@ -8598,7 +8578,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
-                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                    break :blk variants.get(tpa.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner_layout = ls.getLayout(union_layout.data.box);
@@ -8606,7 +8586,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return raw_value_loc;
                     }
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
-                    break :blk variants.get(tpa.tag_discriminant).payload_layout;
+                    break :blk variants.get(tpa.variant_index).payload_layout;
                 },
                 else => tpa.target_layout,
             };
@@ -8669,7 +8649,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.data.tag_union.idx));
-                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                    break :blk variants.get(tps.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner_layout = ls.getLayout(union_layout.data.box);
@@ -8677,7 +8657,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return raw_value_loc;
                     }
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner_layout.data.tag_union.idx));
-                    break :blk variants.get(tps.tag_discriminant).payload_layout;
+                    break :blk variants.get(tps.variant_index).payload_layout;
                 },
                 else => tps.target_layout,
             };
@@ -8948,24 +8928,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn valueSizeFromLoc(_: *Self, loc: ValueLocation) u32 {
-            return switch (loc) {
-                .stack_str => roc_str_size,
-                .list_stack => roc_list_size,
-                .stack_i128, .immediate_i128 => 16,
-                .immediate_i64, .general_reg, .stack, .float_reg, .immediate_f64 => 8,
-                else => {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: valueSizeFromLoc unsupported location {s}",
-                            .{@tagName(loc)},
-                        );
-                    }
-                    unreachable;
-                },
-            };
-        }
-
         fn generateZeroArgTag(self: *Self, tag: anytype) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const union_layout = ls.getLayout(tag.target_layout);
@@ -8991,6 +8953,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (union_layout.tag == .box) {
                 return try self.generateTag(.{
                     .target_layout = tag.target_layout,
+                    .variant_index = tag.variant_index,
                     .discriminant = tag.discriminant,
                     .payload = null,
                 });
@@ -9067,23 +9030,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 const inner_tu_data = ls.getTagUnionData(inner_layout.data.tag_union.idx);
                 const variants = ls.getTagUnionVariants(inner_tu_data);
-                const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
-                    variants.get(tag.discriminant).payload_layout
-                else
-                    null;
+                if (@as(usize, tag.variant_index) >= variants.len) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
+                            .{ tag.variant_index, variants.len },
+                        );
+                    }
+                    unreachable;
+                }
+                const variant_payload_layout = variants.get(tag.variant_index).payload_layout;
 
                 if (tag.payload) |payload_local| {
-                    const arg_layout_idx = variant_payload_layout orelse self.valueLayout(payload_local);
                     const arg_loc = self.requireExactValueLocationToLayout(
                         try self.emitValueLocal(payload_local),
                         self.valueLayout(payload_local),
-                        arg_layout_idx,
+                        variant_payload_layout,
                         "assign_tag.boxed_payload",
                     );
-                    const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
-                        const pl_val = ls.getLayout(pl);
-                        break :blk ls.layoutSizeAlign(pl_val).size;
-                    } else valueSizeFromLoc(self, arg_loc);
+                    const payload_layout = ls.getLayout(variant_payload_layout);
+                    const payload_size: u32 = ls.layoutSizeAlign(payload_layout).size;
                     if (payload_size > 0) {
                         const arg_stack_offset = try self.ensureOnStack(arg_loc, payload_size);
                         const heap_ptr = try self.allocTempGeneral();
@@ -9122,28 +9088,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.zeroStackArea(base_offset, stack_size);
 
             const variants = ls.getTagUnionVariants(tu_data);
-            const variant_payload_layout: ?layout.Idx = if (tag.discriminant < variants.len)
-                variants.get(tag.discriminant).payload_layout
-            else
-                null;
+            if (@as(usize, tag.variant_index) >= variants.len) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
+                        .{ tag.variant_index, variants.len },
+                    );
+                }
+                unreachable;
+            }
+            const variant_payload_layout = variants.get(tag.variant_index).payload_layout;
 
             if (tag.payload == null) {
                 return try self.generateZeroArgTag(.{
                     .target_layout = tag.target_layout,
+                    .variant_index = tag.variant_index,
                     .discriminant = tag.discriminant,
                 });
             } else if (tag.payload) |payload_local| {
-                const arg_layout_idx = variant_payload_layout orelse self.valueLayout(payload_local);
                 const arg_loc = self.requireExactValueLocationToLayout(
                     try self.emitValueLocal(payload_local),
                     self.valueLayout(payload_local),
-                    arg_layout_idx,
+                    variant_payload_layout,
                     "assign_tag.payload",
                 );
-                const payload_size: u32 = if (variant_payload_layout) |pl| blk: {
-                    const pl_val = ls.getLayout(pl);
-                    break :blk ls.layoutSizeAlign(pl_val).size;
-                } else valueSizeFromLoc(self, arg_loc);
+                const payload_layout = ls.getLayout(variant_payload_layout);
+                const payload_size: u32 = ls.layoutSizeAlign(payload_layout).size;
                 try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
             }
 
@@ -12901,6 +12871,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .assign_tag => |assign| {
                     const value_loc = try self.generateTag(.{
                         .target_layout = self.localLayout(assign.target),
+                        .variant_index = assign.variant_index,
                         .discriminant = assign.discriminant,
                         .payload = assign.payload,
                     });
@@ -14435,6 +14406,7 @@ test "generate bool literal" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const assign_true = try store.addCFStmt(.{ .assign_tag = .{
         .target = result,
+        .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = ret,
@@ -14474,6 +14446,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
         .op = .{ .tag_payload = .{
             .source = source,
             .payload_idx = 0,
+            .variant_index = 0,
             .tag_discriminant = 0,
         } },
         .next = ret,

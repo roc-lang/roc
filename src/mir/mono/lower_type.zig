@@ -21,6 +21,7 @@ pub const Lowerer = struct {
     allocator: Allocator,
     source: checked_artifact.CheckedTypeStoreView,
     dest: *Type.Store,
+    target_names: ?*const canonical.CanonicalNameStore = null,
     name_resolver: ?*ArtifactNames.ArtifactNameResolver = null,
     artifact: ?checked_artifact.CheckedModuleArtifactKey = null,
     lowered: std.AutoHashMap(CheckedTypeId, Type.TypeId),
@@ -29,11 +30,13 @@ pub const Lowerer = struct {
         allocator: Allocator,
         source: checked_artifact.CheckedTypeStoreView,
         dest: *Type.Store,
+        target_names: ?*const canonical.CanonicalNameStore,
     ) Lowerer {
         return .{
             .allocator = allocator,
             .source = source,
             .dest = dest,
+            .target_names = target_names,
             .name_resolver = null,
             .artifact = null,
             .lowered = std.AutoHashMap(CheckedTypeId, Type.TypeId).init(allocator),
@@ -51,6 +54,7 @@ pub const Lowerer = struct {
             .allocator = allocator,
             .source = source,
             .dest = dest,
+            .target_names = name_resolver.lowering_names,
             .name_resolver = name_resolver,
             .artifact = artifact,
             .lowered = std.AutoHashMap(CheckedTypeId, Type.TypeId).init(allocator),
@@ -129,7 +133,8 @@ pub const Lowerer = struct {
                 .ty = try self.lowerChecked(field.ty),
             };
         }
-        std.mem.sort(Type.Field, fields, {}, typeFieldLessThan);
+        const sort_context = TypeSortContext{ .names = self.target_names };
+        std.mem.sort(Type.Field, fields, sort_context, typeFieldLessThan);
 
         return .{ .record = .{ .fields = fields } };
     }
@@ -187,7 +192,8 @@ pub const Lowerer = struct {
                 .args = try self.lowerTypeIds(tag.args),
             };
         }
-        std.mem.sort(Type.Tag, tags, {}, typeTagLessThan);
+        const sort_context = TypeSortContext{ .names = self.target_names };
+        std.mem.sort(Type.Tag, tags, sort_context, typeTagLessThan);
 
         return .{ .tag_union = .{ .tags = tags } };
     }
@@ -305,11 +311,25 @@ pub const Lowerer = struct {
     }
 };
 
-fn typeFieldLessThan(_: void, a: Type.Field, b: Type.Field) bool {
+const TypeSortContext = struct {
+    names: ?*const canonical.CanonicalNameStore,
+};
+
+fn typeFieldLessThan(ctx: TypeSortContext, a: Type.Field, b: Type.Field) bool {
+    if (ctx.names) |names| {
+        const left = names.recordFieldLabelText(a.name);
+        const right = names.recordFieldLabelText(b.name);
+        if (!std.mem.eql(u8, left, right)) return std.mem.lessThan(u8, left, right);
+    }
     return @intFromEnum(a.name) < @intFromEnum(b.name);
 }
 
-fn typeTagLessThan(_: void, a: Type.Tag, b: Type.Tag) bool {
+fn typeTagLessThan(ctx: TypeSortContext, a: Type.Tag, b: Type.Tag) bool {
+    if (ctx.names) |names| {
+        const left = names.tagLabelText(a.name);
+        const right = names.tagLabelText(b.name);
+        if (!std.mem.eql(u8, left, right)) return std.mem.lessThan(u8, left, right);
+    }
     return @intFromEnum(a.name) < @intFromEnum(b.name);
 }
 

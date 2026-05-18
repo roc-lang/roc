@@ -16,6 +16,7 @@ const ids = @import("../ids.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const Layouts = @import("layouts.zig");
+const ConstructionBridge = @import("construction_bridge.zig");
 
 const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
@@ -60,166 +61,14 @@ fn constructionSlotBridgeForProgram(
     source_ty: Type.TypeId,
     target_ty: Type.TypeId,
 ) Allocator.Error!Ast.BridgeId {
-    if (source_ty == target_ty) {
-        return switch (program.types.getType(source_ty)) {
-            .placeholder => executableInvariant("executable construction bridge saw placeholder type"),
-            .link => executableInvariant("executable construction bridge saw unresolved link type"),
-            .primitive => try ast.addBridgePlan(.direct),
-            .nominal, .box, .callable_set, .erased_fn => try ast.addBridgePlan(.nominal_reinterpret),
-            .list => try ast.addBridgePlan(.list_reinterpret),
-            .tuple => |items| try ast.addBridgePlan(.{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, items, items) }),
-            .record => |record| try ast.addBridgePlan(.{ .struct_ = try constructionSlotRecordBridgeForProgram(allocator, program, ast, record, record) }),
-            .tag_union => |tag_union| try ast.addBridgePlan(.{ .tag_union = try constructionSlotTagUnionBridgeForProgram(allocator, program, ast, tag_union, tag_union) }),
-            .vacant_callable_slot => try ast.addBridgePlan(.zst),
-        };
-    }
-
-    const source = program.types.getType(source_ty);
-    const target = program.types.getType(target_ty);
-    return try ast.addBridgePlan(switch (source) {
-        .placeholder => executableInvariant("executable construction bridge saw placeholder source type"),
-        .link => executableInvariant("executable construction bridge saw unresolved source link"),
-        .primitive => |source_prim| switch (target) {
-            .primitive => |target_prim| blk: {
-                if (source_prim != target_prim) executableInvariant("executable construction bridge crossed primitive types");
-                break :blk .direct;
-            },
-            else => executableInvariant("executable construction bridge crossed primitive/non-primitive types"),
-        },
-        .nominal => |source_nominal| switch (target) {
-            .nominal => |target_nominal| blk: {
-                if (source_nominal.nominal.module_name == target_nominal.nominal.module_name and
-                    source_nominal.nominal.type_name == target_nominal.nominal.type_name)
-                {
-                    break :blk .nominal_reinterpret;
-                }
-                executableInvariant("executable construction bridge crossed distinct nominal types");
-            },
-            else => .nominal_reinterpret,
-        },
-        .list => switch (target) {
-            .list => .list_reinterpret,
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed list/non-list types"),
-        },
-        .box => switch (target) {
-            .box, .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed box/non-box types"),
-        },
-        .tuple => |source_items| switch (target) {
-            .tuple => |target_items| .{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, source_items, target_items) },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed tuple/non-tuple types"),
-        },
-        .record => |source_record| switch (target) {
-            .record => |target_record| .{ .struct_ = try constructionSlotRecordBridgeForProgram(allocator, program, ast, source_record, target_record) },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed record/non-record types"),
-        },
-        .tag_union => |source_union| switch (target) {
-            .tag_union => |target_union| .{ .tag_union = try constructionSlotTagUnionBridgeForProgram(allocator, program, ast, source_union, target_union) },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed tag-union/non-tag-union types"),
-        },
-        .callable_set => |source_callable| switch (target) {
-            .callable_set => |target_callable| blk: {
-                if (!repr.callableSetKeyEql(source_callable.key, target_callable.key)) {
-                    executableInvariant("executable construction bridge crossed callable-set keys");
-                }
-                break :blk .nominal_reinterpret;
-            },
-            .nominal => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed callable-set/non-callable-set types"),
-        },
-        .erased_fn => switch (target) {
-            .erased_fn => .nominal_reinterpret,
-            else => executableInvariant("executable construction bridge crossed erased-fn/non-erased-fn types"),
-        },
-        .vacant_callable_slot => switch (target) {
-            .vacant_callable_slot => .zst,
-            else => executableInvariant("executable construction bridge crossed vacant/non-vacant callable-slot types"),
-        },
-    });
-}
-
-fn constructionSlotStructBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source_items: []const Type.TypeId,
-    target_items: []const Type.TypeId,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    if (source_items.len != target_items.len) executableInvariant("executable construction struct bridge arity mismatch");
-    if (source_items.len == 0) return Ast.Span(Ast.BridgeId).empty();
-    const children = try allocator.alloc(Ast.BridgeId, source_items.len);
-    defer allocator.free(children);
-    for (source_items, target_items, 0..) |source, target, i| {
-        children[i] = try constructionSlotBridgeForProgram(allocator, program, ast, source, target);
-    }
-    return try ast.addBridgePlanSpan(children);
-}
-
-fn constructionSlotRecordBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source: Type.RecordType,
-    target: Type.RecordType,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    if (source.fields.len != target.fields.len) executableInvariant("executable construction record bridge arity mismatch");
-    if (source.fields.len == 0) return Ast.Span(Ast.BridgeId).empty();
-    const children = try allocator.alloc(Ast.BridgeId, source.fields.len);
-    defer allocator.free(children);
-    for (target.fields, 0..) |target_field, i| {
-        const target_label = program.row_shapes.recordField(target_field.field).label;
-        const source_field = recordFieldForLabel(program, source, target_label);
-        children[i] = try constructionSlotBridgeForProgram(allocator, program, ast, source_field.ty, target_field.ty);
-    }
-    return try ast.addBridgePlanSpan(children);
-}
-
-fn constructionSlotTagUnionBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source: Type.TagUnionType,
-    target: Type.TagUnionType,
-) Allocator.Error!Ast.Span(Ast.BridgeId) {
-    if (source.tags.len != target.tags.len) executableInvariant("executable construction tag-union bridge arity mismatch");
-    if (source.tags.len == 0) return Ast.Span(Ast.BridgeId).empty();
-    const children = try allocator.alloc(Ast.BridgeId, target.tags.len);
-    defer allocator.free(children);
-    for (target.tags, 0..) |target_tag, i| {
-        const target_label = program.row_shapes.tag(target_tag.tag).label;
-        const source_tag = tagTypeForLabel(program, source, target_label);
-        children[i] = try constructionSlotTagPayloadBridgeForProgram(allocator, program, ast, source_tag, target_tag);
-    }
-    return try ast.addBridgePlanSpan(children);
-}
-
-fn constructionSlotTagPayloadBridgeForProgram(
-    allocator: Allocator,
-    program: *const Program,
-    ast: *Ast.Store,
-    source: Type.TagType,
-    target: Type.TagType,
-) Allocator.Error!Ast.BridgeId {
-    if (source.payloads.len != target.payloads.len) executableInvariant("executable construction tag payload bridge arity mismatch");
-    if (source.payloads.len == 0) return try ast.addBridgePlan(.zst);
-    if (source.payloads.len == 1) {
-        return try constructionSlotBridgeForProgram(allocator, program, ast, source.payloads[0].ty, target.payloads[0].ty);
-    }
-    const source_payloads = try allocator.alloc(Type.TypeId, source.payloads.len);
-    defer allocator.free(source_payloads);
-    const target_payloads = try allocator.alloc(Type.TypeId, target.payloads.len);
-    defer allocator.free(target_payloads);
-    for (source.payloads) |payload| {
-        source_payloads[@intCast(program.row_shapes.tagPayload(payload.payload).logical_index)] = payload.ty;
-    }
-    for (target.payloads) |payload| {
-        target_payloads[@intCast(program.row_shapes.tagPayload(payload.payload).logical_index)] = payload.ty;
-    }
-    return try ast.addBridgePlan(.{ .struct_ = try constructionSlotStructBridgeForProgram(allocator, program, ast, source_payloads, target_payloads) });
+    return try ConstructionBridge.executableBridge(
+        allocator,
+        &program.types,
+        &program.row_shapes,
+        ast,
+        source_ty,
+        target_ty,
+    );
 }
 
 fn addTupleItemExprSpanForConstruction(
@@ -321,6 +170,35 @@ const ErasedDirectProcAdapterRequirement = struct {
     solve_session: repr.RepresentationSolveSessionId,
     arg_transforms: []const repr.ValueTransformBoundaryId = &.{},
 };
+
+const LiveCallableEmissionPlans = std.AutoHashMap(repr.CallableValueEmissionPlanId, void);
+
+fn collectLiveCallableEmissionPlansForSession(
+    allocator: Allocator,
+    input: *const LambdaSolved.Solve.Program,
+    session: *const repr.RepresentationSolveSession,
+) Allocator.Error!LiveCallableEmissionPlans {
+    var live = LiveCallableEmissionPlans.init(allocator);
+    errdefer live.deinit();
+
+    for (session.representation_store.callable_group_emissions) |maybe_emission| {
+        const emission = maybe_emission orelse continue;
+        try live.put(emission, {});
+    }
+
+    for (session.members) |instance_id| {
+        const instance = input.proc_instances.items[@intFromEnum(instance_id)];
+        if (!instance.materialized) continue;
+        const value_store = &input.value_stores.items[@intFromEnum(instance.value_store)];
+        for (value_store.values.items) |value| {
+            if (!value_store.valueSourceMatchBranchReachable(value)) continue;
+            const callable = value.callable orelse continue;
+            try live.put(callable.emission_plan, {});
+        }
+    }
+
+    return live;
+}
 
 fn erasedAdapterRequirementPayloadOwner(requirement: anytype) ErasedAdapterPayloadOwner {
     if (requirement.payload_solve_session) |session| return .{ .solve_session = session };
@@ -719,7 +597,12 @@ fn collectErasedDirectProcAdapterRequirements(
     }
 
     for (input.solve_sessions.items, 0..) |*session, session_index| {
-        for (session.representation_store.callable_emission_plans) |plan| {
+        var live_emissions = try collectLiveCallableEmissionPlansForSession(allocator, input, session);
+        defer live_emissions.deinit();
+
+        for (session.representation_store.callable_emission_plans, 0..) |plan, raw_plan| {
+            const emission_plan: repr.CallableValueEmissionPlanId = @enumFromInt(@as(u32, @intCast(raw_plan)));
+            if (!live_emissions.contains(emission_plan)) continue;
             switch (plan) {
                 .erase_proc_value => |erase| try appendErasedDirectProcAdapterRequirement(
                     allocator,
@@ -754,7 +637,12 @@ fn collectErasedAdapterRequirements(
 
     for (input.solve_sessions.items, 0..) |*session, raw_session| {
         const payload_solve_session: repr.RepresentationSolveSessionId = @enumFromInt(@as(u32, @intCast(raw_session)));
-        for (session.representation_store.callable_emission_plans) |plan| {
+        var live_emissions = try collectLiveCallableEmissionPlansForSession(allocator, input, session);
+        defer live_emissions.deinit();
+
+        for (session.representation_store.callable_emission_plans, 0..) |plan, raw_plan| {
+            const emission_plan: repr.CallableValueEmissionPlanId = @enumFromInt(@as(u32, @intCast(raw_plan)));
+            if (!live_emissions.contains(emission_plan)) continue;
             switch (plan) {
                 .erase_finite_set => |erase| try appendErasedAdapterRequirement(allocator, &adapters, .{
                     .key = erase.adapter,
@@ -2062,7 +1950,7 @@ fn lowerErasedDirectProcAdapterBody(
     }
 
     const capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_payload_ty) |payload_ty| blk: {
-        const handle_ty = try program.types.addType(.{ .primitive = .erased });
+        const handle_ty = program.ast.requireValueType(hidden_capture_handle);
         const handle_expr = try program.ast.addValueRefExpr(handle_ty, hidden_capture_handle);
         const value = program.ast.freshValueRef();
         const payload_expr = try program.ast.addExpr(payload_ty, value, .{ .low_level = .{
@@ -4429,6 +4317,110 @@ fn lowerPureComptimeValueExpr(
     );
 }
 
+const ConstBackedLoweringContext = struct {
+    value_store: *const repr.ValueInfoStore,
+    representation_store: *const repr.RepresentationStore,
+    value_info: repr.ValueInfoId,
+};
+
+fn constBackedChildContext(
+    context: ConstBackedLoweringContext,
+    child: repr.ValueInfoId,
+) ConstBackedLoweringContext {
+    return .{
+        .value_store = context.value_store,
+        .representation_store = context.representation_store,
+        .value_info = child,
+    };
+}
+
+fn constBackedRecordFieldContext(
+    context: ?ConstBackedLoweringContext,
+    field: MonoRow.RecordFieldId,
+) ?ConstBackedLoweringContext {
+    const ctx = context orelse return null;
+    const info = ctx.value_store.values.items[@intFromEnum(ctx.value_info)];
+    const aggregate = info.aggregate orelse return null;
+    const record = switch (aggregate) {
+        .record => |record| record,
+        else => executableInvariant("const-backed record materialization reached non-record aggregate metadata"),
+    };
+    for (record.fields) |candidate| {
+        if (candidate.field == field) return constBackedChildContext(ctx, candidate.value);
+    }
+    executableInvariant("const-backed record materialization missing field metadata");
+}
+
+fn constBackedTupleElemContext(
+    context: ?ConstBackedLoweringContext,
+    index: u32,
+) ?ConstBackedLoweringContext {
+    const ctx = context orelse return null;
+    const info = ctx.value_store.values.items[@intFromEnum(ctx.value_info)];
+    const aggregate = info.aggregate orelse return null;
+    const items = switch (aggregate) {
+        .tuple => |items| items,
+        else => executableInvariant("const-backed tuple materialization reached non-tuple aggregate metadata"),
+    };
+    for (items) |candidate| {
+        if (candidate.index == index) return constBackedChildContext(ctx, candidate.value);
+    }
+    executableInvariant("const-backed tuple materialization missing element metadata");
+}
+
+fn constBackedListElemContext(
+    context: ?ConstBackedLoweringContext,
+    index: u32,
+) ?ConstBackedLoweringContext {
+    const ctx = context orelse return null;
+    const info = ctx.value_store.values.items[@intFromEnum(ctx.value_info)];
+    const aggregate = info.aggregate orelse return null;
+    const list = switch (aggregate) {
+        .list => |list| list,
+        else => executableInvariant("const-backed list materialization reached non-list aggregate metadata"),
+    };
+    for (list.elems) |candidate| {
+        if (candidate.index == index) return constBackedChildContext(ctx, candidate.value);
+    }
+    executableInvariant("const-backed list materialization missing element metadata");
+}
+
+fn constBackedBoxPayloadContext(
+    context: ?ConstBackedLoweringContext,
+) ?ConstBackedLoweringContext {
+    const ctx = context orelse return null;
+    const info = ctx.value_store.values.items[@intFromEnum(ctx.value_info)];
+    const boxed = info.boxed orelse return null;
+    const payload = boxed.payload_value orelse return null;
+    return constBackedChildContext(ctx, payload);
+}
+
+fn constBackedTagPayloadContext(
+    context: ?ConstBackedLoweringContext,
+    payload: MonoRow.TagPayloadId,
+) ?ConstBackedLoweringContext {
+    const ctx = context orelse return null;
+    const info = ctx.value_store.values.items[@intFromEnum(ctx.value_info)];
+    const aggregate = info.aggregate orelse return null;
+    const tag = switch (aggregate) {
+        .tag => |tag| tag,
+        else => executableInvariant("const-backed tag materialization reached non-tag aggregate metadata"),
+    };
+    for (tag.payloads) |candidate| {
+        if (candidate.payload == payload) return constBackedChildContext(ctx, candidate.value);
+    }
+    executableInvariant("const-backed tag materialization missing payload metadata");
+}
+
+fn constBackedNominalBackingContext(
+    context: ?ConstBackedLoweringContext,
+) ?ConstBackedLoweringContext {
+    const ctx = context orelse return null;
+    const info = ctx.value_store.values.items[@intFromEnum(ctx.value_info)];
+    const backing = info.nominal_backing_value orelse return ctx;
+    return constBackedChildContext(ctx, backing);
+}
+
 fn lowerComptimeValueExpr(
     allocator: Allocator,
     program: *Program,
@@ -4438,12 +4430,34 @@ fn lowerComptimeValueExpr(
     value_id: checked_artifact.ComptimeValueId,
     allow_callable: bool,
 ) Allocator.Error!Ast.ExprId {
+    return try lowerComptimeValueExprWithContext(
+        allocator,
+        program,
+        materialization,
+        expected_ty,
+        schema_id,
+        value_id,
+        allow_callable,
+        null,
+    );
+}
+
+fn lowerComptimeValueExprWithContext(
+    allocator: Allocator,
+    program: *Program,
+    materialization: MaterializationStores,
+    expected_ty: Type.TypeId,
+    schema_id: checked_artifact.ComptimeSchemaId,
+    value_id: checked_artifact.ComptimeValueId,
+    allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
+) Allocator.Error!Ast.ExprId {
     const schema = comptimeSchema(materialization.values, schema_id);
     const value = comptimeValue(materialization.values, value_id);
     if (schema != .nominal and schema != .alias) {
         switch (program.types.getType(expected_ty)) {
             .nominal => |nominal| {
-                const backing = try lowerComptimeValueExpr(
+                const backing = try lowerComptimeValueExprWithContext(
                     allocator,
                     program,
                     materialization,
@@ -4451,6 +4465,7 @@ fn lowerComptimeValueExpr(
                     schema_id,
                     value_id,
                     allow_callable,
+                    constBackedNominalBackingContext(context),
                 );
                 const out = program.ast.freshValueRef();
                 return try program.ast.addExpr(expected_ty, out, .{ .nominal_reinterpret = backing });
@@ -4516,20 +4531,20 @@ fn lowerComptimeValueExpr(
             const out = program.ast.freshValueRef();
             break :blk try program.ast.addExpr(expected_ty, out, .{ .str_lit = literal });
         },
-        .list => |elem_schema| try lowerPureComptimeListExpr(allocator, program, materialization, expected_ty, elem_schema, value, allow_callable),
-        .box => |payload_schema| try lowerPureComptimeBoxExpr(allocator, program, materialization, expected_ty, payload_schema, value, allow_callable),
-        .tuple => |items| try lowerPureComptimeTupleExpr(allocator, program, materialization, expected_ty, items, value, allow_callable),
-        .record => |fields| try lowerPureComptimeRecordExpr(allocator, program, materialization, expected_ty, fields, value, allow_callable),
-        .tag_union => |variants| try lowerPureComptimeTagExpr(allocator, program, materialization, expected_ty, variants, value, allow_callable),
-        .alias => |alias| try lowerPureComptimeAliasExpr(allocator, program, materialization, expected_ty, alias.backing, value, allow_callable),
-        .nominal => |nominal| try lowerPureComptimeNominalExpr(allocator, program, materialization, expected_ty, nominal.type_name, nominal.backing, value, allow_callable),
+        .list => |elem_schema| try lowerPureComptimeListExpr(allocator, program, materialization, expected_ty, elem_schema, value, allow_callable, context),
+        .box => |payload_schema| try lowerPureComptimeBoxExpr(allocator, program, materialization, expected_ty, payload_schema, value, allow_callable, context),
+        .tuple => |items| try lowerPureComptimeTupleExpr(allocator, program, materialization, expected_ty, items, value, allow_callable, context),
+        .record => |fields| try lowerPureComptimeRecordExpr(allocator, program, materialization, expected_ty, fields, value, allow_callable, context),
+        .tag_union => |variants| try lowerPureComptimeTagExpr(allocator, program, materialization, expected_ty, variants, value, allow_callable, context),
+        .alias => |alias| try lowerPureComptimeAliasExpr(allocator, program, materialization, expected_ty, alias.backing, value, allow_callable, context),
+        .nominal => |nominal| try lowerPureComptimeNominalExpr(allocator, program, materialization, expected_ty, nominal.type_name, nominal.backing, value, allow_callable, context),
         .callable => blk: {
             if (!allow_callable) executableInvariant("executable pure compile-time materialization contained a callable slot");
             const leaf = switch (value) {
                 .callable => |leaf| leaf,
                 else => executableInvariant("executable compile-time callable materialization value mismatch"),
             };
-            break :blk try lowerComptimeCallableLeafExpr(allocator, program, materialization, expected_ty, leaf);
+            break :blk try lowerComptimeCallableLeafExpr(allocator, program, materialization, expected_ty, leaf, context);
         },
     };
 }
@@ -4542,6 +4557,7 @@ fn lowerPureComptimeListExpr(
     elem_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
     allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const elem_ty = switch (program.types.getType(expected_ty)) {
         .list => |elem| elem,
@@ -4554,7 +4570,16 @@ fn lowerPureComptimeListExpr(
     const exprs = try allocator.alloc(Ast.ExprId, items.len);
     defer allocator.free(exprs);
     for (items, 0..) |item, i| {
-        exprs[i] = try lowerComptimeValueExpr(allocator, program, materialization, elem_ty, elem_schema, item, allow_callable);
+        exprs[i] = try lowerComptimeValueExprWithContext(
+            allocator,
+            program,
+            materialization,
+            elem_ty,
+            elem_schema,
+            item,
+            allow_callable,
+            constBackedListElemContext(context, @intCast(i)),
+        );
     }
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .list = try addListItemExprSpanForConstruction(allocator, program, &program.ast, exprs, elem_ty) });
@@ -4568,6 +4593,7 @@ fn lowerPureComptimeBoxExpr(
     payload_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
     allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const payload_ty = switch (program.types.getType(expected_ty)) {
         .box => |payload| payload,
@@ -4577,7 +4603,16 @@ fn lowerPureComptimeBoxExpr(
         .box => |payload| payload,
         else => executableInvariant("executable pure compile-time box materialization value mismatch"),
     };
-    const payload_expr = try lowerComptimeValueExpr(allocator, program, materialization, payload_ty, payload_schema, payload_value, allow_callable);
+    const payload_expr = try lowerComptimeValueExprWithContext(
+        allocator,
+        program,
+        materialization,
+        payload_ty,
+        payload_schema,
+        payload_value,
+        allow_callable,
+        constBackedBoxPayloadContext(context),
+    );
     const exprs = [_]Ast.ExprId{payload_expr};
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .low_level = .{
@@ -4595,6 +4630,7 @@ fn lowerPureComptimeTupleExpr(
     schemas: []const checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
     allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const item_tys = switch (program.types.getType(expected_ty)) {
         .tuple => |tuple| tuple,
@@ -4610,7 +4646,16 @@ fn lowerPureComptimeTupleExpr(
     const exprs = try allocator.alloc(Ast.ExprId, items.len);
     defer allocator.free(exprs);
     for (items, schemas, 0..) |item, schema, i| {
-        exprs[i] = try lowerComptimeValueExpr(allocator, program, materialization, item_tys[i], schema, item, allow_callable);
+        exprs[i] = try lowerComptimeValueExprWithContext(
+            allocator,
+            program,
+            materialization,
+            item_tys[i],
+            schema,
+            item,
+            allow_callable,
+            constBackedTupleElemContext(context, @intCast(i)),
+        );
     }
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .tuple = try addTupleItemExprSpanForConstruction(allocator, program, &program.ast, exprs, item_tys) });
@@ -4624,6 +4669,7 @@ fn lowerPureComptimeRecordExpr(
     schema_fields: []const checked_artifact.ComptimeFieldSchema,
     value: checked_artifact.ComptimeValue,
     allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const record_ty = switch (program.types.getType(expected_ty)) {
         .record => |record| record,
@@ -4646,7 +4692,7 @@ fn lowerPureComptimeRecordExpr(
         const materialized = (try findPureComptimeRecordField(program, materialization, schema_fields, value_fields, expected_label, seen)) orelse missing: {
             break :missing executableInvariant("executable pure compile-time record materialization missing expected field");
         };
-        const lowered = try lowerComptimeValueExpr(
+        const lowered = try lowerComptimeValueExprWithContext(
             allocator,
             program,
             materialization,
@@ -4654,6 +4700,7 @@ fn lowerPureComptimeRecordExpr(
             materialized.schema,
             materialized.value,
             allow_callable,
+            constBackedRecordFieldContext(context, expected_field.field),
         );
         output_fields[expected_i] = .{
             .field = expected_field.field,
@@ -4704,6 +4751,7 @@ fn lowerPureComptimeTagExpr(
     schema_variants: []const checked_artifact.ComptimeVariantSchema,
     value: checked_artifact.ComptimeValue,
     allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const tag_union_ty = switch (program.types.getType(expected_ty)) {
         .tag_union => |tag_union| tag_union,
@@ -4739,7 +4787,7 @@ fn lowerPureComptimeTagExpr(
         if (payload_index >= variant_value.payloads.len) {
             executableInvariant("executable pure compile-time tag materialization payload index exceeded stored arity");
         }
-        const lowered = try lowerComptimeValueExpr(
+        const lowered = try lowerComptimeValueExprWithContext(
             allocator,
             program,
             materialization,
@@ -4747,6 +4795,7 @@ fn lowerPureComptimeTagExpr(
             schema_variant.payloads[payload_index],
             variant_value.payloads[payload_index],
             allow_callable,
+            constBackedTagPayloadContext(context, expected_payload.payload),
         );
         output_payloads[expected_i] = .{
             .payload = expected_payload.payload,
@@ -4783,12 +4832,13 @@ fn lowerPureComptimeAliasExpr(
     backing_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
     allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const backing_value = switch (value) {
         .alias => |backing| backing,
         else => executableInvariant("executable pure compile-time alias materialization value mismatch"),
     };
-    return try lowerComptimeValueExpr(
+    return try lowerComptimeValueExprWithContext(
         allocator,
         program,
         materialization,
@@ -4796,6 +4846,7 @@ fn lowerPureComptimeAliasExpr(
         backing_schema,
         backing_value,
         allow_callable,
+        context,
     );
 }
 
@@ -4808,6 +4859,7 @@ fn lowerPureComptimeNominalExpr(
     backing_schema: checked_artifact.ComptimeSchemaId,
     value: checked_artifact.ComptimeValue,
     allow_callable: bool,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const expected_nominal = switch (program.types.getType(expected_ty)) {
         .nominal => |expected| expected,
@@ -4821,7 +4873,7 @@ fn lowerPureComptimeNominalExpr(
         .nominal => |backing| backing,
         else => executableInvariant("executable pure compile-time nominal materialization value mismatch"),
     };
-    const backing = try lowerComptimeValueExpr(
+    const backing = try lowerComptimeValueExprWithContext(
         allocator,
         program,
         materialization,
@@ -4829,6 +4881,7 @@ fn lowerPureComptimeNominalExpr(
         backing_schema,
         backing_value,
         allow_callable,
+        constBackedNominalBackingContext(context),
     );
     const out = program.ast.freshValueRef();
     return try program.ast.addExpr(expected_ty, out, .{ .nominal_reinterpret = backing });
@@ -4840,9 +4893,10 @@ fn lowerComptimeCallableLeafExpr(
     materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     leaf: checked_artifact.CallableLeafInstance,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     return switch (leaf) {
-        .finite => |finite| try lowerComptimeFiniteCallableLeafExpr(program, materialization, expected_ty, finite),
+        .finite => |finite| try lowerComptimeFiniteCallableLeafExpr(program, materialization, expected_ty, finite, context),
         .erased_boxed => |erased| try lowerMaterializedErasedCallableValue(
             allocator,
             program,
@@ -4853,15 +4907,71 @@ fn lowerComptimeCallableLeafExpr(
     };
 }
 
+fn executableProcForErasedAdapterInProgram(
+    program: *const Program,
+    adapter: canonical.ErasedAdapterKey,
+) Ast.ExecutableProcId {
+    for (program.erased_adapter_procs.items) |proc| {
+        if (erasedAdapterKeyEql(proc.key, adapter)) return proc.executable_proc;
+    }
+    executableInvariant("executable const-backed finite callable leaf referenced an unreserved erased adapter");
+}
+
+fn executableProcForErasedDirectProcAdapterInProgram(
+    program: *const Program,
+    code: canonical.ErasedDirectProcCodeRef,
+) Ast.ExecutableProcId {
+    for (program.erased_direct_proc_adapters.items) |proc| {
+        if (erasedDirectProcCodeRefEql(proc.code, code)) return proc.executable_proc;
+    }
+    executableInvariant("executable const-backed finite callable leaf referenced an unreserved direct erased adapter");
+}
+
+fn lowerSessionExecutableTypeKeyForProgram(
+    program: *Program,
+    representation_store: *const repr.RepresentationStore,
+    key: repr.CanonicalExecValueTypeKey,
+) Allocator.Error!Type.TypeId {
+    const ref = representation_store.session_executable_type_payloads.refForKey(key) orelse {
+        executableInvariant("executable const-backed finite callable leaf hidden capture key has no published payload");
+    };
+    var lowerer = SessionTypeLowerer.init(
+        program.allocator,
+        &representation_store.session_executable_type_payloads,
+        &program.types,
+        &program.lowered_session_types_by_key,
+    );
+    defer lowerer.deinit();
+    return try lowerer.lower(ref, key);
+}
+
+fn lowerFiniteSetAdapterCaptureTypeForProgram(
+    program: *Program,
+    representation_store: *const repr.RepresentationStore,
+    adapter: repr.ErasedAdapterKey,
+    descriptor: *const repr.CanonicalCallableSetDescriptor,
+) Allocator.Error!?Type.TypeId {
+    if (descriptor.members.len == 1 and descriptor.members[0].capture_slots.len == 0) {
+        return null;
+    }
+    return try lowerSessionExecutableTypeKeyForProgram(
+        program,
+        representation_store,
+        repr.finiteCallableSetExecValueTypeKey(adapter.callable_set_key),
+    );
+}
+
 fn lowerComptimeFiniteCallableLeafExpr(
     program: *Program,
     materialization: MaterializationStores,
     expected_ty: Type.TypeId,
     finite: checked_artifact.FiniteCallableLeafInstance,
+    context: ?ConstBackedLoweringContext,
 ) Allocator.Error!Ast.ExprId {
     const callable_set = switch (program.types.getType(expected_ty)) {
         .callable_set => |callable_set| callable_set,
-        else => executableInvariant("executable compile-time finite callable leaf expected callable-set type"),
+        .erased_fn => |erased| return try lowerComptimeFiniteCallableLeafErased(program, materialization, expected_ty, erased, finite, context),
+        else => executableInvariant("executable compile-time finite callable leaf expected callable-set or erased function type"),
     };
     const proc_value = try materializationProcedureCallableRef(program, materialization, finite.proc_value);
     const member = findCallableSetMemberForProc(program, callable_set.key, proc_value) orelse
@@ -4884,6 +4994,131 @@ fn lowerComptimeFiniteCallableLeafExpr(
             .member_index = member.member,
         },
         .capture_record = null,
+    } });
+}
+
+fn lowerComptimeFiniteCallableLeafErased(
+    program: *Program,
+    materialization: MaterializationStores,
+    expected_ty: Type.TypeId,
+    expected_erased: Type.ErasedFnType,
+    finite: checked_artifact.FiniteCallableLeafInstance,
+    context: ?ConstBackedLoweringContext,
+) Allocator.Error!Ast.ExprId {
+    const ctx = context orelse executableInvariant("erased const-backed finite callable leaf had no lowering context");
+    const value_info = ctx.value_store.values.items[@intFromEnum(ctx.value_info)];
+    const callable = value_info.callable orelse executableInvariant("erased const-backed finite callable leaf had no callable metadata");
+    const proc_value = try materializationProcedureCallableRef(program, materialization, finite.proc_value);
+    const emission = ctx.representation_store.callableEmissionPlan(callable.emission_plan);
+
+    var stmts = std.ArrayList(Ast.StmtId).empty;
+    defer stmts.deinit(program.allocator);
+
+    const packed_fn = switch (emission) {
+        .erase_finite_set => |erase| blk: {
+            if (!repr.erasedFnSigKeyEql(expected_erased.sig_key, erase.adapter.erased_fn_sig_key)) {
+                executableInvariant("erased const-backed finite callable leaf target signature differs from adapter");
+            }
+            if (!repr.captureShapeKeyEql(expected_erased.capture_shape, erase.adapter.capture_shape_key)) {
+                executableInvariant("erased const-backed finite callable leaf target capture shape differs from adapter");
+            }
+            const construction_id = callable.construction_plan orelse {
+                executableInvariant("erased const-backed finite callable leaf had no construction plan");
+            };
+            const construction = ctx.representation_store.callableConstructionPlan(construction_id);
+            if (construction.result != ctx.value_info) {
+                executableInvariant("erased const-backed finite callable leaf construction belongs to another value");
+            }
+            if (!repr.callableSetKeyEql(construction.callable_set_key, erase.adapter.callable_set_key)) {
+                executableInvariant("erased const-backed finite callable leaf construction key differs from adapter");
+            }
+            if (!repr.canonicalTypeKeyEql(construction.source_fn_ty, erase.adapter.source_fn_ty)) {
+                executableInvariant("erased const-backed finite callable leaf source type differs from adapter");
+            }
+            if (construction.capture_values.len != 0 or construction.capture_transforms.len != 0) {
+                executableInvariant("erased const-backed finite callable leaf unexpectedly had captures");
+            }
+            const descriptor = callableSetDescriptorFromSlice(program.callable_set_descriptors, erase.adapter.callable_set_key) orelse {
+                executableInvariant("erased const-backed finite callable leaf adapter has no callable-set descriptor");
+            };
+            const member = callableSetDescriptorMember(descriptor, construction.selected_member) orelse {
+                executableInvariant("erased const-backed finite callable leaf selected missing descriptor member");
+            };
+            if (member.capture_slots.len != 0) {
+                executableInvariant("erased const-backed finite callable leaf selected captured descriptor member");
+            }
+            if (!canonical.procedureCallableRefEql(member.proc_value, proc_value)) {
+                executableInvariant("erased const-backed finite callable leaf descriptor member differs from materialized procedure");
+            }
+            const hidden_capture_ty = try lowerFiniteSetAdapterCaptureTypeForProgram(program, ctx.representation_store, erase.adapter, descriptor);
+            if (hidden_capture_ty) |capture_ty| {
+                const expected_capture_ty = expected_erased.capture_ty orelse {
+                    executableInvariant("erased const-backed finite callable leaf adapter needed hidden capture but target type had none");
+                };
+                if (expected_capture_ty != capture_ty) {
+                    executableInvariant("erased const-backed finite callable leaf hidden capture type differs from adapter");
+                }
+            }
+            const hidden_capture_value: ?Ast.ExecutableValueRef = if (hidden_capture_ty) |capture_ty| hidden_value_blk: {
+                const value = program.ast.freshValueRef();
+                const capture_expr = try program.ast.addExpr(capture_ty, value, .{ .callable_set_value = .{
+                    .construction_plan = construction_id,
+                    .callable_set_key = construction.callable_set_key,
+                    .member = .{
+                        .callable_set_key = construction.callable_set_key,
+                        .member_index = construction.selected_member,
+                    },
+                    .capture_record = null,
+                } });
+                try stmts.append(program.allocator, try program.ast.addStmt(.{ .decl = .{
+                    .value = value,
+                    .body = capture_expr,
+                } }));
+                break :hidden_value_blk value;
+            } else null;
+            break :blk Ast.PackedErasedFn{
+                .sig_key = erase.adapter.erased_fn_sig_key,
+                .code = executableProcForErasedAdapterInProgram(program, erase.adapter),
+                .capture = hidden_capture_value,
+                .capture_ty = hidden_capture_ty,
+                .capture_shape = erase.adapter.capture_shape_key,
+            };
+        },
+        .erase_proc_value => |erase| blk: {
+            if (!repr.erasedFnSigKeyEql(expected_erased.sig_key, erase.erased_fn_sig_key)) {
+                executableInvariant("erased const-backed finite callable leaf target signature differs from proc-value erase plan");
+            }
+            if (!repr.captureShapeKeyEql(expected_erased.capture_shape, erase.capture_shape_key)) {
+                executableInvariant("erased const-backed finite callable leaf target capture shape differs from proc-value erase plan");
+            }
+            if (erase.capture_slots.len != 0 or erase.capture_transforms.len != 0 or erase.erased_fn_sig_key.capture_ty != null or expected_erased.capture_ty != null) {
+                executableInvariant("erased const-backed finite callable leaf proc-value erase unexpectedly required captures");
+            }
+            if (!canonical.procedureCallableRefEql(erase.proc_value, proc_value)) {
+                executableInvariant("erased const-backed finite callable leaf proc-value erase procedure differs from materialized procedure");
+            }
+            break :blk Ast.PackedErasedFn{
+                .sig_key = erase.erased_fn_sig_key,
+                .code = executableProcForErasedDirectProcAdapterInProgram(program, .{
+                    .proc_value = erase.proc_value,
+                    .capture_shape_key = erase.capture_shape_key,
+                }),
+                .capture = null,
+                .capture_ty = null,
+                .capture_shape = erase.capture_shape_key,
+            };
+        },
+        .pending_proc_value => executableInvariant("erased const-backed finite callable leaf reached pending emission"),
+        .finite => executableInvariant("erased const-backed finite callable leaf was not assigned an erased emission"),
+        .already_erased => executableInvariant("finite const-backed callable leaf reached already-erased emission"),
+    };
+
+    const value = program.ast.freshValueRef();
+    const packed_expr = try program.ast.addExpr(expected_ty, value, .{ .packed_erased_fn = packed_fn });
+    if (stmts.items.len == 0) return packed_expr;
+    return try program.ast.addExpr(expected_ty, value, .{ .block = .{
+        .stmts = try program.ast.addStmtSpan(stmts.items),
+        .final_expr = packed_expr,
     } });
 }
 
@@ -6738,7 +6973,7 @@ const BodyBuilder = struct {
                 {
                     executableInvariant("executable const_instance expression source type disagrees with requested source type");
                 }
-                break :blk try lowerComptimeValueExpr(
+                break :blk try lowerComptimeValueExprWithContext(
                     self.allocator,
                     self.program,
                     resolved.materialization,
@@ -6746,6 +6981,11 @@ const BodyBuilder = struct {
                     resolved.instance.schema,
                     resolved.instance.value,
                     true,
+                    .{
+                        .value_store = self.value_store,
+                        .representation_store = self.representation_store,
+                        .value_info = expr.value_info,
+                    },
                 );
             },
             .const_ref => executableInvariant("executable lowering reached non-runnable compile-time dependency const_ref"),
@@ -6791,6 +7031,7 @@ const BodyBuilder = struct {
                 if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
                     break :blk try self.lowerConstBackedValueExpr(
                         try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                        expr.value_info,
                         backing,
                     );
                 }
@@ -6873,6 +7114,7 @@ const BodyBuilder = struct {
                 if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
                     break :blk try self.lowerConstBackedValueExpr(
                         try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                        expr.value_info,
                         backing,
                     );
                 }
@@ -6899,6 +7141,7 @@ const BodyBuilder = struct {
                 if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
                     break :blk try self.lowerConstBackedValueExpr(
                         try self.lowerExecutableValueType(expr.ty, expr.value_info),
+                        expr.value_info,
                         backing,
                     );
                 }
@@ -7028,10 +7271,11 @@ const BodyBuilder = struct {
     fn lowerConstBackedValueExpr(
         self: *BodyBuilder,
         expected_ty: Type.TypeId,
+        value_info_id: repr.ValueInfoId,
         backing: repr.ConstBackedValueInfo,
     ) Allocator.Error!Ast.ExprId {
         const resolved = resolveConstInstanceForExecutable(self.program, backing.const_instance);
-        return try lowerComptimeValueExpr(
+        return try lowerComptimeValueExprWithContext(
             self.allocator,
             self.program,
             resolved.materialization,
@@ -7039,6 +7283,11 @@ const BodyBuilder = struct {
             backing.schema,
             backing.value,
             true,
+            .{
+                .value_store = self.value_store,
+                .representation_store = self.representation_store,
+                .value_info = value_info_id,
+            },
         );
     }
 
@@ -7049,7 +7298,7 @@ const BodyBuilder = struct {
     ) Allocator.Error!Ast.ExprId {
         const expr = self.input.exprs.items[@intFromEnum(expr_id)];
         if (self.value_store.values.items[@intFromEnum(expr.value_info)].const_backing) |backing| {
-            return try self.lowerConstBackedValueExpr(expected_ty, backing);
+            return try self.lowerConstBackedValueExpr(expected_ty, expr.value_info, backing);
         }
         return switch (expr.data) {
             .record => |record| blk: {
@@ -8539,7 +8788,7 @@ const BodyBuilder = struct {
         source_ty: Type.TypeId,
         target_ty: Type.TypeId,
     ) Allocator.Error!Ast.BridgeId {
-        return try self.valueBridge(source_ty, target_ty, .pattern_binding);
+        return try self.valueBridge(source_ty, target_ty);
     }
 
     fn constructionSlotBridge(
@@ -8547,19 +8796,20 @@ const BodyBuilder = struct {
         source_ty: Type.TypeId,
         target_ty: Type.TypeId,
     ) Allocator.Error!Ast.BridgeId {
-        return try self.valueBridge(source_ty, target_ty, .construction_slot);
+        return try ConstructionBridge.executableBridge(
+            self.allocator,
+            &self.program.types,
+            &self.program.row_shapes,
+            self.output,
+            source_ty,
+            target_ty,
+        );
     }
-
-    const ValueBridgeMode = enum {
-        pattern_binding,
-        construction_slot,
-    };
 
     fn valueBridge(
         self: *BodyBuilder,
         source_ty: Type.TypeId,
         target_ty: Type.TypeId,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.BridgeId {
         const source = self.program.types.getType(source_ty);
         const target = self.program.types.getType(target_ty);
@@ -8594,17 +8844,17 @@ const BodyBuilder = struct {
                 else => executableInvariant("executable value bridge crossed box/non-box types"),
             },
             .tuple => |source_items| switch (target) {
-                .tuple => |target_items| .{ .struct_ = try self.valueStructBridge(source_items, target_items, mode) },
+                .tuple => |target_items| .{ .struct_ = try self.valueStructBridge(source_items, target_items) },
                 .nominal => .nominal_reinterpret,
                 else => executableInvariant("executable value bridge crossed tuple/non-tuple types"),
             },
             .record => |source_record| switch (target) {
-                .record => |target_record| .{ .struct_ = try self.valueRecordBridge(source_record, target_record, mode) },
+                .record => |target_record| .{ .struct_ = try self.valueRecordBridge(source_record, target_record) },
                 .nominal => .nominal_reinterpret,
                 else => executableInvariant("executable value bridge crossed record/non-record types"),
             },
             .tag_union => |source_union| switch (target) {
-                .tag_union => |target_union| .{ .tag_union = try self.valueTagUnionBridge(source_union, target_union, mode) },
+                .tag_union => |target_union| .{ .tag_union = try self.valueTagUnionBridge(source_union, target_union) },
                 .nominal => .nominal_reinterpret,
                 else => executableInvariant("executable value bridge crossed tag-union/non-tag-union types"),
             },
@@ -8634,7 +8884,6 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source_items: []const Type.TypeId,
         target_items: []const Type.TypeId,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
         if (source_items.len != target_items.len) {
             executableInvariant("executable value struct bridge arity mismatch");
@@ -8643,7 +8892,7 @@ const BodyBuilder = struct {
         const children = try self.allocator.alloc(Ast.BridgeId, source_items.len);
         defer self.allocator.free(children);
         for (source_items, target_items, 0..) |source, target, i| {
-            children[i] = try self.valueBridge(source, target, mode);
+            children[i] = try self.valueBridge(source, target);
         }
         return try self.output.addBridgePlanSpan(children);
     }
@@ -8652,7 +8901,6 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source: Type.RecordType,
         target: Type.RecordType,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
         if (source.fields.len != target.fields.len) {
             executableInvariant("executable value record bridge arity mismatch");
@@ -8662,7 +8910,7 @@ const BodyBuilder = struct {
         defer self.allocator.free(children);
         for (target.fields, 0..) |target_field, i| {
             const source_field = self.recordFieldTypeByLabel(source, target_field.field);
-            children[i] = try self.valueBridge(source_field.ty, target_field.ty, mode);
+            children[i] = try self.valueBridge(source_field.ty, target_field.ty);
         }
         return try self.output.addBridgePlanSpan(children);
     }
@@ -8684,7 +8932,6 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source: Type.TagUnionType,
         target: Type.TagUnionType,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
         if (source.tags.len != target.tags.len) {
             executableInvariant("executable value tag-union bridge arity mismatch");
@@ -8694,7 +8941,7 @@ const BodyBuilder = struct {
         defer self.allocator.free(children);
         for (target.tags, 0..) |target_tag, i| {
             const source_tag = self.tagTypeByLabel(source, target_tag.tag);
-            children[i] = try self.valueTagPayloadBridge(source_tag, target_tag, mode);
+            children[i] = try self.valueTagPayloadBridge(source_tag, target_tag);
         }
         return try self.output.addBridgePlanSpan(children);
     }
@@ -8716,14 +8963,13 @@ const BodyBuilder = struct {
         self: *BodyBuilder,
         source: Type.TagType,
         target: Type.TagType,
-        mode: ValueBridgeMode,
     ) Allocator.Error!Ast.BridgeId {
         if (source.payloads.len != target.payloads.len) {
             executableInvariant("executable value tag payload bridge arity mismatch");
         }
         if (source.payloads.len == 0) return try self.output.addBridgePlan(.zst);
         if (source.payloads.len == 1) {
-            return try self.valueBridge(source.payloads[0].ty, target.payloads[0].ty, mode);
+            return try self.valueBridge(source.payloads[0].ty, target.payloads[0].ty);
         }
 
         const source_payloads = try self.allocator.alloc(Type.TypeId, source.payloads.len);
@@ -8754,7 +9000,7 @@ const BodyBuilder = struct {
         }
         verifyAllSeen(seen_source, "executable value source payload bridge omitted payload");
         verifyAllSeen(seen_target, "executable value target payload bridge omitted payload");
-        return try self.output.addBridgePlan(.{ .struct_ = try self.valueStructBridge(source_payloads, target_payloads, mode) });
+        return try self.output.addBridgePlan(.{ .struct_ = try self.valueStructBridge(source_payloads, target_payloads) });
     }
 
     const SavedBinding = struct {
@@ -9926,7 +10172,7 @@ const BodyBuilder = struct {
             .finite => {},
             .erase_proc_value => |erase| return try self.lowerProcValueErased(source_ty, value_info_id, callable, proc_value, erase),
             .erase_finite_set => |erase| return try self.lowerFiniteSetValueErased(source_ty, value_info_id, callable, proc_value, erase),
-            .already_erased => executableInvariant("executable proc_value reached erased emission that is not a proc-value erase plan"),
+            .already_erased => executableInvariant("executable proc_value reached already-erased emission"),
         }
 
         const construction_id = callable.construction_plan orelse executableInvariant("executable proc_value reached finite callable value without construction metadata");
@@ -10164,10 +10410,10 @@ const BodyBuilder = struct {
         }
 
         const result_ty = try self.lowerExecutableValueType(source_ty, value_info_id);
-        const capture_ty = self.erasedFnCaptureType(result_ty, erase.erased_fn_sig_key);
-        if ((capture_ty != null) != (erase.erased_fn_sig_key.capture_ty != null)) {
-            executableInvariant("executable proc-value erase capture type disagrees with erased signature");
-        }
+        const capture_ty = if (erase.erased_fn_sig_key.capture_ty) |capture_key|
+            try self.lowerSessionExecutableTypeKey(capture_key)
+        else
+            null;
         if (capture_ty == null and erase.capture_slots.len != 0) {
             executableInvariant("executable proc-value erase has captures but no hidden capture type");
         }
