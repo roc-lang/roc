@@ -2236,6 +2236,19 @@ pub const Coordinator = struct {
                 const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                 try imported_envs.append(self.gpa, ext_env);
                 mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
+                continue;
+            }
+
+            // Fallback: canonicalization may create duplicate import entries for
+            // a referenced type/module using only the base name (e.g. "Types"
+            // alongside the qualified "pf.Types"). If we already imported an env
+            // with a matching module_name, reuse its index. This keeps deferred
+            // type/expression lookups resolvable during type checking.
+            for (imported_envs.items, 0..) |existing_env, idx| {
+                if (std.mem.eql(u8, existing_env.module_name, import_name)) {
+                    mod.moduleEnv().?.imports.setResolvedModule(import_idx, @intCast(idx));
+                    break;
+                }
             }
         }
 
