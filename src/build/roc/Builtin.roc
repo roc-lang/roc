@@ -627,6 +627,22 @@ Builtin :: [].{
 			$new_list
 		}
 
+		## This works like [List.map], except it also passes the index
+		## of the element to the conversion function.
+		## ```roc
+		## expect List.map_with_index([10, 20, 30], (|num, index| num + index)) == [10, 21, 32]
+		## ```
+		map_with_index : List(a), (a, U64 -> b) -> List(b)
+		map_with_index = |list, transform| {
+			var $new_list = List.with_capacity(list.len())
+			var $index = 0
+			for item in list {
+				$new_list = list_append_unsafe($new_list, transform(item, $index))
+				$index = $index + 1
+			}
+			$new_list
+		}
+
 		## Apply a binary function to pairs of elements from two lists, returning a list of results.
 		## The result's length is the length of the shorter input list.
 		## ```
@@ -765,6 +781,68 @@ Builtin :: [].{
 			$state
 		}
 
+		## Like [List.fold], but at each step the function also receives the index of the current element.
+		fold_with_index : List(item), state, (state, item, U64 -> state) -> state
+		fold_with_index = |list, init, step| {
+			var $state = init
+			var $index = 0
+
+			for item in list {
+				$state = step($state, item, $index)
+				$index = $index + 1
+			}
+			
+			$state
+		}
+
+		## Same as [List.fold], except you can stop folding early.
+		##
+		## ## Performance Details
+		##
+		## Compared to [List.fold], this can potentially visit fewer elements (which can
+		## improve performance) at the cost of making each step take longer.
+		## However, the added cost to each step is extremely small, and can easily
+		## be outweighed if it results in skipping even a small number of elements.
+		##
+		## As such, it is typically better for performance to use this over [List.fold]
+		## if returning `Break` earlier than the last element is expected to be common.
+		fold_until : List(item), state, (state, item -> [Continue(state), Break(state)]) -> state
+		fold_until = |list, init, step| {
+			var $state = init
+
+			for item in list {
+				match step($state, item) {
+					Continue(new_state) => { $state = new_state }
+					Break(final_state) => {
+						$state = final_state
+						break
+					}
+				}
+			}
+
+			$state
+		}
+
+		## Same as [List.fold_with_index], except you can stop folding early.
+		fold_with_index_until : List(item), state, (state, item, U64 -> [Continue(state), Break(state)]) -> state
+		fold_with_index_until = |list, init, step| {
+			var $state = init
+			var $index = 0
+
+			for item in list {
+				match step($state, item, $index) {
+					Continue(new_state) => { $state = new_state }
+					Break(final_state) => {
+						$state = final_state
+						break
+					}
+				}
+				$index = $index + 1
+			}
+
+			$state
+		}
+
 		## Like [List.fold], but walks the list from last to first. The `step` function
 		## receives the element first and the current `state` second.
 		##
@@ -797,6 +875,26 @@ Builtin :: [].{
 
 			$state
 		}
+
+		## Returns `Bool.True` if the first list starts with the second list.
+		##
+		## If the second list is empty, this always returns `Bool.True`; every list
+		## is considered to "start with" an empty list.
+		##
+		## If the first list is empty, this only returns `Bool.True` if the second list is empty.
+		starts_with : List(a), List(a) -> Bool where [a.is_eq : a, a -> Bool]
+		starts_with = |list, prefix|
+			prefix == List.take_first(list, List.len(prefix))
+
+		## Returns `Bool.True` if the first list ends with the second list.
+		##
+		## If the second list is empty, this always returns `Bool.True`; every list
+		## is considered to "end with" an empty list.
+		##
+		## If the first list is empty, this only returns `Bool.True` if the second list is empty.
+		ends_with : List(a), List(a) -> Bool where [a.is_eq : a, a -> Bool]
+		ends_with = |list, suffix|
+			suffix == List.take_last(list, List.len(suffix))
 
 		## Run the given predicate on each element of the list, returning `Bool.True` if
 		## any of the elements satisfy it.
@@ -1108,6 +1206,10 @@ Builtin :: [].{
 			Ok({ before, after: others.drop_first(1) })
 		}
 
+		## Split a list into two parts at the last occurrence of a specified delimiter element, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
+		## ```
+		## expect [0, 1, 2, 1, 2].split_last(1) == Ok({ before: [0, 1, 2], after: [2] })
+		## ```
 		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim| {
@@ -1154,40 +1256,36 @@ Builtin :: [].{
 		min = |list|
 			match List.first(list) {
 				Ok(initial) =>
-					Ok(min_help(list, initial))
+					Ok(
+						List.fold(
+							list,
+							initial,
+							|best_so_far, elem| best_so_far.min(elem)
+						)
+					)
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
 			}
 
-		min_help : List(a), a -> a 
-			where [a.min : a, a -> a]
-		min_help = |list, initial|
-			List.fold(
-				list,
-				initial,
-				|best_so_far, elem| best_so_far.min(elem)
-			)
-
+		## Find the maximum element in a list, or `Err(ListWasEmpty)` if the list is empty.
+		## Works for any type that implements `max`.
 		max : List(a) -> Try(a, [ListWasEmpty])
 		    where [a.max : a, a -> a]
 		max = |list|
 			match List.first(list) {
 				Ok(initial) =>
-					Ok(max_help(list, initial))
+					Ok(
+						List.fold(
+							list,
+							initial,
+							|best_so_far, elem| best_so_far.max(elem)
+						)
+					)
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
 			}
-
-		max_help : List(a), a -> a 
-			where [a.max : a, a -> a]
-		max_help = |list, initial|
-			List.fold(
-				list,
-				initial,
-				|best_so_far, elem| best_so_far.max(elem)
-			)
 
 		## Encode a list using a format that provides encode_list
 		encode : List(item), fmt -> Try(encoded, err)
