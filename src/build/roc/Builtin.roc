@@ -541,7 +541,7 @@ Builtin :: [].{
 		## expect [10, 20, 30].set(5, 99) == Err(OutOfBounds)
 		## ```
 		set : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
-		set = |list, index, value| 
+		set = |list, index, value|
 			if index < List.len(list) {
 				Ok(list_set_unsafe(list, index, value))
 			} else {
@@ -555,12 +555,12 @@ Builtin :: [].{
 		## expect [10, 20, 30].replace(5, 99) == Err(OutOfBounds)
 		## ```
 		replace : List(a), U64, a -> Try({ list : List(a), prev : a }, [OutOfBounds, ..])
-		replace = |list, index, new_value| 
-		if index < List.len(list) {
-			Ok(list_replace_unsafe(list, index, new_value))
-		} else {
-			Err(OutOfBounds)
-		}
+		replace = |list, index, new_value|
+			if index < List.len(list) {
+				Ok(list_replace_unsafe(list, index, new_value))
+			} else {
+				Err(OutOfBounds)
+			}
 
 		## Updates the element at the given index by applying a function to it.
 		## ```roc
@@ -789,7 +789,7 @@ Builtin :: [].{
 				$state = step($state, item, $index)
 				$index = $index + 1
 			}
-			
+
 			$state
 		}
 
@@ -810,7 +810,9 @@ Builtin :: [].{
 
 			for item in list {
 				match step($state, item) {
-					Continue(new_state) => { $state = new_state }
+					Continue(new_state) => {
+						$state = new_state
+					}
 					Break(final_state) => {
 						$state = final_state
 						break
@@ -829,7 +831,9 @@ Builtin :: [].{
 
 			for item in list {
 				match step($state, item, $index) {
-					Continue(new_state) => { $state = new_state }
+					Continue(new_state) => {
+						$state = new_state
+					}
 					Break(final_state) => {
 						$state = final_state
 						break
@@ -1253,7 +1257,7 @@ Builtin :: [].{
 		## Find the minimum element in a list, or `Err(ListWasEmpty)` if the list is empty. 
 		## Works for any type that implements `min`. 
 		min : List(a) -> Try(a, [ListWasEmpty])
-		    where [a.min : a, a -> a]
+			where [a.min : a, a -> a]
 		min = |list|
 			match List.first(list) {
 				Ok(initial) =>
@@ -1261,18 +1265,18 @@ Builtin :: [].{
 						List.fold(
 							list,
 							initial,
-							|best_so_far, elem| best_so_far.min(elem)
-						)
+							|best_so_far, elem| best_so_far.min(elem),
+						),
 					)
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-			}
+				}
 
 		## Find the maximum element in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
 		max : List(a) -> Try(a, [ListWasEmpty])
-		    where [a.max : a, a -> a]
+			where [a.max : a, a -> a]
 		max = |list|
 			match List.first(list) {
 				Ok(initial) =>
@@ -1280,13 +1284,13 @@ Builtin :: [].{
 						List.fold(
 							list,
 							initial,
-							|best_so_far, elem| best_so_far.max(elem)
-						)
+							|best_so_far, elem| best_so_far.max(elem),
+						),
 					)
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-			}
+				}
 
 		## Encode a list using a format that provides encode_list
 		encode : List(item), fmt -> Try(encoded, err)
