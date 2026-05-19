@@ -9,29 +9,27 @@ pub inline fn enabled() bool {
 }
 
 /// Public `assert` function.
-pub fn assert(condition: bool, comptime message: []const u8) void {
-    if (builtin.mode != .Debug) return;
+pub inline fn assert(condition: bool, comptime message: []const u8) void {
+    if (comptime builtin.mode != .Debug) return;
     if (!condition) std.debug.panic(message, .{});
 }
 
 /// Public `assertFmt` function.
-pub fn assertFmt(condition: bool, comptime fmt: []const u8, args: anytype) void {
-    if (builtin.mode != .Debug) return;
+pub inline fn assertFmt(condition: bool, comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.mode != .Debug) return;
     if (!condition) std.debug.panic(fmt, args);
 }
 
 /// Public `invariant` function.
-pub fn invariant(condition: bool, comptime message: []const u8) void {
-    if (condition) return;
-    if (builtin.mode == .Debug) std.debug.panic(message, .{});
-    unreachable;
+pub inline fn invariant(condition: bool, comptime message: []const u8) void {
+    if (comptime builtin.mode != .Debug) return;
+    if (!condition) std.debug.panic(message, .{});
 }
 
 /// Public `invariantFmt` function.
-pub fn invariantFmt(condition: bool, comptime fmt: []const u8, args: anytype) void {
-    if (condition) return;
-    if (builtin.mode == .Debug) std.debug.panic(fmt, args);
-    unreachable;
+pub inline fn invariantFmt(condition: bool, comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.mode != .Debug) return;
+    if (!condition) std.debug.panic(fmt, args);
 }
 
 test "debug verification helpers compile out of release callers" {

@@ -44,6 +44,11 @@ const wasm_erased_callable_on_drop_offset: u32 = 4;
 
 const Self = @This();
 
+fn wasmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
+    if (builtin.mode == .Debug) std.debug.panic(fmt, args);
+    unreachable;
+}
+
 fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime _: []const u8, layout_idx: layout.Idx) bool {
     return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
 }
@@ -4952,7 +4957,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 }
 
 fn requireProcBody(proc: LirProcSpec) LIR.CFStmtId {
-    return proc.body orelse std.debug.panic(
+    return proc.body orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: non-hosted proc {d} missing statement body",
         .{proc.name.raw()},
     );
@@ -5245,7 +5250,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                     WasmModule.leb128WriteI64(self.allocator, &self.body, 0) catch return error.OutOfMemory;
                     self.body.append(self.allocator, Op.i64_ne) catch return error.OutOfMemory;
                 },
-                .f32, .f64 => std.debug.panic(
+                .f32, .f64 => wasmInvariantFmt(
                     "WasmCodeGen invariant violated: expect condition local {d} had non-integer value type {s}",
                     .{ @intFromEnum(expect_stmt.condition), @tagName(condition_vt) },
                 ),
@@ -5468,7 +5473,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
 
             const param_locals = self.join_point_param_locals.get(jp_key) orelse unreachable;
             if (args.len != param_locals.len) {
-                if (std.debug.runtime_safety) {
+                if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "WASM/codegen invariant violated: jump arg arity ({d}) does not match join param arity ({d})",
                         .{ args.len, param_locals.len },
@@ -5498,7 +5503,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
             WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
             try self.emitLocalSet(state_local);
 
-            const loop_depth = self.join_point_depths.get(jp_key) orelse std.debug.panic(
+            const loop_depth = self.join_point_depths.get(jp_key) orelse wasmInvariantFmt(
                 "WASM/codegen invariant violated: jump target {d} has no active join-point depth",
                 .{jp_key},
             );
@@ -5630,7 +5635,7 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
         .proc_ref => |proc_id| {
             const key: u32 = @intFromEnum(proc_id);
             const table_idx = self.proc_table_indices.get(key) orelse {
-                std.debug.panic(
+                wasmInvariantFmt(
                     "WasmCodeGen invariant violated: proc_ref target {d} missing table index",
                     .{@intFromEnum(proc_id)},
                 );
@@ -5699,7 +5704,7 @@ fn emitRocStaticStringCall(self: *Self, table_offset: u32, msg: []const u8) Allo
 }
 
 fn emitRocDbg(self: *Self, message: ProcLocalId) Allocator.Error!void {
-    if (self.procLocalLayoutIdx(message) != .str) {
+    if (builtin.mode == .Debug and self.procLocalLayoutIdx(message) != .str) {
         std.debug.panic(
             "WasmCodeGen invariant violated: debug local {d} did not have Str layout",
             .{@intFromEnum(message)},
@@ -5803,7 +5808,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 .box => blk: {
                     const inner_layout = ls.getLayout(source_layout.data.box);
                     if (inner_layout.tag != .tag_union) {
-                        std.debug.panic(
+                        wasmInvariantFmt(
                             "WasmCodeGen invariant violated: discriminant access on boxed non-tag-union layout {s}",
                             .{@tagName(inner_layout.tag)},
                         );
@@ -5828,7 +5833,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 .i32 => switch (target_vt) {
                     .i32 => {},
                     .i64 => self.body.append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory,
-                    else => std.debug.panic(
+                    else => wasmInvariantFmt(
                         "WasmCodeGen invariant violated: discriminant target layout lowered to non-integer value type {s}",
                         .{@tagName(target_vt)},
                     ),
@@ -5836,12 +5841,12 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 .i64 => switch (target_vt) {
                     .i32 => self.body.append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory,
                     .i64 => {},
-                    else => std.debug.panic(
+                    else => wasmInvariantFmt(
                         "WasmCodeGen invariant violated: discriminant target layout lowered to non-integer value type {s}",
                         .{@tagName(target_vt)},
                     ),
                 },
-                else => std.debug.panic(
+                else => wasmInvariantFmt(
                     "WasmCodeGen invariant violated: discriminant source layout lowered to non-integer value type {s}",
                     .{@tagName(source_vt)},
                 ),
@@ -5972,7 +5977,7 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     const proc_key: u32 = @intFromEnum(c.proc);
     const func_idx = self.registered_procs.get(proc_key) orelse {
-        if (std.debug.runtime_safety) {
+        if (builtin.mode == .Debug) {
             std.debug.panic("generateCall: unresolved proc call target {d}", .{@intFromEnum(c.proc)});
         }
         unreachable;
@@ -5990,16 +5995,15 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
 }
 
 fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const closure_layout = self.procLocalLayoutIdx(c.closure);
-    const closure_layout_val = ls.getLayout(closure_layout);
-
-    switch (closure_layout_val.tag) {
-        .erased_callable => {},
-        else => std.debug.panic(
-            "WasmCodeGen invariant violated: erased call closure layout {d} is not erased_callable",
-            .{@intFromEnum(closure_layout)},
-        ),
+    if (builtin.mode == .Debug) {
+        const closure_layout = self.procLocalLayoutIdx(c.closure);
+        const closure_layout_val = self.getLayoutStore().getLayout(closure_layout);
+        if (closure_layout_val.tag != .erased_callable) {
+            std.debug.panic(
+                "WasmCodeGen invariant violated: erased call closure layout {d} is not erased_callable",
+                .{@intFromEnum(closure_layout)},
+            );
+        }
     }
 
     try self.emitProcLocal(c.closure);
@@ -6107,15 +6111,16 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 }
 
 fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
-    const target_layout_val = self.getLayoutStore().getLayout(c.target_layout);
-    if (target_layout_val.tag != .erased_callable) {
-        std.debug.panic(
-            "WasmCodeGen invariant violated: packed erased fn target layout {d} is not erased_callable",
-            .{@intFromEnum(c.target_layout)},
-        );
+    if (builtin.mode == .Debug) {
+        const target_layout_val = self.getLayoutStore().getLayout(c.target_layout);
+        if (target_layout_val.tag != .erased_callable) {
+            std.debug.panic(
+                "WasmCodeGen invariant violated: packed erased fn target layout {d} is not erased_callable",
+                .{@intFromEnum(c.target_layout)},
+            );
+        }
     }
-    const has_capture = c.capture != null;
-    if (has_capture != (c.capture_layout != null)) {
+    if (builtin.mode == .Debug and (c.capture != null) != (c.capture_layout != null)) {
         std.debug.panic("WasmCodeGen invariant violated: packed erased fn capture value/layout presence differed", .{});
     }
 
@@ -6138,7 +6143,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
 
     const proc_key: u32 = @intFromEnum(c.proc);
     const table_idx = self.proc_table_indices.get(proc_key) orelse {
-        std.debug.panic(
+        wasmInvariantFmt(
             "WasmCodeGen invariant violated: packed erased fn target {d} missing table index",
             .{@intFromEnum(c.proc)},
         );
@@ -8222,15 +8227,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     };
                 }
             }
-            const resolved_ok = ok_disc orelse std.debug.panic(
+            const resolved_ok = ok_disc orelse wasmInvariantFmt(
                 "WasmCodeGen invariant violated: str_from_utf8 had no Ok(Str) variant",
                 .{},
             );
-            const resolved_err = err_disc orelse std.debug.panic(
+            const resolved_err = err_disc orelse wasmInvariantFmt(
                 "WasmCodeGen invariant violated: str_from_utf8 had no Err variant",
                 .{},
             );
-            const rec_idx = err_record_idx orelse std.debug.panic(
+            const rec_idx = err_record_idx orelse wasmInvariantFmt(
                 "WasmCodeGen invariant violated: str_from_utf8 could not resolve error record layout",
                 .{},
             );
@@ -8262,19 +8267,19 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     problem_size = field_size;
                 }
             }
-            const resolved_index_off = index_off orelse std.debug.panic(
+            const resolved_index_off = index_off orelse wasmInvariantFmt(
                 "WasmCodeGen invariant violated: str_from_utf8 could not resolve index offset",
                 .{},
             );
-            const resolved_index_size = index_size orelse std.debug.panic(
+            const resolved_index_size = index_size orelse wasmInvariantFmt(
                 "WasmCodeGen invariant violated: str_from_utf8 could not resolve index size",
                 .{},
             );
-            const resolved_problem_off = problem_off orelse std.debug.panic(
+            const resolved_problem_off = problem_off orelse wasmInvariantFmt(
                 "WasmCodeGen invariant violated: str_from_utf8 could not resolve problem offset",
                 .{},
             );
-            const resolved_problem_size = problem_size orelse std.debug.panic(
+            const resolved_problem_size = problem_size orelse wasmInvariantFmt(
                 "WasmCodeGen invariant violated: str_from_utf8 could not resolve problem size",
                 .{},
             );
@@ -8404,7 +8409,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             .dec => try self.emitDecToStr(args[0]),
             .f32 => try self.emitFloatToStr(args[0], true),
             .f64 => try self.emitFloatToStr(args[0], false),
-            else => std.debug.panic(
+            else => wasmInvariantFmt(
                 "WasmCodeGen invariant violated: num_to_str received non-numeric layout {s}",
                 .{@tagName(self.procLocalLayoutIdx(args[0]))},
             ),

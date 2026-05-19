@@ -353,12 +353,16 @@ const Lowerer = struct {
                 .value_layout = try self.lowerLayoutRef(encoding.value_layout),
                 .members = members,
             };
-            self.verifyCallableSetRuntimeEncoding(lowered);
+            if (@import("builtin").mode == .Debug) {
+                self.verifyCallableSetRuntimeEncoding(lowered);
+            }
             self.callable_set_runtime_encodings.appendAssumeCapacity(lowered);
         }
     }
 
     fn verifyCallableSetRuntimeEncoding(self: *const Lowerer, encoding: CallableSetRuntimeEncoding) void {
+        if (@import("builtin").mode != .Debug) return;
+
         for (encoding.members, 0..) |member, i| {
             for (encoding.members[0..i]) |previous| {
                 if (previous.member == member.member) {
