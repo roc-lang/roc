@@ -1100,9 +1100,31 @@ Finite callable sets are canonical maps of exact callable member instances:
 The left-hand side is identity. The right-hand side is descriptor payload.
 Capture slots, capture shapes, and executable payload keys are not identity
 material, because recursive callable captures can mention the callable set being
-defined. Unification unions different member identities in the same callable
-child group, refreshes matching member capture schemas from the target procedure
-instance, and converts to erased representation only through explicit erasure
+defined. Lambda-solved may use private mutable callable-group work tables while
+solving the fixed point, but a callable-set descriptor is a published compiler
+fact. It is published exactly once, after every member identity and every
+reachable capture-payload callable dependency for that group has been solved.
+
+Before descriptor publication, lambda-solved recursively walks each selected
+target capture's explicit value metadata: aliases, projections, nominal
+backings, boxes, records, tuples, tags, lists, joins, and direct function
+values. Every function-typed child reachable inside the capture payload must
+already have a solved callable representation or must be published from the
+same private callable-group work state before the parent member's capture schema
+is computed. The walk consumes only explicit lambda-solved value metadata and
+representation roots; it does not inspect source syntax, infer from field names,
+or recover from executable payloads.
+
+Once the recursive capture dependency walk is complete, lambda-solved computes
+the member capture schema from the target procedure instance exactly once and
+then seals the descriptor. Duplicate descriptor publication with the same key is
+valid only if the members are byte-for-byte equivalent. Duplicate publication
+with different capture slots, capture shapes, executable payload keys, or member
+payloads is a compiler bug. There is no descriptor refresh, descriptor
+replacement, or rerun caused by reading an earlier descriptor payload.
+
+Unification unions different member identities in the same callable child group
+and converts to erased representation only through explicit erasure
 requirements. Callable-set descriptor identity is published from the solved
 callable child group, not from source function type equality and not from an
 occurrence-local executable payload.
@@ -6791,12 +6813,14 @@ object-file symbols, or interpreter handles.
 
 `CallableSetMemberIdentity` is a solve-session identity. `capture_slots`,
 `capture_shape_key`, and derived executable payload keys are solved schema for
-that identity; they are not part of the identity itself. If a callable group
-already contains a member with the same `source_proc`, `proc_value`, and
-`target_instance`, lambda-solved replaces the stored capture schema in place
-before sealing. Appending a second member for the same identity with a different
-capture schema is a compiler bug because branch tags would depend on transient
-solver order.
+that identity; they are not part of the identity itself. While solving,
+lambda-solved may keep private pending member sources. It may not publish a
+descriptor member until the capture schema for that identity is complete. If a
+callable group already contains a member with the same `source_proc`,
+`proc_value`, and `target_instance`, the second member must be byte-for-byte
+equivalent to the first. Appending or replacing a same-identity member with a
+different capture schema is a compiler bug because branch tags would depend on
+transient solver order.
 
 `CallableSetMemberId` is a semantic descriptor-member id. It may be dense for
 storage efficiency, but density is not a physical encoding contract. Code that
@@ -6858,12 +6882,12 @@ Dependency-summary lowering, concrete compile-time root lowering,
 const/callable instantiation, callable promotion, private capture
 construction, erased adapter creation, and runtime lowering may all discover
 descriptors before the artifact seals. A duplicate published key must have
-byte-for-byte identical member identities. During a solve session, a duplicate
-lambda-solved key with the same member identities, source function type payloads,
-publication payloads, and lifted-owner payloads but a newer capture schema
-replaces the transient descriptor payload in place before sealing. A duplicate
-key with different member identities, procedure refs, source function type
-payloads, publication payloads, or lifted-owner payloads is a compiler bug.
+byte-for-byte identical member identities and member payloads. During a solve
+session, duplicate lambda-solved descriptor publication follows the same rule:
+the duplicate must be identical. A duplicate key with different member
+identities, procedure refs, source function type payloads, publication payloads,
+lifted-owner payloads, capture slots, capture shapes, or executable payload keys
+is a compiler bug.
 
 Every descriptor reachable from a callable result plan, callable value emission
 plan, callable-set construction plan, erased adapter key, erased callable code
@@ -6879,24 +6903,23 @@ keys use publication identities instead of `ProcRepresentationInstanceId`.
 Runtime descriptor hash tables are performance-only indexes over
 already-published data; they are not semantic inputs.
 
-During a solve session, descriptor candidates can be transient. If later
-erasure requirements, promoted wrapper payloads, or capture-slot transforms
-change the capture schema for a representation group, the descriptor payload for
-the same member-identity key is replaced in place before the artifact store is
-sealed. Existing descriptor contributions are treated as member identities and
-their capture schemas are refreshed from the selected target instance before
-they are unioned into another callable group. Executable payload publication
-consumes only live final descriptor refs: current group emissions, current
-`CallableValueInfo.emission_plan` records, current
-`CallableSetConstructionPlan` records, and current finite-erased adapter
-demands. Stale interned descriptors must not be copied into checked artifacts,
-runtime descriptor tables, callable result plans, or executable payloads.
+During a solve session, descriptor candidates live in private callable-group work
+state until their capture schemas are complete. Later erasure requirements,
+promoted wrapper payloads, or capture-slot transforms must be discovered before
+descriptor publication. If one of those facts would change an already-published
+descriptor, the producer published too early and the compiler must fail an
+invariant. Existing descriptor contributions copied into another callable group
+are already sealed payload facts; lambda-solved may validate them, but it must
+not refresh them from the selected target instance. Executable payload
+publication consumes only sealed descriptor refs: group emissions,
+`CallableValueInfo.emission_plan` records, `CallableSetConstructionPlan` records,
+and finite-erased adapter demands that all point at immutable descriptors.
 
 A verifier checks that every live descriptor member's capture-slot executable
 keys match the selected target instance's published capture endpoints. The
-descriptor store is append-only after publication, but builder-time replacement
-before sealing is required so stale transient descriptors do not become
-semantic data.
+descriptor store is append-only after publication. Builder-time descriptor
+replacement is forbidden because descriptors must not be used as transient
+solver storage.
 
 Erased call signatures and capture shapes are also canonical keys:
 
@@ -8012,12 +8035,13 @@ value occurrence. They return the forwarded endpoint without reserving a new
 payload key. Reserving a payload first and then forwarding leaves an orphan
 `pending` payload and is a compiler bug.
 
-Callable-set payloads can be derived before all member capture payloads are
-final. The owning session may replace an unconsumed derived callable-set payload
-for the same canonical callable-set key before the payload store seals, but only
-with a new payload built from the explicit final callable-set descriptor and
-member capture-slot payload refs. No downstream stage may have consumed the superseded
-payload, and no other payload case may be replaced this way.
+Callable-set payloads are derived only from sealed callable-set descriptors.
+The owning session may reserve a pending payload entry while walking a recursive
+payload graph, but filling that reservation is not replacement: no consumer may
+observe the pending entry as a payload fact. Once a callable-set payload is
+filled, publishing the same canonical callable-set key again is valid only when
+it resolves to the already-owned equivalent payload. No stage may replace an
+unconsumed derived callable-set payload with a newer descriptor payload.
 
 Promoted callable values publish the same payload data. Even an empty aggregate
 capture such as `List(vacant_callable_slot(...))` has an explicit capture-slot
@@ -12162,14 +12186,15 @@ Structural tests cover every type-state boundary:
   semantic equality, singleton key stability, publication from every reachable
   descriptor source, and rejection of session-local ids in published keys
 - callable-set member tests for `CallableSetMemberIdentity`,
-  `CallableSetMemberPublicationIdentity`, in-place capture schema replacement for
-  the same identity, duplicate same-identity member rejection, and prevention of
-  lowering-run `source_proc`, `proc_value`, or `target_instance` values in
-  persisted artifacts
-- callable-set descriptor liveness/replacement tests where a transient
-  descriptor is superseded before sealing, stale descriptors are not published,
-  current emission plans consume the live descriptor, and capture-slot
-  executable keys match the selected target endpoints
+  `CallableSetMemberPublicationIdentity`, duplicate same-identity member
+  rejection when payloads differ, byte-for-byte acceptance when payloads match,
+  and prevention of lowering-run `source_proc`, `proc_value`, or
+  `target_instance` values in persisted artifacts
+- callable-set descriptor sealing tests where duplicate descriptor publication
+  with a different payload is rejected, current emission plans consume sealed
+  descriptors only, nested callable capture dependencies are published before
+  capture-slot schema computation, and capture-slot executable keys match the
+  selected target endpoints
 - `FunctionRepShape` tests proving whole-function roots publish argument,
   return, and callable children together for `call_value`, `call_proc`, and
   `proc_value`, and executable values keep only solved callable representation

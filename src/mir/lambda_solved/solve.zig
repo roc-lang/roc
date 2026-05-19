@@ -5237,6 +5237,11 @@ const FunctionRootForGroup = struct {
     root: repr.RepRootId,
 };
 
+const CapturedPayloadValueKey = struct {
+    value_store: repr.ValueInfoStoreId,
+    value: repr.ValueInfoId,
+};
+
 const CallableEmissionAssigner = struct {
     allocator: Allocator,
     program: *Program,
@@ -5275,10 +5280,10 @@ const CallableEmissionAssigner = struct {
 
     fn assign(self: *CallableEmissionAssigner) Allocator.Error!void {
         try self.collectFunctionRootMetadata();
-        try self.collectFiniteCallableContributions();
         try self.seedAlreadyErasedCallableGroupEmissions();
         try self.collectBoxErasureRequirements();
         try self.publishGroupErasureProvenance();
+        try self.collectFiniteCallableContributions();
         try self.publishCallableGroupSets();
         try self.assignValueEmissionPlans();
     }
@@ -5326,18 +5331,14 @@ const CallableEmissionAssigner = struct {
                     .finite => |key| {
                         switch (callable.source) {
                             .proc_value => |source| {
-                                const proc_source = ProcValueCallableSource{
+                                try self.appendPendingProcValueGroupMember(group, .{
                                     .proc = source.proc,
                                     .published_proc = source.published_proc,
                                     .target_instance = source.target_instance,
                                     .captures = source.captures,
                                     .fn_ty = source.fn_ty,
                                     .source_fn_ty_payload = source.source_fn_ty_payload,
-                                };
-                                if (!try self.ensureFunctionCaptureGroupsPublished(proc_source)) continue;
-                                const member = try self.memberForProcValueSource(proc_source);
-                                defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
-                                try self.addGroupCallableMember(group, member);
+                                });
                             },
                             .finite_set,
                             .erased_adapter,
@@ -5351,24 +5352,7 @@ const CallableEmissionAssigner = struct {
                             else => lambdaInvariant("lambda-solved pending proc-value emission has non-proc callable source"),
                         };
                         _ = try self.groupSetFor(group);
-                        try self.pending_proc_members.append(self.allocator, .{
-                            .group = group,
-                            .source = .{
-                                .proc = source.proc,
-                                .published_proc = source.published_proc,
-                                .target_instance = source.target_instance,
-                                .captures = source.captures,
-                                .fn_ty = source.fn_ty,
-                                .source_fn_ty_payload = source.source_fn_ty_payload,
-                            },
-                        });
-                    },
-                    .erase_proc_value => {
-                        const source = switch (callable.source) {
-                            .proc_value => |source| source,
-                            else => lambdaInvariant("lambda-solved proc-value erase emission has non-proc callable source"),
-                        };
-                        const member = try self.memberForProcValueSource(.{
+                        try self.appendPendingProcValueGroupMember(group, .{
                             .proc = source.proc,
                             .published_proc = source.published_proc,
                             .target_instance = source.target_instance,
@@ -5376,24 +5360,32 @@ const CallableEmissionAssigner = struct {
                             .fn_ty = source.fn_ty,
                             .source_fn_ty_payload = source.source_fn_ty_payload,
                         });
-                        defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
-                        try self.addGroupCallableMember(group, member);
+                    },
+                    .erase_proc_value => {
+                        const source = switch (callable.source) {
+                            .proc_value => |source| source,
+                            else => lambdaInvariant("lambda-solved proc-value erase emission has non-proc callable source"),
+                        };
+                        try self.appendPendingProcValueGroupMember(group, .{
+                            .proc = source.proc,
+                            .published_proc = source.published_proc,
+                            .target_instance = source.target_instance,
+                            .captures = source.captures,
+                            .fn_ty = source.fn_ty,
+                            .source_fn_ty_payload = source.source_fn_ty_payload,
+                        });
                     },
                     .erase_finite_set => |erase| {
                         switch (callable.source) {
                             .proc_value => |source| {
-                                const proc_source = ProcValueCallableSource{
+                                try self.appendPendingProcValueGroupMember(group, .{
                                     .proc = source.proc,
                                     .published_proc = source.published_proc,
                                     .target_instance = source.target_instance,
                                     .captures = source.captures,
                                     .fn_ty = source.fn_ty,
                                     .source_fn_ty_payload = source.source_fn_ty_payload,
-                                };
-                                if (!try self.ensureFunctionCaptureGroupsPublished(proc_source)) continue;
-                                const member = try self.memberForProcValueSource(proc_source);
-                                defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
-                                try self.addGroupCallableMember(group, member);
+                                });
                             },
                             .finite_set,
                             .erased_adapter,
@@ -5407,6 +5399,18 @@ const CallableEmissionAssigner = struct {
         }
     }
 
+    fn appendPendingProcValueGroupMember(
+        self: *CallableEmissionAssigner,
+        group: repr.RepresentationGroupId,
+        source: ProcValueCallableSource,
+    ) Allocator.Error!void {
+        _ = try self.groupSetFor(group);
+        try self.pending_proc_members.append(self.allocator, .{
+            .group = group,
+            .source = source,
+        });
+    }
+
     fn addCallableSetDescriptorMembers(
         self: *CallableEmissionAssigner,
         group: repr.RepresentationGroupId,
@@ -5416,40 +5420,9 @@ const CallableEmissionAssigner = struct {
             lambdaInvariant("lambda-solved callable emission referenced a missing callable-set descriptor");
         };
         for (descriptor.members) |member| {
-            if (!try self.ensureTargetCaptureGroupsPublished(member.target_instance)) continue;
-            const refreshed = try self.refreshCallableSetMemberSchema(member);
-            defer if (refreshed.capture_slots.len > 0) self.allocator.free(refreshed.capture_slots);
-            try self.addGroupCallableMember(group, refreshed);
+            try self.validateSealedMemberCaptureDependencies(member);
+            try self.addGroupCallableMember(group, member);
         }
-    }
-
-    fn refreshCallableSetMemberSchema(
-        self: *CallableEmissionAssigner,
-        member: repr.CanonicalCallableSetMember,
-    ) Allocator.Error!repr.CanonicalCallableSetMember {
-        const target_record = self.recordForInstance(member.target_instance);
-        if (!mirProcedureBodyIdentityEql(target_record.proc, member.source_proc)) {
-            lambdaInvariant("lambda-solved callable-set descriptor member target instance has a different source procedure");
-        }
-        const target_value_store = self.valueStoreFor(target_record);
-        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
-        if (target_captures.len != member.capture_slots.len) {
-            lambdaInvariant("lambda-solved callable-set descriptor member capture arity differs from target captures");
-        }
-        const capture_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
-        errdefer if (capture_slots.len > 0) self.allocator.free(capture_slots);
-        return .{
-            .member = member.member,
-            .proc_value = member.proc_value,
-            .source_fn_ty_payload = member.source_fn_ty_payload,
-            .source_proc = member.source_proc,
-            .published_proc_value = member.published_proc_value,
-            .published_source_proc = member.published_source_proc,
-            .lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload,
-            .target_instance = member.target_instance,
-            .capture_slots = capture_slots,
-            .capture_shape_key = repr.captureShapeKeyForSlots(capture_slots),
-        };
     }
 
     fn addGroupCallableMember(
@@ -5461,18 +5434,7 @@ const CallableEmissionAssigner = struct {
         for (set.members.items) |*existing| {
             if (callableSetMemberEquivalent(existing.*, member)) return;
             if (callableSetMemberSameIdentity(existing.*, member)) {
-                const capture_slots = if (member.capture_slots.len == 0)
-                    &.{}
-                else
-                    try self.allocator.dupe(repr.CallableSetCaptureSlot, member.capture_slots);
-                if (existing.capture_slots.len > 0) self.allocator.free(existing.capture_slots);
-                existing.capture_slots = capture_slots;
-                existing.capture_shape_key = member.capture_shape_key;
-                existing.published_proc_value = member.published_proc_value;
-                existing.published_source_proc = member.published_source_proc;
-                existing.source_fn_ty_payload = member.source_fn_ty_payload;
-                existing.lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload;
-                return;
+                lambdaInvariant("lambda-solved callable-group member identity was added twice with different payloads");
             }
         }
         const capture_slots = if (member.capture_slots.len == 0)
@@ -5549,10 +5511,8 @@ const CallableEmissionAssigner = struct {
         for (set.members.items, 0..) |*member, semantic_member_index| {
             member.member = @enumFromInt(@as(u32, @intCast(semantic_member_index)));
         }
-        const interned = try self.representationStore().internCallableSetDescriptor(set.members.items);
-        set.key = interned.key;
-        if (interned.replaced_existing) self.changed = true;
-        const group_key = set.key orelse lambdaInvariant("lambda-solved callable group set key was not published");
+        const group_key = try self.representationStore().internCallableSetDescriptor(set.members.items);
+        set.key = group_key;
         if (self.representationStore().callableGroupEmission(group) == null) {
             _ = try self.ensureCallableGroupEmission(set, group_key, self.erasedProvenance(group));
         }
@@ -5585,26 +5545,149 @@ const CallableEmissionAssigner = struct {
         if (source.captures.len != target_captures.len) {
             lambdaInvariant("lambda-solved proc-value callable capture arity differs from target captures");
         }
-        return try self.ensureTargetCaptureGroupsPublished(source.target_instance);
+        return try self.ensureTargetCaptureCallableDependenciesPublished(source.target_instance);
     }
 
-    fn ensureTargetCaptureGroupsPublished(
+    fn ensureTargetCaptureCallableDependenciesPublished(
         self: *CallableEmissionAssigner,
         target_instance: repr.ProcRepresentationInstanceId,
     ) Allocator.Error!bool {
         const target_record = self.recordForInstance(target_instance);
         const target_value_store = self.valueStoreFor(target_record);
         const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
+        var visited = std.AutoHashMap(CapturedPayloadValueKey, void).init(self.allocator);
+        defer visited.deinit();
         for (target_captures) |target_capture| {
-            const target_value = target_value_store.values.items[@intFromEnum(target_capture)];
-            if (!self.valueHasFunctionType(target_value.logical_ty)) continue;
-            const capture_group = self.callableGroupForValueInfo(target_value, target_value.callable) orelse
-                lambdaInvariant("lambda-solved function-typed target capture has no solved callable group");
-            if (self.representationStore().callableGroupEmission(capture_group) != null) continue;
-            if (self.callableGroupSet(capture_group) == null) return false;
-            if (!try self.ensureGroupSetPublished(capture_group)) return false;
+            if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(
+                target_record,
+                target_value_store,
+                target_capture,
+                &visited,
+            )) return false;
         }
         return true;
+    }
+
+    fn validateSealedMemberCaptureDependencies(
+        self: *CallableEmissionAssigner,
+        member: repr.CanonicalCallableSetMember,
+    ) Allocator.Error!void {
+        const target_record = self.recordForInstance(member.target_instance);
+        if (!mirProcedureBodyIdentityEql(target_record.proc, member.source_proc)) {
+            lambdaInvariant("lambda-solved sealed callable-set member target instance has a different source procedure");
+        }
+        const target_value_store = self.valueStoreFor(target_record);
+        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
+        if (target_captures.len != member.capture_slots.len) {
+            lambdaInvariant("lambda-solved sealed callable-set member capture arity differs from target captures");
+        }
+        var visited = std.AutoHashMap(CapturedPayloadValueKey, void).init(self.allocator);
+        defer visited.deinit();
+        for (target_captures) |target_capture| {
+            if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(
+                target_record,
+                target_value_store,
+                target_capture,
+                &visited,
+            )) {
+                lambdaInvariant("lambda-solved sealed callable-set member contains unpublished callable capture dependencies");
+            }
+        }
+        const computed_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
+        defer if (computed_slots.len > 0) self.allocator.free(computed_slots);
+        if (computed_slots.len != member.capture_slots.len) {
+            lambdaInvariant("lambda-solved sealed callable-set member capture schema arity differs from target captures");
+        }
+        for (computed_slots, member.capture_slots) |computed, sealed| {
+            if (computed.slot != sealed.slot or
+                !repr.canonicalTypeKeyEql(computed.source_ty, sealed.source_ty) or
+                !repr.canonicalExecValueTypeKeyEql(computed.exec_value_ty, sealed.exec_value_ty))
+            {
+                lambdaInvariant("lambda-solved sealed callable-set member capture schema differs from selected target instance");
+            }
+        }
+    }
+
+    fn ensureCapturedPayloadValueCallableDependenciesPublished(
+        self: *CallableEmissionAssigner,
+        target_record: *const ProcBuildRecord,
+        target_value_store: *const repr.ValueInfoStore,
+        value: repr.ValueInfoId,
+        visited: *std.AutoHashMap(CapturedPayloadValueKey, void),
+    ) Allocator.Error!bool {
+        const visit_key = CapturedPayloadValueKey{
+            .value_store = target_record.value_store,
+            .value = value,
+        };
+        const visit = try visited.getOrPut(visit_key);
+        if (visit.found_existing) return true;
+
+        const value_info = target_value_store.values.items[@intFromEnum(value)];
+
+        if (value_info.value_alias_source) |source| {
+            if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, source, visited)) return false;
+        }
+        if (value_info.nominal_backing_value) |backing| {
+            if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, backing, visited)) return false;
+        }
+        if (value_info.projection_info) |projection_id| {
+            const projection = target_value_store.projections.items[@intFromEnum(projection_id)];
+            if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, projection.source, visited)) return false;
+        }
+        if (value_info.join_info) |join_id| {
+            const join = target_value_store.joins.items[@intFromEnum(join_id)];
+            const inputs = target_value_store.sliceJoinInputSpan(join.inputs);
+            for (inputs) |input| {
+                if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, input.value, visited)) return false;
+            }
+        }
+        if (value_info.boxed) |boxed| {
+            if (boxed.payload_value) |payload| {
+                if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, payload, visited)) return false;
+            }
+        }
+        if (value_info.aggregate) |aggregate| {
+            switch (aggregate) {
+                .record => |record| {
+                    for (record.fields) |field| {
+                        if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, field.value, visited)) return false;
+                    }
+                },
+                .tuple => |items| {
+                    for (items) |item| {
+                        if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, item.value, visited)) return false;
+                    }
+                },
+                .tag => |tag| {
+                    for (tag.payloads) |payload| {
+                        if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, payload.value, visited)) return false;
+                    }
+                },
+                .list => |list| {
+                    for (list.elems) |elem| {
+                        if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(target_record, target_value_store, elem.value, visited)) return false;
+                    }
+                },
+            }
+        }
+
+        if (!self.valueHasFunctionType(value_info.logical_ty)) return true;
+        const capture_group = self.callableGroupForValueInfo(value_info, value_info.callable) orelse
+            lambdaInvariant("lambda-solved captured function value has no solved callable group");
+        return try self.ensureCapturedCallableGroupPublished(capture_group);
+    }
+
+    fn ensureCapturedCallableGroupPublished(
+        self: *CallableEmissionAssigner,
+        group: repr.RepresentationGroupId,
+    ) Allocator.Error!bool {
+        if (self.representationStore().callableGroupEmission(group) != null) return true;
+        if (self.callableGroupSet(group) != null) return try self.ensureGroupSetPublished(group);
+        if (self.erasedProvenance(group) != null) {
+            try self.ensureTypeOnlyErasedFunctionGroupEmission(group);
+            return self.representationStore().callableGroupEmission(group) != null;
+        }
+        return false;
     }
 
     fn collectBoxErasureRequirements(self: *CallableEmissionAssigner) Allocator.Error!void {
@@ -5725,6 +5808,7 @@ const CallableEmissionAssigner = struct {
         };
         const emission = try self.representationStore().appendAlreadyErasedCallableEmissionPlan(plan);
         try self.representationStore().publishCallableGroupEmission(group, emission);
+        self.changed = true;
     }
 
     fn addErasedGroupProvenance(
@@ -5905,12 +5989,11 @@ const CallableEmissionAssigner = struct {
                 try self.rewriteCallableConstructionPlan(&callable, value_id, group_set, group_key);
                 switch (current_emission) {
                     .pending_proc_value => {
-                        self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
+                        self.representationStore().sealPendingProcValueEmissionPlanAsFinite(callable.emission_plan, group_key);
                         self.changed = true;
                     },
                     .finite => |key| if (!repr.callableSetKeyEql(key, group_key)) {
-                        self.representationStore().replaceCallableEmissionPlanWithFinite(callable.emission_plan, group_key);
-                        self.changed = true;
+                        lambdaInvariant("lambda-solved finite callable emission key changed after publication");
                     },
                     .erase_finite_set => {},
                     .already_erased,
@@ -5937,6 +6020,9 @@ const CallableEmissionAssigner = struct {
         }
         if (!repr.canonicalTypeKeyEql(source.fn_ty, erased.sig_key.source_fn_ty)) {
             lambdaInvariant("lambda-solved direct proc-value erased emission source type differs from erased signature");
+        }
+        if (!try self.ensureFunctionCaptureGroupsPublished(source)) {
+            lambdaInvariant("lambda-solved proc-value erase plan capture dependencies were not solved before capture schema computation");
         }
         const target_record = self.recordForInstance(source.target_instance);
         if (!mirProcedureBodyIdentityEql(target_record.proc, source.proc)) {
@@ -6114,7 +6200,7 @@ const CallableEmissionAssigner = struct {
             if (self.callableGroupEmissionMatches(existing, group_key, provenance)) return existing;
             const existing_plan = self.representationStore().callableEmissionPlan(existing);
             if (provenance) |boundaries| {
-                const erase_provenance = switch (existing_plan) {
+                switch (existing_plan) {
                     .already_erased => |erased| {
                         if (erased.provenance.len > 0) {
                             try self.representationStore().publishGroupErasureProvenance(group_set.group, erased.provenance);
@@ -6123,34 +6209,21 @@ const CallableEmissionAssigner = struct {
                         try self.representationStore().publishGroupErasureProvenance(group_set.group, boundaries);
                         return existing;
                     },
-                    .erase_finite_set => |erase| blk: {
-                        const merged = try repr.mergeBoxErasureProvenanceSets(self.allocator, erase.provenance, boundaries);
-                        break :blk merged;
-                    },
-                    .finite => blk: {
-                        break :blk try repr.mergeBoxErasureProvenanceSets(self.allocator, &.{}, boundaries);
-                    },
+                    .erase_finite_set,
+                    .finite,
+                    => lambdaInvariant("lambda-solved callable group erasure arrived after finite emission publication"),
                     .pending_proc_value,
                     .erase_proc_value,
                     => lambdaInvariant("lambda-solved finite callable group emission merged with incompatible existing emission plan"),
-                };
-                defer if (erase_provenance.len > 0) self.allocator.free(erase_provenance);
-                const erase = try self.finiteSetErasePlan(group_set, group_key, erase_provenance);
-                defer deinitExecutableSpecializationKeySlice(self.allocator, erase.member_targets);
-                try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(existing, erase);
-                self.changed = true;
+                }
             } else {
                 switch (existing_plan) {
                     .finite => |key| if (!repr.callableSetKeyEql(key, group_key)) {
-                        self.representationStore().replaceCallableEmissionPlanWithFinite(existing, group_key);
-                        self.changed = true;
+                        lambdaInvariant("lambda-solved finite callable group emission key changed after publication");
                     },
                     .erase_finite_set => |erase| {
                         if (!repr.callableSetKeyEql(erase.adapter.callable_set_key, group_key)) {
-                            const updated = try self.finiteSetErasePlan(group_set, group_key, erase.provenance);
-                            defer deinitExecutableSpecializationKeySlice(self.allocator, updated.member_targets);
-                            try self.representationStore().replaceCallableEmissionPlanWithFiniteSetErase(existing, updated);
-                            self.changed = true;
+                            lambdaInvariant("lambda-solved erased finite callable group emission key changed after publication");
                         }
                         return existing;
                     },
@@ -6312,9 +6385,6 @@ const CallableEmissionAssigner = struct {
     ) repr.CanonicalCallableSetMember {
         for (group_set.members.items) |member| {
             if (callableSetMemberEquivalent(member, selected)) return member;
-        }
-        for (group_set.members.items) |member| {
-            if (callableSetMemberSameIdentity(member, selected)) return member;
         }
         lambdaInvariant("lambda-solved callable construction selected member missing from solved group callable set");
     }
@@ -6600,17 +6670,14 @@ const CallableEmissionAssigner = struct {
 
         for (values, 0..) |value, i| {
             const endpoint = try self.publishTargetExecutableEndpoint(target_record, target_value_store, value);
-            const value_info = &target_value_store.values.items[@intFromEnum(value)];
+            const value_info = target_value_store.values.items[@intFromEnum(value)];
             if (isEmptyCanonicalTypeKey(value_info.source_ty)) {
                 lambdaInvariant("lambda-solved capture slot reached callable-set construction without an explicit source type key");
             }
             if (value_info.exec_ty) |existing| {
                 if (!repr.canonicalExecValueTypeKeyEql(existing.key, endpoint.key)) {
-                    value_info.exec_ty = endpoint;
-                    self.changed = true;
+                    lambdaInvariant("lambda-solved capture slot executable endpoint differs from already-published value endpoint");
                 }
-            } else {
-                value_info.exec_ty = endpoint;
             }
             slots[i] = .{
                 .slot = @intCast(i),
@@ -7297,6 +7364,16 @@ fn callableSetMemberEquivalent(
     b: repr.CanonicalCallableSetMember,
 ) bool {
     if (!callableSetMemberSameIdentity(a, b)) return false;
+    if (a.source_fn_ty_payload != b.source_fn_ty_payload) return false;
+    if ((a.published_proc_value == null) != (b.published_proc_value == null)) return false;
+    if (a.published_proc_value) |left| {
+        if (!canonical.procedureCallableRefEql(left, b.published_proc_value.?)) return false;
+    }
+    if ((a.published_source_proc == null) != (b.published_source_proc == null)) return false;
+    if (a.published_source_proc) |left| {
+        if (!canonical.mirProcedureRefEql(left, b.published_source_proc.?)) return false;
+    }
+    if (a.lifted_owner_source_fn_ty_payload != b.lifted_owner_source_fn_ty_payload) return false;
     if (!repr.captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key)) return false;
     if (a.capture_slots.len != b.capture_slots.len) return false;
     for (a.capture_slots, b.capture_slots) |left, right| {

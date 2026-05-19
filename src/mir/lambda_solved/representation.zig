@@ -325,12 +325,6 @@ pub const CanonicalCallableSetDescriptor = struct {
     members: []const CanonicalCallableSetMember,
 };
 
-/// Public `CallableSetDescriptorInternResult` declaration.
-pub const CallableSetDescriptorInternResult = struct {
-    key: CanonicalCallableSetKey,
-    replaced_existing: bool,
-};
-
 /// Public `SessionExecutableTypePayloadId` declaration.
 pub const SessionExecutableTypePayloadId = enum(u32) { _ };
 
@@ -497,19 +491,6 @@ pub const SessionExecutableTypePayloadStore = struct {
                     deinitSessionExecutableTypePayload(allocator, &duplicate);
                 },
             }
-            return existing;
-        }
-        return try self.appendNew(allocator, key, payload);
-    }
-
-    pub fn replaceDerived(
-        self: *SessionExecutableTypePayloadStore,
-        allocator: std.mem.Allocator,
-        key: CanonicalExecValueTypeKey,
-        payload: SessionExecutableTypePayload,
-    ) std.mem.Allocator.Error!SessionExecutableTypePayloadId {
-        if (self.by_key.get(key)) |existing| {
-            self.fill(allocator, existing, payload);
             return existing;
         }
         return try self.appendNew(allocator, key, payload);
@@ -2851,26 +2832,18 @@ pub const RepresentationStore = struct {
         } });
     }
 
-    pub fn replaceCallableEmissionPlanWithFinite(
+    pub fn sealPendingProcValueEmissionPlanAsFinite(
         self: *RepresentationStore,
         id: CallableValueEmissionPlanId,
         key: CanonicalCallableSetKey,
     ) void {
         const plan = self.callableEmissionPlanPtr(id);
+        switch (plan.*) {
+            .pending_proc_value => {},
+            else => representationInvariant("lambda-solved attempted to seal a non-pending callable emission plan"),
+        }
         deinitCallableEmissionPlan(self.allocator, plan.*);
         plan.* = .{ .finite = key };
-    }
-
-    pub fn replaceCallableEmissionPlanWithFiniteSetErase(
-        self: *RepresentationStore,
-        id: CallableValueEmissionPlanId,
-        erase: FiniteSetErasePlan,
-    ) std.mem.Allocator.Error!void {
-        const owned = try self.cloneFiniteSetEraseEmissionPayload(erase);
-        errdefer deinitFiniteSetErasePlan(self.allocator, owned);
-        const plan = self.callableEmissionPlanPtr(id);
-        deinitCallableEmissionPlan(self.allocator, plan.*);
-        plan.* = .{ .erase_finite_set = owned };
     }
 
     fn cloneFiniteSetEraseEmissionPayload(
@@ -3063,18 +3036,14 @@ pub const RepresentationStore = struct {
     pub fn internCallableSetDescriptor(
         self: *RepresentationStore,
         members: []const CanonicalCallableSetMember,
-    ) std.mem.Allocator.Error!CallableSetDescriptorInternResult {
+    ) std.mem.Allocator.Error!CanonicalCallableSetKey {
         if (members.len == 0) representationInvariant("lambda-solved attempted to intern an empty callable-set descriptor");
         const key = callableSetKeyForMembers(members);
         if (self.callableSetDescriptorIndex(key)) |existing_index| {
             if (callableSetMembersEquivalent(self.callable_set_descriptors[existing_index].members, members)) {
-                return .{ .key = key, .replaced_existing = false };
+                return key;
             }
-
-            const owned_members = try self.cloneCallableSetMembers(members);
-            self.freeCallableSetMembers(self.callable_set_descriptors[existing_index].members);
-            self.callable_set_descriptors[existing_index].members = owned_members;
-            return .{ .key = key, .replaced_existing = true };
+            representationInvariant("lambda-solved attempted to republish callable-set descriptor key with different member payloads");
         }
 
         const owned_members = try self.cloneCallableSetMembers(members);
@@ -3084,7 +3053,7 @@ pub const RepresentationStore = struct {
             .key = key,
             .members = owned_members,
         });
-        return .{ .key = key, .replaced_existing = false };
+        return key;
     }
 
     fn callableSetDescriptorIndex(
@@ -5611,7 +5580,27 @@ const SessionExecutableTypePayloadBuilder = struct {
         key: CanonicalCallableSetKey,
         expected_key: CanonicalExecValueTypeKey,
     ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
-        const id = try self.payload_store.replaceDerived(self.allocator, expected_key, .{
+        if (self.payload_store.refForKey(expected_key)) |existing| {
+            const payload = self.payload_store.get(existing.payload);
+            switch (payload) {
+                .pending => {
+                    self.payload_store.fill(self.allocator, existing.payload, .{
+                        .callable_set = try self.callableSetPayload(key),
+                    });
+                },
+                .callable_set => |callable_set| {
+                    if (!callableSetKeyEql(callable_set.key, key)) {
+                        representationInvariant("session callable-set payload key already belongs to a different callable set");
+                    }
+                },
+                else => representationInvariant("session callable-set payload key was already published as a different payload"),
+            }
+            return .{
+                .ty = existing,
+                .key = expected_key,
+            };
+        }
+        const id = try self.payload_store.append(self.allocator, expected_key, .{
             .callable_set = try self.callableSetPayload(key),
         });
         return .{

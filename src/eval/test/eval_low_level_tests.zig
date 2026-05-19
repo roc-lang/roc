@@ -3745,6 +3745,22 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "9" },
     },
     .{
+        .name = "boxed lambda round trip: boxed callable captures boxed callable",
+        .source_kind = .module,
+        .source =
+        \\make_outer : {} -> Box((I64 -> I64))
+        \\make_outer = |_| {
+        \\    inner = Box.box(|x| x + 1)
+        \\
+        \\    Box.box(|x| Box.unbox(inner)(x) + 1)
+        \\}
+        \\
+        \\main : I64
+        \\main = Box.unbox(make_outer({}))(40)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
         .name = "boxed lambda round trip: nested box does not authorize unrelated erasure",
         .source_kind = .module,
         .source =
