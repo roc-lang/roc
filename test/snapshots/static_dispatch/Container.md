@@ -391,9 +391,9 @@ func = {
 							(e-num (value "100"))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dispatch-call (method "get_or") (constraint-fn-var 268)
+				(e-dispatch-call (method "get_or") (constraint-fn-var 264)
 					(receiver
-						(e-dispatch-call (method "flat_map") (constraint-fn-var 246)
+						(e-dispatch-call (method "flat_map") (constraint-fn-var 244)
 							(receiver
 								(e-dispatch-call (method "map") (constraint-fn-var 216)
 									(receiver

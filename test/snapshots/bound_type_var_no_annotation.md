@@ -221,20 +221,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call (constraint-fn-var 196)
+					(e-call (constraint-fn-var 150)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "text"))
-					(e-call (constraint-fn-var 205)
+					(e-call (constraint-fn-var 159)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "pair"))
-					(e-call (constraint-fn-var 210)
+					(e-call (constraint-fn-var 164)
 						(e-lookup-local
 							(p-assign (ident "combine")))
 						(e-lookup-local
@@ -243,7 +243,7 @@ main! = |_| {
 							(p-assign (ident "text")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 221)
+					(e-call (constraint-fn-var 175)
 						(e-lookup-local
 							(p-assign (ident "addOne")))
 						(e-num (value "5"))))

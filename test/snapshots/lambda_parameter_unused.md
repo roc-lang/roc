@@ -258,25 +258,25 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 489)
+					(e-call (constraint-fn-var 353)
 						(e-lookup-local
 							(p-assign (ident "add")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 564)
+					(e-call (constraint-fn-var 394)
 						(e-lookup-local
 							(p-assign (ident "multiply")))
 						(e-num (value "3"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 639)
+					(e-call (constraint-fn-var 435)
 						(e-lookup-local
 							(p-assign (ident "process")))
 						(e-num (value "7"))))
 				(s-let
 					(p-assign (ident "result4"))
-					(e-call (constraint-fn-var 714)
+					(e-call (constraint-fn-var 476)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "4"))))

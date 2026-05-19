@@ -6232,7 +6232,7 @@ const ConstGraphPlanBuilder = struct {
                 .list => .{ .list = .{ .elem = try self.planForExpected(
                     nominalArg(nominal, 0),
                     value_context,
-                    try self.listElemValue(value_context, value_info),
+                    self.listRepresentativeValue(value_context, value_info),
                     self.listElemExecutableKey(value_context, value_info, expected_exec_key),
                 ) } },
                 .box => .{ .box = .{ .payload = try self.boxPayloadPlan(
@@ -6988,12 +6988,11 @@ const ConstGraphPlanBuilder = struct {
         checkedPipelineInvariant("tag-union constant aggregate metadata omitted a finalized payload");
     }
 
-    fn listElemValue(
+    fn listRepresentativeValue(
         self: *const ConstGraphPlanBuilder,
         value_context: ?ConstValueContext,
         value_info: ?repr.ValueInfoId,
-    ) Allocator.Error!?repr.ValueInfoId {
-        const context = value_context orelse return null;
+    ) ?repr.ValueInfoId {
         const info = self.valueInfo(value_context, value_info) orelse return null;
         const aggregate = info.aggregate orelse return null;
         const list = switch (aggregate) {
@@ -7001,19 +7000,6 @@ const ConstGraphPlanBuilder = struct {
             else => checkedPipelineInvariant("List(T) constant value had non-list aggregate metadata"),
         };
         if (list.elems.len == 0) return null;
-        const first_info = context.value_store.values.items[@intFromEnum(list.elems[0].value)];
-        const first_endpoint = first_info.exec_ty orelse {
-            checkedPipelineInvariant("List(T) constant element has no published executable endpoint");
-        };
-        for (list.elems[1..]) |elem| {
-            const elem_info = context.value_store.values.items[@intFromEnum(elem.value)];
-            const elem_endpoint = elem_info.exec_ty orelse {
-                checkedPipelineInvariant("List(T) constant element has no published executable endpoint");
-            };
-            if (!repr.canonicalExecValueTypeKeyEql(first_endpoint.key, elem_endpoint.key)) {
-                checkedPipelineInvariant("List(T) constant elements have different executable representations");
-            }
-        }
         return list.elems[0].value;
     }
 

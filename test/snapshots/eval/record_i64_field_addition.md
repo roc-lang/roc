@@ -120,7 +120,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 217)
+				(e-call (constraint-fn-var 171)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields

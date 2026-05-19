@@ -713,26 +713,6 @@ fn instantiateVar(
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
-fn instantiateUseSiteVar(
-    self: *Self,
-    var_to_instantiate: Var,
-    env: *Env,
-    region_behavior: InstantiateRegionBehavior,
-) std.mem.Allocator.Error!Var {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    var instantiate_ctx = Instantiator{
-        .store = self.types,
-        .idents = self.cir.getIdentStoreConst(),
-        .var_map = &self.var_map,
-        .current_rank = env.rank(),
-        .rigid_behavior = .fresh_flex,
-        .rank_behavior = .ignore_rank,
-    };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
-}
-
 /// You probably are looking for `instantiateVar`.
 ///
 /// Copy/paste a variable. This does NOT respect rank or normal instantiation rules.
@@ -973,30 +953,48 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
     );
 }
 
-/// Create a nominal Iter type with the given item type
-fn mkIterContent(self: *Self, item_var: Var, env: *Env) Allocator.Error!Content {
+/// Instantiate the builtin Iter type declaration and bind its item parameter.
+fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name;
-
-    const iter_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.idents.builtin_iter,
+    const iter_decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
+        const indices = self.builtin_ctx.builtin_indices orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+            }
+            unreachable;
+        };
+        const copied_var = try self.copyVar(ModuleEnv.varFrom(indices.iter_type), builtin_env, region);
+        break :blk copied_var;
+    } else blk: {
+        const iter_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_iter) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: Builtin.Iter declaration not found while checking Builtin", .{});
+            }
+            unreachable;
+        };
+        break :blk ModuleEnv.varFrom(iter_stmt_idx);
     };
 
-    const backing_var = try self.freshFromContent(.{ .flex = Flex.init() }, env, Region.zero());
-    const type_args = [_]Var{item_var};
+    const iter_var = try self.instantiateVar(iter_decl_var, env, .{ .explicit = region });
+    const iter_content = self.types.resolveVar(iter_var).desc.content;
+    const nominal = iter_content.unwrapNominalType() orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.Iter declaration did not instantiate to a nominal type", .{});
+        }
+        unreachable;
+    };
+    const args = self.types.sliceNominalArgs(nominal);
+    if (args.len != 1) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.Iter expected one type argument, found {d}", .{args.len});
+        }
+        unreachable;
+    }
 
-    return try self.types.mkNominal(
-        iter_ident,
-        backing_var,
-        &type_args,
-        origin_module_id,
-        true,
-    );
+    _ = try self.unify(args[0], item_var, env);
+    return iter_var;
 }
 
 fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) Allocator.Error!Content {
@@ -1152,6 +1150,24 @@ fn findLocalTypedLiteralTypeDecl(
     }
 
     return best_stmt;
+}
+
+fn findLocalTypeDeclByName(self: *const Self, type_name: Ident.Idx) ?CIR.Statement.Idx {
+    const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
+
+    for (all_stmts) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const header_idx = switch (stmt) {
+            .s_alias_decl => |alias| alias.header,
+            .s_nominal_decl => |nominal| nominal.header,
+            else => continue,
+        };
+
+        const header = self.cir.store.getTypeHeader(header_idx);
+        if (header.name.eql(type_name)) return stmt_idx;
+    }
+
+    return null;
 }
 
 fn unifyTypedLiteralWithExplicitType(
@@ -6370,7 +6386,7 @@ fn checkIteratorForLoop(
     const iterable_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(iterable));
     const iterable_var: Var = ModuleEnv.varFrom(iterable);
 
-    const iterator_var = try self.freshFromContent(try self.mkIterContent(item_var, env), env, iterable_region);
+    const iterator_var = try self.mkIterVar(item_var, env, iterable_region);
     const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("iter"));
     const iter_fn_var = try self.mkSyntheticReceiverDispatchConstraint(
         iterable_var,
@@ -6995,11 +7011,12 @@ fn staticDispatchConstraintAcceptsCandidate(
     const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse return false;
     const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
     const def_var: Var = ModuleEnv.varFrom(def_idx);
-    const def = original_env.store.getDef(def_idx);
-    const def_pattern_var: Var = ModuleEnv.varFrom(def.pattern);
 
     const method_var = if (nominal_type.origin_module.eql(self.builtin_ctx.module_name)) blk: {
-        break :blk try self.instantiateUseSiteVar(def_pattern_var, env, .use_last_var);
+        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+        }
+        break :blk def_var;
     } else blk: {
         const copied_var = try self.copyVar(def_var, original_env, self.getRegionAt(candidate_var));
         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = self.getRegionAt(candidate_var) });
@@ -7306,7 +7323,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                     const def_var: Var = ModuleEnv.varFrom(def_idx);
                     const def = original_env.store.getDef(def_idx);
-                    const def_pattern_var: Var = ModuleEnv.varFrom(def.pattern);
                     // Track whether we just processed a cycle participant
                     var cycle_method_expr_var: ?Var = null;
 
@@ -7382,7 +7398,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // fresh flex var instead of def_var to avoid rank lowering.
                         break :blk expr_var_for_method;
                     } else if (is_this_module) blk: {
-                        break :blk try self.instantiateUseSiteVar(def_pattern_var, env, .use_last_var);
+                        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
+                            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+                        }
+                        break :blk def_var;
                     } else blk: {
                         // Copy the method from the other module's type store
                         const copied_var = try self.copyVar(def_var, original_env, region);
@@ -7503,7 +7522,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                     const def_var: Var = ModuleEnv.varFrom(def_idx);
                     const def = original_env.store.getDef(def_idx);
-                    const def_pattern_var: Var = ModuleEnv.varFrom(def.pattern);
                     var cycle_method_expr_var: ?Var = null;
                     if (is_this_module) {
                         const mb_processing_def = self.top_level_ptrns.get(def.pattern);
@@ -7562,7 +7580,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
                         break :blk expr_var_for_method;
                     } else if (is_this_module) blk: {
-                        break :blk try self.instantiateUseSiteVar(def_pattern_var, env, .use_last_var);
+                        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
+                            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+                        }
+                        break :blk def_var;
                     } else blk: {
                         const copied_var = try self.copyVar(def_var, original_env, region);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });

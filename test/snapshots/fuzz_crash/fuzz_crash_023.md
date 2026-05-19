@@ -2437,7 +2437,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1383)
+					(e-call (constraint-fn-var 1315)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2609,12 +2609,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1893)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1859)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1860)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1826)
 																			(receiver
 																				(e-match
 																					(match
