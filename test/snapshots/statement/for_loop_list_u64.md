@@ -80,23 +80,68 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "total_"))
 				(e-num (value "0")))
-			(s-for
-				(p-assign (ident "n"))
-				(e-list
-					(elems
-						(e-num (value "1"))
-						(e-num (value "2"))
-						(e-num (value "3"))
-						(e-num (value "4"))
-						(e-num (value "5"))))
+			(s-expr
 				(e-block
-					(s-reassign
-						(p-assign (ident "total_"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "total_")))
-							(e-lookup-local
-								(p-assign (ident "n")))))
+					(s-var
+						(p-assign (ident "#for_iter_1"))
+						(e-dispatch-call (method "iter") (constraint-fn-var 140)
+							(receiver
+								(e-list
+									(elems
+										(e-num (value "1"))
+										(e-num (value "2"))
+										(e-num (value "3"))
+										(e-num (value "4"))
+										(e-num (value "5")))))
+							(args)))
+					(s-while
+						(e-tag (name "True"))
+						(e-match
+							(match
+								(cond
+									(e-dispatch-call (method "next") (constraint-fn-var 195)
+										(receiver
+											(e-lookup-local
+												(p-assign (ident "#for_iter_1"))))
+										(args)))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-block
+												(s-reassign
+													(p-assign (ident "#for_iter_1"))
+													(e-lookup-local
+														(p-assign (ident "#for_rest_2"))))
+												(s-expr
+													(e-block
+														(s-reassign
+															(p-assign (ident "total_"))
+															(e-binop (op "add")
+																(e-lookup-local
+																	(p-assign (ident "total_")))
+																(e-lookup-local
+																	(p-assign (ident "n")))))
+														(e-empty_record)))
+												(e-empty_record))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-block
+												(s-break)
+												(e-empty_record))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-block
+												(s-break)
+												(e-empty_record))))))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "total_"))))

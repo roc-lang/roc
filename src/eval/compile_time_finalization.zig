@@ -1612,7 +1612,7 @@ fn appendDirectCallableBindingDependencySummary(
     proc_value: canonical.ProcedureCallableRef,
 ) Allocator.Error!checked_artifact.ComptimeDependencySummaryId {
     const availability = [_]checked_artifact.ComptimeAvailabilityUse{.{ .procedure_binding = binding }};
-    const concrete = [_]checked_artifact.ComptimeConcreteValueUse{.{ .procedure_callable = proc_value }};
+    const concrete = [_]checked_artifact.ComptimeConcreteValueUse{.{ .procedure_callable = .{ .proc_value = proc_value } }};
     return try artifact.comptime_dependencies.appendSummary(allocator, .{
         .availability_values = availability[0..],
         .concrete_values = concrete[0..],
@@ -1875,6 +1875,7 @@ const ConcreteDependencyCollector = struct {
         self.active_erased_nodes.deinit();
         self.active_capture_slots.deinit();
         self.active_const_graphs.deinit();
+        checked_artifact.deinitComptimeConcreteValueUseElements(self.allocator, self.concrete.items);
         self.concrete.deinit(self.allocator);
     }
 
@@ -1882,7 +1883,16 @@ const ConcreteDependencyCollector = struct {
         self: *ConcreteDependencyCollector,
         proc_value: canonical.ProcedureCallableRef,
     ) Allocator.Error!void {
-        try self.concrete.append(self.allocator, .{ .procedure_callable = proc_value });
+        try self.concrete.append(self.allocator, .{ .procedure_callable = .{ .proc_value = proc_value } });
+    }
+
+    fn appendConcreteValue(
+        self: *ConcreteDependencyCollector,
+        value: checked_artifact.ComptimeConcreteValueUse,
+    ) Allocator.Error!void {
+        const cloned = try checked_artifact.cloneComptimeConcreteValueUse(self.allocator, value);
+        errdefer checked_artifact.deinitComptimeConcreteValueUse(self.allocator, cloned);
+        try self.concrete.append(self.allocator, cloned);
     }
 
     fn appendConstInstance(
@@ -1967,10 +1977,12 @@ const ConcreteDependencyCollector = struct {
                     if (!canonical.procedureCallableRefEql(member.proc_value, member_plan.member_proc)) {
                         compileTimeFinalizationInvariant("concrete dependency collection finite member plan disagreed with descriptor member");
                     }
-                    try self.concrete.append(self.allocator, .{ .procedure_callable_with_payloads = .{
+                    try self.appendConcreteValue(.{ .procedure_callable_with_payloads = .{
                         .proc_value = member_plan.member_proc,
                         .source_fn_ty_payload = member_plan.member_proc_source_fn_ty_payload,
                         .lifted_owner_source_fn_ty_payload = member_plan.member_lifted_owner_source_fn_ty_payload,
+                        .proc_template_closure = member_plan.member_proc_template_closure,
+                        .lifted_owner_template_closure = member_plan.member_lifted_owner_template_closure,
                     } });
                     for (member_plan.capture_slots) |capture| try self.collectCaptureSlot(capture);
                 }
@@ -2675,6 +2687,28 @@ fn promoteFiniteCallableResult(
         try allocator.dupe(canonical.CallableSetCaptureSlot, selected.descriptor_member.capture_slots);
     var member_capture_slots_owned = true;
     errdefer if (member_capture_slots_owned and member_capture_slots.len != 0) allocator.free(member_capture_slots);
+    const member_proc_template_closure = if (selected.planned_member.member_proc_template_closure) |closure|
+        try checked_artifact.cloneImportedTemplateClosure(allocator, closure)
+    else
+        null;
+    var member_proc_template_closure_owned = true;
+    errdefer if (member_proc_template_closure_owned) {
+        if (member_proc_template_closure) |closure| {
+            var owned = closure;
+            checked_artifact.deinitImportedTemplateClosure(allocator, &owned);
+        }
+    };
+    const member_lifted_owner_template_closure = if (selected.planned_member.member_lifted_owner_template_closure) |closure|
+        try checked_artifact.cloneImportedTemplateClosure(allocator, closure)
+    else
+        null;
+    var member_lifted_owner_template_closure_owned = true;
+    errdefer if (member_lifted_owner_template_closure_owned) {
+        if (member_lifted_owner_template_closure) |closure| {
+            var owned = closure;
+            checked_artifact.deinitImportedTemplateClosure(allocator, &owned);
+        }
+    };
     for (selected.planned_member.capture_slots, selected.descriptor_member.capture_slots, 0..) |slot_plan, slot, i| {
         if (slot.slot != @as(u32, @intCast(i))) {
             compileTimeFinalizationInvariant("promoted callable selected member capture slots are not canonical");
@@ -2694,6 +2728,8 @@ fn promoteFiniteCallableResult(
         .member_proc = member_proc,
         .member_proc_source_fn_ty_payload = checked_fn_root,
         .member_lifted_owner_source_fn_ty_payload = selected.planned_member.member_lifted_owner_source_fn_ty_payload,
+        .member_proc_template_closure = member_proc_template_closure,
+        .member_lifted_owner_template_closure = member_lifted_owner_template_closure,
         .member_target = member_target,
         .member_target_promoted_wrapper = finitePromotedWrapperMemberTargetProvenance(context),
         .member_capture_shape = selected.descriptor_member.capture_shape_key,
@@ -2704,6 +2740,8 @@ fn promoteFiniteCallableResult(
     } });
     member_target_owned = false;
     member_capture_slots_owned = false;
+    member_proc_template_closure_owned = false;
+    member_lifted_owner_template_closure_owned = false;
     try artifact.publishPromotedCallableWrapper(allocator, reserved);
     const generated_procedure = try publishSemanticInstantiationProcedureForPromoted(
         allocator,

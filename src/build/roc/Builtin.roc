@@ -371,15 +371,15 @@ Builtin :: [].{
 	}
 
 	Iter(item) :: {
-		# The sequence being iterated, or e.g. a range, is captured in the next thunk.
+		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
 		len_if_known : [Known(U64), Unknown],
-		next : () -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done],
+		step : () -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done],
 	}.{
 		custom : source, [Known(U64), Unknown], (source -> Try((item, Iter(item)), [NoMore])) -> Iter(item)
-		custom = |source, len_if_known, next| {
+		custom = |source, len_if_known, advance| {
 			len_if_known,
-			next: ||
-				match next(source) {
+			step: ||
+				match advance(source) {
 					Ok((item, rest_iter)) => One({ item, rest: rest_iter })
 					Err(NoMore) => Done
 				},
@@ -388,13 +388,16 @@ Builtin :: [].{
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
+		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done]
+		next = |iterator| (iterator.step)()
+
 		map : Iter(a), (a -> b) -> Iter(b)
 		map = |iterator, transform|
 			match iterator {
-				{ len_if_known, next } => {
+				{ len_if_known, step } => {
 					len_if_known,
-					next: ||
-						match next() {
+					step: ||
+						match step() {
 							Done => Done
 							Skip(n) => Skip(n)
 							One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
@@ -405,10 +408,10 @@ Builtin :: [].{
 		keep_if : Iter(a), (a -> Bool) -> Iter(a)
 		keep_if = |iterator, predicate|
 			match iterator {
-				{ next, .. } => {
+				{ step, .. } => {
 					len_if_known: Unknown,
-					next: || {
-						match next() {
+					step: || {
+						match step() {
 							Done => Done
 							Skip(n) => Skip(n)
 							One({ item, rest }) =>
@@ -416,7 +419,7 @@ Builtin :: [].{
 									One({ item, rest: Iter.keep_if(rest, predicate) })
 								} else {
 									kept_rest = Iter.keep_if(rest, predicate)
-									(kept_rest.next)()
+									Iter.next(kept_rest)
 								}
 							}
 					},
@@ -426,16 +429,16 @@ Builtin :: [].{
 		drop_if : Iter(a), (a -> Bool) -> Iter(a)
 		drop_if = |iterator, predicate|
 			match iterator {
-				{ next, .. } => {
+				{ step, .. } => {
 					len_if_known: Unknown,
-					next: || {
-						match next() {
+					step: || {
+						match step() {
 							Done => Done
 							Skip(n) => Skip(n)
 							One({ item, rest }) =>
 								if predicate(item) {
 									dropped_rest = Iter.drop_if(rest, predicate)
-									(dropped_rest.next)()
+									Iter.next(dropped_rest)
 								} else {
 									One({ item, rest: Iter.drop_if(rest, predicate) })
 								}
@@ -446,7 +449,7 @@ Builtin :: [].{
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
 		fold = |iterator, acc, step|
-			match (iterator.next)() {
+			match Iter.next(iterator) {
 				Done => acc
 				Skip(_) => acc
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
@@ -478,7 +481,7 @@ Builtin :: [].{
 
 				{
 					len_if_known: Known(len - index),
-					next: ||
+					step: ||
 						if index == len {
 							Done
 						} else {
@@ -7446,7 +7449,7 @@ Builtin :: [].{
 range_to : item, item, (item, item -> Bool), (item -> item) -> Iter(item)
 range_to = |current, end, is_in_range, step| {
 	len_if_known: Unknown,
-	next: ||
+	step: ||
 		if is_in_range(current, end) {
 			One({ item: current, rest: range_to(step(current), end, is_in_range, step) })
 		} else {
@@ -7457,7 +7460,7 @@ range_to = |current, end, is_in_range, step| {
 range_until : item, item, (item, item -> Bool), (item -> item) -> Iter(item)
 range_until = |current, end, is_in_range, step| {
 	len_if_known: Unknown,
-	next: ||
+	step: ||
 		if is_in_range(current, end) {
 			One({ item: current, rest: range_until(step(current), end, is_in_range, step) })
 		} else {

@@ -176,10 +176,23 @@ fn methodOwnerForRegistryEntry(
     if (builtinOwnerForRegistryEntry(module, type_ident)) |owner| {
         return .{ .builtin = owner };
     }
+    const owner_type_ident = registryNominalOwnerIdent(module, type_ident);
     return .{ .nominal = .{
         .module_name = module_name,
-        .type_name = try names.internTypeIdent(module.identStoreConst(), type_ident),
+        .type_name = try names.internTypeIdent(module.identStoreConst(), owner_type_ident),
     } };
+}
+
+fn registryNominalOwnerIdent(module: TypedCIR.Module, type_ident: Ident.Idx) Ident.Idx {
+    const module_env = module.moduleEnvConst();
+    const node_idx = module_env.getExposedNodeIndexById(type_ident) orelse return type_ident;
+    const stmt_idx: CIR.Statement.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
+    const stmt = module_env.store.getStatement(stmt_idx);
+    return switch (stmt) {
+        .s_nominal_decl => |nominal| module_env.store.getTypeHeader(nominal.header).relative_name,
+        .s_alias_decl => |alias| module_env.store.getTypeHeader(alias.header).relative_name,
+        else => type_ident,
+    };
 }
 
 fn builtinOwnerForRegistryEntry(

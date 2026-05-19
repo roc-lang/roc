@@ -133,6 +133,7 @@ pub const Proc = struct {
     local_handle: MonoProcHandle,
     fn_ty: Type.TypeId,
     body: Ast.DefId,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 /// Public `Program` declaration.
@@ -209,6 +210,7 @@ pub const Program = struct {
             .local_handle = reserved.local_handle,
             .fn_ty = fn_ty,
             .body = body,
+            .imported_closure = reserved.imported_closure,
         });
     }
 
@@ -1416,6 +1418,22 @@ fn reserveCallableProcedureDependency(
     }
 }
 
+fn reserveConcreteProcedureCallableDependency(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    dependency: checked_artifact.ProcedureCallableRefDependency,
+    reason: MonoSpecializationReason,
+) Allocator.Error!void {
+    const lowering_callable = try remapDependencyCallable(input, program, dependency.proc_value);
+    switch (lowering_callable.template) {
+        .checked,
+        .synthetic,
+        => _ = try reserveLoweringProcedureCallableDependencyWithClosure(input, program, queue, lowering_callable, dependency.proc_template_closure, reason),
+        .lifted => |lifted| try reserveLiftedCallableOwnerDependencyWithClosure(input, program, queue, lifted, dependency.lifted_owner_template_closure, reason),
+    }
+}
+
 fn remapDependencyCallable(
     input: Input,
     program: *Program,
@@ -1465,6 +1483,17 @@ fn reserveLiftedCallableOwnerDependency(
     lifted: canonical.LiftedProcedureTemplateRef,
     reason: MonoSpecializationReason,
 ) Allocator.Error!void {
+    return reserveLiftedCallableOwnerDependencyWithClosure(input, program, queue, lifted, null, reason);
+}
+
+fn reserveLiftedCallableOwnerDependencyWithClosure(
+    input: Input,
+    program: *Program,
+    queue: *Queue,
+    lifted: canonical.LiftedProcedureTemplateRef,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView,
+    reason: MonoSpecializationReason,
+) Allocator.Error!void {
     const owner_key = lifted.owner_mono_specialization;
     const owner_artifact = artifactKeyForRef(input, owner_key.template.artifact) orelse {
         debug.invariant(false, "mono dependency reservation invariant violated: lifted callable owner artifact was not available");
@@ -1489,6 +1518,7 @@ fn reserveLiftedCallableOwnerDependency(
         .template = owner_key.template,
         .requested_fn_ty = owner_requested_fn_ty,
         .reason = reason,
+        .imported_closure = imported_closure,
     });
 }
 
@@ -1803,8 +1833,8 @@ fn reserveComptimeDependencySummaryDependencies(
                 };
                 try reserveCallableBindingInstanceRefDependencies(input, program, queue, state, ref);
             },
-            .procedure_callable => |callable| {
-                try reserveCallableProcedureDependency(input, program, queue, callable, reason);
+            .procedure_callable => |dependency| {
+                try reserveConcreteProcedureCallableDependency(input, program, queue, dependency, reason);
             },
             .procedure_callable_with_payloads => |dependency| {
                 try reserveCallableProcedureDependencyWithPayloads(input, program, queue, owner, dependency, reason);
@@ -1835,7 +1865,7 @@ fn reserveCallableProcedureDependencyWithPayloads(
     switch (concrete_callable.template) {
         .checked,
         .synthetic,
-        => _ = try reserveLoweringProcedureCallableDependencyWithConcreteRef(input, program, queue, concrete_callable, source_ref, reason),
+        => _ = try reserveLoweringProcedureCallableDependencyWithConcreteRef(input, program, queue, concrete_callable, source_ref, dependency.proc_template_closure, reason),
         .lifted => |lifted| {
             const owner_payload = dependency.lifted_owner_source_fn_ty_payload orelse {
                 debug.invariant(false, "mono dependency reservation lifted callable dependency had no owner source type payload");
@@ -1853,6 +1883,7 @@ fn reserveCallableProcedureDependencyWithPayloads(
                 .template = lifted.owner_mono_specialization.template,
                 .requested_fn_ty = owner_ref,
                 .reason = reason,
+                .imported_closure = dependency.lifted_owner_template_closure,
             });
         },
     }
@@ -1953,6 +1984,7 @@ fn reserveLoweringProcedureCallableDependencyWithConcreteRef(
     queue: *Queue,
     callable: canonical.ProcedureCallableRef,
     requested_fn_ty: ConcreteSourceType.ConcreteSourceTypeRef,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView,
     reason: MonoSpecializationReason,
 ) Allocator.Error!canonical.MirProcedureRef {
     const requested_key = program.concrete_source_types.key(requested_fn_ty);
@@ -1967,6 +1999,7 @@ fn reserveLoweringProcedureCallableDependencyWithConcreteRef(
         .callable_template = concrete_callable.template,
         .requested_fn_ty = requested_fn_ty,
         .reason = reason,
+        .imported_closure = imported_closure,
     });
     return .{
         .proc = reserved.proc.proc,
@@ -6382,7 +6415,7 @@ const BodyLowerer = struct {
                     .callable_template = concrete_callable.template,
                     .requested_fn_ty = requested_fn_ty,
                     .reason = reason,
-                    .imported_closure = self.importedClosureForTemplate(template),
+                    .imported_closure = finite.member_proc_template_closure,
                 });
                 break :blk .{
                     .proc = reserved.proc.proc,
@@ -6395,6 +6428,7 @@ const BodyLowerer = struct {
                 finite.member_lifted_owner_source_fn_ty_payload orelse {
                     invariantViolation("promoted callable wrapper lifted member has no owner source type payload");
                 },
+                finite.member_lifted_owner_template_closure,
                 reason,
             ),
         };
@@ -6405,6 +6439,7 @@ const BodyLowerer = struct {
         callable: canonical.ProcedureCallableRef,
         lifted: canonical.LiftedProcedureTemplateRef,
         owner_source_fn_ty_payload: checked_artifact.CheckedTypeId,
+        imported_closure: ?checked_artifact.ImportedTemplateClosureView,
         reason: MonoSpecializationReason,
     ) Allocator.Error!canonical.MirProcedureRef {
         const owner_key = lifted.owner_mono_specialization;
@@ -6426,7 +6461,7 @@ const BodyLowerer = struct {
             .template = owner_key.template,
             .requested_fn_ty = owner_requested_fn_ty,
             .reason = reason,
-            .imported_closure = self.importedClosureForTemplate(owner_key.template),
+            .imported_closure = imported_closure,
         });
 
         const owner_base = self.program.canonical_names.procBase(owner_key.template.proc_base);
@@ -9995,7 +10030,7 @@ const BodyLowerer = struct {
         body: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
         const iterable_info = try self.concreteResultTypeForExpr(iterable, self.checkedExpr(iterable).ty);
-        const pattern_ty = try self.listElementTypeFromConcrete(iterable_info.source_ref);
+        const pattern_ty = try self.concreteTypeInfoForChecked(self.checkedPattern(pattern).ty);
         return try self.program.ast.addExpr(ty, .{ .for_ = .{
             .patt = try self.lowerPattern(pattern_ty, pattern),
             .iterable = try self.lowerExprConcreteExpected(iterable, iterable_info),
@@ -10576,7 +10611,7 @@ const BodyLowerer = struct {
         body: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.StmtId {
         const iterable_info = try self.concreteResultTypeForExpr(iterable, self.checkedExpr(iterable).ty);
-        const pattern_ty = try self.listElementTypeFromConcrete(iterable_info.source_ref);
+        const pattern_ty = try self.concreteTypeInfoForChecked(self.checkedPattern(pattern).ty);
         return try self.program.ast.addStmt(.{ .for_ = .{
             .patt = try self.lowerPattern(pattern_ty, pattern),
             .iterable = try self.lowerExprConcreteExpected(iterable, iterable_info),

@@ -15,6 +15,7 @@ const verify = @import("../debug_verify.zig");
 
 const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 const MonoType = Mono.Type;
 const TypeId = MonoType.TypeId;
 
@@ -327,6 +328,7 @@ pub const Proc = struct {
     local_handle: Mono.Specialize.MonoProcHandle,
     fn_ty: TypeId,
     body: Ast.DefId,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 /// Public `Program` declaration.
@@ -430,6 +432,7 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
             .local_handle = proc.local_handle,
             .fn_ty = proc.fn_ty,
             .body = try finalizer.lowerDef(proc.body),
+            .imported_closure = proc.imported_closure,
         });
     }
     try program.executable_synthetic_procs.appendSlice(allocator, owned_mono.executable_synthetic_procs.items);

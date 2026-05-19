@@ -99,35 +99,80 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "$allTrue"))
 				(e-tag (name "True")))
-			(s-for
-				(p-assign (ident "b"))
-				(e-list
-					(elems
-						(e-tag (name "True"))
-						(e-tag (name "True"))
-						(e-tag (name "False"))
-						(e-tag (name "True"))
-						(e-tag (name "True"))
-						(e-tag (name "True"))))
+			(s-expr
 				(e-block
-					(e-if
-						(if-branches
-							(if-branch
-								(e-structural-eq (negated "false")
-									(lhs
-										(e-lookup-local
-											(p-assign (ident "b"))))
-									(rhs
-										(e-tag (name "False"))))
-								(e-block
-									(s-reassign
-										(p-assign (ident "$allTrue"))
-										(e-tag (name "False")))
-									(s-break)
-									(e-empty_record))))
-						(if-else
-							(e-block
-								(e-empty_record))))))
+					(s-var
+						(p-assign (ident "#for_iter_1"))
+						(e-dispatch-call (method "iter") (constraint-fn-var 101)
+							(receiver
+								(e-list
+									(elems
+										(e-tag (name "True"))
+										(e-tag (name "True"))
+										(e-tag (name "False"))
+										(e-tag (name "True"))
+										(e-tag (name "True"))
+										(e-tag (name "True")))))
+							(args)))
+					(s-while
+						(e-tag (name "True"))
+						(e-match
+							(match
+								(cond
+									(e-dispatch-call (method "next") (constraint-fn-var 156)
+										(receiver
+											(e-lookup-local
+												(p-assign (ident "#for_iter_1"))))
+										(args)))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-block
+												(s-reassign
+													(p-assign (ident "#for_iter_1"))
+													(e-lookup-local
+														(p-assign (ident "#for_rest_2"))))
+												(s-expr
+													(e-block
+														(e-if
+															(if-branches
+																(if-branch
+																	(e-structural-eq (negated "false")
+																		(lhs
+																			(e-lookup-local
+																				(p-assign (ident "b"))))
+																		(rhs
+																			(e-tag (name "False"))))
+																	(e-block
+																		(s-reassign
+																			(p-assign (ident "$allTrue"))
+																			(e-tag (name "False")))
+																		(s-break)
+																		(e-empty_record))))
+															(if-else
+																(e-block
+																	(e-empty_record))))))
+												(e-empty_record))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-block
+												(s-break)
+												(e-empty_record))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-block
+												(s-break)
+												(e-empty_record))))))))
+					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "$allTrue"))))
 		(annotation

@@ -953,6 +953,32 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
     );
 }
 
+/// Create a nominal Iter type with the given item type
+fn mkIterContent(self: *Self, item_var: Var, env: *Env) Allocator.Error!Content {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
+        self.cir.idents.builtin_module
+    else
+        self.builtin_ctx.module_name;
+
+    const iter_ident = types_mod.TypeIdent{
+        .ident_idx = self.cir.idents.iter,
+    };
+
+    const backing_var = try self.freshFromContent(.{ .flex = Flex.init() }, env, Region.zero());
+    const type_args = [_]Var{item_var};
+
+    return try self.types.mkNominal(
+        iter_ident,
+        backing_var,
+        &type_args,
+        origin_module_id,
+        true,
+    );
+}
+
 /// Create a nominal number type content (e.g., U8, I32, Dec)
 /// Number types are defined in Builtin.roc nested inside Num module: Num.U8 :: [].{...}
 /// They have no type parameters and their backing is the empty tag union []
@@ -1967,6 +1993,7 @@ fn generateAliasDecl(
         .name = header.relative_name,
         .type_ = .alias,
         .backing_var = backing_var,
+        .is_opaque = false,
         .num_args = @intCast(header_args.len),
     } });
 
@@ -2025,6 +2052,7 @@ fn generateNominalDecl(
         .name = header.relative_name,
         .type_ = .nominal,
         .backing_var = backing_var,
+        .is_opaque = nominal.is_opaque,
         .num_args = @intCast(header_args.len),
     } });
 
@@ -2132,6 +2160,7 @@ const GenTypeAnnoCtx = union(enum) {
         name: Ident.Idx,
         type_: enum { nominal, alias },
         backing_var: Var,
+        is_opaque: bool,
         num_args: u32,
     },
 };
@@ -2333,7 +2362,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                             this_decl.backing_var,
                                             &.{},
                                             self.builtin_ctx.module_name,
-                                            false, // Default to non-opaque for error case
+                                            this_decl.is_opaque,
                                         ), env);
                                     },
                                 }
@@ -2433,7 +2462,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                             this_decl.backing_var,
                                             anno_arg_vars,
                                             self.builtin_ctx.module_name,
-                                            false, // Default to non-opaque for error case
+                                            this_decl.is_opaque,
                                         ), env);
                                     },
                                 }
@@ -4716,15 +4745,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.checkPattern(for_expr.patt, .for_, env);
             const for_ptrn_var: Var = ModuleEnv.varFrom(for_expr.patt);
 
-            // Check the list expression
+            // Check the iterable expression, already canonicalized as `.iter()`
             does_fx = try self.checkExpr(for_expr.expr, env, Expected.none()) or does_fx;
             const for_expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(for_expr.expr));
             const for_expr_var: Var = ModuleEnv.varFrom(for_expr.expr);
 
-            // Check that the expr is list of the ptrn
-            const list_content = try self.mkListContent(for_ptrn_var, env);
-            const list_var = try self.freshFromContent(list_content, env, for_expr_region);
-            _ = try self.unify(list_var, for_expr_var, env);
+            // Check that the expr is Iter of the pattern item
+            const iter_content = try self.mkIterContent(for_ptrn_var, env);
+            const iter_var = try self.freshFromContent(iter_content, env, for_expr_region);
+            _ = try self.unify(iter_var, for_expr_var, env);
 
             // Check the body
             does_fx = try self.checkExpr(for_expr.body, env, Expected.none()) or does_fx;
@@ -5249,17 +5278,17 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 try self.checkPattern(for_stmt.patt, .for_, env);
                 const for_ptrn_var: Var = ModuleEnv.varFrom(for_stmt.patt);
 
-                // Check the expr
+                // Check the iterable expression, already canonicalized as `.iter()`
                 // for item in [1,2,3] {
                 //             ^^^^^^^
                 does_fx = try self.checkExpr(for_stmt.expr, env, Expected.none()) or does_fx;
                 const for_expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(for_stmt.expr));
                 const for_expr_var: Var = ModuleEnv.varFrom(for_stmt.expr);
 
-                // Check that the expr is list of the ptrn
-                const list_content = try self.mkListContent(for_ptrn_var, env);
-                const list_var = try self.freshFromContent(list_content, env, for_expr_region);
-                _ = try self.unify(list_var, for_expr_var, env);
+                // Check that the expr is Iter of the pattern item
+                const iter_content = try self.mkIterContent(for_ptrn_var, env);
+                const iter_var = try self.freshFromContent(iter_content, env, for_expr_region);
+                _ = try self.unify(iter_var, for_expr_var, env);
 
                 // Check the body
                 // for item in [1,2,3] {

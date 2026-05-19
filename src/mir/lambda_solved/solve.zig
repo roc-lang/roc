@@ -31,6 +31,7 @@ pub const Proc = struct {
     proc: canonical.MirProcedureRef,
     body: Ast.DefId,
     representation_instance: repr.ProcRepresentationInstanceId,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 const ProcBuildRecord = struct {
@@ -46,6 +47,7 @@ const ProcBuildRecord = struct {
     has_public_roots: bool = false,
     materialized: bool = true,
     built: bool = false,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 const ProcBuildRecordKind = union(enum) {
@@ -676,6 +678,14 @@ const ProcedureInstanceRegistry = struct {
             .normal => if (self.procIsRecursive(proc)) instance else null,
             .executable_synthetic => null,
         };
+        const imported_closure = switch (kind) {
+            .normal => self.input.procs.items[
+                self.proc_indices.get(proc) orelse {
+                    lambdaInvariant("lambda-solved procedure instance registry could not find normal procedure input index");
+                }
+            ].imported_closure,
+            .executable_synthetic => null,
+        };
         try self.records.append(self.allocator, .{
             .proc = proc,
             .kind = kind,
@@ -685,6 +695,7 @@ const ProcedureInstanceRegistry = struct {
             .value_store = value_store_id,
             .owner = owner,
             .materialized = materialized,
+            .imported_closure = imported_closure,
         });
         try self.reservations.append(self.allocator, .{
             .proc = proc,
@@ -1932,6 +1943,22 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
             if (!value_store.callSiteSourceMatchBranchReachable(call_site)) continue;
             if (call_site.dispatch == null) {
                 lambdaInvariant("lambda-solved sealed program contains an unresolved call-site dispatch");
+            }
+        }
+    }
+    for (program.proc_instances.items) |instance| {
+        const value_store = &program.value_stores.items[@intFromEnum(instance.value_store)];
+        const representation_store = &program.solve_sessions.items[@intFromEnum(instance.solve_session)].representation_store;
+        for (value_store.values.items) |value| {
+            const use_id = value.contextual_consumer_use orelse continue;
+            const use_index = @intFromEnum(use_id);
+            if (use_index >= representation_store.consumer_use_plans.items.len) {
+                lambdaInvariant("lambda-solved value contextual consumer-use metadata points outside the consumer-use store");
+            }
+            const plan = representation_store.consumer_use_plans.items[use_index];
+            switch (plan.owner) {
+                .return_value => {},
+                else => lambdaInvariant("lambda-solved contextual consumer-use metadata referenced a non-return consumer"),
             }
         }
     }
@@ -3741,6 +3768,7 @@ fn sealProcRepresentationInstances(
             .boundary_payloads = boundary_payloads,
             .boundary_provenance = boundary_provenance,
             .materialized = record.materialized,
+            .imported_closure = record.imported_closure,
         });
         boundary_provenance = &.{};
         switch (record.kind) {
@@ -3748,6 +3776,7 @@ fn sealProcRepresentationInstances(
                 .proc = record.proc,
                 .body = record.body,
                 .representation_instance = record.representation_instance,
+                .imported_closure = record.imported_closure,
             }),
             .executable_synthetic => |synthetic_index| try program.executable_synthetic_proc_instances.append(program.allocator, .{
                 .source_proc = record.proc,
@@ -6059,7 +6088,7 @@ const CallableEmissionAssigner = struct {
     fn assignValueEmissionPlans(self: *CallableEmissionAssigner) Allocator.Error!void {
         for (self.session.members) |instance| {
             const record = self.recordForInstance(instance);
-            if (!record.materialized) continue;
+            if (!self.recordNeedsValueEmissionAssignment(record)) continue;
             const value_store = self.valueStoreFor(record);
             for (value_store.values.items, 0..) |*value_info, raw_value| {
                 if (!value_store.valueSourceMatchBranchReachable(value_info.*)) continue;
@@ -6237,6 +6266,21 @@ const CallableEmissionAssigner = struct {
                 value_info.callable = callable;
             }
         }
+    }
+
+    fn recordNeedsValueEmissionAssignment(
+        self: *CallableEmissionAssigner,
+        record: *const ProcBuildRecord,
+    ) bool {
+        if (record.materialized) return true;
+        for (self.representationStore().callable_set_descriptors) |descriptor| {
+            for (descriptor.members) |member| {
+                if (member.target_instance == record.representation_instance and member.capture_slots.len != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     fn procValueErasePlanForAlreadyErasedSource(
@@ -8383,7 +8427,7 @@ const ValueTransformFinalizer = struct {
             .tag_payload => |payload| try self.finalizeExprConstructionUsesAtEndpoint(payload.tag_union, null),
             .tuple_access => |access| try self.finalizeExprConstructionUsesAtEndpoint(access.tuple, null),
             .return_ => |ret| {
-                try self.finalizeReturnConsumerUse(ret.return_info, ret.expr);
+                try self.finalizeReturnConsumerUse(expr_id, ret.return_info, ret.expr);
             },
             .for_ => |for_| {
                 try self.finalizeExprConstructionUsesAtEndpoint(for_.iterable, null);
@@ -8589,7 +8633,7 @@ const ValueTransformFinalizer = struct {
             ),
             .expr, .debug, .expect => |expr| try self.finalizeExprConstructionUsesAtEndpoint(expr, null),
             .return_ => |ret| {
-                try self.finalizeReturnConsumerUse(ret.return_info, ret.expr);
+                try self.finalizeReturnConsumerUse(null, ret.return_info, ret.expr);
             },
             .for_ => |for_| {
                 try self.finalizeExprConstructionUsesAtEndpoint(for_.iterable, null);
@@ -8887,6 +8931,7 @@ const ValueTransformFinalizer = struct {
 
     fn finalizeReturnConsumerUse(
         self: *ValueTransformFinalizer,
+        return_expr_id: ?Ast.ExprId,
         return_info_id: repr.ReturnInfoId,
         expr_id: Ast.ExprId,
     ) Allocator.Error!void {
@@ -8896,12 +8941,16 @@ const ValueTransformFinalizer = struct {
         }
         const expr = self.program.ast.exprs.items[@intFromEnum(expr_id)];
         if (!self.valueStore().valueSourceMatchBranchReachable(self.valueStore().values.items[@intFromEnum(expr.value_info)])) return;
-        if (self.valueStore().returns.items[return_index].consumer_use != null) return;
+        if (self.valueStore().returns.items[return_index].consumer_use) |existing| {
+            try self.publishContextualReturnConsumerUse(return_expr_id, existing);
+            return;
+        }
 
         const expected_endpoint = try self.targetReturnEndpoint(self.instance_id, self.instance);
         const provenance = self.procedureBoundaryProvenance(self.instance);
         const use_id = try self.publishReturnConsumerUse(return_info_id, expr_id, expected_endpoint, provenance);
         self.valueStore().returns.items[return_index].consumer_use = use_id;
+        try self.publishContextualReturnConsumerUse(return_expr_id, use_id);
 
         const plan = self.representationStore().consumerUsePlan(use_id);
         switch (plan.lowering) {
@@ -8912,6 +8961,24 @@ const ValueTransformFinalizer = struct {
                 self.valueStore().returns.items[return_index].transform = boundary;
                 try self.finalizeExprConstructionUsesAtEndpoint(expr_id, null);
             },
+        }
+    }
+
+    fn publishContextualReturnConsumerUse(
+        self: *ValueTransformFinalizer,
+        return_expr_id: ?Ast.ExprId,
+        use_id: repr.ConsumerUsePlanId,
+    ) Allocator.Error!void {
+        const id = return_expr_id orelse return;
+        const return_expr = self.program.ast.exprs.items[@intFromEnum(id)];
+        if (return_expr.value_info != self.instance.public_roots.ret) return;
+        const ret_info = &self.valueStore().values.items[@intFromEnum(self.instance.public_roots.ret)];
+        if (ret_info.contextual_consumer_use) |existing| {
+            if (existing != use_id) {
+                lambdaInvariant("lambda-solved procedure return value already points at a different contextual consumer use");
+            }
+        } else {
+            ret_info.contextual_consumer_use = use_id;
         }
     }
 

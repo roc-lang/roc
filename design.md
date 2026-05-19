@@ -553,6 +553,48 @@ publication.
 
 No dispatch nodes survive mono MIR output.
 
+### Iterator For Loops
+
+Source `for` loops are iterator sugar. Canonicalization lowers them to ordinary
+checked dispatch calls and control flow before checked artifact publication:
+
+```roc
+for item in iterable {
+    body
+}
+```
+
+is represented as:
+
+```roc
+{
+    var #for_iter = iterable.iter()
+    while True {
+        match #for_iter.next() {
+            One({ item, rest }) => {
+                #for_iter = rest
+                body
+                {}
+            }
+            Skip(_) => break
+            Done => break
+        }
+    }
+}
+```
+
+The original iterable expression is evaluated once, by the generated `iter`
+dispatch call. `iter` is resolved by the same checked static-dispatch machinery
+as any other method call, with the callable type `iterable -> Iter(item)`.
+`next` is then resolved as an ordinary checked dispatch on `Iter(item)`.
+
+Later stages consume the resulting checked dispatch plans, `match`, and `while`
+nodes. They do not infer iteration from `List(item)`, source `for` syntax,
+backend list layout, or numeric range syntax. Lists participate only by
+publishing `List.iter : List(item) -> Iter(item)`, and numeric ranges
+participate only by returning `Iter(item)` from their checked `.to` and
+`.until` methods.
+
 ## MIR Stage Ownership
 
 Each MIR stage that accepts its input program by value owns that input
@@ -3067,10 +3109,25 @@ const CallableBindingInstantiationRecord = struct {
 Dependency summaries use the same request records, not only the stable key:
 
 ```zig
+const ProcedureCallableRefDependency = struct {
+    proc_value: ProcedureCallableRef,
+    proc_template_closure: ?ImportedTemplateClosureView,
+    lifted_owner_template_closure: ?ImportedTemplateClosureView,
+};
+
+const ProcedureCallableDependency = struct {
+    proc_value: ProcedureCallableRef,
+    source_fn_ty_payload: CheckedTypeId,
+    lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
+    proc_template_closure: ?ImportedTemplateClosureView,
+    lifted_owner_template_closure: ?ImportedTemplateClosureView,
+};
+
 const ComptimeConcreteValueUse = union(enum) {
-    procedure_callable: ProcedureCallableRef,
     const_instance: ConstInstantiationRequest,
     callable_binding_instance: CallableBindingInstantiationRequest,
+    procedure_callable: ProcedureCallableRefDependency,
+    procedure_callable_with_payloads: ProcedureCallableDependency,
 };
 ```
 
@@ -3079,6 +3136,16 @@ request payload supplied by the producer and verifies that the payload key agree
 with the request key. It does not call `rootForKey(requested_source_ty)` or
 `rootForKey(requested_source_fn_ty)` to rediscover a checked root in whichever
 artifact happens to be active.
+
+Procedure-callable concrete uses also publish their authorization closures. If
+the referenced procedure template is private to an imported artifact, the
+dependency record carries the imported-template closure that proved that private
+template is reachable from the exported value being lowered. If the callable is
+a lifted local procedure, the dependency also carries the lifted owner's
+authorization closure. Mono reservation consumes these closures directly and
+rejects an imported private template that has no explicit closure. It does not
+search the importing module's current template, scan dependency artifacts, or
+infer availability from the callable's source function type.
 
 Capture-slot reification plans are payload-bearing graph nodes. The source type
 payload belongs to the node, not to a leaf hidden under the node, because every
@@ -6136,9 +6203,12 @@ become materialized only when an explicit `MaterializedProcedureDemand` names it
 A materialized executable instance exists only when a root, direct call, finite
 adapter branch, promoted wrapper, readonly data dependency, or other explicit
 `MaterializedProcedureDemand` requires executable code. Strict callable-emission
-assignment, executable payload publication, value-transform finalization,
-executable MIR procedure emission, and backend lowering iterate only
-materialized executable procedure instances.
+assignment finalizes every materialized executable value and every descriptor-only
+public value that appears in a published callable-set capture schema; those
+descriptor-only values are semantic payloads even though their procedure body is
+not emitted. Executable payload publication, value-transform finalization,
+executable MIR procedure emission, and backend lowering iterate only materialized
+executable procedure instances.
 
 Erased boxed-payload requirements are part of this fixed point and must be
 known before strict callable-emission assignment:
@@ -7128,6 +7198,7 @@ const ValueInfo = struct {
     value_alias_needs_executable_transform: bool,
     value_alias_source: ?ValueInfoId,
     value_alias_transform: ?ValueTransformBoundaryId,
+    contextual_consumer_use: ?ConsumerUsePlanId,
 };
 
 const ConstBackedValueInfo = struct {
@@ -7353,6 +7424,15 @@ storage. Executable MIR evaluates or reads that child exactly once at the
 boundary's `from_endpoint`, then applies the published transform to the
 `to_endpoint`. It must not lower the child as an unconstrained producer and
 then re-ascribe the resulting value.
+
+When a consumer root is itself the public value later stages must materialize,
+lambda-solved publishes a direct `contextual_consumer_use` link on that public
+`ValueInfo`. A procedure return root whose implicit return expression is lowered
+contextually points at the exact sealed `ConsumerUsePlan` for that return.
+Checked finalization follows that link to the child value and the
+already-published expected endpoint; it must not scan procedure bodies, search
+return statements, or re-enter executable lowering to discover which constructor
+produced the public return value.
 
 This distinction matters for inactive tag variants with function slots. A tag
 union value can contain variants whose payloads are not currently present at

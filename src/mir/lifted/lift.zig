@@ -12,6 +12,7 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 const canonical = check.CanonicalNames;
+const checked_artifact = check.CheckedArtifact;
 const Symbol = symbol_mod.Symbol;
 
 /// Public `ProcOrderKey` declaration.
@@ -55,6 +56,7 @@ pub const Proc = struct {
     order_key: ProcOrderKey,
     body: Ast.DefId,
     direct_calls: ids.Span(canonical.MirProcedureRef),
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 /// Public `Program` declaration.
@@ -144,12 +146,14 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
     try program.procs.ensureTotalCapacity(allocator, input.program.procs.items.len);
     for (input.program.procs.items) |proc| {
         const order_key = lifter.nextProcOrder();
+        lifter.current_imported_closure = proc.imported_closure;
         const lowered = try lifter.lowerProcDef(proc.key, proc.body);
         try program.procs.append(allocator, .{
             .proc = proc.proc,
             .order_key = order_key,
             .body = lowered.body,
             .direct_calls = lowered.direct_calls,
+            .imported_closure = proc.imported_closure,
         });
     }
     if (@import("builtin").mode == .Debug) {
@@ -169,6 +173,7 @@ const LocalProcInfo = struct {
     fn_ty: Type.TypeId,
     args: Ast.Span(Ast.TypedSymbol),
     capture_slots: Ast.Span(Ast.CaptureSlot),
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 const LiftedClosureKey = struct {
@@ -257,6 +262,7 @@ const BodyLifter = struct {
     capture_slots: std.AutoHashMap(Symbol, u32),
     active_binder_symbols: std.AutoHashMap(u32, Symbol),
     current_direct_calls: ?*std.ArrayList(canonical.MirProcedureRef) = null,
+    current_imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
     owner_key: canonical.MonoSpecializationKey = undefined,
     next_order: u32 = 0,
 
@@ -655,6 +661,7 @@ const BodyLifter = struct {
             .fn_ty = fn_ty,
             .args = args,
             .capture_slots = capture_slots,
+            .imported_closure = self.current_imported_closure,
         };
     }
 
@@ -735,6 +742,9 @@ const BodyLifter = struct {
         const previous_direct_calls = self.current_direct_calls;
         self.current_direct_calls = &direct_calls;
         defer self.current_direct_calls = previous_direct_calls;
+        const previous_imported_closure = self.current_imported_closure;
+        self.current_imported_closure = info.imported_closure;
+        defer self.current_imported_closure = previous_imported_closure;
 
         var previous_slots = std.ArrayList(CaptureSlotRestore).empty;
         defer previous_slots.deinit(self.allocator);
@@ -774,6 +784,7 @@ const BodyLifter = struct {
             .order_key = self.nextProcOrder(),
             .body = def,
             .direct_calls = try self.appendDirectCallSpan(direct_calls.items),
+            .imported_closure = info.imported_closure,
         });
 
         self.restoreActiveBinderSymbols(active_binders.items);

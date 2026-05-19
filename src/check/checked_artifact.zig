@@ -6054,6 +6054,8 @@ pub const FinitePromotedWrapperBodyPlan = struct {
     member_proc: canonical.ProcedureCallableRef,
     member_proc_source_fn_ty_payload: CheckedTypeId,
     member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
+    member_proc_template_closure: ?ImportedTemplateClosureView = null,
+    member_lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
     member_target: CallableResultMemberTargetPlan,
     member_target_promoted_wrapper: ?canonical.MirProcedureRef = null,
     member_capture_shape: canonical.CaptureShapeKey,
@@ -11562,6 +11564,8 @@ pub const CallableResultMemberPlan = struct {
     member_proc: canonical.ProcedureCallableRef,
     member_proc_source_fn_ty_payload: CheckedTypeId,
     member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
+    member_proc_template_closure: ?ImportedTemplateClosureView = null,
+    member_lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
     target: CallableResultMemberTargetPlan,
     capture_slots: []const CaptureSlotReificationPlanId,
 };
@@ -11921,6 +11925,8 @@ fn deinitCallableResultPlan(allocator: Allocator, plan: *CallableResultPlan) voi
             for (finite.members) |member| {
                 var target = member.target;
                 deinitCallableResultMemberTargetPlan(allocator, &target);
+                deinitOptionalImportedTemplateClosure(allocator, member.member_proc_template_closure);
+                deinitOptionalImportedTemplateClosure(allocator, member.member_lifted_owner_template_closure);
                 allocator.free(member.capture_slots);
             }
             allocator.free(finite.members);
@@ -12170,6 +12176,8 @@ fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableB
         .finite => |finite| {
             var member_target = finite.member_target;
             deinitCallableResultMemberTargetPlan(allocator, &member_target);
+            deinitOptionalImportedTemplateClosure(allocator, finite.member_proc_template_closure);
+            deinitOptionalImportedTemplateClosure(allocator, finite.member_lifted_owner_template_closure);
             allocator.free(finite.member_capture_slots);
             allocator.free(finite.captures);
             allocator.free(finite.params);
@@ -12369,11 +12377,17 @@ fn verifyCallableResultPlan(
                         const owner_payload = member.member_lifted_owner_source_fn_ty_payload orelse {
                             std.debug.panic("checked artifact invariant violated: finite callable result lifted member has no owner source type payload", .{});
                         };
+                        if (member.member_proc_template_closure != null) {
+                            std.debug.panic("checked artifact invariant violated: finite callable result lifted member carried direct proc template closure", .{});
+                        }
                         verifyCheckedTypePayloadKey(checked_types, owner_payload, lifted.owner_mono_specialization.requested_mono_fn_ty, "finite callable result lifted owner source type payload differs from owner specialization source type");
                     },
                     .checked, .synthetic => {
                         if (member.member_lifted_owner_source_fn_ty_payload != null) {
                             std.debug.panic("checked artifact invariant violated: non-lifted finite callable result member carried lifted owner source type payload", .{});
+                        }
+                        if (member.member_lifted_owner_template_closure != null) {
+                            std.debug.panic("checked artifact invariant violated: non-lifted finite callable result member carried lifted owner template closure", .{});
                         }
                     },
                 }
@@ -12900,11 +12914,17 @@ fn verifyPromotedCallableBodyPlan(
                     const owner_payload = finite.member_lifted_owner_source_fn_ty_payload orelse {
                         std.debug.panic("checked artifact invariant violated: finite promoted callable body lifted member has no owner source type payload", .{});
                     };
+                    if (finite.member_proc_template_closure != null) {
+                        std.debug.panic("checked artifact invariant violated: finite promoted callable body lifted member carried direct proc template closure", .{});
+                    }
                     verifyCheckedTypePayloadKey(checked_types, owner_payload, lifted.owner_mono_specialization.requested_mono_fn_ty, "finite promoted callable body lifted owner source type payload differs from owner specialization source type");
                 },
                 .checked, .synthetic => {
                     if (finite.member_lifted_owner_source_fn_ty_payload != null) {
                         std.debug.panic("checked artifact invariant violated: non-lifted finite promoted callable body carried lifted owner source type payload", .{});
+                    }
+                    if (finite.member_lifted_owner_template_closure != null) {
+                        std.debug.panic("checked artifact invariant violated: non-lifted finite promoted callable body carried lifted owner template closure", .{});
                     }
                 },
             }
@@ -13609,18 +13629,27 @@ pub const ComptimeAvailabilityUse = union(enum) {
     procedure_binding: ProcedureBindingRef,
 };
 
+/// Public `ProcedureCallableRefDependency` declaration.
+pub const ProcedureCallableRefDependency = struct {
+    proc_value: canonical.ProcedureCallableRef,
+    proc_template_closure: ?ImportedTemplateClosureView = null,
+    lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
+};
+
 /// Public `ProcedureCallableDependency` declaration.
 pub const ProcedureCallableDependency = struct {
     proc_value: canonical.ProcedureCallableRef,
     source_fn_ty_payload: CheckedTypeId,
     lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
+    proc_template_closure: ?ImportedTemplateClosureView = null,
+    lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
 };
 
 /// Public `ComptimeConcreteValueUse` declaration.
 pub const ComptimeConcreteValueUse = union(enum) {
     const_instance: ConstInstantiationRequest,
     callable_binding_instance: CallableBindingInstantiationRequest,
-    procedure_callable: canonical.ProcedureCallableRef,
+    procedure_callable: ProcedureCallableRefDependency,
     procedure_callable_with_payloads: ProcedureCallableDependency,
 };
 
@@ -13815,8 +13844,8 @@ pub const ComptimeDependencySummaryStore = struct {
         const id: ComptimeDependencySummaryId = @enumFromInt(@as(u32, @intCast(self.summaries.items.len)));
         const availability_values = try allocator.dupe(ComptimeAvailabilityUse, summary.availability_values);
         errdefer allocator.free(availability_values);
-        const concrete_values = try allocator.dupe(ComptimeConcreteValueUse, summary.concrete_values);
-        errdefer allocator.free(concrete_values);
+        const concrete_values = try cloneComptimeConcreteValueUseSlice(allocator, summary.concrete_values);
+        errdefer deinitComptimeConcreteValueUseSlice(allocator, concrete_values);
         try self.summaries.append(allocator, .{
             .availability_values = availability_values,
             .concrete_values = concrete_values,
@@ -13883,7 +13912,7 @@ pub const ComptimeDependencySummaryStore = struct {
         self.proc_summaries.deinit(allocator);
         for (self.summaries.items) |summary| {
             allocator.free(summary.availability_values);
-            allocator.free(summary.concrete_values);
+            deinitComptimeConcreteValueUseSlice(allocator, summary.concrete_values);
         }
         allocator.free(self.root_requests);
         self.summaries.deinit(allocator);
@@ -13897,7 +13926,7 @@ fn deinitComptimeProcDependencySummary(
 ) void {
     deinitExecutableSpecializationKey(allocator, &summary.proc);
     allocator.free(summary.availability_values);
-    allocator.free(summary.concrete_values);
+    deinitComptimeConcreteValueUseSlice(allocator, summary.concrete_values);
     for (summary.call_deps) |*dep| deinitComptimeCallDependency(allocator, dep);
     allocator.free(summary.call_deps);
     for (summary.const_graph_deps) |*dep| deinitConstGraphDependency(allocator, dep);
@@ -13925,7 +13954,7 @@ fn deinitComptimeCallDependency(allocator: Allocator, dep: *const ComptimeCallDe
 
 fn deinitConstGraphDependency(allocator: Allocator, dep: *const ConstGraphDependency) void {
     allocator.free(dep.availability_values);
-    allocator.free(dep.concrete_values);
+    deinitComptimeConcreteValueUseSlice(allocator, dep.concrete_values);
     for (dep.callable_leaves) |*leaf| deinitCallableLeafDependency(allocator, leaf);
     allocator.free(dep.callable_leaves);
 }
@@ -13933,7 +13962,7 @@ fn deinitConstGraphDependency(allocator: Allocator, dep: *const ConstGraphDepend
 fn deinitCallableResultDependency(allocator: Allocator, dep: *const CallableResultDependency) void {
     deinitExecutableSpecializationKeySlice(allocator, dep.members);
     allocator.free(dep.capture_availability);
-    allocator.free(dep.capture_concrete_values);
+    deinitComptimeConcreteValueUseSlice(allocator, dep.capture_concrete_values);
     if (dep.erased) |erased| deinitErasedCallableDependency(allocator, erased);
 }
 
@@ -13965,7 +13994,7 @@ fn deinitErasedCallableDependencyFields(
 ) void {
     deinitErasedCallableCodeDependency(allocator, code);
     allocator.free(availability);
-    allocator.free(concrete);
+    deinitComptimeConcreteValueUseSlice(allocator, concrete);
     allocator.free(provenance);
 }
 
@@ -15383,7 +15412,7 @@ fn appendUniqueValue(
     try list.append(allocator, value);
 }
 
-fn deinitImportedTemplateClosure(
+pub fn deinitImportedTemplateClosure(
     allocator: Allocator,
     closure: *ImportedTemplateClosureView,
 ) void {
@@ -15413,7 +15442,8 @@ fn deinitImportedTemplateClosure(
     closure.* = .{};
 }
 
-fn cloneImportedTemplateClosure(
+/// Clone an imported-template closure view so it can be owned by a new artifact record.
+pub fn cloneImportedTemplateClosure(
     allocator: Allocator,
     closure: ImportedTemplateClosureView,
 ) Allocator.Error!ImportedTemplateClosureView {
@@ -15444,6 +15474,109 @@ fn cloneImportedTemplateClosure(
     out.method_registry_entries = try cloneConstSlice(allocator, MethodRegistryEntryRef, closure.method_registry_entries);
     out.interface_capabilities = try cloneConstSlice(allocator, ArtifactModuleInterfaceCapabilitiesRef, closure.interface_capabilities);
 
+    return out;
+}
+
+fn cloneOptionalImportedTemplateClosure(
+    allocator: Allocator,
+    closure: ?ImportedTemplateClosureView,
+) Allocator.Error!?ImportedTemplateClosureView {
+    return if (closure) |value| try cloneImportedTemplateClosure(allocator, value) else null;
+}
+
+fn deinitOptionalImportedTemplateClosure(
+    allocator: Allocator,
+    closure: ?ImportedTemplateClosureView,
+) void {
+    if (closure) |value| {
+        var owned = value;
+        deinitImportedTemplateClosure(allocator, &owned);
+    }
+}
+
+/// Release any owned closure metadata attached to a concrete dependency use.
+pub fn deinitComptimeConcreteValueUse(
+    allocator: Allocator,
+    value: ComptimeConcreteValueUse,
+) void {
+    switch (value) {
+        .const_instance,
+        .callable_binding_instance,
+        => {},
+        .procedure_callable => |dependency| {
+            deinitOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
+            deinitOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
+        },
+        .procedure_callable_with_payloads => |dependency| {
+            deinitOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
+            deinitOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
+        },
+    }
+}
+
+/// Release owned closure metadata for a caller-owned concrete dependency slice.
+pub fn deinitComptimeConcreteValueUseElements(
+    allocator: Allocator,
+    values: []const ComptimeConcreteValueUse,
+) void {
+    for (values) |value| deinitComptimeConcreteValueUse(allocator, value);
+}
+
+/// Release a concrete dependency slice and any owned closure metadata inside it.
+pub fn deinitComptimeConcreteValueUseSlice(
+    allocator: Allocator,
+    values: []const ComptimeConcreteValueUse,
+) void {
+    deinitComptimeConcreteValueUseElements(allocator, values);
+    allocator.free(values);
+}
+
+/// Clone a concrete dependency use, including any owned imported-template closures.
+pub fn cloneComptimeConcreteValueUse(
+    allocator: Allocator,
+    value: ComptimeConcreteValueUse,
+) Allocator.Error!ComptimeConcreteValueUse {
+    return switch (value) {
+        .const_instance => |request| .{ .const_instance = request },
+        .callable_binding_instance => |request| .{ .callable_binding_instance = request },
+        .procedure_callable => |dependency| blk: {
+            const proc_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
+            errdefer deinitOptionalImportedTemplateClosure(allocator, proc_template_closure);
+            const lifted_owner_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
+            break :blk .{ .procedure_callable = .{
+                .proc_value = dependency.proc_value,
+                .proc_template_closure = proc_template_closure,
+                .lifted_owner_template_closure = lifted_owner_template_closure,
+            } };
+        },
+        .procedure_callable_with_payloads => |dependency| blk: {
+            const proc_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
+            errdefer deinitOptionalImportedTemplateClosure(allocator, proc_template_closure);
+            const lifted_owner_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
+            break :blk .{ .procedure_callable_with_payloads = .{
+                .proc_value = dependency.proc_value,
+                .source_fn_ty_payload = dependency.source_fn_ty_payload,
+                .lifted_owner_source_fn_ty_payload = dependency.lifted_owner_source_fn_ty_payload,
+                .proc_template_closure = proc_template_closure,
+                .lifted_owner_template_closure = lifted_owner_template_closure,
+            } };
+        },
+    };
+}
+
+/// Clone a concrete dependency slice, including all owned imported-template closures.
+pub fn cloneComptimeConcreteValueUseSlice(
+    allocator: Allocator,
+    values: []const ComptimeConcreteValueUse,
+) Allocator.Error![]const ComptimeConcreteValueUse {
+    const out = try allocator.alloc(ComptimeConcreteValueUse, values.len);
+    errdefer allocator.free(out);
+    var initialized: usize = 0;
+    errdefer deinitComptimeConcreteValueUseElements(allocator, out[0..initialized]);
+    for (values, 0..) |value, i| {
+        out[i] = try cloneComptimeConcreteValueUse(allocator, value);
+        initialized += 1;
+    }
     return out;
 }
 

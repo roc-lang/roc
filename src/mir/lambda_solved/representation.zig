@@ -1633,6 +1633,7 @@ pub const ValueInfo = struct {
     aggregate: ?AggregateValueInfo = null,
     const_backing: ?ConstBackedValueInfo = null,
     nominal_backing_consumer_use: ?ConsumerUsePlanId = null,
+    contextual_consumer_use: ?ConsumerUsePlanId = null,
     source_match_branch: ?SourceMatchBranchRef = null,
     pending_comptime_dependency_origin: bool = false,
 };
@@ -3735,6 +3736,7 @@ pub const ProcRepresentationInstance = struct {
     boundary_payloads: ?ProcBoundaryExecutablePayloads = null,
     boundary_provenance: []const BoxErasureProvenance = &.{},
     materialized: bool,
+    imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
 
 /// Public `executableSpecializationKeyForProc` function.

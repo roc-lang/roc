@@ -143,6 +143,8 @@ scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 malformed_import_count: u32 = 0,
 /// Counter for generating unique anonymous open extension rigid var names
 anon_open_ext_count: u32 = 0,
+/// Counter for generated local identifiers that cannot collide with source names.
+synthetic_local_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
@@ -7472,18 +7474,7 @@ pub fn canonicalizeExpr(
             return try self.canonicalizeBlock(e);
         },
         .for_expr => |for_expr| {
-            const region = self.parse_ir.tokenizedRegionToRegion(for_expr.region);
-            const result = try self.canonicalizeForLoop(for_expr.patt, for_expr.expr, for_expr.body);
-
-            const for_expr_idx = try self.env.addExpr(Expr{
-                .e_for = .{
-                    .patt = result.patt,
-                    .expr = result.list_expr,
-                    .body = result.body,
-                },
-            }, region);
-
-            return CanonicalizedExpr{ .idx = for_expr_idx, .free_vars = result.free_vars };
+            return try self.canonicalizeForLoop(for_expr.patt, for_expr.expr, for_expr.body, self.parse_ir.tokenizedRegionToRegion(for_expr.region));
         },
         .malformed => {
             // We won't touch this since it's already a parse error.
@@ -7981,79 +7972,260 @@ fn canonicalizeSingleQuestionBinop(
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 
-/// Result of canonicalizing a for loop's components
-const CanonicalizedForLoop = struct {
-    patt: Pattern.Idx,
-    list_expr: Expr.Idx,
-    body: Expr.Idx,
-    free_vars: DataSpan,
-};
+fn generateSyntheticLocalIdent(self: *Self, comptime prefix: []const u8) std.mem.Allocator.Error!Ident.Idx {
+    self.synthetic_local_count += 1;
+    const ident_text = try std.fmt.allocPrint(
+        self.env.gpa,
+        "#{s}_{d}",
+        .{ prefix, self.synthetic_local_count },
+    );
+    defer self.env.gpa.free(ident_text);
+    return try self.env.insertIdent(base.Ident.for_text(ident_text));
+}
 
-/// Canonicalize a for loop (shared between for expressions and for statements)
+fn appendFreeVarsToForCaptures(
+    self: *Self,
+    captures_top: u32,
+    bound_vars_top: u32,
+    free_vars: DataSpan,
+) std.mem.Allocator.Error!void {
+    const free_vars_slice = self.scratch_free_vars.sliceFromSpan(free_vars);
+    for (free_vars_slice) |fv| {
+        if (!self.scratch_captures.containsFrom(captures_top, fv) and !self.scratch_bound_vars.containsFrom(bound_vars_top, fv)) {
+            try self.scratch_captures.append(fv);
+        }
+    }
+}
+
+fn addSyntheticLookup(self: *Self, pattern_idx: Pattern.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+    return try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+        .pattern_idx = pattern_idx,
+    } }, region);
+}
+
+fn addZeroArgMethodCall(self: *Self, receiver: Expr.Idx, method_name: []const u8, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    return try self.env.addExpr(CIR.Expr{ .e_method_call = .{
+        .receiver = receiver,
+        .method_name = try self.env.insertIdent(base.Ident.for_text(method_name)),
+        .method_name_region = region,
+        .args = Expr.Span{ .span = DataSpan.empty() },
+    } }, region);
+}
+
+fn addEmptyRecordExpr(self: *Self, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    return try self.env.addExpr(CIR.Expr{ .e_empty_record = .{} }, region);
+}
+
+fn addBlockExprFromScratchStatements(self: *Self, stmt_start: u32, final_expr: Expr.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const stmt_span = try self.env.store.statementSpanFrom(stmt_start);
+    return try self.env.addExpr(CIR.Expr{ .e_block = .{
+        .stmts = stmt_span,
+        .final_expr = final_expr,
+    } }, region);
+}
+
+fn addTagPattern(self: *Self, name: Ident.Idx, args: Pattern.Span, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    return try self.env.addPattern(Pattern{ .applied_tag = .{
+        .name = name,
+        .args = args,
+    } }, region);
+}
+
+fn addZeroArgTagPattern(self: *Self, name: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    return try self.addTagPattern(name, Pattern.Span{ .span = DataSpan.empty() }, region);
+}
+
+fn addSinglePatternBranch(self: *Self, pattern: Pattern.Idx, value: Expr.Idx, region: Region) std.mem.Allocator.Error!void {
+    const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+    const branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+        .pattern = pattern,
+        .degenerate = false,
+    }, region);
+    try self.env.store.addScratchMatchBranchPattern(branch_pattern_idx);
+    const branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+    const branch_idx = try self.env.addMatchBranch(Expr.Match.Branch{
+        .patterns = branch_pat_span,
+        .value = value,
+        .guard = null,
+        .redundant = try self.env.types.fresh(),
+    }, region);
+    try self.env.store.addScratchMatchBranch(branch_idx);
+}
+
+fn addBreakBlock(self: *Self, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const stmt_start = self.env.store.scratch.?.statements.top();
+    const break_stmt = try self.env.addStatement(Statement{ .s_break = .{} }, region);
+    try self.env.store.addScratchStatement(break_stmt);
+    return try self.addBlockExprFromScratchStatements(stmt_start, try self.addEmptyRecordExpr(region), region);
+}
+
+fn addForLoopOneBranchBody(
+    self: *Self,
+    iter_pattern: Pattern.Idx,
+    rest_pattern: Pattern.Idx,
+    body: Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Expr.Idx {
+    const stmt_start = self.env.store.scratch.?.statements.top();
+
+    const rest_lookup = try self.addSyntheticLookup(rest_pattern, region);
+    const reassign_stmt = try self.env.addStatement(Statement{ .s_reassign = .{
+        .pattern_idx = iter_pattern,
+        .expr = rest_lookup,
+    } }, region);
+    try self.env.store.addScratchStatement(reassign_stmt);
+
+    const body_stmt = try self.env.addStatement(Statement{ .s_expr = .{
+        .expr = body,
+    } }, region);
+    try self.env.store.addScratchStatement(body_stmt);
+
+    return try self.addBlockExprFromScratchStatements(stmt_start, try self.addEmptyRecordExpr(region), region);
+}
+
+fn addForLoopOnePattern(
+    self: *Self,
+    item_pattern: Pattern.Idx,
+    rest_pattern: Pattern.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Pattern.Idx {
+    const item_ident = try self.env.insertIdent(base.Ident.for_text("item"));
+    const rest_ident = try self.env.insertIdent(base.Ident.for_text("rest"));
+
+    const destruct_start = self.env.store.scratchRecordDestructTop();
+
+    const item_destruct = try self.env.addRecordDestruct(Pattern.RecordDestruct{
+        .label = item_ident,
+        .ident = item_ident,
+        .kind = .{ .SubPattern = item_pattern },
+    }, region);
+    try self.env.store.addScratchRecordDestruct(item_destruct);
+
+    const rest_destruct = try self.env.addRecordDestruct(Pattern.RecordDestruct{
+        .label = rest_ident,
+        .ident = rest_ident,
+        .kind = .{ .SubPattern = rest_pattern },
+    }, region);
+    try self.env.store.addScratchRecordDestruct(rest_destruct);
+
+    const destructs = try self.env.store.recordDestructSpanFrom(destruct_start);
+    const record_pattern = try self.env.addPattern(Pattern{ .record_destructure = .{
+        .destructs = destructs,
+    } }, region);
+
+    const args_start = self.env.store.scratchPatternTop();
+    try self.env.store.addScratchPattern(record_pattern);
+    const args = try self.env.store.patternSpanFrom(args_start);
+
+    return try self.addTagPattern(try self.env.insertIdent(base.Ident.for_text("One")), args, region);
+}
+
+fn addForLoopSkipPattern(self: *Self, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    const wildcard = try self.env.addPattern(Pattern{ .underscore = {} }, region);
+    const args_start = self.env.store.scratchPatternTop();
+    try self.env.store.addScratchPattern(wildcard);
+    const args = try self.env.store.patternSpanFrom(args_start);
+    return try self.addTagPattern(try self.env.insertIdent(base.Ident.for_text("Skip")), args, region);
+}
+
+/// Canonicalize a for loop by desugaring it to ordinary checked calls and control flow.
+///
+/// The source:
+///
+/// ```roc
+/// for item in iterable {
+///     body
+/// }
+/// ```
+///
+/// becomes:
+///
+/// ```roc
+/// {
+///     var #for_iter = iterable.iter()
+///     while True {
+///         match #for_iter.next() {
+///             One({ item, rest }) => {
+///                 #for_iter = rest
+///                 body
+///                 {}
+///             }
+///             Skip(_) => break
+///             Done => break
+///         }
+///     }
+/// }
+/// ```
+///
+/// This keeps `iter` and `next` as normal checked method dispatch sites. Later
+/// stages lower ordinary calls, matches, and while loops; they do not infer
+/// iteration behavior from List syntax or backend-specific layout knowledge.
 fn canonicalizeForLoop(
     self: *Self,
     ast_patt: AST.Pattern.Idx,
-    ast_list_expr: AST.Expr.Idx,
+    ast_iterable_expr: AST.Expr.Idx,
     ast_body: AST.Expr.Idx,
-) std.mem.Allocator.Error!CanonicalizedForLoop {
-    // Use scratch_captures to collect free vars from both expr & body
+    loop_region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const ast_iterable_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getExpr(ast_iterable_expr).to_tokenized_region());
+
+    try self.scopeEnter(self.env.gpa, false);
+    defer self.scopeExit(self.env.gpa) catch {};
+
+    const saved_defining_patterns_start = self.defining_patterns_start;
+    const saved_defining_pattern = self.defining_pattern;
+    self.defining_patterns_start = null;
+    self.defining_pattern = null;
+    defer self.defining_patterns_start = saved_defining_patterns_start;
+    defer self.defining_pattern = saved_defining_pattern;
+
+    const saved_stmt_pos = self.in_statement_position;
+    self.in_statement_position = true;
+    defer self.in_statement_position = saved_stmt_pos;
+
+    const block_stmt_start = self.env.store.scratch.?.statements.top();
+    const bound_vars_top = self.scratch_bound_vars.top();
+    defer self.scratch_bound_vars.clearFrom(bound_vars_top);
+
     const captures_top = self.scratch_captures.top();
     defer self.scratch_captures.clearFrom(captures_top);
 
-    // Canonicalize the list expr
-    const list_expr = blk: {
-        const body_free_vars_start = self.scratch_free_vars.top();
-        defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+    const iterable_expr = blk: {
+        const free_vars_start = self.scratch_free_vars.top();
+        defer self.scratch_free_vars.clearFrom(free_vars_start);
 
-        const czerd_expr = try self.canonicalizeExprOrMalformed(ast_list_expr);
-
-        // Copy free vars into captures (deduplicating)
-        const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_expr.free_vars);
-        for (free_vars_slice) |fv| {
-            if (!self.scratch_captures.contains(fv)) {
-                try self.scratch_captures.append(fv);
-            }
-        }
-
-        break :blk czerd_expr;
+        const czerd_expr = try self.canonicalizeExprOrMalformed(ast_iterable_expr);
+        try self.appendFreeVarsToForCaptures(captures_top, bound_vars_top, czerd_expr.free_vars);
+        break :blk czerd_expr.idx;
     };
 
-    // Canonicalize the pattern
-    const ptrn = try self.canonicalizePatternOrMalformed(ast_patt);
+    const iter_expr = try self.addZeroArgMethodCall(iterable_expr, "iter", ast_iterable_region);
+    const iter_ident = try self.generateSyntheticLocalIdent("for_iter");
+    const iter_pattern = try self.env.addPattern(Pattern{ .assign = .{ .ident = iter_ident } }, loop_region);
+    _ = try self.scopeIntroduceVar(iter_ident, iter_pattern, loop_region, true, Pattern.Idx);
+    try self.collectBoundVarsToScratch(iter_pattern);
 
-    // Collect bound vars from pattern
-    const for_bound_vars_top = self.scratch_bound_vars.top();
-    defer self.scratch_bound_vars.clearFrom(for_bound_vars_top);
-    try self.collectBoundVarsToScratch(ptrn);
+    const iter_var_stmt = try self.env.addStatement(Statement{ .s_var = .{
+        .pattern_idx = iter_pattern,
+        .expr = iter_expr,
+        .anno = null,
+    } }, loop_region);
+    try self.env.store.addScratchStatement(iter_var_stmt);
 
-    // Canonicalize the body
-    const body = blk: {
-        self.loop_depth += 1;
-        defer self.loop_depth -= 1;
-        const body_free_vars_start = self.scratch_free_vars.top();
-        defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+    const match_expr = try self.addForLoopNextMatch(ast_patt, ast_body, iter_pattern, captures_top, bound_vars_top, loop_region);
+    const true_expr = try self.env.addExpr(CIR.Expr{ .e_tag = .{
+        .name = self.env.idents.true_tag,
+        .args = Expr.Span{ .span = DataSpan.empty() },
+    } }, loop_region);
+    const while_stmt = try self.env.addStatement(Statement{ .s_while = .{
+        .cond = true_expr,
+        .body = match_expr,
+    } }, loop_region);
+    try self.env.store.addScratchStatement(while_stmt);
 
-        // Reset defining_patterns_start for the loop body - variables bound by the
-        // loop pattern are valid to use in the body and aren't self-references
-        const saved_defining_patterns_start = self.defining_patterns_start;
-        const saved_defining_pattern = self.defining_pattern;
-        self.defining_patterns_start = null;
-        self.defining_pattern = null;
-        defer self.defining_patterns_start = saved_defining_patterns_start;
-        defer self.defining_pattern = saved_defining_pattern;
-
-        const body_expr = try self.canonicalizeExprOrMalformed(ast_body);
-
-        // Copy free vars into captures, excluding pattern-bound vars (deduplicating)
-        const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars);
-        for (body_free_vars_slice) |fv| {
-            if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.containsFrom(for_bound_vars_top, fv)) {
-                try self.scratch_captures.append(fv);
-            }
-        }
-
-        break :blk body_expr;
-    };
+    const block_expr = try self.addBlockExprFromScratchStatements(block_stmt_start, try self.addEmptyRecordExpr(loop_region), loop_region);
 
     // Copy captures to free_vars for parent
     const free_vars_start = self.scratch_free_vars.top();
@@ -8063,12 +8235,72 @@ fn canonicalizeForLoop(
     }
     const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
-    return CanonicalizedForLoop{
-        .patt = ptrn,
-        .list_expr = list_expr.idx,
-        .body = body.idx,
-        .free_vars = free_vars,
-    };
+    return CanonicalizedExpr{ .idx = block_expr, .free_vars = free_vars };
+}
+
+fn addForLoopNextMatch(
+    self: *Self,
+    ast_patt: AST.Pattern.Idx,
+    ast_body: AST.Expr.Idx,
+    iter_pattern: Pattern.Idx,
+    captures_top: u32,
+    bound_vars_top: u32,
+    loop_region: Region,
+) std.mem.Allocator.Error!Expr.Idx {
+    const iter_lookup = try self.addSyntheticLookup(iter_pattern, loop_region);
+    const next_expr = try self.addZeroArgMethodCall(iter_lookup, "next", loop_region);
+
+    const branch_scratch_top = self.env.store.scratchMatchBranchTop();
+
+    {
+        try self.scopeEnter(self.env.gpa, false);
+        defer self.scopeExit(self.env.gpa) catch {};
+
+        const rest_ident = try self.generateSyntheticLocalIdent("for_rest");
+        const rest_pattern = try self.env.addPattern(Pattern{ .assign = .{ .ident = rest_ident } }, loop_region);
+        try self.handleScopeIntroduceResult(
+            try self.scopeIntroduceInternal(self.env.gpa, .ident, rest_ident, rest_pattern, false, true),
+            rest_ident,
+            loop_region,
+        );
+
+        const item_pattern = try self.canonicalizePatternOrMalformed(ast_patt);
+        const branch_bound_top = self.scratch_bound_vars.top();
+        try self.collectBoundVarsToScratch(rest_pattern);
+        try self.collectBoundVarsToScratch(item_pattern);
+
+        const body = blk: {
+            self.loop_depth += 1;
+            defer self.loop_depth -= 1;
+
+            const body_free_vars_start = self.scratch_free_vars.top();
+            defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+            const body_expr = try self.canonicalizeExprOrMalformed(ast_body);
+            try self.appendFreeVarsToForCaptures(captures_top, bound_vars_top, body_expr.free_vars);
+            break :blk body_expr.idx;
+        };
+
+        self.scratch_bound_vars.clearFrom(branch_bound_top);
+
+        const one_pattern = try self.addForLoopOnePattern(item_pattern, rest_pattern, loop_region);
+        const one_body = try self.addForLoopOneBranchBody(iter_pattern, rest_pattern, body, loop_region);
+        try self.addSinglePatternBranch(one_pattern, one_body, loop_region);
+    }
+
+    const skip_pattern = try self.addForLoopSkipPattern(loop_region);
+    try self.addSinglePatternBranch(skip_pattern, try self.addBreakBlock(loop_region), loop_region);
+
+    const done_pattern = try self.addZeroArgTagPattern(try self.env.insertIdent(base.Ident.for_text("Done")), loop_region);
+    try self.addSinglePatternBranch(done_pattern, try self.addBreakBlock(loop_region), loop_region);
+
+    const branches = try self.env.store.matchBranchSpanFrom(branch_scratch_top);
+    return try self.env.addExpr(CIR.Expr{ .e_match = Expr.Match{
+        .cond = next_expr,
+        .branches = branches,
+        .exhaustive = try self.env.types.fresh(),
+        .is_try_suffix = false,
+    } }, loop_region);
 }
 
 /// Canonicalize a record builder expression: `{ a: fa, b: fb }.T`
@@ -12546,14 +12778,10 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         },
         .@"for" => |for_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
-            const result = try self.canonicalizeForLoop(for_stmt.patt, for_stmt.expr, for_stmt.body);
+            const result = try self.canonicalizeForLoop(for_stmt.patt, for_stmt.expr, for_stmt.body, region);
 
             const stmt_idx = try self.env.addStatement(Statement{
-                .s_for = .{
-                    .patt = result.patt,
-                    .expr = result.list_expr,
-                    .body = result.body,
-                },
+                .s_expr = .{ .expr = result.idx },
             }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = result.free_vars };

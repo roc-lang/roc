@@ -1930,6 +1930,7 @@ const CompileTimeRootSummary = struct {
     }
 
     fn deinit(self: *CompileTimeRootSummary, allocator: Allocator) void {
+        checked_artifact.deinitComptimeConcreteValueUseElements(allocator, self.concrete.items);
         self.concrete.deinit(allocator);
         self.availability.deinit(allocator);
     }
@@ -2013,7 +2014,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         const summary_id = try self.ensureProcSummary(instance_id);
         const proc_summary = self.artifact_sink.comptime_dependencies.getProcSummary(summary_id);
         try availability.appendSlice(self.allocator, proc_summary.availability_values);
-        try concrete.appendSlice(self.allocator, proc_summary.concrete_values);
+        try self.appendConcreteValues(concrete, proc_summary.concrete_values);
 
         for (proc_summary.call_deps) |call_dep| {
             switch (call_dep) {
@@ -2023,7 +2024,7 @@ const CompileTimeDependencySummaryBuilder = struct {
                 },
                 .call_value_erased => |erased| {
                     try availability.appendSlice(self.allocator, erased.capture_availability);
-                    try concrete.appendSlice(self.allocator, erased.capture_concrete_values);
+                    try self.appendConcreteValues(concrete, erased.capture_concrete_values);
                     switch (erased.code) {
                         .direct_proc_value => |direct| try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(direct.erase_plan.executable_specialization_key), availability, concrete),
                         .finite_set_adapter => |adapter| for (adapter.member_targets) |member| {
@@ -2037,12 +2038,30 @@ const CompileTimeDependencySummaryBuilder = struct {
 
         for (proc_summary.const_graph_deps) |dep| {
             try availability.appendSlice(self.allocator, dep.availability_values);
-            try concrete.appendSlice(self.allocator, dep.concrete_values);
+            try self.appendConcreteValues(concrete, dep.concrete_values);
             for (dep.callable_leaves) |leaf| try self.collectCallableLeafDependency(leaf, availability, concrete);
         }
         for (proc_summary.callable_result_deps) |dep| {
             try self.collectCallableResultDependency(dep, availability, concrete);
         }
+    }
+
+    fn appendConcreteValue(
+        self: *CompileTimeDependencySummaryBuilder,
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+        value: checked_artifact.ComptimeConcreteValueUse,
+    ) Allocator.Error!void {
+        const cloned = try checked_artifact.cloneComptimeConcreteValueUse(self.allocator, value);
+        errdefer checked_artifact.deinitComptimeConcreteValueUse(self.allocator, cloned);
+        try concrete.append(self.allocator, cloned);
+    }
+
+    fn appendConcreteValues(
+        self: *CompileTimeDependencySummaryBuilder,
+        concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
+        values: []const checked_artifact.ComptimeConcreteValueUse,
+    ) Allocator.Error!void {
+        for (values) |value| try self.appendConcreteValue(concrete, value);
     }
 
     fn ensureProcSummary(
@@ -2054,7 +2073,10 @@ const CompileTimeDependencySummaryBuilder = struct {
         var availability = std.ArrayList(checked_artifact.ComptimeAvailabilityUse).empty;
         errdefer availability.deinit(self.allocator);
         var concrete = std.ArrayList(checked_artifact.ComptimeConcreteValueUse).empty;
-        errdefer concrete.deinit(self.allocator);
+        errdefer {
+            checked_artifact.deinitComptimeConcreteValueUseElements(self.allocator, concrete.items);
+            concrete.deinit(self.allocator);
+        }
         var call_deps = std.ArrayList(checked_artifact.ComptimeCallDependency).empty;
         errdefer call_deps.deinit(self.allocator);
 
@@ -2070,10 +2092,13 @@ const CompileTimeDependencySummaryBuilder = struct {
             repr.deinitExecutableSpecializationKey(self.allocator, &key);
         }
 
+        const concrete_values = try concrete.toOwnedSlice(self.allocator);
+        errdefer checked_artifact.deinitComptimeConcreteValueUseSlice(self.allocator, concrete_values);
+
         const summary_id = try self.artifact_sink.comptime_dependencies.appendProcSummary(self.allocator, .{
             .proc = proc_key,
             .availability_values = try availability.toOwnedSlice(self.allocator),
-            .concrete_values = try concrete.toOwnedSlice(self.allocator),
+            .concrete_values = concrete_values,
             .call_deps = try call_deps.toOwnedSlice(self.allocator),
         });
         try self.proc_summary_ids.put(instance_id, summary_id);
@@ -2546,10 +2571,12 @@ const CompileTimeDependencySummaryBuilder = struct {
         switch (self.artifact_sink.comptime_plans.callableResult(plan_id)) {
             .finite => |finite| {
                 for (finite.members) |member| {
-                    try concrete.append(self.allocator, .{ .procedure_callable_with_payloads = .{
+                    try self.appendConcreteValue(concrete, .{ .procedure_callable_with_payloads = .{
                         .proc_value = member.member_proc,
                         .source_fn_ty_payload = member.member_proc_source_fn_ty_payload,
                         .lifted_owner_source_fn_ty_payload = member.member_lifted_owner_source_fn_ty_payload,
+                        .proc_template_closure = member.member_proc_template_closure,
+                        .lifted_owner_template_closure = member.member_lifted_owner_template_closure,
                     } });
                     for (member.capture_slots) |capture| try self.collectCaptureSlotPlan(capture, availability, concrete);
                 }
@@ -2557,7 +2584,7 @@ const CompileTimeDependencySummaryBuilder = struct {
             .erased => |erased| {
                 switch (erased.code_plan) {
                     .materialized_by_lowering => |code| switch (code) {
-                        .direct_proc_value => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.proc_value }),
+                        .direct_proc_value => |direct| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = direct.proc_value } }),
                         .finite_set_adapter => {},
                     },
                     .read_from_interpreted_erased_value => {},
@@ -2574,7 +2601,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
         switch (leaf) {
-            .resolved_finite => |finite| try concrete.append(self.allocator, .{ .procedure_callable = finite.proc_value }),
+            .resolved_finite => |finite| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = finite.proc_value } }),
             .promoted_callable => |plan| try self.collectCallableResultPlan(plan, availability, concrete),
             .erased_boxed_callable => |erased| try self.collectErasedCallableDependency(erased, availability, concrete),
         }
@@ -2588,7 +2615,7 @@ const CompileTimeDependencySummaryBuilder = struct {
     ) Allocator.Error!void {
         for (dep.members) |member| try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(member), availability, concrete);
         try availability.appendSlice(self.allocator, dep.capture_availability);
-        try concrete.appendSlice(self.allocator, dep.capture_concrete_values);
+        try self.appendConcreteValues(concrete, dep.capture_concrete_values);
         if (dep.erased) |erased| try self.collectErasedCallableDependency(erased, availability, concrete);
     }
 
@@ -2599,7 +2626,7 @@ const CompileTimeDependencySummaryBuilder = struct {
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
         try availability.appendSlice(self.allocator, erased.capture_availability);
-        try concrete.appendSlice(self.allocator, erased.capture_concrete_values);
+        try self.appendConcreteValues(concrete, erased.capture_concrete_values);
         switch (erased.code) {
             .direct_proc_value => |direct| try self.collectTransitiveProc(self.procInstanceIdForExecutableKey(direct.erase_plan.executable_specialization_key), availability, concrete),
             .finite_set_adapter => |adapter| for (adapter.member_targets) |member| {
@@ -2616,11 +2643,11 @@ const CompileTimeDependencySummaryBuilder = struct {
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
         switch (leaf) {
-            .finite => |finite| try concrete.append(self.allocator, .{ .procedure_callable = finite.proc_value }),
+            .finite => |finite| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = finite.proc_value } }),
             .erased_boxed => |erased| switch (erased.sealed.code) {
-                .direct_proc => |direct| try concrete.append(self.allocator, .{ .procedure_callable = direct.code.proc_value }),
+                .direct_proc => |direct| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = direct.code.proc_value } }),
                 .finite_adapter => |finite| for (finite.members) |member| {
-                    try concrete.append(self.allocator, .{ .procedure_callable = member.proc_value });
+                    try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = member.proc_value } });
                 },
             },
         }
@@ -2755,6 +2782,14 @@ fn deinitCallableResultMembersForPipeline(
 ) void {
     for (members) |member| {
         deinitCallableResultMemberTargetPlanForPipeline(allocator, member.target);
+        if (member.member_proc_template_closure) |closure| {
+            var owned = closure;
+            checked_artifact.deinitImportedTemplateClosure(allocator, &owned);
+        }
+        if (member.member_lifted_owner_template_closure) |closure| {
+            var owned = closure;
+            checked_artifact.deinitImportedTemplateClosure(allocator, &owned);
+        }
         allocator.free(member.capture_slots);
     }
     allocator.free(members);
@@ -2771,6 +2806,16 @@ fn deinitCallableResultMemberTargetPlanForPipeline(
         },
         .member_proc_relative => |endpoint| allocator.free(endpoint.exec_arg_tys),
     }
+}
+
+fn importedClosureContainsProcedureTemplate(
+    closure: checked_artifact.ImportedTemplateClosureView,
+    template: canonical.ProcedureTemplateRef,
+) bool {
+    for (closure.checked_procedure_templates) |listed| {
+        if (std.mem.eql(u8, &listed.artifact.bytes, &template.artifact.bytes) and listed.template == template.template) return true;
+    }
+    return false;
 }
 
 fn executableEndpointFromKey(
@@ -4604,6 +4649,8 @@ const CaptureSlotPlanBuilder = struct {
 
         for (descriptor.members, 0..) |member, i| {
             const member_proc = try self.callableResultMemberProcForBoundary(member, source_fn_ty, source_fn_ty_payload);
+            var member_proc_owned = true;
+            errdefer if (member_proc_owned) deinitCallableResultMemberProcPlanForPipeline(self.allocator, member_proc);
             const target = try self.cloneMemberTargetPlan(member, source_fn_ty);
             var target_owned = true;
             errdefer if (target_owned) deinitCallableResultMemberTargetPlanForPipeline(self.allocator, target);
@@ -4626,10 +4673,13 @@ const CaptureSlotPlanBuilder = struct {
                             .member_proc = member_proc.proc,
                             .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
                             .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                            .member_proc_template_closure = member_proc.proc_template_closure,
+                            .member_lifted_owner_template_closure = member_proc.lifted_owner_template_closure,
                             .target = target,
                             .capture_slots = slot_plans,
                         };
                         target_owned = false;
+                        member_proc_owned = false;
                         initialized_members += 1;
                         continue;
                     }
@@ -4640,10 +4690,13 @@ const CaptureSlotPlanBuilder = struct {
                     .member_proc = member_proc.proc,
                     .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
                     .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                    .member_proc_template_closure = member_proc.proc_template_closure,
+                    .member_lifted_owner_template_closure = member_proc.lifted_owner_template_closure,
                     .target = target,
                     .capture_slots = slot_plans,
                 };
                 target_owned = false;
+                member_proc_owned = false;
                 initialized_members += 1;
                 continue;
             }
@@ -4652,10 +4705,13 @@ const CaptureSlotPlanBuilder = struct {
                 .member_proc = member_proc.proc,
                 .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
                 .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                .member_proc_template_closure = member_proc.proc_template_closure,
+                .member_lifted_owner_template_closure = member_proc.lifted_owner_template_closure,
                 .target = target,
                 .capture_slots = &.{},
             };
             target_owned = false;
+            member_proc_owned = false;
             initialized_members += 1;
         }
 
@@ -4863,6 +4919,8 @@ const CaptureSlotPlanBuilder = struct {
 
         for (descriptor.members, 0..) |member, i| {
             const member_proc = try self.callableResultMemberProcForBoundary(member, source_fn_ty, source_fn_ty_payload);
+            var member_proc_owned = true;
+            errdefer if (member_proc_owned) deinitCallableResultMemberProcPlanForPipeline(self.allocator, member_proc);
             const target = try self.cloneMemberTargetPlan(member, source_fn_ty);
             var target_owned = true;
             errdefer if (target_owned) deinitCallableResultMemberTargetPlanForPipeline(self.allocator, target);
@@ -4879,10 +4937,13 @@ const CaptureSlotPlanBuilder = struct {
                 .member_proc = member_proc.proc,
                 .member_proc_source_fn_ty_payload = member_proc.source_fn_ty_payload,
                 .member_lifted_owner_source_fn_ty_payload = member_proc.lifted_owner_source_fn_ty_payload,
+                .member_proc_template_closure = member_proc.proc_template_closure,
+                .member_lifted_owner_template_closure = member_proc.lifted_owner_template_closure,
                 .target = target,
                 .capture_slots = slot_plans,
             };
             target_owned = false;
+            member_proc_owned = false;
             initialized_members += 1;
         }
 
@@ -4911,7 +4972,23 @@ const CaptureSlotPlanBuilder = struct {
         proc: canonical.ProcedureCallableRef,
         source_fn_ty_payload: checked_artifact.CheckedTypeId,
         lifted_owner_source_fn_ty_payload: ?checked_artifact.CheckedTypeId,
+        proc_template_closure: ?checked_artifact.ImportedTemplateClosureView = null,
+        lifted_owner_template_closure: ?checked_artifact.ImportedTemplateClosureView = null,
     };
+
+    fn deinitCallableResultMemberProcPlanForPipeline(
+        allocator: Allocator,
+        plan: CallableResultMemberProcPlan,
+    ) void {
+        if (plan.proc_template_closure) |closure| {
+            var owned = closure;
+            checked_artifact.deinitImportedTemplateClosure(allocator, &owned);
+        }
+        if (plan.lifted_owner_template_closure) |closure| {
+            var owned = closure;
+            checked_artifact.deinitImportedTemplateClosure(allocator, &owned);
+        }
+    }
 
     fn callableResultMemberProcForBoundary(
         self: *CaptureSlotPlanBuilder,
@@ -4921,6 +4998,7 @@ const CaptureSlotPlanBuilder = struct {
     ) Allocator.Error!CallableResultMemberProcPlan {
         var out = member.published_proc_value orelse member.proc_value;
         out.source_fn_ty = source_fn_ty;
+        const target_instance = self.value_context.solved.proc_instances.items[@intFromEnum(member.target_instance)];
         return .{
             .proc = out,
             .source_fn_ty_payload = if (source_fn_ty_payload) |payload|
@@ -4941,7 +5019,48 @@ const CaptureSlotPlanBuilder = struct {
                     break :blk null;
                 },
             },
+            .proc_template_closure = try self.memberProcTemplateClosure(out, target_instance),
+            .lifted_owner_template_closure = try self.memberLiftedOwnerTemplateClosure(out, target_instance),
         };
+    }
+
+    fn memberProcTemplateClosure(
+        self: *CaptureSlotPlanBuilder,
+        proc: canonical.ProcedureCallableRef,
+        target_instance: repr.ProcRepresentationInstance,
+    ) Allocator.Error!?checked_artifact.ImportedTemplateClosureView {
+        const template = switch (proc.template) {
+            .checked => |checked| checked,
+            .synthetic => |synthetic| synthetic.template,
+            .lifted => return null,
+        };
+        return try self.cloneInstanceClosureForTemplate(target_instance, template);
+    }
+
+    fn memberLiftedOwnerTemplateClosure(
+        self: *CaptureSlotPlanBuilder,
+        proc: canonical.ProcedureCallableRef,
+        target_instance: repr.ProcRepresentationInstance,
+    ) Allocator.Error!?checked_artifact.ImportedTemplateClosureView {
+        const template = switch (proc.template) {
+            .lifted => |lifted| lifted.owner_mono_specialization.template,
+            .checked,
+            .synthetic,
+            => return null,
+        };
+        return try self.cloneInstanceClosureForTemplate(target_instance, template);
+    }
+
+    fn cloneInstanceClosureForTemplate(
+        self: *CaptureSlotPlanBuilder,
+        target_instance: repr.ProcRepresentationInstance,
+        template: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!?checked_artifact.ImportedTemplateClosureView {
+        const closure = target_instance.imported_closure orelse return null;
+        if (!importedClosureContainsProcedureTemplate(closure, template)) {
+            checkedPipelineInvariant("callable result member target instance closure does not contain member template");
+        }
+        return try checked_artifact.cloneImportedTemplateClosure(self.allocator, closure);
     }
 
     fn checkedPayloadForConcreteSourcePayload(
@@ -5099,7 +5218,8 @@ const CaptureSlotPlanBuilder = struct {
         source_fn_ty_payload: checked_artifact.CheckedTypeId,
         value_info_id: repr.ValueInfoId,
     ) Allocator.Error!checked_artifact.CallableResultPlanId {
-        const info = self.valueInfo(value_info_id);
+        const resolved_value_info_id = self.resolveValueInfoId(value_info_id);
+        const info = self.valueInfo(resolved_value_info_id);
         const callable = info.callable orelse checkedPipelineInvariant("function-typed capture leaf has no callable metadata");
         const emission = self.value_context.representation_store.callableEmissionPlan(callable.emission_plan);
         return switch (emission) {
@@ -5222,7 +5342,7 @@ const CaptureSlotPlanBuilder = struct {
             },
             .backing = try self.planForOptionalExecutable(
                 self.sourceForChecked(backing),
-                value_info_id,
+                self.nominalBackingValue(value_info_id),
                 self.nominalBackingExecutableKey(exec_ty),
             ),
         } };
@@ -5687,6 +5807,15 @@ const CaptureSlotPlanBuilder = struct {
         return self.nominalBackingExecutableKeyFromPayload(key, self.executablePayloadForKey(key));
     }
 
+    fn nominalBackingValue(
+        self: *const CaptureSlotPlanBuilder,
+        value_info_id: ?repr.ValueInfoId,
+    ) ?repr.ValueInfoId {
+        const id = value_info_id orelse return null;
+        const info = self.valueInfo(id);
+        return info.nominal_backing_value;
+    }
+
     fn nominalBackingExecutableKeyFromPayload(
         self: *const CaptureSlotPlanBuilder,
         original_key: canonical.CanonicalExecValueTypeKey,
@@ -5791,6 +5920,10 @@ const ConstGraphPlanBuilder = struct {
         value_info: ?repr.ValueInfoId,
         expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error!checked_artifact.ConstGraphReificationPlanId {
+        if (self.contextualChildValue(value_context, value_info)) |child_value| {
+            return try self.planForExpected(checked_ty, value_context, child_value, expected_exec_key);
+        }
+
         const key = ConstPlanKey.from(checked_ty, value_context, value_info, expected_exec_key);
         if (self.active.get(key)) |active| {
             const recursive = try self.plans.reserveConstGraph(self.allocator);
@@ -5806,6 +5939,29 @@ const ConstGraphPlanBuilder = struct {
         self.plans.fillConstGraph(id, plan);
         _ = self.active.remove(key);
         return id;
+    }
+
+    fn contextualChildValue(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+    ) ?repr.ValueInfoId {
+        const context = value_context orelse return null;
+        const raw_info = value_info orelse return null;
+        const info_id = self.resolveValueInfoId(context, raw_info);
+        const info = context.value_store.values.items[@intFromEnum(info_id)];
+        const use_id = info.contextual_consumer_use orelse return null;
+        const plan = context.representation_store.consumerUsePlan(use_id);
+        switch (plan.owner) {
+            .return_value => {},
+            else => checkedPipelineInvariant("const graph contextual consumer-use is not a return value"),
+        }
+        return switch (plan.lowering) {
+            .construct_directly,
+            .lower_control_flow_contextually,
+            => plan.child_value,
+            .existing_value => null,
+        };
     }
 
     fn schemaForPlan(
@@ -6101,7 +6257,7 @@ const ConstGraphPlanBuilder = struct {
             .backing = try self.planForExpected(
                 backing,
                 value_context,
-                value_info,
+                self.nominalBackingValue(value_context, value_info),
                 self.nominalBackingExecutableKey(value_context, value_info, expected_exec_key),
             ),
         } };
@@ -6459,6 +6615,15 @@ const ConstGraphPlanBuilder = struct {
             .nominal => |nominal| nominal.backing_key,
             else => null,
         };
+    }
+
+    fn nominalBackingValue(
+        self: *const ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+    ) ?repr.ValueInfoId {
+        const info = self.valueInfo(value_context, value_info) orelse return null;
+        return info.nominal_backing_value;
     }
 
     fn recordExecutablePayload(
