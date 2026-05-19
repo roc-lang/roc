@@ -81,68 +81,23 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "counter_"))
 				(e-num (value "0")))
-			(s-expr
+			(s-for
+				(p-underscore)
+				(e-list
+					(elems
+						(e-string
+							(e-literal (string "hello")))
+						(e-string
+							(e-literal (string "world")))
+						(e-string
+							(e-literal (string "test")))))
 				(e-block
-					(s-var
-						(p-assign (ident "#for_iter_1"))
-						(e-dispatch-call (method "iter") (constraint-fn-var 109)
-							(receiver
-								(e-list
-									(elems
-										(e-string
-											(e-literal (string "hello")))
-										(e-string
-											(e-literal (string "world")))
-										(e-string
-											(e-literal (string "test"))))))
-							(args)))
-					(s-while
-						(e-tag (name "True"))
-						(e-match
-							(match
-								(cond
-									(e-dispatch-call (method "next") (constraint-fn-var 164)
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "#for_iter_1"))))
-										(args)))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-reassign
-													(p-assign (ident "#for_iter_1"))
-													(e-lookup-local
-														(p-assign (ident "#for_rest_2"))))
-												(s-expr
-													(e-block
-														(s-reassign
-															(p-assign (ident "counter_"))
-															(e-binop (op "add")
-																(e-lookup-local
-																	(p-assign (ident "counter_")))
-																(e-num (value "1"))))
-														(e-empty_record)))
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))))))
+					(s-reassign
+						(p-assign (ident "counter_"))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "counter_")))
+							(e-num (value "1"))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "counter_"))))

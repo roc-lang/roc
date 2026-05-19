@@ -111,85 +111,40 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "max_"))
 				(e-num (value "0")))
-			(s-expr
+			(s-for
+				(p-assign (ident "n"))
+				(e-list
+					(elems
+						(e-num (value "3"))
+						(e-num (value "7"))
+						(e-num (value "2"))
+						(e-num (value "9"))
+						(e-num (value "1"))))
 				(e-block
-					(s-var
-						(p-assign (ident "#for_iter_1"))
-						(e-dispatch-call (method "iter") (constraint-fn-var 165)
-							(receiver
-								(e-list
-									(elems
-										(e-num (value "3"))
-										(e-num (value "7"))
-										(e-num (value "2"))
-										(e-num (value "9"))
-										(e-num (value "1")))))
-							(args)))
-					(s-while
-						(e-tag (name "True"))
-						(e-match
-							(match
-								(cond
-									(e-dispatch-call (method "next") (constraint-fn-var 220)
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "#for_iter_1"))))
-										(args)))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-reassign
-													(p-assign (ident "#for_iter_1"))
-													(e-lookup-local
-														(p-assign (ident "#for_rest_2"))))
-												(s-expr
-													(e-block
-														(s-reassign
-															(p-assign (ident "sum_"))
-															(e-binop (op "add")
-																(e-lookup-local
-																	(p-assign (ident "sum_")))
-																(e-lookup-local
-																	(p-assign (ident "n")))))
-														(e-if
-															(if-branches
-																(if-branch
-																	(e-binop (op "gt")
-																		(e-lookup-local
-																			(p-assign (ident "n")))
-																		(e-lookup-local
-																			(p-assign (ident "max_"))))
-																	(e-block
-																		(s-reassign
-																			(p-assign (ident "max_"))
-																			(e-lookup-local
-																				(p-assign (ident "n"))))
-																		(e-empty_record))))
-															(if-else
-																(e-block
-																	(e-empty_record))))))
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))))))
-					(e-empty_record)))
+					(s-reassign
+						(p-assign (ident "sum_"))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "sum_")))
+							(e-lookup-local
+								(p-assign (ident "n")))))
+					(e-if
+						(if-branches
+							(if-branch
+								(e-binop (op "gt")
+									(e-lookup-local
+										(p-assign (ident "n")))
+									(e-lookup-local
+										(p-assign (ident "max_"))))
+								(e-block
+									(s-reassign
+										(p-assign (ident "max_"))
+										(e-lookup-local
+											(p-assign (ident "n"))))
+									(e-empty_record))))
+						(if-else
+							(e-block
+								(e-empty_record))))))
 			(e-binop (op "add")
 				(e-lookup-local
 					(p-assign (ident "sum_")))

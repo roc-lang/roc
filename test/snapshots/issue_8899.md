@@ -125,97 +125,52 @@ EndOfFile,
 					(e-list
 						(elems
 							(e-num (value "0")))))
-				(s-expr
+				(s-for
+					(p-assign (ident "e"))
+					(e-lookup-local
+						(p-assign (ident "l")))
 					(e-block
-						(s-var
-							(p-assign (ident "#for_iter_1"))
-							(e-dispatch-call (method "iter") (constraint-fn-var 99)
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "l"))))
-								(args)))
-						(s-while
-							(e-tag (name "True"))
+						(s-reassign
+							(p-assign (ident "$acc"))
+							(e-call (constraint-fn-var 131)
+								(e-lookup-external
+									(builtin))
+								(e-lookup-local
+									(p-assign (ident "$acc")))
+								(e-lookup-local
+									(p-assign (ident "e")))))
+						(s-reassign
+							(p-assign (ident "$total"))
 							(e-match
 								(match
 									(cond
-										(e-dispatch-call (method "next") (constraint-fn-var 106)
-											(receiver
-												(e-lookup-local
-													(p-assign (ident "#for_iter_1"))))
-											(args)))
+										(e-call (constraint-fn-var 152)
+											(e-lookup-external
+												(builtin))
+											(e-lookup-local
+												(p-assign (ident "$acc")))))
 									(branches
 										(branch
 											(patterns
 												(pattern (degenerate false)
 													(p-applied-tag)))
 											(value
-												(e-block
-													(s-reassign
-														(p-assign (ident "#for_iter_1"))
-														(e-lookup-local
-															(p-assign (ident "#for_rest_2"))))
-													(s-expr
-														(e-block
-															(s-reassign
-																(p-assign (ident "$acc"))
-																(e-call (constraint-fn-var 125)
-																	(e-lookup-external
-																		(builtin))
-																	(e-lookup-local
-																		(p-assign (ident "$acc")))
-																	(e-lookup-local
-																		(p-assign (ident "e")))))
-															(s-reassign
-																(p-assign (ident "$total"))
-																(e-match
-																	(match
-																		(cond
-																			(e-call (constraint-fn-var 146)
-																				(e-lookup-external
-																					(builtin))
-																				(e-lookup-local
-																					(p-assign (ident "$acc")))))
-																		(branches
-																			(branch
-																				(patterns
-																					(pattern (degenerate false)
-																						(p-applied-tag)))
-																				(value
-																					(e-binop (op "add")
-																						(e-lookup-local
-																							(p-assign (ident "$total")))
-																						(e-lookup-local
-																							(p-assign (ident "last"))))))
-																			(branch
-																				(patterns
-																					(pattern (degenerate false)
-																						(p-applied-tag)))
-																				(value
-																					(e-lookup-local
-																						(p-assign (ident "$total")))))))))
-															(e-empty_record)))
-													(e-empty_record))))
+												(e-binop (op "add")
+													(e-lookup-local
+														(p-assign (ident "$total")))
+													(e-lookup-local
+														(p-assign (ident "last"))))))
 										(branch
 											(patterns
 												(pattern (degenerate false)
 													(p-applied-tag)))
 											(value
-												(e-block
-													(s-break)
-													(e-empty_record))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-block
-													(s-break)
-													(e-empty_record))))))))
+												(e-lookup-local
+													(p-assign (ident "$total")))))))))
 						(e-empty_record)))
 				(e-lookup-local
 					(p-assign (ident "$total"))))))
-	(e-call (constraint-fn-var 189)
+	(e-call (constraint-fn-var 191)
 		(e-lookup-local
 			(p-assign (ident "sum_with_last")))
 		(e-list

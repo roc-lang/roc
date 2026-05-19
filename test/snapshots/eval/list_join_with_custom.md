@@ -446,7 +446,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "output"))
-		(e-dispatch-call (method "to_str") (constraint-fn-var 443)
+		(e-dispatch-call (method "to_str") (constraint-fn-var 462)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "result"))))

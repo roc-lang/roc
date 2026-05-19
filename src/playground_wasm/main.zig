@@ -214,6 +214,7 @@ const CompilerStageData = struct {
                 .idents = ModuleEnv.CommonIdents.find(&common),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
                 .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+                .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 

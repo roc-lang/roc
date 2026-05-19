@@ -555,8 +555,9 @@ No dispatch nodes survive mono MIR output.
 
 ### Iterator For Loops
 
-Source `for` loops are iterator sugar. Canonicalization lowers them to ordinary
-checked dispatch calls and control flow before checked artifact publication:
+Source `for` loops are checked iterator constructs. Canonicalization preserves
+the source loop as `for pattern in iterable { body }`; it does not lower the
+loop to method-call syntax or control-flow syntax.
 
 ```roc
 for item in iterable {
@@ -564,7 +565,23 @@ for item in iterable {
 }
 ```
 
-is represented as:
+Checking publishes one `IteratorForPlan` for the loop. That plan contains the
+two static-dispatch obligations created by the loop:
+
+```text
+iter : iterable -> Iter(item)
+next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done]
+```
+
+The loop pattern owns the `item` type variable. The iterable expression owns the
+`iterable` type variable. Checking connects those variables directly by the
+published `iter` callable type, then connects the loop-local iterator and the
+`next` result by the published `next` callable type. The loop body is checked as
+an ordinary expression whose value is discarded by the loop construct; the loop
+itself evaluates to `{}`.
+
+Mono consumes the checked `IteratorForPlan` and may lower the loop to ordinary
+MIR calls, mutable state, `while`, and `match`:
 
 ```roc
 {
@@ -583,17 +600,19 @@ is represented as:
 }
 ```
 
-The original iterable expression is evaluated once, by the generated `iter`
-dispatch call. `iter` is resolved by the same checked static-dispatch machinery
-as any other method call, with the callable type `iterable -> Iter(item)`.
-`next` is then resolved as an ordinary checked dispatch on `Iter(item)`.
+This is a mono lowering choice, not a source rewrite. The `iter` and `next`
+calls in that MIR are created from the checked plan's method names, dispatcher
+types, callable types, and method targets. Mono does not infer these facts from
+source syntax, from `List(item)`, from `Iter(item)` shape, from field names, or
+from backend layouts.
 
-Later stages consume the resulting checked dispatch plans, `match`, and `while`
-nodes. They do not infer iteration from `List(item)`, source `for` syntax,
-backend list layout, or numeric range syntax. Lists participate only by
-publishing `List.iter : List(item) -> Iter(item)`, and numeric ranges
-participate only by returning `Iter(item)` from their checked `.to` and
-`.until` methods.
+Later stages consume the MIR produced by mono. They do not contain source
+`for` semantics and do not infer iteration from lists, numeric ranges, or
+runtime layouts. Lists participate only by publishing
+`List.iter : List(item) -> Iter(item)`, numeric ranges participate only by
+returning `Iter(item)` from their checked `.to` and `.until` methods, and
+`Iter` participates by publishing `Iter.iter : Iter(item) -> Iter(item)` and
+`Iter.next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done]`.
 
 ## MIR Stage Ownership
 

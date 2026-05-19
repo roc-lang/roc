@@ -2437,7 +2437,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1350)
+					(e-call (constraint-fn-var 1383)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2472,74 +2472,29 @@ expect {
 										(p-assign (ident "number")))))
 							(e-num (value "456"))
 							(e-num (value "789")))))
-				(s-expr
+				(s-for
+					(p-assign (ident "n"))
+					(e-lookup-local
+						(p-assign (ident "list")))
 					(e-block
-						(s-var
-							(p-assign (ident "#for_iter_1"))
-							(e-dispatch-call (method "iter") (constraint-fn-var 1398)
-								(receiver
+						(s-expr
+							(e-call
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-string
+									(e-literal (string "Adding "))
 									(e-lookup-local
-										(p-assign (ident "list"))))
-								(args)))
-						(s-while
-							(e-tag (name "True"))
-							(e-match
-								(match
-									(cond
-										(e-dispatch-call (method "next") (constraint-fn-var 1453)
-											(receiver
-												(e-lookup-local
-													(p-assign (ident "#for_iter_1"))))
-											(args)))
-									(branches
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-block
-													(s-reassign
-														(p-assign (ident "#for_iter_1"))
-														(e-lookup-local
-															(p-assign (ident "#for_rest_2"))))
-													(s-expr
-														(e-block
-															(s-expr
-																(e-call
-																	(e-runtime-error (tag "ident_not_in_scope"))
-																	(e-string
-																		(e-literal (string "Adding "))
-																		(e-lookup-local
-																			(p-assign (ident "n")))
-																		(e-literal (string " to "))
-																		(e-lookup-local
-																			(p-assign (ident "number")))
-																		(e-literal (string "")))))
-															(s-reassign
-																(p-assign (ident "number"))
-																(e-binop (op "add")
-																	(e-lookup-local
-																		(p-assign (ident "number")))
-																	(e-lookup-local
-																		(p-assign (ident "n")))))
-															(e-empty_record)))
-													(e-empty_record))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-block
-													(s-break)
-													(e-empty_record))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-block
-													(s-break)
-													(e-empty_record))))))))
+										(p-assign (ident "n")))
+									(e-literal (string " to "))
+									(e-lookup-local
+										(p-assign (ident "number")))
+									(e-literal (string "")))))
+						(s-reassign
+							(p-assign (ident "number"))
+							(e-binop (op "add")
+								(e-lookup-local
+									(p-assign (ident "number")))
+								(e-lookup-local
+									(p-assign (ident "n")))))
 						(e-empty_record)))
 				(s-let
 					(p-assign (ident "record"))
@@ -2654,12 +2609,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1865)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1893)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1832)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1860)
 																			(receiver
 																				(e-match
 																					(match

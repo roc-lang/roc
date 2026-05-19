@@ -92,122 +92,32 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "result_"))
 				(e-num (value "0")))
-			(s-expr
+			(s-for
+				(p-assign (ident "i"))
+				(e-list
+					(elems
+						(e-num (value "1"))
+						(e-num (value "2"))
+						(e-num (value "3"))))
 				(e-block
-					(s-var
-						(p-assign (ident "#for_iter_1"))
-						(e-dispatch-call (method "iter") (constraint-fn-var 162)
-							(receiver
-								(e-list
-									(elems
-										(e-num (value "1"))
-										(e-num (value "2"))
-										(e-num (value "3")))))
-							(args)))
-					(s-while
-						(e-tag (name "True"))
-						(e-match
-							(match
-								(cond
-									(e-dispatch-call (method "next") (constraint-fn-var 217)
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "#for_iter_1"))))
-										(args)))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-reassign
-													(p-assign (ident "#for_iter_1"))
-													(e-lookup-local
-														(p-assign (ident "#for_rest_2"))))
-												(s-expr
-													(e-block
-														(s-expr
-															(e-block
-																(s-var
-																	(p-assign (ident "#for_iter_3"))
-																	(e-dispatch-call (method "iter") (constraint-fn-var 282)
-																		(receiver
-																			(e-list
-																				(elems
-																					(e-num (value "10"))
-																					(e-num (value "20")))))
-																		(args)))
-																(s-while
-																	(e-tag (name "True"))
-																	(e-match
-																		(match
-																			(cond
-																				(e-dispatch-call (method "next") (constraint-fn-var 337)
-																					(receiver
-																						(e-lookup-local
-																							(p-assign (ident "#for_iter_3"))))
-																					(args)))
-																			(branches
-																				(branch
-																					(patterns
-																						(pattern (degenerate false)
-																							(p-applied-tag)))
-																					(value
-																						(e-block
-																							(s-reassign
-																								(p-assign (ident "#for_iter_3"))
-																								(e-lookup-local
-																									(p-assign (ident "#for_rest_4"))))
-																							(s-expr
-																								(e-block
-																									(s-reassign
-																										(p-assign (ident "result_"))
-																										(e-binop (op "add")
-																											(e-lookup-local
-																												(p-assign (ident "result_")))
-																											(e-binop (op "mul")
-																												(e-lookup-local
-																													(p-assign (ident "i")))
-																												(e-lookup-local
-																													(p-assign (ident "j"))))))
-																									(e-empty_record)))
-																							(e-empty_record))))
-																				(branch
-																					(patterns
-																						(pattern (degenerate false)
-																							(p-applied-tag)))
-																					(value
-																						(e-block
-																							(s-break)
-																							(e-empty_record))))
-																				(branch
-																					(patterns
-																						(pattern (degenerate false)
-																							(p-applied-tag)))
-																					(value
-																						(e-block
-																							(s-break)
-																							(e-empty_record))))))))
-																(e-empty_record)))
-														(e-empty_record)))
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))))))
+					(s-for
+						(p-assign (ident "j"))
+						(e-list
+							(elems
+								(e-num (value "10"))
+								(e-num (value "20"))))
+						(e-block
+							(s-reassign
+								(p-assign (ident "result_"))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "result_")))
+									(e-binop (op "mul")
+										(e-lookup-local
+											(p-assign (ident "i")))
+										(e-lookup-local
+											(p-assign (ident "j"))))))
+							(e-empty_record)))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "result_"))))

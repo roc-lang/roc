@@ -1179,6 +1179,7 @@ pub const CheckedStatementId = checked_ids.CheckedStatementId;
 pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
 pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
+pub const IteratorForPlanId = static_dispatch.IteratorForPlanId;
 /// Public `PatternBinderId` declaration.
 pub const PatternBinderId = enum(u32) { _ };
 
@@ -3430,6 +3431,11 @@ fn appendStaticDispatchTypeRoots(
             else => unreachable,
         }
     }
+
+    for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
+        _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, @enumFromInt(plan.iter_fn_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, @enumFromInt(plan.next_fn_var));
+    }
 }
 
 fn syntheticFunctionTypeKey(
@@ -3926,7 +3932,12 @@ pub const CheckedStatementData = union(enum) {
     dbg: CheckedExprId,
     expr: CheckedExprId,
     expect: CheckedExprId,
-    for_: struct { pattern: CheckedPatternId, expr: CheckedExprId, body: CheckedExprId },
+    for_: struct {
+        pattern: CheckedPatternId,
+        expr: CheckedExprId,
+        body: CheckedExprId,
+        plan: ?static_dispatch.IteratorForPlanId,
+    },
     while_: struct { cond: CheckedExprId, body: CheckedExprId },
     break_,
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
@@ -4105,6 +4116,7 @@ pub const CheckedExprData = union(enum) {
         pattern: CheckedPatternId,
         expr: CheckedExprId,
         body: CheckedExprId,
+        plan: ?static_dispatch.IteratorForPlanId,
     },
     hosted_lambda: struct {
         symbol_name: canonical.ExternalSymbolNameId,
@@ -4380,6 +4392,49 @@ pub const CheckedBodyStore = struct {
         }
     }
 
+    pub fn attachIteratorForPlans(
+        self: *CheckedBodyStore,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) void {
+        var iter = plans.iterator_for_by_node.iterator();
+        while (iter.next()) |entry| {
+            const raw_node = @intFromEnum(entry.key_ptr.*);
+
+            if (raw_node < self.expr_by_node.len) {
+                if (self.expr_by_node[raw_node]) |checked_expr| {
+                    const data = &self.exprs[@intFromEnum(checked_expr)].data;
+                    switch (data.*) {
+                        .for_ => |*for_| for_.plan = entry.value_ptr.*,
+                        else => checkedArtifactInvariant(
+                            "iterator-for plan {d} points at non-for checked expression {d}",
+                            .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                        ),
+                    }
+                    continue;
+                }
+            }
+
+            if (raw_node < self.statement_by_node.len) {
+                if (self.statement_by_node[raw_node]) |checked_statement| {
+                    const data = &self.statements[@intFromEnum(checked_statement)].data;
+                    switch (data.*) {
+                        .for_ => |*for_| for_.plan = entry.value_ptr.*,
+                        else => checkedArtifactInvariant(
+                            "iterator-for plan {d} points at non-for checked statement {d}",
+                            .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_statement) },
+                        ),
+                    }
+                    continue;
+                }
+            }
+
+            checkedArtifactInvariant(
+                "iterator-for plan {d} points at source node {d} with no checked loop",
+                .{ @intFromEnum(entry.value_ptr.*), raw_node },
+            );
+        }
+    }
+
     pub fn attachResolvedValueRefs(
         self: *CheckedBodyStore,
         refs: *const ResolvedValueRefTable,
@@ -4637,6 +4692,7 @@ const CheckedBodyPayloadCopier = struct {
                 .pattern = self.checkedPattern(for_.patt),
                 .expr = self.checkedExpr(for_.expr),
                 .body = self.checkedExpr(for_.body),
+                .plan = null,
             } },
             .e_hosted_lambda => |hosted| .{ .hosted_lambda = .{
                 .symbol_name = try self.names.internExternalSymbolIdent(self.module.identStoreConst(), hosted.symbol_name),
@@ -4703,6 +4759,7 @@ const CheckedBodyPayloadCopier = struct {
                 .pattern = self.checkedPattern(for_.patt),
                 .expr = self.checkedExpr(for_.expr),
                 .body = self.checkedExpr(for_.body),
+                .plan = null,
             } },
             .s_while => |while_| .{ .while_ = .{
                 .cond = self.checkedExpr(while_.cond),
@@ -5145,6 +5202,7 @@ fn verifyCheckedExprDataPublished(data: CheckedExprData) void {
         .dispatch_call => |plan| std.debug.assert(plan != null),
         .method_eq => |plan| std.debug.assert(plan != null),
         .type_dispatch_call => |plan| std.debug.assert(plan != null),
+        .for_ => |for_| std.debug.assert(for_.plan != null),
         else => {},
     }
 }
@@ -5159,6 +5217,7 @@ fn verifyCheckedPatternDataPublished(data: CheckedPatternData) void {
 fn verifyCheckedStatementDataPublished(data: CheckedStatementData) void {
     switch (data) {
         .pending => std.debug.panic("checked artifact invariant violated: checked statement payload was not filled", .{}),
+        .for_ => |for_| std.debug.assert(for_.plan != null),
         else => {},
     }
 }
@@ -7572,6 +7631,8 @@ const CheckedTemplateRefCollector = struct {
                 // lowering, not an owned child expression.
             },
             .for_ => |for_| {
+                const plan_id = for_.plan orelse checkedArtifactInvariant("checked for expression reached template closure collection without an iterator-for plan", .{});
+                try self.collectIteratorForPlan(plan_id);
                 try self.collectPattern(for_.pattern);
                 try self.collectExpr(for_.expr);
                 try self.collectExpr(for_.body);
@@ -7613,6 +7674,21 @@ const CheckedTemplateRefCollector = struct {
         }
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| try self.collectExpr(arg);
+    }
+
+    fn collectIteratorForPlan(
+        self: *CheckedTemplateRefCollector,
+        plan_id: static_dispatch.IteratorForPlanId,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(plan_id);
+        if (raw >= self.static_dispatch_plans.iterator_for_plans.len) {
+            checkedArtifactInvariant("checked template iterator-for plan id was outside the plan table", .{});
+        }
+        const plan = self.static_dispatch_plans.iterator_for_plans[raw];
+        try self.dispatch_refs.append(self.allocator, plan.iter);
+        try self.dispatch_refs.append(self.allocator, plan.next);
+        try self.collectStaticDispatchPlanArgs(plan.iter);
+        try self.collectStaticDispatchPlanArgs(plan.next);
     }
 
     fn collectPattern(self: *CheckedTemplateRefCollector, pattern_id: CheckedPatternId) Allocator.Error!void {
@@ -7683,6 +7759,8 @@ const CheckedTemplateRefCollector = struct {
                 // lowering, not an owned child expression.
             },
             .for_ => |for_| {
+                const plan_id = for_.plan orelse checkedArtifactInvariant("checked for statement reached template closure collection without an iterator-for plan", .{});
+                try self.collectIteratorForPlan(plan_id);
                 try self.collectPattern(for_.pattern);
                 try self.collectExpr(for_.expr);
                 try self.collectExpr(for_.body);
@@ -19515,6 +19593,7 @@ pub fn publishFromTypedModule(
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_type_publication, &checked_bodies);
     errdefer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
+    checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, &canonical_names, &checked_procedure_templates);
     errdefer hosted_procs.deinit(allocator);

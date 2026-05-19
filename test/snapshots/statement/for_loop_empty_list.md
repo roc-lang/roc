@@ -73,59 +73,14 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "value_"))
 				(e-num (value "42")))
-			(s-expr
+			(s-for
+				(p-assign (ident "n"))
+				(e-empty_list)
 				(e-block
-					(s-var
-						(p-assign (ident "#for_iter_1"))
-						(e-dispatch-call (method "iter") (constraint-fn-var 84)
-							(receiver
-								(e-empty_list))
-							(args)))
-					(s-while
-						(e-tag (name "True"))
-						(e-match
-							(match
-								(cond
-									(e-dispatch-call (method "next") (constraint-fn-var 139)
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "#for_iter_1"))))
-										(args)))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-reassign
-													(p-assign (ident "#for_iter_1"))
-													(e-lookup-local
-														(p-assign (ident "#for_rest_2"))))
-												(s-expr
-													(e-block
-														(s-reassign
-															(p-assign (ident "value_"))
-															(e-lookup-local
-																(p-assign (ident "n"))))
-														(e-empty_record)))
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))))))
+					(s-reassign
+						(p-assign (ident "value_"))
+						(e-lookup-local
+							(p-assign (ident "n"))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "value_"))))

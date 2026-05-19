@@ -7736,7 +7736,12 @@ const BodyLowerer = struct {
             },
             .binop => |binop| try self.lowerBinop(expected_info, binop),
             .unary_minus => |child| try self.lowerUnaryMinus(expected_info, child),
-            .for_ => |for_| try self.lowerForExpr(ty, for_.pattern, for_.expr, for_.body),
+            .for_ => |for_| try self.lowerForExpr(
+                ty,
+                for_.plan orelse invariantViolation("checked for expression reached mono without an iterator-for plan"),
+                for_.pattern,
+                for_.body,
+            ),
             .run_low_level => |run_low_level| try self.lowerRunLowLevel(ty, run_low_level.op, run_low_level.args),
             .nominal => |nominal| blk: {
                 const backing_info = try self.concreteNominalBackingInfo(expected_info);
@@ -9704,6 +9709,134 @@ const BodyLowerer = struct {
         };
     }
 
+    fn lowerStaticDispatchWithConcreteArgs(
+        self: *BodyLowerer,
+        expected: ConcreteTypeInfo,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+        lowered_args: Ast.Span(Ast.ExprId),
+        arg_infos: []const ConcreteTypeInfo,
+        receiver_arg_index: ?usize,
+    ) Allocator.Error!Ast.ExprId {
+        var dispatch_instantiator = self.freshDispatchInstantiator();
+        defer dispatch_instantiator.deinit();
+
+        const previous_instantiator = self.type_instantiator;
+        self.type_instantiator = &dispatch_instantiator;
+        defer self.type_instantiator = previous_instantiator;
+
+        return try self.lowerStaticDispatchWithConcreteArgsInCurrentInstantiation(
+            expected,
+            plan_id,
+            lowered_args,
+            arg_infos,
+            receiver_arg_index,
+        );
+    }
+
+    fn lowerStaticDispatchWithConcreteArgsInCurrentInstantiation(
+        self: *BodyLowerer,
+        expected: ConcreteTypeInfo,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+        lowered_args: Ast.Span(Ast.ExprId),
+        arg_infos: []const ConcreteTypeInfo,
+        receiver_arg_index: ?usize,
+    ) Allocator.Error!Ast.ExprId {
+        const plan = self.staticDispatchPlan(plan_id);
+        try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected.source_ref);
+        try self.bindStaticDispatchConcreteArgumentTypes(plan, arg_infos, receiver_arg_index);
+
+        const dispatcher_info = try self.concreteTypeInfoForChecked(plan.dispatcher_ty);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_info.source_ref);
+        const method = try self.methodName(plan.method);
+        const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
+
+        if (target) |method_target| {
+            const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
+            try self.type_instantiator.unifyTemplateWithConcrete(plan.callable_ty, target_callable);
+        } else switch (plan.result_mode) {
+            .value => invariantViolation("mono static dispatch value call had no checked method target"),
+            .equality => |equality| {
+                if (!equality.structural_allowed) invariantViolation("mono static dispatch equality had no checked method target and structural equality is not allowed");
+                if (arg_infos.len != 2) invariantViolation("mono static dispatch equality did not have exactly two operands");
+            },
+        }
+
+        const requested_fn_ty = try self.type_instantiator.concreteRefForTemplateType(plan.callable_ty);
+        const callable_ty = try self.type_instantiator.lowerConcreteRef(requested_fn_ty);
+        const callable = switch (self.program.types.getType(callable_ty)) {
+            .func => |func| func,
+            else => invariantViolation("mono static dispatch callable type did not resolve to a fixed-arity function"),
+        };
+        if (callable.args.len != arg_infos.len) invariantViolation("mono static dispatch argument count did not match callable arity");
+
+        const arg_items = self.program.ast.sliceExprSpan(lowered_args);
+        if (arg_items.len != arg_infos.len) invariantViolation("mono static dispatch lowered argument count did not match argument metadata");
+        for (arg_items, callable.args) |arg, expected_arg_ty| {
+            const actual_arg_ty = self.program.ast.getExpr(arg).ty;
+            if (!self.program.types.equalIds(actual_arg_ty, expected_arg_ty)) {
+                invariantViolation("mono static dispatch argument type did not match callable type");
+            }
+        }
+
+        if (target) |method_target| {
+            const template = try self.name_resolver.procedureTemplateRef(method_target.template orelse invariantViolation("mono static dispatch method target did not publish a checked procedure template"));
+            const ret_info = try self.returnTypeFromConcreteFunction(requested_fn_ty);
+            const reserved = try self.queue.reserve(&self.program.concrete_source_types, .{
+                .template = template,
+                .requested_fn_ty = requested_fn_ty,
+                .reason = .{ .static_dispatch_target = plan_id },
+                .imported_closure = if (self.template_lookup.imported_closure) |closure|
+                    if (importedClosureContainsProcedureTemplate(closure, template)) closure else null
+                else
+                    null,
+            });
+            const call_expr = try self.program.ast.addExpr(ret_info.ty, .{ .call_proc = .{
+                .proc = mirProcedureRefFromReserved(reserved),
+                .args = lowered_args,
+                .requested_fn_ty = callable_ty,
+                .requested_source_fn_ty = self.program.concrete_source_types.key(requested_fn_ty),
+            } });
+            self.program.ast.setExprSourceTy(call_expr, ret_info.source_ty);
+            return switch (plan.result_mode) {
+                .value => call_expr,
+                .equality => |equality| if (equality.negated)
+                    try self.program.ast.addExpr(expected.ty, .{ .bool_not = call_expr })
+                else
+                    call_expr,
+            };
+        }
+
+        return switch (plan.result_mode) {
+            .value => unreachable,
+            .equality => |equality| blk: {
+                const lhs = arg_items[0];
+                const rhs = arg_items[1];
+                const structural = try self.program.ast.addExpr(expected.ty, .{ .structural_eq = .{ .lhs = lhs, .rhs = rhs } });
+                if (!equality.negated) break :blk structural;
+                break :blk try self.program.ast.addExpr(expected.ty, .{ .bool_not = structural });
+            },
+        };
+    }
+
+    fn bindStaticDispatchConcreteArgumentTypes(
+        self: *BodyLowerer,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        arg_infos: []const ConcreteTypeInfo,
+        receiver_arg_index: ?usize,
+    ) Allocator.Error!void {
+        const param_templates = try self.templateFunctionArgTypes(plan.callable_ty);
+        if (param_templates.len != arg_infos.len) invariantViolation("mono static dispatch argument count disagreed with checked callable type");
+
+        for (arg_infos, param_templates) |arg_info, param_template| {
+            try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_info.source_ref);
+        }
+
+        if (receiver_arg_index) |index| {
+            if (index >= arg_infos.len) invariantViolation("mono static dispatch receiver index was outside argument metadata");
+            try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, arg_infos[index].source_ref);
+        }
+    }
+
     fn bindStaticDispatchKnownArgumentTypes(
         self: *BodyLowerer,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -10025,16 +10158,225 @@ const BodyLowerer = struct {
     fn lowerForExpr(
         self: *BodyLowerer,
         ty: Type.TypeId,
+        plan_id: checked_artifact.IteratorForPlanId,
         pattern: checked_artifact.CheckedPatternId,
-        iterable: checked_artifact.CheckedExprId,
         body: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
-        const iterable_info = try self.concreteResultTypeForExpr(iterable, self.checkedExpr(iterable).ty);
-        const pattern_ty = try self.concreteTypeInfoForChecked(self.checkedPattern(pattern).ty);
-        return try self.program.ast.addExpr(ty, .{ .for_ = .{
-            .patt = try self.lowerPattern(pattern_ty, pattern),
-            .iterable = try self.lowerExprConcreteExpected(iterable, iterable_info),
-            .body = try self.lowerExpr(body),
+        const plan = self.iteratorForPlan(plan_id);
+        const iterator_info = try self.concreteTypeInfoForChecked(plan.iterator_ty);
+        const step_info = try self.concreteTypeInfoForChecked(plan.step_ty);
+        const iterable_expr = self.checkedExpr(plan.iterable);
+        const iterable_info = try self.concreteResultTypeForExpr(plan.iterable, iterable_expr.ty);
+        const iterable = try self.lowerExprConcreteExpected(plan.iterable, iterable_info);
+        const iter_args = [_]Ast.ExprId{iterable};
+        const iter_arg_infos = [_]ConcreteTypeInfo{iterable_info};
+        const iter_call = try self.lowerStaticDispatchWithConcreteArgs(
+            iterator_info,
+            plan.iter,
+            try self.program.ast.addExprSpan(&iter_args),
+            &iter_arg_infos,
+            0,
+        );
+
+        const iterator_symbol = try self.program.addSyntheticSymbol();
+        const iterator_decl = try self.program.ast.addStmt(.{ .var_decl = .{
+            .bind = .{
+                .ty = iterator_info.ty,
+                .source_ty = iterator_info.source_ty,
+                .symbol = iterator_symbol,
+            },
+            .body = iter_call,
+        } });
+
+        const while_body = try self.lowerIteratorForWhileBody(
+            plan,
+            pattern,
+            body,
+            iterator_symbol,
+            iterator_info,
+            step_info,
+            ty,
+        );
+        const bool_info = try self.boolConcreteTypeInfo();
+        const true_expr = try self.lowerBoolLiteral(bool_info, true);
+        const while_stmt = try self.program.ast.addStmt(.{ .while_ = .{
+            .cond = true_expr,
+            .body = while_body,
+        } });
+        const unit = try self.program.ast.addExpr(ty, .unit);
+        return try self.program.ast.addExpr(ty, .{ .block = .{
+            .stmts = try self.program.ast.addStmtSpan(&.{ iterator_decl, while_stmt }),
+            .final_expr = unit,
+        } });
+    }
+
+    fn lowerIteratorForWhileBody(
+        self: *BodyLowerer,
+        plan: static_dispatch.IteratorForPlan,
+        pattern: checked_artifact.CheckedPatternId,
+        body: checked_artifact.CheckedExprId,
+        iterator_symbol: Ast.Symbol,
+        iterator_info: ConcreteTypeInfo,
+        step_info: ConcreteTypeInfo,
+        unit_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const iterator = try self.program.ast.addExprWithSource(iterator_info.ty, iterator_info.source_ty, .{ .var_ = iterator_symbol });
+        const next_args = [_]Ast.ExprId{iterator};
+        const next_arg_infos = [_]ConcreteTypeInfo{iterator_info};
+        const step = try self.lowerStaticDispatchWithConcreteArgs(
+            step_info,
+            plan.next,
+            try self.program.ast.addExprSpan(&next_args),
+            &next_arg_infos,
+            0,
+        );
+        const branches = [_]Ast.Branch{
+            try self.lowerIteratorDoneBranch(step_info, unit_ty),
+            try self.lowerIteratorOneBranch(pattern, body, iterator_symbol, iterator_info, step_info, unit_ty),
+            try self.lowerIteratorSkipBranch(step_info, unit_ty),
+        };
+        return try self.program.ast.addExprWithSource(unit_ty, .{}, .{ .match_ = .{
+            .cond = step,
+            .branches = try self.program.ast.addBranchSpan(&branches),
+            .is_try_suffix = false,
+        } });
+    }
+
+    fn lowerIteratorDoneBranch(
+        self: *BodyLowerer,
+        step_info: ConcreteTypeInfo,
+        unit_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Branch {
+        const done_label = try self.program.canonical_names.internTagLabel("Done");
+        const done_info = self.tagInfoForUnionType(step_info.ty, done_label);
+        if (done_info.payload_count != 0) invariantViolation("mono iterator-for Done step had payloads");
+        return .{
+            .pat = try self.program.ast.addPat(.{
+                .ty = step_info.ty,
+                .source_ty = step_info.source_ty,
+                .data = .{ .tag = .{
+                    .name = done_label,
+                    .discriminant = done_info.discriminant,
+                    .args = Ast.Span(Ast.PatId).empty(),
+                } },
+            }),
+            .body = try self.lowerIteratorBreakBody(unit_ty),
+        };
+    }
+
+    fn lowerIteratorSkipBranch(
+        self: *BodyLowerer,
+        step_info: ConcreteTypeInfo,
+        unit_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Branch {
+        const skip_label = try self.program.canonical_names.internTagLabel("Skip");
+        const skip_info = self.tagInfoForUnionType(step_info.ty, skip_label);
+        if (skip_info.payload_count != 1) invariantViolation("mono iterator-for Skip step did not have exactly one payload");
+        const payload_infos = try self.concreteTagPayloadInfosForUnionType(step_info.source_ref, skip_label);
+        defer if (payload_infos.len != 0) self.allocator.free(payload_infos);
+        if (payload_infos.len != 1) invariantViolation("mono iterator-for Skip source payload count disagreed with runtime type");
+        const payload_pat = try self.program.ast.addPat(.{
+            .ty = payload_infos[0].ty,
+            .source_ty = payload_infos[0].source_ty,
+            .data = .wildcard,
+        });
+        return .{
+            .pat = try self.program.ast.addPat(.{
+                .ty = step_info.ty,
+                .source_ty = step_info.source_ty,
+                .data = .{ .tag = .{
+                    .name = skip_label,
+                    .discriminant = skip_info.discriminant,
+                    .args = try self.program.ast.addPatSpan(&.{payload_pat}),
+                } },
+            }),
+            .body = try self.lowerIteratorBreakBody(unit_ty),
+        };
+    }
+
+    fn lowerIteratorOneBranch(
+        self: *BodyLowerer,
+        pattern: checked_artifact.CheckedPatternId,
+        body: checked_artifact.CheckedExprId,
+        iterator_symbol: Ast.Symbol,
+        iterator_info: ConcreteTypeInfo,
+        step_info: ConcreteTypeInfo,
+        unit_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Branch {
+        const one_label = try self.program.canonical_names.internTagLabel("One");
+        const one_info = self.tagInfoForUnionType(step_info.ty, one_label);
+        if (one_info.payload_count != 1) invariantViolation("mono iterator-for One step did not have exactly one payload");
+        const payload_infos = try self.concreteTagPayloadInfosForUnionType(step_info.source_ref, one_label);
+        defer if (payload_infos.len != 0) self.allocator.free(payload_infos);
+        if (payload_infos.len != 1) invariantViolation("mono iterator-for One source payload count disagreed with runtime type");
+
+        const item_label = try self.program.canonical_names.internRecordFieldLabel("item");
+        const rest_label = try self.program.canonical_names.internRecordFieldLabel("rest");
+        const item_info = try self.concreteRecordFieldInfo(payload_infos[0].source_ref, item_label);
+        const rest_info = try self.concreteRecordFieldInfo(payload_infos[0].source_ref, rest_label);
+        if (!self.program.types.equalIds(rest_info.ty, iterator_info.ty)) {
+            invariantViolation("mono iterator-for rest field type did not match iterator state type");
+        }
+
+        const rest_symbol = try self.program.addSyntheticSymbol();
+        const rest_pat = try self.program.ast.addPat(.{
+            .ty = rest_info.ty,
+            .source_ty = rest_info.source_ty,
+            .data = .{ .var_ = rest_symbol },
+        });
+        const fields = [_]Ast.RecordFieldPattern{
+            .{
+                .field = item_label,
+                .pattern = try self.lowerPattern(item_info, pattern),
+            },
+            .{
+                .field = rest_label,
+                .pattern = rest_pat,
+            },
+        };
+        const payload_pat = try self.program.ast.addPat(.{
+            .ty = payload_infos[0].ty,
+            .source_ty = payload_infos[0].source_ty,
+            .data = .{ .record = .{
+                .fields = try self.program.ast.addRecordFieldPatternSpan(&fields),
+                .rest = null,
+            } },
+        });
+        const one_pat = try self.program.ast.addPat(.{
+            .ty = step_info.ty,
+            .source_ty = step_info.source_ty,
+            .data = .{ .tag = .{
+                .name = one_label,
+                .discriminant = one_info.discriminant,
+                .args = try self.program.ast.addPatSpan(&.{payload_pat}),
+            } },
+        });
+
+        const rest_expr = try self.program.ast.addExprWithSource(iterator_info.ty, iterator_info.source_ty, .{ .var_ = rest_symbol });
+        const reassign = try self.program.ast.addStmt(.{ .reassign = .{
+            .target = iterator_symbol,
+            .body = rest_expr,
+        } });
+        const body_stmt = try self.program.ast.addStmt(.{ .expr = try self.lowerExpr(body) });
+        const unit = try self.program.ast.addExpr(unit_ty, .unit);
+        return .{
+            .pat = one_pat,
+            .body = try self.program.ast.addExpr(unit_ty, .{ .block = .{
+                .stmts = try self.program.ast.addStmtSpan(&.{ reassign, body_stmt }),
+                .final_expr = unit,
+            } }),
+        };
+    }
+
+    fn lowerIteratorBreakBody(
+        self: *BodyLowerer,
+        unit_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const break_stmt = try self.program.ast.addStmt(.break_);
+        const unit = try self.program.ast.addExpr(unit_ty, .unit);
+        return try self.program.ast.addExpr(unit_ty, .{ .block = .{
+            .stmts = try self.program.ast.addStmtSpan(&.{break_stmt}),
+            .final_expr = unit,
         } });
     }
 
@@ -10588,7 +10930,11 @@ const BodyLowerer = struct {
             .crash => |literal| try self.program.ast.addStmt(.{ .crash = try self.lowerCheckedStringLiteral(literal) }),
             .return_ => |ret| try self.program.ast.addStmt(.{ .return_ = try self.lowerReturnValue(ret.expr) }),
             .break_ => try self.program.ast.addStmt(.break_),
-            .for_ => |for_| try self.lowerForStmt(for_.pattern, for_.expr, for_.body),
+            .for_ => |for_| try self.lowerForStmt(
+                for_.plan orelse invariantViolation("checked for statement reached mono without an iterator-for plan"),
+                for_.pattern,
+                for_.body,
+            ),
             .while_ => |while_| try self.program.ast.addStmt(.{ .while_ = .{
                 .cond = try self.lowerBoolConditionExpr(while_.cond),
                 .body = try self.lowerExpr(while_.body),
@@ -10606,17 +10952,18 @@ const BodyLowerer = struct {
 
     fn lowerForStmt(
         self: *BodyLowerer,
+        plan_id: checked_artifact.IteratorForPlanId,
         pattern: checked_artifact.CheckedPatternId,
-        iterable: checked_artifact.CheckedExprId,
         body: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.StmtId {
-        const iterable_info = try self.concreteResultTypeForExpr(iterable, self.checkedExpr(iterable).ty);
-        const pattern_ty = try self.concreteTypeInfoForChecked(self.checkedPattern(pattern).ty);
-        return try self.program.ast.addStmt(.{ .for_ = .{
-            .patt = try self.lowerPattern(pattern_ty, pattern),
-            .iterable = try self.lowerExprConcreteExpected(iterable, iterable_info),
-            .body = try self.lowerExpr(body),
-        } });
+        return try self.program.ast.addStmt(.{
+            .expr = try self.lowerForExpr(
+                try self.ensureUnitType(),
+                plan_id,
+                pattern,
+                body,
+            ),
+        });
     }
 
     fn lowerLocalFunctionDecl(
@@ -10764,6 +11111,16 @@ const BodyLowerer = struct {
         const raw = @intFromEnum(id);
         if (raw >= table.plans.len) invariantViolation("mono body lowering received static dispatch plan id outside table");
         return table.plans[raw];
+    }
+
+    fn iteratorForPlan(self: *const BodyLowerer, id: checked_artifact.IteratorForPlanId) static_dispatch.IteratorForPlan {
+        const table = staticDispatchPlansForKey(self.input, self.template_lookup.artifact) orelse {
+            debug.invariant(false, "mono body lowering invariant violated: static dispatch plan artifact was not available");
+            unreachable;
+        };
+        const raw = @intFromEnum(id);
+        if (raw >= table.iterator_for_plans.len) invariantViolation("mono body lowering received iterator-for plan id outside table");
+        return table.iterator_for_plans[raw];
     }
 
     fn resolvedValueRef(self: *const BodyLowerer, id: checked_artifact.ResolvedValueRefId) checked_artifact.ResolvedValueRefRecord {

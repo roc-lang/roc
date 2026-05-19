@@ -1124,7 +1124,7 @@ main = {
 								(e-num (value "1")))))))
 			(s-let
 				(p-assign (ident "_str_result"))
-				(e-dispatch-call (method "map") (constraint-fn-var 644)
+				(e-dispatch-call (method "map") (constraint-fn-var 646)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "str_container"))))
@@ -1136,11 +1136,11 @@ main = {
 								(p-assign (ident "s")))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dispatch-call (method "get_or") (constraint-fn-var 714)
+				(e-dispatch-call (method "get_or") (constraint-fn-var 722)
 					(receiver
-						(e-dispatch-call (method "flat_map") (constraint-fn-var 694)
+						(e-dispatch-call (method "flat_map") (constraint-fn-var 700)
 							(receiver
-								(e-dispatch-call (method "map") (constraint-fn-var 666)
+								(e-dispatch-call (method "map") (constraint-fn-var 670)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))
@@ -1177,7 +1177,7 @@ main = {
 							(p-assign (ident "x"))))))
 			(s-let
 				(p-assign (ident "transformed"))
-				(e-call (constraint-fn-var 739)
+				(e-call (constraint-fn-var 748)
 					(e-lookup-local
 						(p-assign (ident "transform_twice")))
 					(e-lookup-local
@@ -1204,7 +1204,7 @@ main = {
 						(e-lookup-local
 							(p-assign (ident "transformed"))))
 					(field (name "final")
-						(e-dispatch-call (method "get_or") (constraint-fn-var 750)
+						(e-dispatch-call (method "get_or") (constraint-fn-var 759)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "num_result"))))

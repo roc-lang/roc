@@ -116,90 +116,45 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "evenCount_"))
 				(e-num (value "0")))
-			(s-expr
+			(s-for
+				(p-assign (ident "n"))
+				(e-list
+					(elems
+						(e-num (value "1"))
+						(e-num (value "2"))
+						(e-num (value "3"))
+						(e-num (value "4"))
+						(e-num (value "5"))
+						(e-num (value "6"))
+						(e-num (value "7"))
+						(e-num (value "8"))))
 				(e-block
-					(s-var
-						(p-assign (ident "#for_iter_1"))
-						(e-dispatch-call (method "iter") (constraint-fn-var 200)
-							(receiver
-								(e-list
-									(elems
-										(e-num (value "1"))
-										(e-num (value "2"))
-										(e-num (value "3"))
-										(e-num (value "4"))
-										(e-num (value "5"))
-										(e-num (value "6"))
-										(e-num (value "7"))
-										(e-num (value "8")))))
-							(args)))
-					(s-while
-						(e-tag (name "True"))
-						(e-match
-							(match
-								(cond
-									(e-dispatch-call (method "next") (constraint-fn-var 255)
-										(receiver
+					(e-if
+						(if-branches
+							(if-branch
+								(e-method-eq (negated "false")
+									(lhs
+										(e-binop (op "rem")
 											(e-lookup-local
-												(p-assign (ident "#for_iter_1"))))
-										(args)))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-reassign
-													(p-assign (ident "#for_iter_1"))
-													(e-lookup-local
-														(p-assign (ident "#for_rest_2"))))
-												(s-expr
-													(e-block
-														(e-if
-															(if-branches
-																(if-branch
-																	(e-method-eq (negated "false")
-																		(lhs
-																			(e-binop (op "rem")
-																				(e-lookup-local
-																					(p-assign (ident "n")))
-																				(e-num (value "2"))))
-																		(rhs
-																			(e-num (value "0"))))
-																	(e-block
-																		(s-reassign
-																			(p-assign (ident "lastEven_"))
-																			(e-lookup-local
-																				(p-assign (ident "n"))))
-																		(s-reassign
-																			(p-assign (ident "evenCount_"))
-																			(e-binop (op "add")
-																				(e-lookup-local
-																					(p-assign (ident "evenCount_")))
-																				(e-num (value "1"))))
-																		(e-empty_record))))
-															(if-else
-																(e-block
-																	(e-empty_record))))))
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))))))
-					(e-empty_record)))
+												(p-assign (ident "n")))
+											(e-num (value "2"))))
+									(rhs
+										(e-num (value "0"))))
+								(e-block
+									(s-reassign
+										(p-assign (ident "lastEven_"))
+										(e-lookup-local
+											(p-assign (ident "n"))))
+									(s-reassign
+										(p-assign (ident "evenCount_"))
+										(e-binop (op "add")
+											(e-lookup-local
+												(p-assign (ident "evenCount_")))
+											(e-num (value "1"))))
+									(e-empty_record))))
+						(if-else
+							(e-block
+								(e-empty_record))))))
 			(e-binop (op "mul")
 				(e-lookup-local
 					(p-assign (ident "lastEven_")))

@@ -265,10 +265,25 @@ pub const StaticDispatchCallPlan = struct {
 /// Public `StaticDispatchPlanId` declaration.
 pub const StaticDispatchPlanId = enum(u32) { _ };
 
+/// Public `IteratorForPlanId` declaration.
+pub const IteratorForPlanId = enum(u32) { _ };
+
+/// Public `IteratorForPlan` declaration.
+pub const IteratorForPlan = struct {
+    iter: StaticDispatchPlanId,
+    next: StaticDispatchPlanId,
+    iterable: CheckedExprId,
+    item_ty: CheckedTypeId,
+    iterator_ty: CheckedTypeId,
+    step_ty: CheckedTypeId,
+};
+
 /// Public `StaticDispatchPlanTable` declaration.
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
     by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{},
+    iterator_for_plans: []IteratorForPlan = &.{},
+    iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{},
     template_refs: []StaticDispatchPlanId = &.{},
 
     pub fn fromModule(
@@ -285,6 +300,10 @@ pub const StaticDispatchPlanTable = struct {
         }
         var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{};
         errdefer by_expr.deinit(allocator);
+        var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
+        errdefer iterator_for_plans.deinit(allocator);
+        var iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{};
+        errdefer iterator_for_by_node.deinit(allocator);
 
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
@@ -353,14 +372,79 @@ pub const StaticDispatchPlanTable = struct {
             try by_expr.put(allocator, expr_idx, plan_id);
         }
 
+        const module_env = module.moduleEnvConst();
+        for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
+            const for_node_idx: CIR.Node.Idx = @enumFromInt(for_plan.node_idx);
+            const node_tag = module.nodeTag(for_node_idx);
+            const pattern_idx: CIR.Pattern.Idx, const iterable_idx: CIR.Expr.Idx = switch (node_tag) {
+                .expr_for => blk: {
+                    const for_expr: CIR.Expr.Idx = @enumFromInt(for_plan.node_idx);
+                    const expr = module.expr(for_expr).data.e_for;
+                    break :blk .{ expr.patt, expr.expr };
+                },
+                .statement_for => blk: {
+                    const for_stmt: CIR.Statement.Idx = @enumFromInt(for_plan.node_idx);
+                    const stmt = module.getStatement(for_stmt).s_for;
+                    break :blk .{ stmt.patt, stmt.expr };
+                },
+                else => if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("checked static dispatch iterator-for plan referenced non-for node {d}", .{for_plan.node_idx});
+                } else unreachable,
+            };
+
+            const iterable_expr = checkedExprIdForSource(checked_bodies, iterable_idx);
+            const item_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.patternType(pattern_idx));
+            const iter_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.iter_fn_var));
+            const next_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.next_fn_var));
+            const iterator_ty = checkedFunctionReturnTypeId(checked_types, iter_callable_ty);
+            const step_ty = checkedFunctionReturnTypeId(checked_types, next_callable_ty);
+
+            const iter_plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
+            try plans.append(allocator, .{
+                .expr = iterable_expr,
+                .method = try names.internMethodName("iter"),
+                .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
+                .callable_ty = iter_callable_ty,
+                .args = try checkedExprIdsForSlice(allocator, checked_bodies, &.{iterable_idx}),
+                .result_mode = .value,
+            });
+
+            const next_plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
+            try plans.append(allocator, .{
+                .expr = iterable_expr,
+                .method = try names.internMethodName("next"),
+                .dispatcher_ty = iterator_ty,
+                .callable_ty = next_callable_ty,
+                .args = try allocator.alloc(CheckedExprId, 0),
+                .result_mode = .value,
+            });
+
+            const iterator_for_id: IteratorForPlanId = @enumFromInt(@as(u32, @intCast(iterator_for_plans.items.len)));
+            try iterator_for_plans.append(allocator, .{
+                .iter = iter_plan_id,
+                .next = next_plan_id,
+                .iterable = iterable_expr,
+                .item_ty = item_ty,
+                .iterator_ty = iterator_ty,
+                .step_ty = step_ty,
+            });
+            try iterator_for_by_node.put(allocator, for_node_idx, iterator_for_id);
+        }
+
         return .{
             .plans = try plans.toOwnedSlice(allocator),
             .by_expr = by_expr,
+            .iterator_for_plans = try iterator_for_plans.toOwnedSlice(allocator),
+            .iterator_for_by_node = iterator_for_by_node,
         };
     }
 
     pub fn lookupByExpr(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?StaticDispatchPlanId {
         return self.by_expr.get(expr);
+    }
+
+    pub fn lookupIteratorForByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?IteratorForPlanId {
+        return self.iterator_for_by_node.get(node);
     }
 
     pub fn appendTemplateRefSpan(
@@ -382,8 +466,10 @@ pub const StaticDispatchPlanTable = struct {
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
         allocator.free(self.template_refs);
         self.by_expr.deinit(allocator);
+        self.iterator_for_by_node.deinit(allocator);
         for (self.plans) |plan| allocator.free(plan.args);
         allocator.free(self.plans);
+        allocator.free(self.iterator_for_plans);
         self.* = .{};
     }
 };
@@ -475,6 +561,25 @@ fn checkedTypeIdForVar(
             std.debug.panic("checked static dispatch invariant violated: dispatch type root was not published", .{});
         }
         unreachable;
+    };
+}
+
+fn checkedFunctionReturnTypeId(
+    checked_types: anytype,
+    callable_ty: CheckedTypeId,
+) CheckedTypeId {
+    const raw = @intFromEnum(callable_ty);
+    if (raw >= checked_types.store.payloads.len) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch invariant violated: callable type root was outside the checked type store", .{});
+        }
+        unreachable;
+    }
+    return switch (checked_types.store.payloads[raw]) {
+        .function => |func| func.ret,
+        else => if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch invariant violated: for-loop dispatch constraint was not a function", .{});
+        } else unreachable,
     };
 }
 

@@ -141,6 +141,7 @@ pub const CommonIdents = extern struct {
     dec: Ident.Idx,
 
     // Fully-qualified type identifiers for type checking and layout generation
+    builtin_iter: Ident.Idx,
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
@@ -237,6 +238,7 @@ pub const CommonIdents = extern struct {
             .f32 = try common.insertIdent(gpa, Ident.for_text("F32")),
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
+            .builtin_iter = try common.insertIdent(gpa, Ident.for_text("Builtin.Iter")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
@@ -334,6 +336,7 @@ pub const CommonIdents = extern struct {
             .f32 = common.findIdent("F32") orelse unreachable,
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
+            .builtin_iter = common.findIdent("Builtin.Iter") orelse unreachable,
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
@@ -401,6 +404,19 @@ pub const MethodKey = packed struct(u64) {
 /// This is populated during canonicalization when methods are defined in associated blocks.
 pub const MethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
 
+/// Checked dispatch metadata for one source `for` loop.
+///
+/// Checking writes this when it creates the loop's required `iter` and `next`
+/// static-dispatch constraints. Checked artifact publication consumes it to
+/// publish an explicit iterator-for plan for mono lowering.
+pub const ForLoopDispatchPlan = extern struct {
+    node_idx: u32,
+    iter_fn_var: u32,
+    next_fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -467,6 +483,9 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
 
+/// Dispatch plans attached by checking to source `for` loop nodes.
+for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
+
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
 pub const ForClauseAlias = struct {
@@ -523,6 +542,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.method_idents.relocate(offset);
+    self.for_loop_dispatch_plans.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -588,6 +608,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
+        .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
     };
 }
 
@@ -602,6 +623,7 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
+    self.for_loop_dispatch_plans.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -637,6 +659,7 @@ pub fn deinitCachedModule(self: *Self) void {
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
     self.import_mapping.deinit();
+    self.for_loop_dispatch_plans.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -2513,6 +2536,7 @@ pub const Serialized = extern struct {
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
+    for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -2559,6 +2583,7 @@ pub const Serialized = extern struct {
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
+        try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -2601,6 +2626,7 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
         };
 
         return env;
@@ -2646,6 +2672,7 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         };
 
         return env;
@@ -2660,6 +2687,39 @@ pub fn nodeIdxFrom(idx: anytype) Node.Idx {
 /// Convert a type into a type var
 pub fn varFrom(idx: anytype) TypeVar {
     return @enumFromInt(@intFromEnum(idx));
+}
+
+/// Record the checked iterator dispatch functions for a semantic `for` loop.
+pub fn recordForLoopDispatchPlan(
+    self: *Self,
+    node_idx: Node.Idx,
+    iter_fn_var: TypeVar,
+    next_fn_var: TypeVar,
+) std.mem.Allocator.Error!void {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.for_loop_dispatch_plans.items.items) |*plan| {
+        if (plan.node_idx != raw_node) continue;
+        plan.* = .{
+            .node_idx = raw_node,
+            .iter_fn_var = @intFromEnum(iter_fn_var),
+            .next_fn_var = @intFromEnum(next_fn_var),
+        };
+        return;
+    }
+    _ = try self.for_loop_dispatch_plans.append(self.gpa, .{
+        .node_idx = raw_node,
+        .iter_fn_var = @intFromEnum(iter_fn_var),
+        .next_fn_var = @intFromEnum(next_fn_var),
+    });
+}
+
+/// Return the checked iterator dispatch functions for a semantic `for` loop node.
+pub fn forLoopDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?ForLoopDispatchPlan {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.for_loop_dispatch_plans.items.items) |plan| {
+        if (plan.node_idx == raw_node) return plan;
+    }
+    return null;
 }
 
 /// Adds an identifier to the list of exposed items by its identifier index.

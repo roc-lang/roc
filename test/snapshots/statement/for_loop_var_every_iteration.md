@@ -94,71 +94,26 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "count_"))
 				(e-num (value "0")))
-			(s-expr
+			(s-for
+				(p-assign (ident "n"))
+				(e-list
+					(elems
+						(e-num (value "10"))
+						(e-num (value "20"))
+						(e-num (value "30"))
+						(e-num (value "40"))
+						(e-num (value "50"))))
 				(e-block
-					(s-var
-						(p-assign (ident "#for_iter_1"))
-						(e-dispatch-call (method "iter") (constraint-fn-var 157)
-							(receiver
-								(e-list
-									(elems
-										(e-num (value "10"))
-										(e-num (value "20"))
-										(e-num (value "30"))
-										(e-num (value "40"))
-										(e-num (value "50")))))
-							(args)))
-					(s-while
-						(e-tag (name "True"))
-						(e-match
-							(match
-								(cond
-									(e-dispatch-call (method "next") (constraint-fn-var 212)
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "#for_iter_1"))))
-										(args)))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-reassign
-													(p-assign (ident "#for_iter_1"))
-													(e-lookup-local
-														(p-assign (ident "#for_rest_2"))))
-												(s-expr
-													(e-block
-														(s-reassign
-															(p-assign (ident "count_"))
-															(e-binop (op "add")
-																(e-lookup-local
-																	(p-assign (ident "count_")))
-																(e-num (value "1"))))
-														(s-reassign
-															(p-assign (ident "prev_"))
-															(e-lookup-local
-																(p-assign (ident "n"))))
-														(e-empty_record)))
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-applied-tag)))
-										(value
-											(e-block
-												(s-break)
-												(e-empty_record))))))))
+					(s-reassign
+						(p-assign (ident "count_"))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "count_")))
+							(e-num (value "1"))))
+					(s-reassign
+						(p-assign (ident "prev_"))
+						(e-lookup-local
+							(p-assign (ident "n"))))
 					(e-empty_record)))
 			(e-binop (op "add")
 				(e-lookup-local

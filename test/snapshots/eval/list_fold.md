@@ -136,65 +136,20 @@ expect sumResult == 10
 					(p-assign (ident "$state"))
 					(e-lookup-local
 						(p-assign (ident "init"))))
-				(s-expr
+				(s-for
+					(p-assign (ident "item"))
+					(e-lookup-local
+						(p-assign (ident "list")))
 					(e-block
-						(s-var
-							(p-assign (ident "#for_iter_1"))
-							(e-dispatch-call (method "iter") (constraint-fn-var 106)
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "list"))))
-								(args)))
-						(s-while
-							(e-tag (name "True"))
-							(e-match
-								(match
-									(cond
-										(e-dispatch-call (method "next") (constraint-fn-var 161)
-											(receiver
-												(e-lookup-local
-													(p-assign (ident "#for_iter_1"))))
-											(args)))
-									(branches
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-block
-													(s-reassign
-														(p-assign (ident "#for_iter_1"))
-														(e-lookup-local
-															(p-assign (ident "#for_rest_2"))))
-													(s-expr
-														(e-block
-															(s-reassign
-																(p-assign (ident "$state"))
-																(e-call (constraint-fn-var 204)
-																	(e-lookup-local
-																		(p-assign (ident "step")))
-																	(e-lookup-local
-																		(p-assign (ident "$state")))
-																	(e-lookup-local
-																		(p-assign (ident "item")))))
-															(e-empty_record)))
-													(e-empty_record))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-block
-													(s-break)
-													(e-empty_record))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-applied-tag)))
-											(value
-												(e-block
-													(s-break)
-													(e-empty_record))))))))
+						(s-reassign
+							(p-assign (ident "$state"))
+							(e-call (constraint-fn-var 170)
+								(e-lookup-local
+									(p-assign (ident "step")))
+								(e-lookup-local
+									(p-assign (ident "$state")))
+								(e-lookup-local
+									(p-assign (ident "item")))))
 						(e-empty_record)))
 				(e-lookup-local
 					(p-assign (ident "$state")))))
@@ -211,7 +166,7 @@ expect sumResult == 10
 				(ty-rigid-var-lookup (ty-rigid-var (name "state"))))))
 	(d-let
 		(p-assign (ident "sumResult"))
-		(e-call (constraint-fn-var 281)
+		(e-call (constraint-fn-var 241)
 			(e-lookup-local
 				(p-assign (ident "fold")))
 			(e-list
