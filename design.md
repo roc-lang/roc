@@ -1127,6 +1127,14 @@ A callable-set descriptor is a published compiler fact. It is published exactly
 once, after every member identity and every reachable capture-payload callable
 dependency for that group has been solved.
 
+Descriptor publication is one-way. A strict solve pass may encounter the same
+canonical descriptor key again after representation solving has rebuilt root
+groups, but that second encounter is only a byte-for-byte validation of the
+already-published fact. It must not replace, refresh, widen, repack, or mutate
+the descriptor. If later solve work would change a descriptor's capture slots,
+capture shape, executable payload keys, or member payloads, the producer missed
+an explicit dependency before first publication.
+
 Before descriptor publication, lambda-solved recursively walks each selected
 target capture's explicit value metadata: aliases, projections, nominal
 backings, boxes, records, tuples, tags, lists, joins, and direct function

@@ -5333,6 +5333,11 @@ const CapturedPayloadValueKey = struct {
     value: repr.ValueInfoId,
 };
 
+const CapturedPayloadRootKey = struct {
+    root: repr.RepRootId,
+    ty: Type.TypeVarId,
+};
+
 const CallableEmissionAssigner = struct {
     allocator: Allocator,
     program: *Program,
@@ -5369,11 +5374,11 @@ const CallableEmissionAssigner = struct {
 
     fn assign(self: *CallableEmissionAssigner) Allocator.Error!void {
         try self.collectFunctionRootMetadata();
-        try self.seedAlreadyErasedCallableGroupEmissions();
         try self.collectBoxErasureRequirements();
         try self.publishGroupErasureProvenance();
         try self.collectFiniteCallableContributions();
         if (self.mode == .allow_pending_call_values) return;
+        try self.seedAlreadyErasedCallableGroupEmissions();
         try self.publishCallableGroupSets();
         try self.publishTypeOnlyErasedFunctionGroupEmissions();
         try self.assignValueEmissionPlans();
@@ -5697,10 +5702,187 @@ const CallableEmissionAssigner = struct {
             }
         }
 
+        var root_visited = std.AutoHashMap(CapturedPayloadRootKey, void).init(self.allocator);
+        defer root_visited.deinit();
+        if (!try self.ensureCapturedRootTypeCallableDependenciesPublished(
+            value_info.root,
+            value_info.logical_ty,
+            &root_visited,
+        )) return false;
+
         if (!self.valueHasFunctionType(value_info.logical_ty)) return true;
         const capture_group = self.callableGroupForValueInfo(value_info, value_info.callable) orelse
             lambdaInvariant("lambda-solved captured function value has no solved callable group");
         return try self.ensureCapturedCallableGroupPublished(capture_group);
+    }
+
+    fn ensureCapturedRootTypeCallableDependenciesPublished(
+        self: *CallableEmissionAssigner,
+        root: repr.RepRootId,
+        ty: Type.TypeVarId,
+        visited: *std.AutoHashMap(CapturedPayloadRootKey, void),
+    ) Allocator.Error!bool {
+        const unlinked = self.program.types.unlinkConst(ty);
+        const visit_key = CapturedPayloadRootKey{
+            .root = root,
+            .ty = unlinked,
+        };
+        const visit = try visited.getOrPut(visit_key);
+        if (visit.found_existing) return true;
+
+        return switch (self.program.types.getNode(unlinked)) {
+            .link => unreachable,
+            .unbd,
+            .for_a,
+            .flex_for_a,
+            => lambdaInvariant("lambda-solved capture dependency walk reached unresolved type"),
+            .nominal => |nominal| try self.ensureCapturedRootTypeCallableDependenciesPublished(
+                self.structuralChildRoot(root, .{ .nominal_backing = nominal.nominal }),
+                nominal.backing,
+                visited,
+            ),
+            .content => |content| try self.ensureCapturedRootContentCallableDependenciesPublished(root, content, visited),
+        };
+    }
+
+    fn ensureCapturedRootContentCallableDependenciesPublished(
+        self: *CallableEmissionAssigner,
+        root: repr.RepRootId,
+        content: Type.Content,
+        visited: *std.AutoHashMap(CapturedPayloadRootKey, void),
+    ) Allocator.Error!bool {
+        switch (content) {
+            .primitive => return true,
+            .func => {
+                const group = self.callableGroupForFunctionRoot(root) orelse {
+                    lambdaInvariant("lambda-solved captured function root has no solved callable group");
+                };
+                if (!self.capturedFunctionGroupRequiresPublication(group)) return true;
+                return try self.ensureCapturedCallableGroupPublished(group);
+            },
+            .box => |payload| return try self.ensureCapturedRootTypeCallableDependenciesPublished(
+                self.structuralChildRoot(root, .box_payload),
+                payload,
+                visited,
+            ),
+            .list => |elem| return try self.ensureCapturedRootTypeCallableDependenciesPublished(
+                self.structuralChildRoot(root, .list_elem),
+                elem,
+                visited,
+            ),
+            .tuple => |items| {
+                for (self.program.types.sliceTypeVarSpan(items), 0..) |item, index| {
+                    if (!try self.ensureCapturedRootTypeCallableDependenciesPublished(
+                        self.structuralChildRoot(root, .{ .tuple_elem = @intCast(index) }),
+                        item,
+                        visited,
+                    )) return false;
+                }
+                return true;
+            },
+            .record => |record| {
+                const fields = self.program.types.sliceFields(record.fields);
+                const shape = try self.recordShapeForTypeFields(fields);
+                for (fields) |field| {
+                    if (!try self.ensureCapturedRootTypeCallableDependenciesPublished(
+                        self.structuralChildRoot(root, .{ .record_field = self.recordFieldInShape(shape, field.name) }),
+                        field.ty,
+                        visited,
+                    )) return false;
+                }
+                return true;
+            },
+            .tag_union => |tag_union| {
+                const tags = self.program.types.sliceTags(tag_union.tags);
+                const shape = try self.tagUnionShapeForTypeTags(tags);
+                for (tags) |tag| {
+                    const shape_tag = self.tagInShape(shape, tag.name);
+                    const args = self.program.types.sliceTypeVarSpan(tag.args);
+                    const payloads = self.program.row_shapes.tagPayloads(shape_tag);
+                    if (args.len != payloads.len) {
+                        lambdaInvariant("lambda-solved capture dependency tag payload arity differs from logical type");
+                    }
+                    for (args, payloads) |arg, payload| {
+                        if (!try self.ensureCapturedRootTypeCallableDependenciesPublished(
+                            self.structuralChildRoot(root, .{ .tag_payload = payload }),
+                            arg,
+                            visited,
+                        )) return false;
+                    }
+                }
+                return true;
+            },
+        }
+    }
+
+    fn capturedFunctionGroupRequiresPublication(
+        self: *CallableEmissionAssigner,
+        group: repr.RepresentationGroupId,
+    ) bool {
+        if (self.representationStore().callableGroupEmission(group) != null) return true;
+        if (self.representationStore().callableGroupWorkMembers(group).len > 0) return true;
+        if (self.callableGroupSet(group) != null) return true;
+        if (self.erasedProvenance(group) != null) return true;
+        return false;
+    }
+
+    fn structuralChildRoot(
+        self: *CallableEmissionAssigner,
+        parent: repr.RepRootId,
+        kind: repr.RepresentationChildKind,
+    ) repr.RepRootId {
+        return self.representationStore().solvedStructuralChildRoot(parent, kind) orelse {
+            lambdaInvariant("lambda-solved capture dependency root has no published structural child root");
+        };
+    }
+
+    fn recordShapeForTypeFields(
+        self: *CallableEmissionAssigner,
+        fields: []const Type.Field,
+    ) Allocator.Error!MonoRow.RecordShapeId {
+        if (fields.len == 0) return try self.program.row_shapes.internRecordShapeFromLabels(&.{});
+        const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
+        defer self.allocator.free(labels);
+        for (fields, 0..) |field, i| labels[i] = field.name;
+        return try self.program.row_shapes.internRecordShapeFromLabels(labels);
+    }
+
+    fn recordFieldInShape(
+        self: *CallableEmissionAssigner,
+        shape: MonoRow.RecordShapeId,
+        label: canonical.RecordFieldLabelId,
+    ) MonoRow.RecordFieldId {
+        for (self.program.row_shapes.recordShapeFields(shape)) |field_id| {
+            if (self.program.row_shapes.recordField(field_id).label == label) return field_id;
+        }
+        lambdaInvariant("lambda-solved capture dependency record field label missing from interned shape");
+    }
+
+    fn tagUnionShapeForTypeTags(
+        self: *CallableEmissionAssigner,
+        tags: []const Type.Tag,
+    ) Allocator.Error!MonoRow.TagUnionShapeId {
+        if (tags.len == 0) return try self.program.row_shapes.internTagUnionShapeFromDescriptors(&.{});
+        const descriptors = try self.allocator.alloc(MonoRow.Store.TagShapeDescriptor, tags.len);
+        defer self.allocator.free(descriptors);
+        for (tags, 0..) |tag, i| {
+            descriptors[i] = .{
+                .name = tag.name,
+                .payload_arity = @intCast(self.program.types.sliceTypeVarSpan(tag.args).len),
+            };
+        }
+        return try self.program.row_shapes.internTagUnionShapeFromDescriptors(descriptors);
+    }
+
+    fn tagInShape(
+        self: *CallableEmissionAssigner,
+        shape: MonoRow.TagUnionShapeId,
+        label: canonical.TagLabelId,
+    ) MonoRow.TagId {
+        for (self.program.row_shapes.tagUnionTags(shape)) |tag_id| {
+            if (self.program.row_shapes.tag(tag_id).label == label) return tag_id;
+        }
+        lambdaInvariant("lambda-solved capture dependency tag label missing from interned shape");
     }
 
     fn ensureCapturedCallableGroupPublished(
@@ -5754,6 +5936,7 @@ const CallableEmissionAssigner = struct {
                     .already_erased => {
                         const group = self.callableGroupForValueInfo(value_info, callable) orelse
                             lambdaInvariant("lambda-solved already-erased callable seed reached value without a solved callable group");
+                        if (self.representationStore().callableGroupWorkMembers(group).len > 0) continue;
                         _ = try self.publishAlreadyErasedCallableGroupEmission(group, callable.emission_plan);
                     },
                     .pending_proc_value,
@@ -5885,6 +6068,15 @@ const CallableEmissionAssigner = struct {
                         .already_erased => {
                             const group = self.callableGroupForValueInfo(value_info.*, existing) orelse
                                 lambdaInvariant("lambda-solved already-erased callable value reached emission assignment without a solved callable group");
+                            if (self.representationStore().callableGroupEmission(group)) |group_emission| {
+                                const already_erased = switch (self.representationStore().callableEmissionPlan(existing.emission_plan)) {
+                                    .already_erased => |erased| erased,
+                                    else => unreachable,
+                                };
+                                if (try self.groupEmissionAcceptsAlreadyErasedValue(group, group_emission, already_erased)) {
+                                    continue;
+                                }
+                            }
                             const canonical_emission = try self.publishAlreadyErasedCallableGroupEmission(group, existing.emission_plan);
                             const already_erased = switch (self.representationStore().callableEmissionPlan(canonical_emission)) {
                                 .already_erased => |erased| erased,
@@ -6319,6 +6511,29 @@ const CallableEmissionAssigner = struct {
         try self.representationStore().publishCallableGroupEmission(group_set.group, emission);
         self.changed = true;
         return emission;
+    }
+
+    fn groupEmissionAcceptsAlreadyErasedValue(
+        self: *CallableEmissionAssigner,
+        group: repr.RepresentationGroupId,
+        group_emission: repr.CallableValueEmissionPlanId,
+        already_erased: repr.AlreadyErasedCallablePlan,
+    ) Allocator.Error!bool {
+        return switch (self.representationStore().callableEmissionPlan(group_emission)) {
+            .already_erased => false,
+            .erase_finite_set => |erase| blk: {
+                if (!repr.erasedFnSigKeyEql(erase.adapter.erased_fn_sig_key, already_erased.sig_key)) break :blk false;
+                if (!alreadyErasedResultMatchesSig(already_erased)) break :blk false;
+                if (already_erased.provenance.len > 0) {
+                    try self.representationStore().publishGroupErasureProvenance(group, already_erased.provenance);
+                }
+                break :blk true;
+            },
+            .finite,
+            .pending_proc_value,
+            .erase_proc_value,
+            => false,
+        };
     }
 
     fn callableGroupEmissionMatches(
