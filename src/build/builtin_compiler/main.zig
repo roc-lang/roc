@@ -1302,7 +1302,7 @@ pub fn main(process_init: std.process.Init) !void {
 
     var args_list = std.ArrayList([:0]const u8).empty;
     defer args_list.deinit(gpa);
-    var args_iter = std.process.Args.Iterator.init(process_init.minimal.args);
+    var args_iter = try process_init.minimal.args.iterateAllocator(gpa);
     defer args_iter.deinit();
     while (args_iter.next()) |arg| {
         try args_list.append(gpa, arg);

@@ -4,13 +4,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const unbundle = @import("unbundle.zig");
+const localhost = @import("localhost.zig");
 
 // Buffer size for file I/O operations (8KB is efficient for typical filesystem block sizes)
 const IO_BUFFER_SIZE: usize = 8 * 1024;
-
-// IPv4 loopback address 127.0.0.1 in network byte order
-const IPV4_LOOPBACK_BE: u32 = 0x7F000001; // Big-endian
-const IPV4_LOOPBACK_LE: u32 = 0x0100007F; // Little-endian
 
 // Maximum retries for temp file creation (handles rare collisions)
 const MAX_TEMP_FILE_RETRIES: usize = 10;
@@ -185,59 +182,8 @@ fn downloadToFile(
     // Check if we need to resolve localhost and verify loopback
     if (uri.host) |host| {
         if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
-            // Security: We must resolve "localhost" and verify it points to a loopback address.
-            // Use getaddrinfo to resolve and check each returned address.
-            const hints: std.c.addrinfo = .{
-                .flags = @bitCast(@as(u32, 0)),
-                .family = std.posix.AF.UNSPEC,
-                .socktype = 0,
-                .protocol = 0,
-                .addrlen = 0,
-                .addr = null,
-                .canonname = null,
-                .next = null,
-            };
-            var result: ?*std.c.addrinfo = null;
-            if (@intFromEnum(std.c.getaddrinfo("localhost", null, &hints, &result)) != 0) {
-                return error.NetworkError;
-            }
-            defer if (result) |r| std.c.freeaddrinfo(r);
-
-            if (result == null) {
-                return error.LocalhostWasNotLoopback;
-            }
-
-            // Check that at least one address is a loopback
-            var found_loopback = false;
-            var addr_it = result;
-            while (addr_it) |addr| : (addr_it = addr.next) {
-                if (addr.family == std.posix.AF.INET) {
-                    const sockaddr: *const std.posix.sockaddr.in = @ptrCast(@alignCast(addr.addr));
-                    const ipv4_addr = sockaddr.addr;
-                    if (ipv4_addr == IPV4_LOOPBACK_BE or ipv4_addr == IPV4_LOOPBACK_LE) {
-                        found_loopback = true;
-                        break;
-                    }
-                } else if (addr.family == std.posix.AF.INET6) {
-                    const sockaddr6: *const std.posix.sockaddr.in6 = @ptrCast(@alignCast(addr.addr));
-                    const ipv6_addr = sockaddr6.addr;
-                    var is_loopback = true;
-                    for (ipv6_addr[0..15]) |byte| {
-                        if (byte != 0) {
-                            is_loopback = false;
-                            break;
-                        }
-                    }
-                    if (is_loopback and ipv6_addr[15] == 1) {
-                        found_loopback = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!found_loopback) {
-                return error.LocalhostWasNotLoopback;
-            }
+            // Security: resolve "localhost" and require at least one loopback result.
+            try localhost.requireLoopback();
         }
     }
 

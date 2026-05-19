@@ -4,8 +4,22 @@ const build_options = @import("build_options");
 
 var verbose_mode = false;
 
-/// Replacement for removed std.time.nanoTimestamp
+/// Replacement for removed std.time.nanoTimestamp.
+/// Uses QueryPerformanceCounter on Windows (std.c.clock_gettime doesn't apply there)
+/// and clock_gettime(MONOTONIC) elsewhere.
 fn nanoTimestamp() i128 {
+    if (@import("builtin").os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.winapi) std.os.windows.BOOL;
+            extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.winapi) std.os.windows.BOOL;
+        };
+        var counter: i64 = undefined;
+        var freq: i64 = undefined;
+        _ = k32.QueryPerformanceCounter(&counter);
+        _ = k32.QueryPerformanceFrequency(&freq);
+        // Multiply before divide while preserving precision.
+        return @divTrunc(@as(i128, counter) * std.time.ns_per_s, freq);
+    }
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(.MONOTONIC, &ts);
     return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
@@ -941,7 +955,7 @@ pub fn main(init: std.process.Init) !void {
     // Handle CLI arguments
     var args_list: std.ArrayList([]const u8) = .empty;
     defer args_list.deinit(allocator);
-    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+    var args_iter = try init.minimal.args.iterateAllocator(allocator);
     while (args_iter.next()) |arg| {
         try args_list.append(allocator, arg);
     }

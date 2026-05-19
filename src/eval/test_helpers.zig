@@ -94,8 +94,26 @@ const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
     }
 
     fn readNs() u64 {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        if (builtin.os.tag == .windows) {
+            const k32 = struct {
+                extern "kernel32" fn QueryPerformanceCounter(*i64) callconv(.winapi) std.os.windows.BOOL;
+                extern "kernel32" fn QueryPerformanceFrequency(*i64) callconv(.winapi) std.os.windows.BOOL;
+            };
+            var counter: i64 = undefined;
+            var freq: i64 = undefined;
+            _ = k32.QueryPerformanceCounter(&counter);
+            _ = k32.QueryPerformanceFrequency(&freq);
+            // Use i128 to avoid overflow on the multiplication; QPC counter * 1e9
+            // exceeds i64 within ~30 minutes of uptime on a typical 10MHz QPF.
+            return @intCast(@divTrunc(@as(i128, counter) * 1_000_000_000, @as(i128, freq)));
+        }
+        if (builtin.os.tag == .linux) {
+            var ts: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        }
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.MONOTONIC, &ts);
         return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     }
 };

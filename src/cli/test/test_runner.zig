@@ -80,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try parseArgs(init.minimal.args);
+    const args = try parseArgs(init.minimal.args, allocator);
 
     // Look up the platform
     const platform = platform_config.findPlatform(args.platform_name) orelse {
@@ -522,8 +522,8 @@ fn runValgrindTests(
     }
 }
 
-fn parseArgs(process_args: std.process.Args) !Args {
-    var iter = std.process.Args.Iterator.init(process_args);
+fn parseArgs(process_args: std.process.Args, gpa: std.mem.Allocator) !Args {
+    var iter = try process_args.iterateAllocator(gpa);
 
     // Skip argv[0] (program name)
     _ = iter.next();

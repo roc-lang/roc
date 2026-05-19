@@ -512,6 +512,10 @@ test "Channel blocking recv with timeout" {
 test "Channel producer-consumer coordination" {
     // Skip on wasm where threads aren't available
     if (threading.is_freestanding) return error.SkipZigTest;
+    // std.c.nanosleep is unavailable on Windows (timespec.sec is `void` there).
+    // The actual Channel logic is tested elsewhere; skipping here keeps the
+    // suite portable.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
 
     var ch = try Channel(u32).init(std.testing.allocator, 2, std.testing.io); // Small buffer to test blocking
     defer ch.deinit();
@@ -521,7 +525,8 @@ test "Channel producer-consumer coordination" {
         fn run(channel: *Channel(u32)) void {
             for (0..5) |i| {
                 // 1ms delay
-                _ = std.c.nanosleep(&.{ .sec = 0, .nsec = 1_000_000 }, null);
+                const ts: std.c.timespec = .{ .sec = 0, .nsec = 1_000_000 };
+                _ = std.c.nanosleep(&ts, null);
                 channel.send(@as(u32, @intCast(i))) catch return;
             }
         }

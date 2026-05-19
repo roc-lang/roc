@@ -433,11 +433,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 else => try args.append("/machine:x64"), // default to x64
             }
 
-            // Set stack size to 16MB (matching Zig's default; Windows default is 1MB).
-            // Zig's std.fs uses PathSpace buffers (~64KB each) on the stack for path
-            // operations, and nested calls can quickly exceed 1MB. Using Zig's default
-            // ensures Roc applications have the same stack headroom as native Zig programs.
-            try args.append("/stack:16777216");
+            // Set stack size to 64 MiB. Windows default is 1 MiB. Zig 0.16 codegen
+            // produces bigger frames (e.g. std.fs PathSpace buffers ~64 KiB each) than
+            // 0.15, and recursion-heavy Roc programs blow past 16 MiB before the
+            // platform host's overflow handler can run. Match eval-test-runner.exe
+            // and roc.exe.
+            try args.append("/stack:67108864");
 
             // These are part of the core Windows OS and are available on all Windows systems
             try args.append("/defaultlib:kernel32");

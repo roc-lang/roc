@@ -548,8 +548,10 @@ pub fn main(init: std.process.Init) !void {
         gpa = gpa_tracy.allocator();
     }
 
-    const args = try init.minimal.args.toSlice(gpa);
-    defer gpa.free(args);
+    // `toSlice` packs slices and contents into a single arena allocation; freeing
+    // through a debug GPA panics because the returned slice does not match any
+    // original `alloc()` call. Use the process arena (cleaned up at exit) instead.
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     var snapshot_paths = std.array_list.Managed([]const u8).init(gpa);
     defer snapshot_paths.deinit();

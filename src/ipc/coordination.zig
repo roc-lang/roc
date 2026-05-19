@@ -52,19 +52,28 @@ pub fn parseHandle(handle_str: []const u8) CoordinationError!platform.Handle {
 
 /// Windows: Read handle and size from command line arguments
 fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdInfo {
-    const args = std.process.argsAlloc(allocator) catch {
-        std.log.err("Failed to allocate memory for command line arguments", .{});
+    // In Zig 0.16 `std.process.argsAlloc` was removed; on Windows we read the raw
+    // command line from the PEB and parse it with the standard library iterator.
+    // The shim entry point is not driven by Zig's `main(init: Init)`, so we cannot
+    // receive an `Args` value from the runtime.
+    const cmd_line_w = std.os.windows.peb().ProcessParameters.CommandLine.slice();
+    var iter = std.process.Args.Iterator.Windows.init(allocator, cmd_line_w) catch {
+        std.log.err("Failed to initialize command line iterator", .{});
         return error.AllocationFailed;
     };
-    defer std.process.argsFree(allocator, args);
+    defer iter.deinit();
 
-    if (args.len < 3) {
-        std.log.err("Invalid command line arguments: expected at least 3 arguments, got {}", .{args.len});
+    // Skip argv[0] (program name).
+    _ = iter.next();
+
+    const handle_str = iter.next() orelse {
+        std.log.err("Invalid command line arguments: missing handle", .{});
         return error.ArgumentsInvalid;
-    }
-
-    const handle_str = args[1];
-    const size_str = args[2];
+    };
+    const size_str = iter.next() orelse {
+        std.log.err("Invalid command line arguments: missing size", .{});
+        return error.ArgumentsInvalid;
+    };
 
     const fd_str = allocator.dupe(u8, handle_str) catch {
         std.log.err("Failed to duplicate handle string", .{});

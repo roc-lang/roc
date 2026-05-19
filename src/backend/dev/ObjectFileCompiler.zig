@@ -135,8 +135,8 @@ pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8
         CoreCtx.writeFileCwd(io, sub_path, data) catch |err| switch (err) {
             error.AccessDenied => {
                 if (attempt + 1 >= max_attempts) return err;
-                const delay_ns: u64 = @as(u64, 10) * std.time.ns_per_ms * (@as(u64, 1) << @intCast(attempt));
-                std.Thread.sleep(delay_ns);
+                const delay_ms: u32 = @intCast(@as(u64, 10) * (@as(u64, 1) << @intCast(attempt)));
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(delay_ms)), .awake) catch {};
                 continue;
             },
             else => return err,

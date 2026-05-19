@@ -21,6 +21,12 @@ pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
 
+/// Disable stack-trace capture in the shim. Zig 0.16's SelfInfo for Windows pulls in
+/// `ntdll.LdrRegisterDllNotification`, which the linker can't find when a roc-compiled
+/// program links the shim's static archive (we deliberately don't link ntdll). Empty
+/// stack traces are fine for the shim since panics here go through the host's RocOps.
+pub const std_options = std.Options{ .allow_stack_tracing = false };
+
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;

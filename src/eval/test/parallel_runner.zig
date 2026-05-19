@@ -970,6 +970,7 @@ fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: s
 /// main() (the GPA) so that gpa.free on bd.value in cleanup matches the
 /// allocator that duped the bytes during deserialize.
 fn retryFailedForAttribution(
+    io: std.Io,
     gpa: std.mem.Allocator,
     results: []TestResult,
     worker_argv_template: []const []const u8,
@@ -1009,6 +1010,7 @@ fn retryFailedForAttribution(
             if (attributed[bi].status == .not_implemented or attributed[bi].status == .skip) continue;
 
             const outcome = Pool.spawnSingleWorker(
+                io,
                 gpa,
                 worker_argv_template,
                 idx,
@@ -1475,7 +1477,7 @@ pub fn main(init: std.process.Init) !void {
             .backends = backends,
             .expected_str = outcome.expected_str,
         };
-        serializeResultForPool(std.posix.STDOUT_FILENO, result);
+        serializeResultForPool(harness.stdoutFd(), result);
         trace_worker.stamp("serialize done");
         return;
     }
@@ -1488,14 +1490,15 @@ pub fn main(init: std.process.Init) !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
-        const stdout_handle = std.posix.STDOUT_FILENO;
+        const stdout_handle = harness.stdoutFd();
+        const stdin_handle = harness.stdinFd();
 
         var line_buf: [32]u8 = undefined;
         outer: while (true) {
             var line_len: usize = 0;
             while (true) {
                 if (line_len >= line_buf.len) break :outer; // malformed
-                const n = std.posix.read(std.posix.STDIN_FILENO, line_buf[line_len .. line_len + 1]) catch break :outer;
+                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
                 if (n == 0) break :outer; // EOF — parent done
                 if (line_buf[line_len] == '\n') break;
                 line_len += 1;
@@ -1525,8 +1528,14 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // In Zig 0.16, std.process.getEnvVarOwned was removed.
-    // Use std.process.Environ.getPosix instead (no allocation needed).
-    const disable_fork_env: ?[:0]const u8 = std.process.Environ.getPosix(init.minimal.environ, "ROC_EVAL_NO_FORK");
+    // Use Environ.getPosix on POSIX (no alloc). On Windows, the matching
+    // getPosix variant currently mis-compiles in the stdlib, and the fork
+    // path doesn't apply anyway (Windows uses the Child pool), so the
+    // env var has no effect there.
+    const disable_fork_env: ?[:0]const u8 = if (builtin.os.tag == .windows)
+        null
+    else
+        std.process.Environ.getPosix(init.minimal.environ, "ROC_EVAL_NO_FORK");
 
     // Coverage mode and ROC_EVAL_NO_FORK use a simple single-threaded loop: no
     // outer fork, no watchdog, no threads. ROC_EVAL_NO_FORK is also consumed by
@@ -1592,7 +1601,7 @@ pub fn main(init: std.process.Init) !void {
     // unused (fork path doesn't re-exec) but we build it uniformly.
     const worker_argv_template = try buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
+    Pool.run(io, tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
 
     // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
     // whole worker before per-backend details land in the wire payload. For
@@ -1601,7 +1610,7 @@ pub fn main(init: std.process.Init) !void {
     // pays zero retry cost. Skipped on POSIX where forkAndEval already
     // attributes crashes per-backend within the worker.
     if (builtin.os.tag == .windows) {
-        retryFailedForAttribution(gpa, results, worker_argv_template, hang_timeout_ms);
+        retryFailedForAttribution(io, gpa, results, worker_argv_template, hang_timeout_ms);
     }
 
     const wall_elapsed = wall_timer.read();

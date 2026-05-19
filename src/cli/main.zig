@@ -239,20 +239,28 @@ fn ensureWindowsConsoleSupportsAnsiAndUtf8() void {
     windows_console_configured = true;
 
     // Ensure the legacy console interprets escape sequences and UTF-8 output.
-    const kernel32 = std.os.windows.kernel32;
-    const current_code_page = kernel32.GetConsoleOutputCP();
+    // GetConsoleOutputCP / SetConsoleOutputCP were removed from std.os.windows.kernel32
+    // in Zig 0.16; declare them locally.
+    const console = struct {
+        extern "kernel32" fn GetConsoleOutputCP() callconv(.winapi) u32;
+        extern "kernel32" fn SetConsoleOutputCP(wCodePageID: u32) callconv(.winapi) std.os.windows.BOOL;
+    };
+    const current_code_page = console.GetConsoleOutputCP();
     if (current_code_page != 0 and current_code_page != 65001) {
         windows_console_previous_code_page = current_code_page;
-        _ = kernel32.SetConsoleOutputCP(65001);
+        _ = console.SetConsoleOutputCP(65001);
     }
     // Note: ANSI escape support is enabled in Io.init()
 }
 
 fn restoreWindowsConsoleCodePage() void {
     if (!is_windows) return;
+    const console = struct {
+        extern "kernel32" fn SetConsoleOutputCP(wCodePageID: u32) callconv(.winapi) std.os.windows.BOOL;
+    };
     if (windows_console_previous_code_page) |code_page| {
         windows_console_previous_code_page = null;
-        _ = std.os.windows.kernel32.SetConsoleOutputCP(code_page);
+        _ = console.SetConsoleOutputCP(code_page);
     }
 }
 
@@ -404,8 +412,8 @@ fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) !void {
             ) callconv(.winapi) std.os.windows.BOOL;
         };
 
-        if (kernel32.CreateHardLinkW(dest_w, source_w, null) == 0) {
-            const err = std.os.windows.kernel32.GetLastError();
+        if (kernel32.CreateHardLinkW(dest_w, source_w, null) == .FALSE) {
+            const err = std.os.windows.GetLastError();
             switch (err) {
                 .ALREADY_EXISTS => return error.PathAlreadyExists,
                 else => return error.Unexpected,
@@ -645,7 +653,7 @@ pub fn main(init: std.process.Init) !void {
 
     var args_list: std.ArrayList([]const u8) = .empty;
     defer args_list.deinit(arena);
-    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+    var args_iter = try init.minimal.args.iterateAllocator(arena);
     while (args_iter.next()) |arg| {
         try args_list.append(arena, arg);
     }
@@ -1570,7 +1578,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handl
         return error.OutOfMemory;
     };
     defer cmd_builder.deinit();
-    try cmd_builder.writer().print("\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    try cmd_builder.print("\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
     for (app_args) |arg| {
         try cmd_builder.append(' ');
         try appendWindowsQuotedArg(&cmd_builder, arg);
@@ -1609,7 +1617,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handl
     );
 
     if (success == 0) {
-        const last_error = std.os.windows.kernel32.GetLastError();
+        const last_error = std.os.windows.GetLastError();
         std.log.err("CreateProcessW failed with Windows error code: {}", .{last_error});
         std.log.err("exe_path: {s}", .{exe_path});
         std.log.err("cmd_line: {s}", .{cmd_builder.items[0 .. cmd_builder.items.len - 1]});

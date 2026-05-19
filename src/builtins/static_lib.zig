@@ -5,6 +5,7 @@
 //! - Numeric overflow functions (for compiler-rt)
 //! - Dev backend wrapper functions (for roc build --opt=dev)
 
+const std = @import("std");
 const shim_io = @import("shim_io");
 
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
@@ -12,6 +13,12 @@ pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPa
 pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
+
+/// Disable std stack tracing — Zig 0.16's SelfInfo for Windows references
+/// `ntdll.LdrRegisterDllNotification` (and transitively pulls in `Io.Threaded`
+/// timeout helpers needing `__divti3`), neither of which is linked into the
+/// roc-compiled programs that embed this builtins object.
+pub const std_options: std.Options = .{ .allow_stack_tracing = false };
 
 // Export key functions that might need compiler-rt symbols
 comptime {

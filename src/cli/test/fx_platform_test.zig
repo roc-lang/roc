@@ -48,8 +48,13 @@ fn runDevBackendHostSelfTest(
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
-    const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
+    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
     var env_map = try environ.createMap(allocator);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);

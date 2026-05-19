@@ -7,6 +7,9 @@ const builtins = @import("builtins");
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 pub const std_options_debug_io = shim_io.io();
 pub const std_options_debug_threaded_io = null;
+// Disable std stack tracing — Zig 0.16's SelfInfo (Windows) pulls in
+// ntdll.LdrRegisterDllNotification which isn't linked into roc programs.
+pub const std_options: std.Options = .{ .allow_stack_tracing = false };
 
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocDealloc = builtins.host_abi.RocDealloc;

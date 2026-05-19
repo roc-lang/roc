@@ -2835,6 +2835,10 @@ pub fn build(b: *std.Build) void {
             .link_libc = true, // needed for sljmp/setjmp
         }),
     });
+    // The deepest eval test recurses ~1000 frames; Zig 0.16 codegen pushes that past
+    // the 1 MiB Windows default. Reserve a generous stack so recursive eval tests
+    // don't trip our SetUnhandledExceptionFilter stack-overflow handler.
+    eval_test_exe.stack_size = 64 * 1024 * 1024;
     configureBackend(eval_test_exe, target);
     roc_modules.addAll(eval_test_exe);
     eval_test_exe.root_module.addOptions("coverage_options", blk: {
@@ -4045,6 +4049,12 @@ fn addMainExe(
             .link_libc = true,
         }),
     });
+    // The in-process interpreter (used by `--opt=interpreter`) recurses Zig stack
+    // frames per Roc call. With Zig 0.16 codegen frame sizes, the Windows 1 MiB
+    // default reserve isn't enough — recursion-heavy Roc programs trip our
+    // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
+    // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
+    exe.stack_size = 64 * 1024 * 1024;
     configureBackend(exe, target);
 
     // Build str and int test platform host libraries for native target

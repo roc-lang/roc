@@ -3,24 +3,21 @@
 
 const std = @import("std");
 const base = @import("base");
-const builtin = @import("builtin");
 const bundle = @import("bundle.zig");
+const unbundle_mod = @import("unbundle");
+
+const localhost = unbundle_mod.localhost;
 
 // Network constants
 const SERVER_HEADER_BUFFER_SIZE: usize = 16 * 1024;
 
-// IPv4 loopback address 127.0.0.1 in network byte order
-const IPV4_LOOPBACK_BE: u32 = 0x7F000001; // Big-endian
-const IPV4_LOOPBACK_LE: u32 = 0x0100007F; // Little-endian
-
 /// Errors that can occur during the download operation.
 pub const DownloadError = error{
     InvalidUrl,
-    LocalhostWasNotLoopback,
     InvalidHash,
     HttpError,
     NoHashInUrl,
-} || bundle.UnbundleError || std.mem.Allocator.Error;
+} || localhost.Error || bundle.UnbundleError || std.mem.Allocator.Error;
 
 /// Parse URL and validate it meets our security requirements.
 /// Returns the hash from the URL if valid.
@@ -77,66 +74,11 @@ pub fn download(
     var extra_headers: []const std.http.Header = &.{};
     if (uri.host) |host| {
         if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
-            // Security: We must resolve "localhost" and verify it points to a loopback address.
-            // This prevents attacks where:
-            // 1. An attacker modifies /etc/hosts to make localhost resolve to their server
-            // 2. A compromised DNS makes localhost resolve to an external IP
-            // 3. Container/VM networking misconfiguration exposes localhost to external IPs
-            //
-            // We're being intentionally strict here:
-            // - For IPv4: We only accept exactly 127.0.0.1 (not the full 127.0.0.0/8 range)
-            // - For IPv6: We only accept exactly ::1 (not other loopback addresses)
-            //
-            // While the specs technically allow any 127.x.y.z address for IPv4 loopback
-            // and multiple forms for IPv6, in practice localhost almost always resolves
-            // to exactly 127.0.0.1 or ::1. By being conservative, we:
-            // 1. Match real-world usage patterns (no practical downside)
-            // 2. Avoid potential edge cases in networking stack implementations
-            // 3. Reduce attack surface by accepting only the most common values
-
-            // Resolve "localhost" using getaddrinfo and verify it's a loopback address
-            const AF_INET: i32 = 2;
-            const AF_INET6: i32 = if (builtin.os.tag == .linux) 10 else 30;
-
-            var result: ?*std.c.addrinfo = null;
-            const rc = std.c.getaddrinfo("localhost", null, null, &result);
-            if (@intFromEnum(rc) != 0 or result == null) {
-                return error.LocalhostWasNotLoopback;
-            }
-            defer std.c.freeaddrinfo(result.?);
-
-            // Check if the resolved address is a loopback address
-            const addr_info = result.?;
-            const is_loopback = if (addr_info.family == AF_INET) blk: {
-                const sockaddr_in: *const std.posix.sockaddr.in = @ptrCast(@alignCast(addr_info.addr.?));
-                const addr = sockaddr_in.addr;
-                const expected: u32 = if (comptime builtin.cpu.arch.endian() == .little)
-                    IPV4_LOOPBACK_LE
-                else
-                    IPV4_LOOPBACK_BE;
-                break :blk addr == expected;
-            } else if (addr_info.family == AF_INET6) blk: {
-                const sockaddr_in6: *const std.posix.sockaddr.in6 = @ptrCast(@alignCast(addr_info.addr.?));
-                const addr = sockaddr_in6.addr;
-                for (addr[0..15]) |byte| {
-                    if (byte != 0) break :blk false;
-                }
-                break :blk addr[15] == 1;
-            } else false;
-
-            if (!is_loopback) {
-                return error.LocalhostWasNotLoopback;
-            }
-
-            // Update the URI to use the resolved IP instead of "localhost"
-            if (addr_info.family == AF_INET) {
-                // IPv4: just use "127.0.0.1" as the host
-                uri.host = .{ .percent_encoded = "127.0.0.1" };
-            } else {
-                // IPv6: use "[::1]" as the host
-                uri.host = .{ .percent_encoded = "[::1]" };
-            }
-
+            const family = try localhost.resolveLoopback();
+            uri.host = switch (family) {
+                .ip4 => .{ .percent_encoded = "127.0.0.1" },
+                .ip6 => .{ .percent_encoded = "[::1]" },
+            };
             // Set Host header to preserve original hostname
             extra_headers = &.{
                 .{ .name = "Host", .value = "localhost" },

@@ -41,6 +41,10 @@ pub const std_options_debug_threaded_io = null;
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
     .log_level = .warn,
+    // Zig 0.16's std.debug.SelfInfo (Windows) references ntdll.LdrRegisterDllNotification,
+    // which isn't available when the host static archive is linked into a roc-compiled
+    // program. Disabling stack tracing avoids pulling that code in.
+    .allow_stack_tracing = false,
 };
 
 /// Override the default panic handler to avoid secondary crashes in stack trace generation

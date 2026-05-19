@@ -5,6 +5,34 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
+// win32.OVERLAPPED and FILE_NOTIFY_INFORMATION were removed in Zig 0.16.
+// Define the layouts we need locally; these are only referenced on Windows.
+const win32 = struct {
+    const DWORD = std.os.windows.DWORD;
+    const HANDLE = std.os.windows.HANDLE;
+    const ULONG_PTR = std.os.windows.ULONG_PTR;
+
+    const OVERLAPPED = extern struct {
+        Internal: ULONG_PTR,
+        InternalHigh: ULONG_PTR,
+        DUMMYUNIONNAME: extern union {
+            DUMMYSTRUCTNAME: extern struct {
+                Offset: DWORD,
+                OffsetHigh: DWORD,
+            },
+            Pointer: ?*anyopaque,
+        },
+        hEvent: ?HANDLE,
+    };
+
+    const FILE_NOTIFY_INFORMATION = extern struct {
+        NextEntryOffset: DWORD,
+        Action: DWORD,
+        FileNameLength: DWORD,
+        // Followed by FileName: [FileNameLength/2]WCHAR at offset @sizeOf(FILE_NOTIFY_INFORMATION)
+    };
+};
+
 // Use real FSEvents only when building natively for macOS
 // Cross-compilation detection: Use build system's isNative() check
 const target_is_macos = builtin.os.tag == .macos;
@@ -256,8 +284,8 @@ pub const Watcher = struct {
         stop_event: ?std.os.windows.HANDLE,
 
         const OverlappedData = struct {
-            overlapped: std.os.windows.OVERLAPPED,
-            buffer: []align(@alignOf(std.os.windows.FILE_NOTIFY_INFORMATION)) u8,
+            overlapped: win32.OVERLAPPED,
+            buffer: []align(@alignOf(win32.FILE_NOTIFY_INFORMATION)) u8,
             path: []const u8,
         };
     };
@@ -742,7 +770,7 @@ pub const Watcher = struct {
             ) callconv(.winapi) ?std.os.windows.HANDLE;
         }.CreateEventW;
 
-        self.impl.stop_event = CreateEventW(null, std.os.windows.TRUE, std.os.windows.FALSE, null) orelse {
+        self.impl.stop_event = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse {
             std.log.err("Failed to create stop event", .{});
             return;
         };
@@ -794,7 +822,7 @@ pub const Watcher = struct {
             const result = WaitForMultipleObjects(
                 @intCast(handles.len),
                 handles.ptr,
-                std.os.windows.FALSE,
+                .FALSE,
                 100, // 100ms timeout
             );
 
@@ -872,18 +900,18 @@ pub const Watcher = struct {
             ) callconv(.winapi) ?std.os.windows.HANDLE;
         }.CreateEventW;
 
-        const event_handle = CreateEventW(null, std.os.windows.TRUE, std.os.windows.FALSE, null) orelse {
+        const event_handle = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse {
             _ = std.os.windows.CloseHandle(dir_handle);
             return error.FailedToCreateEvent;
         };
 
         // Allocate buffer for ReadDirectoryChangesW
         const buffer_size = 4096;
-        const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(std.os.windows.FILE_NOTIFY_INFORMATION)), buffer_size);
+        const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(win32.FILE_NOTIFY_INFORMATION)), buffer_size);
 
         // Create overlapped data
         var overlapped_data = WindowsData.OverlappedData{
-            .overlapped = std.mem.zeroes(std.os.windows.OVERLAPPED),
+            .overlapped = std.mem.zeroes(win32.OVERLAPPED),
             .buffer = buffer,
             .path = try self.allocator.dupe(u8, path),
         };
@@ -906,7 +934,7 @@ pub const Watcher = struct {
                 bWatchSubtree: std.os.windows.BOOL,
                 dwNotifyFilter: std.os.windows.DWORD,
                 lpBytesReturned: ?*std.os.windows.DWORD,
-                lpOverlapped: *std.os.windows.OVERLAPPED,
+                lpOverlapped: *win32.OVERLAPPED,
                 lpCompletionRoutine: ?*anyopaque,
             ) callconv(.winapi) std.os.windows.BOOL;
         }.ReadDirectoryChangesW;
@@ -925,19 +953,15 @@ pub const Watcher = struct {
             self.impl.handles.items[index],
             self.impl.overlapped_data.items[index].buffer.ptr,
             @intCast(self.impl.overlapped_data.items[index].buffer.len),
-            std.os.windows.TRUE, // Watch subtree
+            std.os.windows.BOOL.TRUE, // Watch subtree
             notify_filter,
             null,
             &self.impl.overlapped_data.items[index].overlapped,
             null,
         );
 
-        if (result == 0) {
-            const GetLastError = struct {
-                extern "kernel32" fn GetLastError() callconv(.winapi) std.os.windows.DWORD;
-            }.GetLastError;
-
-            const err = GetLastError();
+        if (result == .FALSE) {
+            const err = std.os.windows.GetLastError();
             std.log.err("ReadDirectoryChangesW failed with error: {}", .{err});
             return error.ReadDirectoryChangesFailed;
         }
@@ -947,7 +971,7 @@ pub const Watcher = struct {
         const GetOverlappedResult = struct {
             extern "kernel32" fn GetOverlappedResult(
                 hFile: std.os.windows.HANDLE,
-                lpOverlapped: *std.os.windows.OVERLAPPED,
+                lpOverlapped: *win32.OVERLAPPED,
                 lpNumberOfBytesTransferred: *std.os.windows.DWORD,
                 bWait: std.os.windows.BOOL,
             ) callconv(.winapi) std.os.windows.BOOL;
@@ -962,10 +986,10 @@ pub const Watcher = struct {
             self.impl.handles.items[index],
             &self.impl.overlapped_data.items[index].overlapped,
             &bytes_transferred,
-            std.os.windows.FALSE,
+            .FALSE,
         );
 
-        if (result == 0) {
+        if (result == .FALSE) {
             std.log.err("GetOverlappedResult failed", .{});
             return;
         }
@@ -988,10 +1012,10 @@ pub const Watcher = struct {
 
         var offset: u32 = 0;
         while (offset < bytes_transferred) {
-            const info = @as(*const std.os.windows.FILE_NOTIFY_INFORMATION, @ptrCast(@alignCast(&buffer[offset])));
+            const info = @as(*const win32.FILE_NOTIFY_INFORMATION, @ptrCast(@alignCast(&buffer[offset])));
 
             // Convert filename from UTF-16 to UTF-8
-            const filename_utf16 = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(std.os.windows.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
+            const filename_utf16 = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(win32.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
 
             var filename_utf8_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const filename_utf8_len = std.unicode.utf16LeToUtf8(filename_utf8_buf[0..], filename_utf16) catch {

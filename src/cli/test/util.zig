@@ -36,10 +36,25 @@ pub const RocResult = struct {
 /// Create unique Roc and Zig local cache directories for one CLI test subprocess.
 pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheDirs {
     const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-    // Get a nanosecond timestamp for uniqueness across runs
-    var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &ts);
-    const nano_ts: u64 = @intCast(ts.sec * std.time.ns_per_s + ts.nsec);
+    // Get a nanosecond-ish timestamp for uniqueness across runs. std.c.clock_gettime
+    // doesn't compile on Windows-libc in Zig 0.16 (clockid_t is `void` there), so we
+    // use the platform monotonic clock directly.
+    const nano_ts: u64 = if (builtin.os.tag == .windows) blk: {
+        const k32 = struct {
+            extern "kernel32" fn QueryPerformanceCounter(*i64) callconv(.winapi) std.os.windows.BOOL;
+            extern "kernel32" fn QueryPerformanceFrequency(*i64) callconv(.winapi) std.os.windows.BOOL;
+        };
+        var counter: i64 = undefined;
+        var freq: i64 = undefined;
+        _ = k32.QueryPerformanceCounter(&counter);
+        _ = k32.QueryPerformanceFrequency(&freq);
+        // i128 intermediate avoids overflow once uptime * freq exceeds i64.
+        break :blk @intCast(@divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, freq)));
+    } else blk: {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.MONOTONIC, &ts);
+        break :blk @intCast(ts.sec * std.time.ns_per_s + ts.nsec);
+    };
     const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
         nano_ts,
         cache_dir_id,
@@ -78,8 +93,14 @@ pub fn buildIsolatedTestEnvMap(
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.Environ.Map,
 ) !std.process.Environ.Map {
-    const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB on use) and
+    // PosixBlock on POSIX (must point at std.c.environ).
+    const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
     var env_map = try environ.createMap(allocator);
     errdefer env_map.deinit();
 

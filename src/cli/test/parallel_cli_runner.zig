@@ -305,8 +305,13 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
     };
     defer cleanupOutputArtifacts(allocator, output_name);
 
-    const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
+    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
     var env_map = environ.createMap(allocator) catch
         return .{ .status = .crash, .message = "failed to get env" };
     defer env_map.deinit();
@@ -675,7 +680,7 @@ pub fn main(init: std.process.Init) !void {
             var line_len: usize = 0;
             while (true) {
                 if (line_len >= line_buf.len) break :outer;
-                const n = std.posix.read(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
+                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
                 if (n == 0) break :outer;
                 if (line_buf[line_len] == '\n') break;
                 line_len += 1;
@@ -707,7 +712,7 @@ pub fn main(init: std.process.Init) !void {
     const worker_argv_template = try buildCliWorkerArgvTemplate(spec_arena.allocator(), init.minimal.args);
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
-    Pool.run(tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
+    Pool.run(init.io, tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
     const wall_ns = wall_timer.read();
 
     printResults(tests, results, args.verbose, gpa, wall_ns, max_children);

@@ -839,14 +839,16 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
 }
 
 /// Public function `main`.
-pub fn main(init: std.process.Init.Minimal) !void {
+pub fn main(init: std.process.Init) !void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
+    const io = init.io;
+
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
-    const cli = try harness.parseStandardArgs(args_arena.allocator(), init.args);
+    const cli = try harness.parseStandardArgs(args_arena.allocator(), init.minimal.args);
 
     if (cli.help_requested) {
         printHelp();
@@ -896,7 +898,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // worker_argv_template is null — this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, null);
+    Pool.run(io, tests, results, max_children, hang_timeout_ms, gpa, null);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;

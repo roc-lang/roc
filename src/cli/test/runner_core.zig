@@ -38,8 +38,14 @@ pub const TestStats = struct {
 };
 
 fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
-    const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-    const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB at use)
+    // and PosixBlock on POSIX (must point at std.c.environ).
+    const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
     var env_map = try environ.createMap(allocator);
     defer env_map.deinit();
 
