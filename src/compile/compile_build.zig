@@ -744,7 +744,7 @@ pub const BuildEnv = struct {
         }
     };
 
-    // External import classification now comes from CIR qualifier metadata.
+    // External import classification heuristic removed.
     // ModuleBuild determines external vs local using CIR qualifier metadata (s_import.qualifier_tok).
 
     fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
@@ -2448,7 +2448,7 @@ pub const OrderedSink = struct {
         try self.entries.ensureTotalCapacity(pkg_names.len);
         try self.index.ensureTotalCapacity(@as(u32, @intCast(pkg_names.len)));
 
-        // Refresh order; allow pre-registered entries (from early emits) and update their metadata
+        // Rebuild order; allow pre-registered entries (from early emits) and update their metadata
         self.order.items.len = 0;
 
         var i: usize = 0;
@@ -2547,7 +2547,7 @@ pub const OrderedSink = struct {
             if (self.index.put(key, entry_index) catch null == null) {
                 return;
             }
-            // Note: do not append to order here; buildOrder will populate and sort later
+            // Note: do not append to order here; buildOrder will rebuild and sort later
         }
 
         // Record report; take ownership by appending to per-module list

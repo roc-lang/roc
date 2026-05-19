@@ -358,7 +358,7 @@ pub const Module = struct {
         };
     }
 
-    /// Return the checked source-level function boundary for a lambda definition.
+    /// Recover the checked source-level function boundary for a lambda definition.
     pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) Allocator.Error!FnShape {
         var args = std.ArrayList(Var).empty;
         errdefer args.deinit(self.allocator);

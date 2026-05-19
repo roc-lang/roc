@@ -600,6 +600,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = store.getRegionAt(node_idx),
             } };
         },
+        .expr_pending_lookup => {
+            const p = payload.expr_pending_lookup;
+            // Handle pending lookups (deferred external)
+            return CIR.Expr{ .e_lookup_pending = .{
+                .module_idx = @enumFromInt(p.module_idx),
+                .ident_idx = @bitCast(p.ident_idx),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
         .expr_required_lookup => {
             const p = payload.expr_required_lookup;
             // Handle required lookups (platform requires clause)
@@ -1989,6 +1998,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .ident_idx = @bitCast(e.ident_idx),
             } });
         },
+        .e_lookup_pending => |e| {
+            // For pending lookups (deferred external), store the module index and ident
+            node.tag = .expr_pending_lookup;
+            node.setPayload(.{ .expr_pending_lookup = .{
+                .module_idx = @intFromEnum(e.module_idx),
+                .ident_idx = @bitCast(e.ident_idx),
+            } });
+        },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
             node.tag = .expr_required_lookup;
@@ -2400,9 +2417,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);
-    // External lookups carry their source region explicitly.
+    // For e_lookup_external and e_lookup_pending, use the region from the expression itself
     const actual_region = switch (expr) {
         .e_lookup_external => |e| e.region,
+        .e_lookup_pending => |e| e.region,
         else => region,
     };
     _ = try store.regions.append(store.gpa, actual_region);
