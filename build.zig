@@ -1632,6 +1632,9 @@ const MiniCiStep = struct {
         try runSubBuild(step, &.{"test"}, "zig build test");
         try recordTiming(b.allocator, &timings, "zig build test", &timer);
 
+        try runSubBuild(step, &.{"test-builtin-doc"}, "zig build test-builtin-doc");
+        try recordTiming(b.allocator, &timings, "zig build test-builtin-doc", &timer);
+
         try runSubBuild(
             step,
             &.{ "-Doptimize=ReleaseFast", "test-playground" },
@@ -3276,6 +3279,58 @@ pub fn build(b: *std.Build) void {
             run_snapshot_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_snapshot_test.step);
+    }
+
+    // Add Builtin.roc doc code-block tests. Verifies every ```roc block in
+    // src/build/roc/Builtin.roc passes the in-memory equivalent of
+    // `roc check`, and either runs as `roc test` (when the block is only
+    // top-level expects) or evaluates.
+    const enable_builtin_doc_tests = b.option(bool, "builtin-doc-tests", "Enable Builtin.roc doc code-block tests") orelse true;
+    if (enable_builtin_doc_tests) {
+        const builtin_doc_test = b.addTest(.{
+            .name = "builtin_doc_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/eval/test/builtin_doc_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+            .filters = test_filters,
+        });
+        roc_modules.addAll(builtin_doc_test);
+        builtin_doc_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        builtin_doc_test.step.dependOn(&write_compiled_builtins.step);
+        try addLlvmSupportToStep(
+            b,
+            builtin_doc_test,
+            target,
+            use_system_llvm,
+            user_llvm_path,
+            roc_modules,
+            llvm_codegen_module,
+            &copy_builtins_bc.step,
+            zstd,
+        );
+        if (builtin_doc_test.root_module.resolved_target.?.result.os.tag != .windows or
+            builtin_doc_test.root_module.resolved_target.?.result.abi != .msvc)
+        {
+            builtin_doc_test.root_module.link_libcpp = true;
+        }
+        add_tracy(b, roc_modules.build_options, builtin_doc_test, target, true, flag_enable_tracy);
+
+        const run_builtin_doc_test = b.addRunArtifact(builtin_doc_test);
+        if (run_args.len != 0) {
+            run_builtin_doc_test.addArgs(run_args);
+        }
+
+        // Exposed as a dedicated step rather than included in the default
+        // `test` step: this suite currently surfaces unimplemented Builtin.roc
+        // helpers, and we don't want those known issues to block other tests.
+        const builtin_doc_test_step = b.step(
+            "test-builtin-doc",
+            "Run Builtin.roc doc code-block tests",
+        );
+        builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
     }
 
     // Add CLI test
