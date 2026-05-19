@@ -734,14 +734,11 @@ pub const Coordinator = struct {
 
         try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, &self.builtin_modules.checked_artifact);
 
-        var pkg_iter = self.packages.iterator();
-        while (pkg_iter.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            for (pkg.modules.items) |*mod| {
-                const artifact = mod.checkedArtifact() orelse continue;
-                if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
-                try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
-            }
+        for (root_artifact.direct_import_artifact_keys) |key| {
+            try self.appendPublicApiDependencyViewByKey(&views, allocator, root_artifact, key);
+        }
+        for (root_artifact.public_api_dependencies.artifacts) |key| {
+            try self.appendPublicApiDependencyViewByKey(&views, allocator, root_artifact, key);
         }
         try self.appendRelationClosureDependencyViews(&views, allocator, root_artifact);
 
@@ -821,14 +818,40 @@ pub const Coordinator = struct {
         for (keys.items) |key| {
             if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) continue;
             if (rootRelationContainsArtifact(root_artifact, key)) continue;
-            const artifact = self.checkedArtifactByKey(key) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic("compile.coordinator invariant violated: platform relation closure references unavailable checked artifact", .{});
-                }
-                unreachable;
-            };
-            try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, artifact);
+            try self.appendPublicApiDependencyViewByKey(views, allocator, root_artifact, key);
         }
+    }
+
+    fn appendPublicApiDependencyViewByKey(
+        self: *Coordinator,
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) Allocator.Error!void {
+        if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) return;
+        if (rootRelationContainsArtifact(root_artifact, key)) return;
+        if (importedArtifactViewExists(views.items, key)) return;
+        const artifact = self.checkedArtifactByKey(key) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator invariant violated: public API dependency references unavailable checked artifact", .{});
+            }
+            unreachable;
+        };
+        try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, artifact);
+        for (artifact.public_api_dependencies.artifacts) |dependency_key| {
+            try self.appendPublicApiDependencyViewByKey(views, allocator, root_artifact, dependency_key);
+        }
+    }
+
+    fn importedArtifactViewExists(
+        views: []const check.CheckedArtifact.ImportedModuleView,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        for (views) |view| {
+            if (std.mem.eql(u8, &view.key.bytes, &key.bytes)) return true;
+        }
+        return false;
     }
 
     pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
@@ -1888,34 +1911,6 @@ pub const Coordinator = struct {
                 const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                 try imported_envs.append(self.gpa, ext_env);
                 mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
-            }
-        }
-
-        var seen_modules = std.StringHashMap(void).init(self.gpa);
-        defer seen_modules.deinit();
-
-        for (imported_envs.items) |env| {
-            try seen_modules.put(env.module_name, {});
-        }
-
-        for (mod.external_imports.items) |ext_name| {
-            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
-            if (!seen_modules.contains(ext_env.module_name)) {
-                try imported_envs.append(self.gpa, ext_env);
-                try seen_modules.put(ext_env.module_name, {});
-            }
-
-            const qualified = base.module_path.parseQualifiedImport(ext_name) orelse continue;
-            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
-            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
-
-            for (ext_env.imports.imports.items.items) |trans_str_idx| {
-                const trans_name = ext_env.getString(trans_str_idx);
-                if (seen_modules.contains(trans_name)) continue;
-                if (target_pkg.getSemanticDataIfDone(trans_name)) |semantic| {
-                    try imported_envs.append(self.gpa, semantic.env);
-                    try seen_modules.put(trans_name, {});
-                }
             }
         }
 

@@ -2875,24 +2875,25 @@ pub const Interpreter = struct {
             return self.rocStrToValue(small, .str);
         }
 
-        const total_bytes = @sizeOf(usize) + bytes.len;
-        const storage = switch (@alignOf(usize)) {
-            1 => self.arena.allocator().alignedAlloc(u8, .@"1", total_bytes),
-            2 => self.arena.allocator().alignedAlloc(u8, .@"2", total_bytes),
-            4 => self.arena.allocator().alignedAlloc(u8, .@"4", total_bytes),
-            8 => self.arena.allocator().alignedAlloc(u8, .@"8", total_bytes),
-            16 => self.arena.allocator().alignedAlloc(u8, .@"16", total_bytes),
-            else => @compileError("unsupported usize alignment for static string literal allocation"),
-        } catch return error.OutOfMemory;
-
-        const refcount_ptr: *isize = @ptrCast(@alignCast(storage.ptr));
-        refcount_ptr.* = builtins.utils.REFCOUNT_STATIC_DATA;
-
-        const data_slice = storage[@sizeOf(usize)..];
-        @memcpy(data_slice[0..bytes.len], bytes);
+        if (builtin.mode == .Debug) {
+            const data_addr = @intFromPtr(bytes.ptr);
+            if (data_addr % @alignOf(isize) != 0) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: static string literal bytes are not refcount-aligned",
+                    .{},
+                );
+            }
+            const refcount_ptr: *const isize = @ptrCast(@alignCast(bytes.ptr - @sizeOf(isize)));
+            if (refcount_ptr.* != builtins.utils.REFCOUNT_STATIC_DATA) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: static string literal missing static refcount",
+                    .{},
+                );
+            }
+        }
 
         const rs = RocStr{
-            .bytes = @ptrCast(data_slice.ptr),
+            .bytes = @ptrCast(@constCast(bytes.ptr)),
             .length = bytes.len,
             .capacity_or_alloc_ptr = bytes.len,
         };

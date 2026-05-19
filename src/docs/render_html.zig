@@ -516,7 +516,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.D
             if (entry.type_signature) |sig| {
                 try w.writeAll("        <code class=\"entry-type-def\">");
                 try w.writeAll(":= ");
-                try renderDocTypeHtml(w, ctx, sig, false);
+                try renderDocTypeHtml(w, ctx, gpa, sig, false);
                 try w.writeAll("</code>\n");
             }
         }
@@ -536,7 +536,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.D
     }
 
     // Render entries
-    try renderEntryTree(w, ctx, entry_tree.root, 0);
+    try renderEntryTree(w, ctx, gpa, entry_tree.root, 0);
 
     try writeFooter(w);
     try w.writeAll("    </main>\n");
@@ -810,13 +810,14 @@ fn writeIndent(w: Writer, level: usize) !void {
 fn renderEntryTree(
     w: Writer,
     ctx: *const RenderContext,
+    gpa: Allocator,
     node: *const SidebarNode,
     depth: usize,
 ) !void {
     // Skip the root node (empty name), process its children
     if (depth == 0) {
         for (node.children.items) |child| {
-            try renderEntryTree(w, ctx, child, depth + 1);
+            try renderEntryTree(w, ctx, gpa, child, depth + 1);
         }
         return;
     }
@@ -865,7 +866,7 @@ fn renderEntryTree(
                         try writeIndent(w, base + 1);
                         try w.writeAll("<code class=\"entry-type-def\">");
                         try w.writeAll(":= ");
-                        try renderDocTypeHtml(w, ctx, sig, false);
+                        try renderDocTypeHtml(w, ctx, gpa, sig, false);
                         try w.writeAll("</code>\n");
                     }
                 }
@@ -883,7 +884,7 @@ fn renderEntryTree(
                 try w.writeAll("</a>\n");
                 try writeIndent(w, base + 2);
                 try w.writeAll("<code class=\"entry-signature-code\">");
-                try renderEntrySignature(w, ctx, entry, anchor_id);
+                try renderEntrySignature(w, ctx, gpa, entry, anchor_id);
                 try w.writeAll("</code>\n");
                 try writeIndent(w, base + 1);
                 try w.writeAll("</div>\n");
@@ -903,7 +904,7 @@ fn renderEntryTree(
                 try writeIndent(w, base + 1);
                 try w.writeAll("<div class=\"entry-children-container\">\n");
                 for (node.children.items) |child| {
-                    try renderEntryTree(w, ctx, child, depth + 1);
+                    try renderEntryTree(w, ctx, gpa, child, depth + 1);
                 }
                 try writeIndent(w, base + 1);
                 try w.writeAll("</div>\n");
@@ -924,7 +925,7 @@ fn renderEntryTree(
         try writeHtmlEscaped(w, node.name);
         try w.print("</h{d}>\n", .{heading_level});
         for (node.children.items) |child| {
-            try renderEntryTree(w, ctx, child, depth + 1);
+            try renderEntryTree(w, ctx, gpa, child, depth + 1);
         }
         try writeIndent(w, base);
         try w.writeAll("</section>\n");
@@ -1123,7 +1124,7 @@ fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, bas
     for (ctx.package_docs.modules) |mod| {
         const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
         defer entry_tree.deinit(gpa);
-        try renderSearchTree(w, ctx, mod.name, entry_tree.root, base);
+        try renderSearchTree(w, ctx, gpa, mod.name, entry_tree.root, base);
     }
 }
 
@@ -1132,6 +1133,7 @@ fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, bas
 fn renderSearchTree(
     w: Writer,
     ctx: *const RenderContext,
+    gpa: Allocator,
     module_name: []const u8,
     node: *const SidebarNode,
     base: []const u8,
@@ -1194,11 +1196,11 @@ fn renderSearchTree(
             switch (entry.kind) {
                 .value, .alias => {
                     try w.writeAll(": ");
-                    try renderDocTypeHtml(w, sig_ctx, sig, false);
+                    try renderDocTypeHtml(w, sig_ctx, gpa, sig, false);
                 },
                 .nominal => {
                     try w.writeAll(":= ");
-                    try renderDocTypeHtml(w, sig_ctx, sig, false);
+                    try renderDocTypeHtml(w, sig_ctx, gpa, sig, false);
                 },
                 .@"opaque" => {},
             }
@@ -1208,11 +1210,11 @@ fn renderSearchTree(
     }
 
     for (node.children.items) |child| {
-        try renderSearchTree(w, ctx, module_name, child, base);
+        try renderSearchTree(w, ctx, gpa, module_name, child, base);
     }
 }
 
-fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocModel.DocEntry, anchor_id: []const u8) !void {
+fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, entry: *const DocModel.DocEntry, anchor_id: []const u8) !void {
     // Display only the identifier (last component) of the entry name
     // For "Builtin.Str.Utf8Problem.is_eq", display as "is_eq"
     const display_name = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |idx|
@@ -1230,15 +1232,15 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, entry: *const DocM
         switch (entry.kind) {
             .value => {
                 try w.writeAll(" : ");
-                try renderDocTypeHtml(w, ctx, sig, false);
+                try renderDocTypeHtml(w, ctx, gpa, sig, false);
             },
             .alias => {
                 try w.writeAll(" : ");
-                try renderDocTypeHtml(w, ctx, sig, false);
+                try renderDocTypeHtml(w, ctx, gpa, sig, false);
             },
             .nominal => {
                 try w.writeAll(" := ");
-                try renderDocTypeHtml(w, ctx, sig, false);
+                try renderDocTypeHtml(w, ctx, gpa, sig, false);
             },
             .@"opaque" => {
                 try w.writeAll(" :: <span class=\"type\">&lt;hidden&gt;</span>");
@@ -1617,130 +1619,171 @@ fn validateAnchor(
     ctx.reportBrokenLink(label, anchor, bracket_offset);
 }
 
-fn renderDocTypeHtml(w: Writer, ctx: *const RenderContext, doc_type: *const DocType, needs_parens: bool) !void {
-    switch (doc_type.*) {
-        .type_ref => |ref| {
-            if (!ctx.suppress_type_links and resolveTypeLink(ctx, ref.module_path)) {
-                try w.writeAll("<a href=\"");
-                try writeTypeLink(w, ctx, ref.module_path, ref.type_name);
-                try w.writeAll("\">");
-                try w.writeAll("<span class=\"type\">");
-                // Display only the last component of the type name
+fn renderDocTypeHtml(
+    w: Writer,
+    ctx: *const RenderContext,
+    gpa: Allocator,
+    doc_type: *const DocType,
+    needs_parens: bool,
+) !void {
+    const RenderFrame = union(enum) {
+        doc_type: struct {
+            value: *const DocType,
+            needs_parens: bool,
+        },
+        html: []const u8,
+        escaped: []const u8,
+        type_ref: DocType.TypeRef,
+    };
+
+    var frames = std.ArrayList(RenderFrame).empty;
+    defer frames.deinit(gpa);
+
+    try frames.append(gpa, .{ .doc_type = .{ .value = doc_type, .needs_parens = needs_parens } });
+    while (frames.pop()) |frame| {
+        switch (frame) {
+            .html => |html| try w.writeAll(html),
+            .escaped => |text| try writeHtmlEscaped(w, text),
+            .type_ref => |ref| {
                 const display_name = if (std.mem.lastIndexOfScalar(u8, ref.type_name, '.')) |idx|
                     ref.type_name[idx + 1 ..]
                 else
                     ref.type_name;
-                try writeHtmlEscaped(w, display_name);
-                try w.writeAll("</span></a>");
-            } else {
-                try w.writeAll("<span class=\"type\">");
-                // Display only the last component of the type name
-                const display_name = if (std.mem.lastIndexOfScalar(u8, ref.type_name, '.')) |idx|
-                    ref.type_name[idx + 1 ..]
-                else
-                    ref.type_name;
-                try writeHtmlEscaped(w, display_name);
-                try w.writeAll("</span>");
-            }
-        },
-        .type_var => |name| {
-            try w.writeAll("<span class=\"type-var\">");
-            try writeHtmlEscaped(w, name);
-            try w.writeAll("</span>");
-        },
-        .function => |func| {
-            if (needs_parens) try w.writeAll("(");
-            for (func.args, 0..) |arg, i| {
-                if (i > 0) try w.writeAll(", ");
-                try renderDocTypeHtml(w, ctx, arg, true);
-            }
-            if (func.effectful) {
-                try w.writeAll("<span class=\"sig-arrow\"> =&gt; </span>");
-            } else {
-                try w.writeAll("<span class=\"sig-arrow\"> -&gt; </span>");
-            }
-            try renderDocTypeHtml(w, ctx, func.ret, false);
-            if (needs_parens) try w.writeAll(")");
-        },
-        .record => |rec| {
-            try w.writeAll("{ ");
-            if (rec.is_open) {
-                try w.writeAll("..");
-                if (rec.ext) |ext| {
-                    try renderDocTypeHtml(w, ctx, ext, false);
+
+                if (!ctx.suppress_type_links and resolveTypeLink(ctx, ref.module_path)) {
+                    try w.writeAll("<a href=\"");
+                    try writeTypeLink(w, ctx, ref.module_path, ref.type_name);
+                    try w.writeAll("\"><span class=\"type\">");
+                    try writeHtmlEscaped(w, display_name);
+                    try w.writeAll("</span></a>");
+                } else {
+                    try w.writeAll("<span class=\"type\">");
+                    try writeHtmlEscaped(w, display_name);
+                    try w.writeAll("</span>");
                 }
-                if (rec.fields.len > 0) try w.writeAll(", ");
-            }
-            for (rec.fields, 0..) |field, i| {
-                if (i > 0) try w.writeAll(", ");
-                try writeHtmlEscaped(w, field.name);
-                try w.writeAll(" : ");
-                try renderDocTypeHtml(w, ctx, field.type, false);
-            }
-            try w.writeAll(" }");
-        },
-        .tag_union => |tu| {
-            try w.writeAll("[");
-            for (tu.tags, 0..) |tag, i| {
-                if (i > 0) try w.writeAll(", ");
-                try w.writeAll("<span class=\"type\">");
-                try writeHtmlEscaped(w, tag.name);
-                try w.writeAll("</span>");
-                if (tag.args.len > 0) {
-                    try w.writeAll("(");
-                    for (tag.args, 0..) |arg, j| {
-                        if (j > 0) try w.writeAll(", ");
-                        try renderDocTypeHtml(w, ctx, arg, false);
-                    }
-                    try w.writeAll(")");
+            },
+            .doc_type => |item| {
+                switch (item.value.*) {
+                    .type_ref => |ref| {
+                        try frames.append(gpa, .{ .type_ref = ref });
+                    },
+                    .type_var => |name| {
+                        try frames.append(gpa, .{ .html = "</span>" });
+                        try frames.append(gpa, .{ .escaped = name });
+                        try frames.append(gpa, .{ .html = "<span class=\"type-var\">" });
+                    },
+                    .function => |func| {
+                        if (item.needs_parens) try frames.append(gpa, .{ .html = ")" });
+                        try frames.append(gpa, .{ .doc_type = .{ .value = func.ret, .needs_parens = false } });
+                        try frames.append(gpa, .{ .html = if (func.effectful)
+                            "<span class=\"sig-arrow\"> =&gt; </span>"
+                        else
+                            "<span class=\"sig-arrow\"> -&gt; </span>" });
+                        var i = func.args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(gpa, .{ .doc_type = .{ .value = func.args[i], .needs_parens = true } });
+                            if (i > 0) try frames.append(gpa, .{ .html = ", " });
+                        }
+                        if (item.needs_parens) try frames.append(gpa, .{ .html = "(" });
+                    },
+                    .record => |rec| {
+                        try frames.append(gpa, .{ .html = " }" });
+                        var i = rec.fields.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const field = rec.fields[i];
+                            try frames.append(gpa, .{ .doc_type = .{ .value = field.type, .needs_parens = false } });
+                            try frames.append(gpa, .{ .html = " : " });
+                            try frames.append(gpa, .{ .escaped = field.name });
+                            if (i > 0) try frames.append(gpa, .{ .html = ", " });
+                        }
+                        if (rec.is_open) {
+                            if (rec.fields.len > 0) try frames.append(gpa, .{ .html = ", " });
+                            if (rec.ext) |ext| {
+                                try frames.append(gpa, .{ .doc_type = .{ .value = ext, .needs_parens = false } });
+                            }
+                            try frames.append(gpa, .{ .html = ".." });
+                        }
+                        try frames.append(gpa, .{ .html = "{ " });
+                    },
+                    .tag_union => |tu| {
+                        try frames.append(gpa, .{ .html = "]" });
+                        if (tu.is_open) {
+                            if (tu.ext) |ext| {
+                                try frames.append(gpa, .{ .doc_type = .{ .value = ext, .needs_parens = false } });
+                            }
+                            try frames.append(gpa, .{ .html = ".." });
+                            if (tu.tags.len > 0) try frames.append(gpa, .{ .html = ", " });
+                        }
+                        var i = tu.tags.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const tag = tu.tags[i];
+                            if (tag.args.len > 0) {
+                                try frames.append(gpa, .{ .html = ")" });
+                                var j = tag.args.len;
+                                while (j > 0) {
+                                    j -= 1;
+                                    try frames.append(gpa, .{ .doc_type = .{ .value = tag.args[j], .needs_parens = false } });
+                                    if (j > 0) try frames.append(gpa, .{ .html = ", " });
+                                }
+                                try frames.append(gpa, .{ .html = "(" });
+                            }
+                            try frames.append(gpa, .{ .html = "</span>" });
+                            try frames.append(gpa, .{ .escaped = tag.name });
+                            try frames.append(gpa, .{ .html = "<span class=\"type\">" });
+                            if (i > 0) try frames.append(gpa, .{ .html = ", " });
+                        }
+                        try frames.append(gpa, .{ .html = "[" });
+                    },
+                    .tuple => |tup| {
+                        try frames.append(gpa, .{ .html = ")" });
+                        var i = tup.elems.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(gpa, .{ .doc_type = .{ .value = tup.elems[i], .needs_parens = false } });
+                            if (i > 0) try frames.append(gpa, .{ .html = ", " });
+                        }
+                        try frames.append(gpa, .{ .html = "(" });
+                    },
+                    .apply => |app| {
+                        try frames.append(gpa, .{ .html = ")" });
+                        var i = app.args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(gpa, .{ .doc_type = .{ .value = app.args[i], .needs_parens = false } });
+                            if (i > 0) try frames.append(gpa, .{ .html = ", " });
+                        }
+                        try frames.append(gpa, .{ .html = "(" });
+                        try frames.append(gpa, .{ .doc_type = .{ .value = app.constructor, .needs_parens = false } });
+                    },
+                    .where_clause => |wc| {
+                        try frames.append(gpa, .{ .html = " }" });
+                        var i = wc.constraints.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const constraint = wc.constraints[i];
+                            try frames.append(gpa, .{ .doc_type = .{ .value = constraint.signature, .needs_parens = false } });
+                            try frames.append(gpa, .{ .html = " : " });
+                            try frames.append(gpa, .{ .escaped = constraint.method_name });
+                            try frames.append(gpa, .{ .html = "</span>." });
+                            try frames.append(gpa, .{ .escaped = constraint.type_var });
+                            try frames.append(gpa, .{ .html = "<span class=\"type-var\">" });
+                            if (i > 0) try frames.append(gpa, .{ .html = ", " });
+                        }
+                        try frames.append(gpa, .{ .html = " <span class=\"kw\">where</span> { " });
+                        try frames.append(gpa, .{ .doc_type = .{ .value = wc.type, .needs_parens = item.needs_parens } });
+                    },
+                    .wildcard => {
+                        try frames.append(gpa, .{ .html = "_" });
+                    },
+                    .@"error" => {
+                        try frames.append(gpa, .{ .html = "?" });
+                    },
                 }
-            }
-            if (tu.is_open) {
-                if (tu.tags.len > 0) try w.writeAll(", ");
-                try w.writeAll("..");
-                if (tu.ext) |ext| {
-                    try renderDocTypeHtml(w, ctx, ext, false);
-                }
-            }
-            try w.writeAll("]");
-        },
-        .tuple => |tup| {
-            try w.writeAll("(");
-            for (tup.elems, 0..) |elem, i| {
-                if (i > 0) try w.writeAll(", ");
-                try renderDocTypeHtml(w, ctx, elem, false);
-            }
-            try w.writeAll(")");
-        },
-        .apply => |app| {
-            try renderDocTypeHtml(w, ctx, app.constructor, false);
-            try w.writeAll("(");
-            for (app.args, 0..) |arg, i| {
-                if (i > 0) try w.writeAll(", ");
-                try renderDocTypeHtml(w, ctx, arg, false);
-            }
-            try w.writeAll(")");
-        },
-        .where_clause => |wc| {
-            try renderDocTypeHtml(w, ctx, wc.type, needs_parens);
-            try w.writeAll(" <span class=\"kw\">where</span> { ");
-            for (wc.constraints, 0..) |constraint, i| {
-                if (i > 0) try w.writeAll(", ");
-                try w.writeAll("<span class=\"type-var\">");
-                try writeHtmlEscaped(w, constraint.type_var);
-                try w.writeAll("</span>.");
-                try writeHtmlEscaped(w, constraint.method_name);
-                try w.writeAll(" : ");
-                try renderDocTypeHtml(w, ctx, constraint.signature, false);
-            }
-            try w.writeAll(" }");
-        },
-        .wildcard => {
-            try w.writeAll("_");
-        },
-        .@"error" => {
-            try w.writeAll("?");
-        },
+            },
+        }
     }
 }
 
@@ -1839,6 +1882,51 @@ fn writeHtmlEscaped(w: Writer, text: []const u8) !void {
             else => try w.writeAll(&[_]u8{c}),
         }
     }
+}
+
+test "renderDocTypeHtml handles deeply nested types without call stack recursion" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const leaf = try gpa.create(DocType);
+    leaf.* = .{ .type_var = try gpa.dupe(u8, "a") };
+
+    var root: *const DocType = leaf;
+    for (0..20_000) |_| {
+        const constructor = try gpa.create(DocType);
+        constructor.* = .{ .type_ref = .{
+            .module_path = try gpa.dupe(u8, ""),
+            .type_name = try gpa.dupe(u8, "Wrap"),
+        } };
+
+        const args = try gpa.alloc(*const DocType, 1);
+        args[0] = root;
+
+        const app = try gpa.create(DocType);
+        app.* = .{ .apply = .{
+            .constructor = constructor,
+            .args = args,
+        } };
+        root = app;
+    }
+    defer {
+        root.deinit(gpa);
+        gpa.destroy(root);
+    }
+
+    const package_docs = DocModel.PackageDocs{
+        .name = "Test",
+        .modules = &[_]DocModel.ModuleDocs{},
+    };
+    var ctx = try RenderContext.init(&package_docs, gpa);
+    defer ctx.deinit(gpa);
+    ctx.suppress_type_links = true;
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+
+    try renderDocTypeHtml(&output.writer, &ctx, gpa, root, false);
+    try testing.expect(std.mem.startsWith(u8, output.written(), "<span class=\"type\">Wrap</span>("));
 }
 
 test "writeDocRefHref reports broken shorthand refs" {

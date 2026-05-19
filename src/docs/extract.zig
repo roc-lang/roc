@@ -696,8 +696,16 @@ fn extractDefEntry(
             const doc_extract = try extractDocComment(gpa, source, offset);
             errdefer if (doc_extract) |d| gpa.free(d.text);
 
-            // Extract structured type from inferred type
+            // For annotated definitions, render the checked source annotation.
+            // That is the signature the user wrote, and it avoids re-walking
+            // recursive inferred type graphs when explicit documentation data
+            // is already available in CIR.
             const type_sig: ?*const DocType = blk: {
+                if (def.annotation) |anno_idx| {
+                    const annotation = module_env.store.getAnnotation(anno_idx);
+                    break :blk try extractAnnotationAsDocType(gpa, module_env, annotation);
+                }
+
                 const def_var = ModuleEnv.varFrom(def_idx);
                 if (@intFromEnum(def_var) >= module_env.types.len()) break :blk null;
                 break :blk extractDocType(
@@ -855,6 +863,152 @@ fn extractDeclTypeSig(
     return try extractTypeAnnoAsDocType(gpa, module_env, anno_idx);
 }
 
+fn extractAnnotationAsDocType(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    annotation: CIR.Annotation,
+) !?*const DocType {
+    const base_type = try extractTypeAnnoAsDocType(gpa, module_env, annotation.anno) orelse return null;
+    var base_type_moved = false;
+    errdefer if (!base_type_moved) {
+        base_type.deinit(gpa);
+        gpa.destroy(base_type);
+    };
+
+    const where_span = annotation.where orelse return base_type;
+    var constraints = std.ArrayList(DocType.Constraint).empty;
+    defer {
+        for (constraints.items) |*constraint| {
+            constraint.signature.deinit(gpa);
+            gpa.destroy(constraint.signature);
+            gpa.free(constraint.type_var);
+            gpa.free(constraint.method_name);
+        }
+        constraints.deinit(gpa);
+    }
+
+    for (module_env.store.sliceWhereClauses(where_span)) |where_idx| {
+        const where_clause = module_env.store.getWhereClause(where_idx);
+        switch (where_clause) {
+            .w_method => |method| {
+                const constraint = try extractWhereMethodConstraint(gpa, module_env, method);
+                errdefer {
+                    constraint.signature.deinit(gpa);
+                    gpa.destroy(constraint.signature);
+                    gpa.free(constraint.type_var);
+                    gpa.free(constraint.method_name);
+                }
+                try constraints.append(gpa, constraint);
+            },
+            .w_alias, .w_malformed => {},
+        }
+    }
+
+    if (constraints.items.len == 0) return base_type;
+
+    const owned_constraints = try gpa.alloc(DocType.Constraint, constraints.items.len);
+    var constraints_moved = false;
+    errdefer if (!constraints_moved) {
+        for (owned_constraints) |*constraint| {
+            constraint.signature.deinit(gpa);
+            gpa.destroy(constraint.signature);
+            gpa.free(constraint.type_var);
+            gpa.free(constraint.method_name);
+        }
+        gpa.free(owned_constraints);
+    };
+    @memcpy(owned_constraints, constraints.items);
+    constraints.clearRetainingCapacity();
+
+    const wrapped = try allocDocType(gpa, .{ .where_clause = .{
+        .type = base_type,
+        .constraints = owned_constraints,
+    } });
+    base_type_moved = true;
+    constraints_moved = true;
+    return wrapped;
+}
+
+fn extractWhereMethodConstraint(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
+) !DocType.Constraint {
+    const type_var = try extractWhereTypeVarName(gpa, module_env, method.var_);
+    errdefer gpa.free(type_var);
+
+    const method_name = try gpa.dupe(u8, module_env.getIdentText(method.method_name));
+    errdefer gpa.free(method_name);
+
+    const signature = try extractWhereMethodSignature(gpa, module_env, method);
+    errdefer {
+        signature.deinit(gpa);
+        gpa.destroy(signature);
+    }
+
+    return .{
+        .type_var = type_var,
+        .method_name = method_name,
+        .signature = signature,
+    };
+}
+
+fn extractWhereMethodSignature(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
+) !*const DocType {
+    const args_slice = module_env.store.sliceTypeAnnos(method.args);
+    const args = try gpa.alloc(*const DocType, args_slice.len);
+    var args_len: usize = 0;
+    var args_moved = false;
+    errdefer if (!args_moved) {
+        for (args[0..args_len]) |arg| {
+            arg.deinit(gpa);
+            gpa.destroy(arg);
+        }
+        gpa.free(args);
+    };
+
+    for (args_slice) |arg_idx| {
+        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, arg_idx) orelse
+            try allocDocType(gpa, .@"error");
+        args_len += 1;
+    }
+
+    const ret = try extractTypeAnnoAsDocType(gpa, module_env, method.ret) orelse
+        try allocDocType(gpa, .@"error");
+    var ret_moved = false;
+    errdefer if (!ret_moved) {
+        ret.deinit(gpa);
+        gpa.destroy(ret);
+    };
+
+    const signature = try allocDocType(gpa, .{ .function = .{
+        .args = args,
+        .ret = ret,
+        .effectful = false,
+    } });
+    args_moved = true;
+    ret_moved = true;
+    return signature;
+}
+
+fn extractWhereTypeVarName(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    var_idx: CIR.TypeAnno.Idx,
+) ![]const u8 {
+    var current = var_idx;
+    while (true) {
+        switch (module_env.store.getTypeAnno(current)) {
+            .rigid_var => |rv| return try gpa.dupe(u8, module_env.getIdentText(rv.name)),
+            .rigid_var_lookup => |rv_lookup| current = rv_lookup.ref,
+            else => return try gpa.dupe(u8, "?"),
+        }
+    }
+}
+
 /// Resolve the module path from a CIR TypeAnno's LocalOrExternal base.
 fn resolveModulePathFromBase(
     module_env: *const ModuleEnv,
@@ -862,7 +1016,10 @@ fn resolveModulePathFromBase(
 ) []const u8 {
     return switch (local_or_ext) {
         .builtin => "", // Don't expose "Builtin" module as it's an implementation detail
-        .local => module_env.module_name,
+        .local => if (!module_env.qualified_module_ident.isNone())
+            module_env.getIdentText(module_env.qualified_module_ident)
+        else
+            module_env.module_name,
         .external => |ext| blk: {
             const idx = @intFromEnum(ext.module_idx);
             if (idx >= module_env.imports.imports.items.items.len) break :blk "";
@@ -894,184 +1051,458 @@ fn extractTypeAnnoAsDocType(
     module_env: *const ModuleEnv,
     type_anno_idx: CIR.TypeAnno.Idx,
 ) !?*const DocType {
-    const anno = module_env.store.getTypeAnno(type_anno_idx);
-    switch (anno) {
-        .apply => |a| {
-            const name = module_env.getIdentText(a.name);
-            const args_slice = module_env.store.sliceTypeAnnos(a.args);
+    const BuildFrame = union(enum) {
+        visit: CIR.TypeAnno.Idx,
+        malformed_tag,
+        finish_apply: struct {
+            name: []const u8,
+            module_path: []const u8,
+            arg_count: usize,
+        },
+        finish_tag: struct {
+            name: []const u8,
+            arg_count: usize,
+        },
+        finish_tag_union: struct {
+            tag_count: usize,
+            has_ext: bool,
+            is_open: bool,
+        },
+        finish_tuple: usize,
+        finish_record: struct {
+            fields: []CIR.TypeAnno.RecordField.Idx,
+            has_ext: bool,
+            is_open: bool,
+        },
+        finish_fn: struct {
+            arg_count: usize,
+            effectful: bool,
+        },
+    };
 
-            const module_path = resolveModulePathFromBase(module_env, a.base);
+    const Builder = struct {
+        fn pushResult(results: *std.ArrayList(*const DocType), allocator: Allocator, value: *const DocType) ExtractError!void {
+            errdefer {
+                value.deinit(allocator);
+                allocator.destroy(value);
+            }
+            try results.append(allocator, value);
+        }
 
-            if (args_slice.len > 0) {
-                // Type application: List(Str), Result(ok, err)
-                const constructor = try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = try gpa.dupe(u8, module_path),
-                    .type_name = try gpa.dupe(u8, name),
+        fn cleanupDocTypes(allocator: Allocator, values: []const *const DocType) void {
+            for (values) |value| {
+                value.deinit(allocator);
+                allocator.destroy(value);
+            }
+        }
+
+        fn cleanupTag(allocator: Allocator, tag: DocType.Tag) void {
+            allocator.free(tag.name);
+            cleanupDocTypes(allocator, tag.args);
+            allocator.free(tag.args);
+        }
+
+        fn cleanupFields(allocator: Allocator, fields: []const DocType.Field) void {
+            for (fields) |field| {
+                allocator.free(field.name);
+                field.type.deinit(allocator);
+                allocator.destroy(field.type);
+            }
+        }
+
+        fn pushVisitsReversed(
+            frames: *std.ArrayList(BuildFrame),
+            allocator: Allocator,
+            children: []const CIR.TypeAnno.Idx,
+        ) ExtractError!void {
+            var i = children.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .visit = children[i] });
+            }
+        }
+    };
+
+    var frames = std.ArrayList(BuildFrame).empty;
+    defer frames.deinit(gpa);
+
+    var results = std.ArrayList(*const DocType).empty;
+    defer results.deinit(gpa);
+    errdefer Builder.cleanupDocTypes(gpa, results.items);
+
+    try frames.append(gpa, .{ .visit = type_anno_idx });
+    while (frames.pop()) |frame| {
+        switch (frame) {
+            .visit => |idx| {
+                const anno = module_env.store.getTypeAnno(idx);
+                switch (anno) {
+                    .apply => |a| {
+                        const args_slice = module_env.store.sliceTypeAnnos(a.args);
+                        const name = module_env.getIdentText(a.name);
+                        const module_path = resolveModulePathFromBase(module_env, a.base);
+                        if (args_slice.len == 0) {
+                            try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
+                                .module_path = try gpa.dupe(u8, module_path),
+                                .type_name = try gpa.dupe(u8, name),
+                            } }));
+                        } else {
+                            try frames.append(gpa, .{ .finish_apply = .{
+                                .name = name,
+                                .module_path = module_path,
+                                .arg_count = args_slice.len,
+                            } });
+                            try Builder.pushVisitsReversed(&frames, gpa, args_slice);
+                        }
+                    },
+                    .rigid_var => |tv| {
+                        try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{
+                            .type_var = try gpa.dupe(u8, module_env.getIdentText(tv.name)),
+                        }));
+                    },
+                    .rigid_var_lookup => |rv| {
+                        try frames.append(gpa, .{ .visit = rv.ref });
+                    },
+                    .underscore => {
+                        try Builder.pushResult(&results, gpa, try allocDocType(gpa, .wildcard));
+                    },
+                    .lookup => |t| {
+                        const name = module_env.getIdentText(t.name);
+                        const module_path = resolveModulePathFromBase(module_env, t.base);
+                        try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
+                            .module_path = try gpa.dupe(u8, module_path),
+                            .type_name = try gpa.dupe(u8, name),
+                        } }));
+                    },
+                    .tag_union => |tu| {
+                        const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
+                        const has_ext = if (tu.ext) |ext_idx| !isAnonymousOpenExt(module_env, ext_idx) else false;
+                        try frames.append(gpa, .{ .finish_tag_union = .{
+                            .tag_count = tags_slice.len,
+                            .has_ext = has_ext,
+                            .is_open = tu.ext != null,
+                        } });
+                        if (has_ext) {
+                            try frames.append(gpa, .{ .visit = tu.ext.? });
+                        }
+                        var i = tags_slice.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const tag_anno = module_env.store.getTypeAnno(tags_slice[i]);
+                            switch (tag_anno) {
+                                .tag => |t| {
+                                    const tag_args_slice = module_env.store.sliceTypeAnnos(t.args);
+                                    try frames.append(gpa, .{ .finish_tag = .{
+                                        .name = module_env.getIdentText(t.name),
+                                        .arg_count = tag_args_slice.len,
+                                    } });
+                                    try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
+                                },
+                                else => {
+                                    try frames.append(gpa, .malformed_tag);
+                                },
+                            }
+                        }
+                    },
+                    .tag => |t| {
+                        const tag_args_slice = module_env.store.sliceTypeAnnos(t.args);
+                        try frames.append(gpa, .{ .finish_tag = .{
+                            .name = module_env.getIdentText(t.name),
+                            .arg_count = tag_args_slice.len,
+                        } });
+                        try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
+                    },
+                    .tuple => |t| {
+                        const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
+                        try frames.append(gpa, .{ .finish_tuple = elems_slice.len });
+                        try Builder.pushVisitsReversed(&frames, gpa, elems_slice);
+                    },
+                    .record => |r| {
+                        const fields_slice = module_env.store.sliceAnnoRecordFields(r.fields);
+                        const has_ext = if (r.ext) |ext_idx| !isAnonymousOpenExt(module_env, ext_idx) else false;
+                        try frames.append(gpa, .{ .finish_record = .{
+                            .fields = fields_slice,
+                            .has_ext = has_ext,
+                            .is_open = r.ext != null,
+                        } });
+                        if (has_ext) {
+                            try frames.append(gpa, .{ .visit = r.ext.? });
+                        }
+                        var i = fields_slice.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const field = module_env.store.getAnnoRecordField(fields_slice[i]);
+                            try frames.append(gpa, .{ .visit = field.ty });
+                        }
+                    },
+                    .@"fn" => |f| {
+                        const args_slice = module_env.store.sliceTypeAnnos(f.args);
+                        try frames.append(gpa, .{ .finish_fn = .{
+                            .arg_count = args_slice.len,
+                            .effectful = f.effectful,
+                        } });
+                        try frames.append(gpa, .{ .visit = f.ret });
+                        try Builder.pushVisitsReversed(&frames, gpa, args_slice);
+                    },
+                    .parens => |p| {
+                        try frames.append(gpa, .{ .visit = p.anno });
+                    },
+                    .malformed => {
+                        try Builder.pushResult(&results, gpa, try allocDocType(gpa, .@"error"));
+                    },
+                }
+            },
+            .malformed_tag => {
+                const tag_args = try gpa.alloc(*const DocType, 0);
+                var tag_args_moved = false;
+                errdefer if (!tag_args_moved) gpa.free(tag_args);
+
+                var tags = try gpa.alloc(DocType.Tag, 1);
+                var tags_len: usize = 0;
+                var tags_moved = false;
+                errdefer if (!tags_moved) {
+                    for (tags[0..tags_len]) |tag| {
+                        Builder.cleanupTag(gpa, tag);
+                    }
+                    gpa.free(tags);
+                };
+
+                tags[0] = .{
+                    .name = try gpa.dupe(u8, "?"),
+                    .args = tag_args,
+                };
+                tags_len = 1;
+                tag_args_moved = true;
+
+                const single_tag = try allocDocType(gpa, .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = null,
+                    .is_open = false,
                 } });
-                errdefer {
+                tags_moved = true;
+                try Builder.pushResult(&results, gpa, single_tag);
+            },
+            .finish_apply => |finish| {
+                std.debug.assert(results.items.len >= finish.arg_count);
+                const start = results.items.len - finish.arg_count;
+                const args = try gpa.alloc(*const DocType, finish.arg_count);
+                var args_moved = false;
+                errdefer if (!args_moved) {
+                    Builder.cleanupDocTypes(gpa, args);
+                    gpa.free(args);
+                };
+                @memcpy(args, results.items[start..]);
+                results.shrinkRetainingCapacity(start);
+
+                const constructor = try allocDocType(gpa, .{ .type_ref = .{
+                    .module_path = try gpa.dupe(u8, finish.module_path),
+                    .type_name = try gpa.dupe(u8, finish.name),
+                } });
+                var constructor_moved = false;
+                errdefer if (!constructor_moved) {
                     constructor.deinit(gpa);
                     gpa.destroy(constructor);
-                }
+                };
 
-                var args = try gpa.alloc(*const DocType, args_slice.len);
-                errdefer {
-                    for (args) |arg| {
-                        arg.deinit(gpa);
-                        gpa.destroy(arg);
-                    }
-                    gpa.free(args);
-                }
-
-                for (args_slice, 0..) |arg_idx, i| {
-                    args[i] = try extractTypeAnnoAsDocType(gpa, module_env, arg_idx) orelse
-                        try allocDocType(gpa, .@"error");
-                }
-
-                return try allocDocType(gpa, .{ .apply = .{
+                const app = try allocDocType(gpa, .{ .apply = .{
                     .constructor = constructor,
                     .args = args,
                 } });
-            } else {
-                // Simple type reference: Str, U64, etc.
-                return try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = try gpa.dupe(u8, module_path),
-                    .type_name = try gpa.dupe(u8, name),
-                } });
-            }
-        },
-        .rigid_var => |tv| {
-            return try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, module_env.getIdentText(tv.name)) });
-        },
-        .rigid_var_lookup => |rv| {
-            return try extractTypeAnnoAsDocType(gpa, module_env, rv.ref);
-        },
-        .underscore => {
-            return try allocDocType(gpa, .wildcard);
-        },
-        .lookup => |t| {
-            const name = module_env.getIdentText(t.name);
-            const module_path = resolveModulePathFromBase(module_env, t.base);
-            return try allocDocType(gpa, .{ .type_ref = .{
-                .module_path = try gpa.dupe(u8, module_path),
-                .type_name = try gpa.dupe(u8, name),
-            } });
-        },
-        .tag_union => |tu| {
-            const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
-            var tags = try gpa.alloc(DocType.Tag, tags_slice.len);
-            errdefer gpa.free(tags);
-
-            for (tags_slice, 0..) |tag_idx, i| {
-                const tag_anno = module_env.store.getTypeAnno(tag_idx);
-                switch (tag_anno) {
-                    .tag => |t| {
-                        const tag_name = try gpa.dupe(u8, module_env.getIdentText(t.name));
-                        const tag_args_slice = module_env.store.sliceTypeAnnos(t.args);
-                        var tag_args = try gpa.alloc(*const DocType, tag_args_slice.len);
-                        for (tag_args_slice, 0..) |arg_idx, j| {
-                            tag_args[j] = try extractTypeAnnoAsDocType(gpa, module_env, arg_idx) orelse
-                                try allocDocType(gpa, .@"error");
-                        }
-                        tags[i] = .{ .name = tag_name, .args = tag_args };
-                    },
-                    else => {
-                        tags[i] = .{ .name = try gpa.dupe(u8, "?"), .args = try gpa.alloc(*const DocType, 0) };
-                    },
-                }
-            }
-
-            var ext: ?*const DocType = null;
-            var is_open = false;
-            if (tu.ext) |ext_idx| {
-                is_open = true;
-                if (!isAnonymousOpenExt(module_env, ext_idx)) {
-                    ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
-                }
-            }
-
-            return try allocDocType(gpa, .{ .tag_union = .{
-                .tags = tags,
-                .ext = ext,
-                .is_open = is_open,
-            } });
-        },
-        .tag => |t| {
-            // A bare tag (shouldn't normally appear at top level, but handle it)
-            const tag_name = try gpa.dupe(u8, module_env.getIdentText(t.name));
-            const tag_args_slice = module_env.store.sliceTypeAnnos(t.args);
-            var tag_args = try gpa.alloc(*const DocType, tag_args_slice.len);
-            for (tag_args_slice, 0..) |arg_idx, i| {
-                tag_args[i] = try extractTypeAnnoAsDocType(gpa, module_env, arg_idx) orelse
-                    try allocDocType(gpa, .@"error");
-            }
-
-            var tags = try gpa.alloc(DocType.Tag, 1);
-            tags[0] = .{ .name = tag_name, .args = tag_args };
-            return try allocDocType(gpa, .{ .tag_union = .{
-                .tags = tags,
-                .ext = null,
-                .is_open = false,
-            } });
-        },
-        .tuple => |t| {
-            const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
-            var elems = try gpa.alloc(*const DocType, elems_slice.len);
-            for (elems_slice, 0..) |elem_idx, i| {
-                elems[i] = try extractTypeAnnoAsDocType(gpa, module_env, elem_idx) orelse
-                    try allocDocType(gpa, .@"error");
-            }
-            return try allocDocType(gpa, .{ .tuple = .{ .elems = elems } });
-        },
-        .record => |r| {
-            const fields_slice = module_env.store.sliceAnnoRecordFields(r.fields);
-            var fields = try gpa.alloc(DocType.Field, fields_slice.len);
-            for (fields_slice, 0..) |field_idx, i| {
-                const field = module_env.store.getAnnoRecordField(field_idx);
-                fields[i] = .{
-                    .name = try gpa.dupe(u8, module_env.getIdentText(field.name)),
-                    .type = try extractTypeAnnoAsDocType(gpa, module_env, field.ty) orelse
-                        try allocDocType(gpa, .@"error"),
+                args_moved = true;
+                constructor_moved = true;
+                try Builder.pushResult(&results, gpa, app);
+            },
+            .finish_tag => |finish| {
+                std.debug.assert(results.items.len >= finish.arg_count);
+                const start = results.items.len - finish.arg_count;
+                const tag_args = try gpa.alloc(*const DocType, finish.arg_count);
+                var tag_args_moved = false;
+                errdefer if (!tag_args_moved) {
+                    Builder.cleanupDocTypes(gpa, tag_args);
+                    gpa.free(tag_args);
                 };
-            }
+                @memcpy(tag_args, results.items[start..]);
+                results.shrinkRetainingCapacity(start);
 
-            var ext: ?*const DocType = null;
-            var is_open = false;
-            if (r.ext) |ext_idx| {
-                is_open = true;
-                if (!isAnonymousOpenExt(module_env, ext_idx)) {
-                    ext = try extractTypeAnnoAsDocType(gpa, module_env, ext_idx);
+                var tags = try gpa.alloc(DocType.Tag, 1);
+                var tags_len: usize = 0;
+                var tags_moved = false;
+                errdefer if (!tags_moved) {
+                    for (tags[0..tags_len]) |tag| {
+                        Builder.cleanupTag(gpa, tag);
+                    }
+                    gpa.free(tags);
+                };
+                tags[0] = .{
+                    .name = try gpa.dupe(u8, finish.name),
+                    .args = tag_args,
+                };
+                tags_len = 1;
+                tag_args_moved = true;
+
+                const single_tag = try allocDocType(gpa, .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = null,
+                    .is_open = false,
+                } });
+                tags_moved = true;
+                try Builder.pushResult(&results, gpa, single_tag);
+            },
+            .finish_tag_union => |finish| {
+                var ext: ?*const DocType = null;
+                var ext_moved = false;
+                errdefer if (!ext_moved) {
+                    if (ext) |ext_type| {
+                        ext_type.deinit(gpa);
+                        gpa.destroy(ext_type);
+                    }
+                };
+                if (finish.has_ext) {
+                    ext = results.pop().?;
                 }
-            }
 
-            return try allocDocType(gpa, .{ .record = .{
-                .fields = fields,
-                .ext = ext,
-                .is_open = is_open,
-            } });
-        },
-        .@"fn" => |f| {
-            const args_slice = module_env.store.sliceTypeAnnos(f.args);
-            var args = try gpa.alloc(*const DocType, args_slice.len);
-            for (args_slice, 0..) |arg_idx, i| {
-                args[i] = try extractTypeAnnoAsDocType(gpa, module_env, arg_idx) orelse
-                    try allocDocType(gpa, .@"error");
-            }
-            const ret = try extractTypeAnnoAsDocType(gpa, module_env, f.ret) orelse
-                try allocDocType(gpa, .@"error");
+                std.debug.assert(results.items.len >= finish.tag_count);
+                const start = results.items.len - finish.tag_count;
+                var tags = try gpa.alloc(DocType.Tag, finish.tag_count);
+                var tags_len: usize = 0;
+                var tags_moved = false;
+                errdefer if (!tags_moved) {
+                    for (tags[0..tags_len]) |tag| {
+                        Builder.cleanupTag(gpa, tag);
+                    }
+                    gpa.free(tags);
+                };
 
-            return try allocDocType(gpa, .{ .function = .{
-                .args = args,
-                .ret = ret,
-                .effectful = f.effectful,
-            } });
-        },
-        .parens => |p| {
-            return try extractTypeAnnoAsDocType(gpa, module_env, p.anno);
-        },
-        .malformed => {
-            return try allocDocType(gpa, .@"error");
-        },
+                for (results.items[start..], 0..) |single_tag, i| {
+                    switch (single_tag.*) {
+                        .tag_union => |tu| {
+                            std.debug.assert(tu.tags.len == 1);
+                            std.debug.assert(tu.ext == null);
+                            tags[i] = tu.tags[0];
+                            tags_len += 1;
+                            gpa.free(tu.tags);
+                        },
+                        else => unreachable,
+                    }
+                    gpa.destroy(single_tag);
+                }
+                results.shrinkRetainingCapacity(start);
+
+                const tag_union = try allocDocType(gpa, .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = ext,
+                    .is_open = finish.is_open,
+                } });
+                tags_moved = true;
+                ext_moved = true;
+                try Builder.pushResult(&results, gpa, tag_union);
+            },
+            .finish_tuple => |elem_count| {
+                std.debug.assert(results.items.len >= elem_count);
+                const start = results.items.len - elem_count;
+                const elems = try gpa.alloc(*const DocType, elem_count);
+                var elems_moved = false;
+                errdefer if (!elems_moved) {
+                    Builder.cleanupDocTypes(gpa, elems);
+                    gpa.free(elems);
+                };
+                @memcpy(elems, results.items[start..]);
+                results.shrinkRetainingCapacity(start);
+
+                const tuple = try allocDocType(gpa, .{ .tuple = .{ .elems = elems } });
+                elems_moved = true;
+                try Builder.pushResult(&results, gpa, tuple);
+            },
+            .finish_record => |finish| {
+                var ext: ?*const DocType = null;
+                var ext_moved = false;
+                errdefer if (!ext_moved) {
+                    if (ext) |ext_type| {
+                        ext_type.deinit(gpa);
+                        gpa.destroy(ext_type);
+                    }
+                };
+                if (finish.has_ext) {
+                    ext = results.pop().?;
+                }
+
+                std.debug.assert(results.items.len >= finish.fields.len);
+                const start = results.items.len - finish.fields.len;
+                var field_names = try gpa.alloc([]const u8, finish.fields.len);
+                defer gpa.free(field_names);
+                var field_names_len: usize = 0;
+                var field_names_moved = false;
+                errdefer if (!field_names_moved) {
+                    for (field_names[0..field_names_len]) |name| {
+                        gpa.free(name);
+                    }
+                };
+                for (finish.fields) |field_idx| {
+                    const field = module_env.store.getAnnoRecordField(field_idx);
+                    field_names[field_names_len] = try gpa.dupe(u8, module_env.getIdentText(field.name));
+                    field_names_len += 1;
+                }
+
+                var fields = try gpa.alloc(DocType.Field, finish.fields.len);
+                var fields_len: usize = 0;
+                var fields_moved = false;
+                errdefer if (!fields_moved) {
+                    Builder.cleanupFields(gpa, fields[0..fields_len]);
+                    gpa.free(fields);
+                };
+
+                for (field_names, 0..) |field_name, i| {
+                    fields[i] = .{
+                        .name = field_name,
+                        .type = results.items[start + i],
+                    };
+                    fields_len += 1;
+                }
+                field_names_moved = true;
+                results.shrinkRetainingCapacity(start);
+
+                const record = try allocDocType(gpa, .{ .record = .{
+                    .fields = fields,
+                    .ext = ext,
+                    .is_open = finish.is_open,
+                } });
+                fields_moved = true;
+                ext_moved = true;
+                try Builder.pushResult(&results, gpa, record);
+            },
+            .finish_fn => |finish| {
+                const needed = finish.arg_count + 1;
+                std.debug.assert(results.items.len >= needed);
+                const ret = results.pop().?;
+                var ret_moved = false;
+                errdefer if (!ret_moved) {
+                    ret.deinit(gpa);
+                    gpa.destroy(ret);
+                };
+
+                const start = results.items.len - finish.arg_count;
+                const args = try gpa.alloc(*const DocType, finish.arg_count);
+                var args_moved = false;
+                errdefer if (!args_moved) {
+                    Builder.cleanupDocTypes(gpa, args);
+                    gpa.free(args);
+                };
+                @memcpy(args, results.items[start..]);
+                results.shrinkRetainingCapacity(start);
+
+                const func = try allocDocType(gpa, .{ .function = .{
+                    .args = args,
+                    .ret = ret,
+                    .effectful = finish.effectful,
+                } });
+                args_moved = true;
+                ret_moved = true;
+                try Builder.pushResult(&results, gpa, func);
+            },
+        }
     }
+
+    std.debug.assert(results.items.len == 1);
+    return results.pop().?;
 }
 
 // --- Type extraction from inferred types ---
