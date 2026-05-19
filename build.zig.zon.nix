@@ -177,12 +177,12 @@ linkFarm name [
     };
   }
   {
-    name = "bytebox-0.0.1-SXc2sZE5DwBGj-RgYk7yO60U9Uv0I5b5W2nO8m-TTRus";
+    name = "bytebox-0.0.1-SXc2sYY5DwAu1aZfl1V7c00g3pPv01J9cJZlw4mExw4J";
     path = fetchZigArtifact {
       name = "bytebox";
-      url = "git+https://github.com/rdunnington/bytebox.git#95ec0c8ddb9c95ded2e97f02748bc14bff189f6f";
-      hash = "sha256-m382E2V8/1jSn9GwR8TXZE6jXwBRZwYpEUvxkhLpQ8Y=";
-      rev = "95ec0c8ddb9c95ded2e97f02748bc14bff189f6f";
+      url = "git+https://github.com/lukewilliamboswell/bytebox.git#1f2de7c28188a262c213b2b0f77929ac7870bc07";
+      hash = "sha256-WBjZ6QAHzwuJ9s6y9iMPDe+QVj+Y2/TmbudT9a1RvFM=";
+      rev = "1f2de7c28188a262c213b2b0f77929ac7870bc07";
     };
   }
   {
