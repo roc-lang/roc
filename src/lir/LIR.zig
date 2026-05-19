@@ -320,6 +320,74 @@ pub const LirProcSpec = struct {
     hosted: ?HostedProc = null,
 };
 
+/// Identifier of a stored LirPattern.
+pub const LirPatternId = enum(u32) {
+    _,
+
+    pub const none: LirPatternId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: LirPatternId) bool {
+        return self == none;
+    }
+};
+
+/// Span into flat pattern-id storage.
+pub const LirPatternSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() LirPatternSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: LirPatternSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// Pattern in the LIR.
+pub const LirPattern = union(enum) {
+    bind: struct {
+        symbol: Symbol,
+        layout_idx: layout.Idx,
+        reassignable: bool = false,
+    },
+    wildcard: struct {
+        layout_idx: layout.Idx,
+    },
+    int_literal: struct {
+        value: i128,
+        layout_idx: layout.Idx,
+    },
+    float_literal: struct {
+        value: f64,
+        layout_idx: layout.Idx,
+    },
+    str_literal: StringLiteral.Idx,
+    tag: struct {
+        discriminant: u16,
+        union_layout: layout.Idx,
+        args: LirPatternSpan,
+    },
+    struct_: struct {
+        struct_layout: layout.Idx,
+        fields: LirPatternSpan,
+    },
+    list: struct {
+        list_layout: layout.Idx,
+        elem_layout: layout.Idx,
+        prefix: LirPatternSpan,
+        rest: LirPatternId,
+        suffix: LirPatternSpan,
+    },
+    as_pattern: struct {
+        symbol: Symbol,
+        layout_idx: layout.Idx,
+        reassignable: bool = false,
+        inner: LirPatternId,
+    },
+};
+
 test "Symbol size and alignment" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Symbol));
     try std.testing.expectEqual(@as(usize, 8), @alignOf(Symbol));

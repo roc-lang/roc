@@ -4,6 +4,7 @@
 //! the AST.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 
 const AST = @import("AST.zig");

@@ -1,6 +1,15 @@
 //! Utilities for CLI tests using the actual roc binary.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+/// Pick an IO suitable for the build context.
+///
+/// `std.Options.debug_io` defaults to a Threaded instance whose allocator is `.failing`,
+/// so it cannot spawn child processes (the spawn path arena-allocates argv/envp before
+/// fork()). In tests we use `std.testing.io`, which is initialized with `testing.allocator`.
+const io: std.Io = if (builtin.is_test) std.testing.io else std.Options.debug_io;
+
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 /// Absolute cache directory paths reserved for a single CLI test subprocess.
@@ -37,24 +46,24 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheD
     });
     defer allocator.free(cache_leaf);
 
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
 
     const cache_root_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
     defer allocator.free(cache_root_rel);
 
-    std.Io.Dir.cwd().createDirPath(std.testing.io, cache_root_rel) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(io, cache_root_rel) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
     const roc_cache_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "roc-cache" });
     defer allocator.free(roc_cache_rel);
-    try std.Io.Dir.cwd().makePath(roc_cache_rel);
+    try std.Io.Dir.cwd().createDirPath(io, roc_cache_rel);
 
     const zig_local_cache_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "zig-local-cache" });
     defer allocator.free(zig_local_cache_rel);
-    try std.Io.Dir.cwd().makePath(zig_local_cache_rel);
+    try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
 
     return .{
         .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
@@ -106,7 +115,7 @@ fn runChild(
     var env_map = try buildIsolatedTestEnvMap(allocator, extra_env);
     defer env_map.deinit();
 
-    const result = try std.process.run(allocator, std.testing.io, .{
+    const result = try std.process.run(allocator, io, .{
         .argv = argv,
         .cwd = .{ .path = cwd_path },
         .environ_map = &env_map,
@@ -131,7 +140,7 @@ pub fn runRocCommandWithEnv(
     extra_env: ?*const std.process.Environ.Map,
 ) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -160,7 +169,7 @@ pub fn runRocWithEnv(
     extra_env: ?*const std.process.Environ.Map,
 ) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -282,7 +291,7 @@ pub fn checkTestSuccess(result: RocResult) !void {
 /// Helper to run roc with stdin input (for REPL testing)
 pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) !RocResult {
     // Get absolute path to roc binary from current working directory
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
@@ -299,7 +308,7 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     var env_map = try buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
 
-    var child = try std.process.spawn(std.testing.io, .{
+    var child = try std.process.spawn(io, .{
         .argv = argv,
         .stdin = .pipe,
         .stdout = .pipe,
@@ -307,17 +316,17 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
         .cwd = .{ .path = cwd_path },
         .environ_map = &env_map,
     });
-    defer child.kill(std.testing.io);
+    defer child.kill(io);
 
     // Write input to stdin and close it
-    child.stdin.?.writeStreamingAll(std.testing.io, stdin_input) catch {};
-    child.stdin.?.close(std.testing.io);
+    child.stdin.?.writeStreamingAll(io, stdin_input) catch {};
+    child.stdin.?.close(io);
     child.stdin = null;
 
     // Collect output using MultiReader
     var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
     var multi_reader: std.Io.File.MultiReader = undefined;
-    multi_reader.init(allocator, std.testing.io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    multi_reader.init(allocator, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
     defer multi_reader.deinit();
 
     while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
@@ -326,7 +335,7 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     }
     try multi_reader.checkAnyError();
 
-    const term = try child.wait(std.testing.io);
+    const term = try child.wait(io);
 
     const stdout = try multi_reader.toOwnedSlice(0);
     errdefer allocator.free(stdout);

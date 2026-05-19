@@ -4412,6 +4412,7 @@ const CheckedBodyPayloadCopier = struct {
                 .resolved = null,
             } },
             .e_lookup_external => .{ .lookup_external = null },
+            .e_lookup_pending => .{ .lookup_external = null },
             .e_lookup_required => .{ .lookup_required = null },
             .e_list => |list| .{ .list = try self.copyExprSpan(list.elems) },
             .e_empty_list => .empty_list,

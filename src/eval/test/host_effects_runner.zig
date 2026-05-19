@@ -236,39 +236,39 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
         return .{ .success = result };
     }
 
-    const pipe_fds = posix.pipe() catch return .{ .fork_failed = {} };
+    const pipe_fds = harness.pipe() catch return .{ .fork_failed = {} };
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = harness.fork() catch {
+        harness.closeFd(pipe_read);
+        harness.closeFd(pipe_write);
         return .{ .fork_failed = {} };
     };
 
     if (fork_result == 0) {
-        posix.close(pipe_read);
+        harness.closeFd(pipe_read);
         var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
 
         const run = eval_fn(child_alloc, lowered) catch |err| {
             const name = @errorName(err);
             harness.writeAll(pipe_write, name);
-            posix.close(pipe_write);
+            harness.closeFd(pipe_write);
             std.c._exit(2);
         };
         serializeRun(pipe_write, run);
-        posix.close(pipe_write);
+        harness.closeFd(pipe_write);
         std.c._exit(0);
     }
 
-    posix.close(pipe_write);
+    harness.closeFd(pipe_write);
 
     var result_buf: std.ArrayListUnmanaged(u8) = .empty;
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
     while (true) {
-        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+        const bytes_read = harness.posixRead(pipe_read, &read_buf) catch {
             read_error = true;
             break;
         };
@@ -278,9 +278,9 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
             break;
         };
     }
-    posix.close(pipe_read);
+    harness.closeFd(pipe_read);
 
-    const wait_result = posix.waitpid(fork_result, 0);
+    const wait_result = harness.waitpid(fork_result, 0);
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
     if (termination_signal != 0) {
@@ -334,7 +334,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         else => return err,
     };
     switch (eval_result) {
-        .value => |_| {},
+        .value => {},
     }
 
     return runtime_env.snapshot(allocator);
@@ -839,14 +839,14 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
 }
 
 /// Public function `main`.
-pub fn main() !void {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init.Minimal) !void {
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
-    const cli = try harness.parseStandardArgs(args_arena.allocator());
+    const cli = try harness.parseStandardArgs(args_arena.allocator(), init.args);
 
     if (cli.help_requested) {
         printHelp();

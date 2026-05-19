@@ -15,9 +15,6 @@ const tracy = @import("tracy");
 
 const CoreCtx = ctx_mod.CoreCtx;
 
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
-
-
 const CIR = @import("CIR.zig");
 const Scope = @import("Scope.zig");
 
@@ -109,7 +106,7 @@ type_decl_stmt_by_ast_idx: std.AutoHashMapUnmanaged(AST.Statement.Idx, Statement
 /// stages consume the published root handle instead of rediscovering a root by
 /// scanning declarations.
 explicit_root_names: []const []const u8 = &.{},
-explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .{},
+explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .empty,
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in

@@ -41,6 +41,7 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
     pub fn deleteTempDir(_: std.mem.Allocator, _: CoreCtx, _: []const u8) void {}
 };
 
+pub const runner = @import("runner.zig");
 pub const CacheManager = manager.CacheManager;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
@@ -84,6 +85,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
     std.testing.refAllDecls(@import("dependency_sort.zig"));
+    std.testing.refAllDecls(@import("runner.zig"));
     std.testing.refAllDecls(@import("static_data_exports.zig"));
 
     // Actor model components

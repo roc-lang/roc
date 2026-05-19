@@ -11,7 +11,7 @@ const eval = @import("eval");
 const parse = @import("parse");
 
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
+
 const ModuleEnv = can.ModuleEnv;
 
 const ReplSession = @This();
@@ -94,7 +94,7 @@ pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]cons
 
     var lines = std.mem.splitScalar(u8, input, '\n');
     while (lines.next()) |raw_line| {
-        const trimmed_line = std.mem.trimRight(u8, raw_line, " \t\r");
+        const trimmed_line = std.mem.trimEnd(u8, raw_line, " \t\r");
         if (std.mem.trim(u8, trimmed_line, " \t\r\n").len == 0 and current.items.len == 0) {
             continue;
         }
@@ -235,11 +235,7 @@ fn classifyInput(self: *ReplSession, line: []const u8) !?InputInfo {
     env.common.source = line;
     try env.common.calcLineStarts(self.allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(self.allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(self.allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 

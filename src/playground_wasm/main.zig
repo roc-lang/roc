@@ -881,11 +881,7 @@ fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -917,11 +913,7 @@ fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -1629,66 +1621,7 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-/// Convert REPL StepResult to playground's ReplStepResult
-fn convertStepResult(result: repl.Repl.StepResult) ReplStepResult {
-    return switch (result) {
-        .expression => |output| ReplStepResult{
-            .output = output,
-            .try_type = .expression,
-        },
-        .definition => |output| ReplStepResult{
-            .output = output,
-            .try_type = .definition,
-        },
-        .help => |output| ReplStepResult{
-            .output = output,
-            .try_type = .expression, // Treat help as expression output
-        },
-        .quit => ReplStepResult{
-            .output = "Goodbye!",
-            .try_type = .expression,
-        },
-        .empty => ReplStepResult{
-            .output = "",
-            .try_type = .expression,
-        },
-        .parse_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .parse,
-            .error_details = extractErrorDetails(output),
-        },
-        .canonicalize_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .canonicalize,
-            .error_details = extractErrorDetails(output),
-        },
-        .type_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .typecheck,
-            .error_details = extractErrorDetails(output),
-        },
-        .eval_error => |output| ReplStepResult{
-            .output = output,
-            .try_type = .@"error",
-            .error_stage = .evaluation,
-            .error_details = extractErrorDetails(output),
-        },
-    };
-}
-
-/// Extract error details from an error message (part after ": ")
-fn extractErrorDetails(message: []const u8) ?[]const u8 {
-    if (std.mem.find(u8, message, ": ")) |idx| {
-        return message[idx + 2 ..];
-    }
-    return null;
-}
-
 /// Write REPL step result as JSON
-
 fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);

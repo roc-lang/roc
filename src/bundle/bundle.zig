@@ -656,7 +656,6 @@ pub fn unbundleStream(
     decompress_reader.verifyComplete() catch |err| {
         switch (err) {
             error.HashMismatch => return error.HashMismatch,
-            error.ReadFailed => return error.ReadFailed,
         }
     };
 }

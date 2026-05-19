@@ -20,7 +20,6 @@ const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
 const eval = @import("eval");
-const messages = @import("messages.zig");
 const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
 const build_options = @import("build_options");
@@ -29,6 +28,7 @@ const build_options = @import("build_options");
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
 const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
+const messages = @import("messages.zig");
 const roc_target = @import("roc_target");
 
 const Check = check.Check;
@@ -40,8 +40,6 @@ const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
 const ReportBuilder = check.ReportBuilder;
 const AST = parse.AST;
-const CanonicalizeImport = messages.CanonicalizeImport;
-
 const OwnedSemanticState = struct {
     module_env: ?*ModuleEnv,
     checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
@@ -1045,7 +1043,7 @@ pub const PackageEnv = struct {
 
                 for (st.dependents.items) |dep| try self.enqueue(dep);
                 for (child.dependents.items) |dep| try self.enqueue(dep);
-                if (!threading.is_freestanding) self.cond.broadcast();
+                if (!threading.is_freestanding) self.cond.broadcast(self.roc_ctx.std_io);
                 return;
             }
 
@@ -1127,6 +1125,7 @@ pub const PackageEnv = struct {
             self.package_name,
             self.resolver,
             self.additional_known_modules.items,
+            &.{},
         );
 
         const canon_end = if (!threading.is_freestanding) self.roc_ctx.timestampNow() else 0;
@@ -1160,7 +1159,7 @@ pub const PackageEnv = struct {
                 continue;
             }
 
-            // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
+            // Use CIR qualifier metadata; this allocates nothing and scans only once
             const qualified = hadQualifiedImport(env, mod_name);
 
             if (qualified) {
@@ -1178,7 +1177,7 @@ pub const PackageEnv = struct {
             const child_id = try self.ensureModule(mod_name, import_path);
             // Refresh st and env pointers in case ensureModule grew the modules array
             st = &self.modules.items[module_id];
-            env = &st.env.?;
+            env = st.moduleEnv().?;
             const is_new_import = child_id >= prev_module_count;
             try st.imports.append(self.gpa, child_id);
             // parent depth + 1
@@ -1208,7 +1207,7 @@ pub const PackageEnv = struct {
                     try rep.document.addAnnotated(self.modules.items[path[0]].name, .emphasized);
                     try rep.document.addLineBreak();
                 } else {
-                    // Fallback: show the detected back-edge
+                    // Path not found; show the detected back-edge
                     const edge_msg = try rep.addOwnedString("Cycle edge: ");
                     try rep.document.addText(edge_msg);
                     try rep.document.addAnnotated(st.name, .emphasized);
@@ -1234,14 +1233,14 @@ pub const PackageEnv = struct {
                 // Mark both Done and adjust counters
                 if (st.phase != .Done) {
                     if (comptime trace_build) {
-                        std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ st.name, mod_name });
+                        std.debug.print("[PKG-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ st.name, mod_name });
                     }
                     st.phase = .Done;
                     self.remaining_modules -= 1;
                 }
                 if (child.phase != .Done) {
                     if (comptime trace_build) {
-                        std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ mod_name, st.name });
+                        std.debug.print("[PKG-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ mod_name, st.name });
                     }
                     child.phase = .Done;
                     if (self.remaining_modules > 0) self.remaining_modules -= 1;
@@ -1261,7 +1260,7 @@ pub const PackageEnv = struct {
         }
 
         if (comptime trace_build) {
-            std.debug.print("[TRACE-CACHE] PHASE: {s} Canonicalize->WaitingOnImports (imports={d}, external={d})\n", .{
+            std.debug.print("[PKG-CACHE] PHASE: {s} Canonicalize->WaitingOnImports (imports={d}, external={d})\n", .{
                 st.name,
                 st.imports.items.len,
                 st.external_imports.items.len,
@@ -1383,6 +1382,23 @@ pub const PackageEnv = struct {
         return checker;
     }
 
+    /// Determine the statement_idx for a sibling module in the module_envs_map.
+    /// For type modules (where methods are stored under qualified names like "Color.to_str"),
+    /// returns the type declaration statement index so Can.zig uses qualified lookup.
+    /// For regular modules (where members are stored under plain names like "to_str"),
+    /// returns null so Can.zig uses bare-name lookup.
+    fn computeSiblingStatementIdx(sibling_env: *const ModuleEnv, sibling_name: []const u8) ?can.CIR.Statement.Idx {
+        // Only type modules store associated functions under qualified names.
+        // Regular modules (deprecated_module, etc.) store them under plain names.
+        switch (sibling_env.module_kind) {
+            .type_module => {},
+            else => return null,
+        }
+        const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse return null;
+        const type_node_idx = sibling_env.getExposedNodeIndexById(type_ident_in_module) orelse return null;
+        return @enumFromInt(type_node_idx);
+    }
+
     /// Canonicalization function that also discovers sibling .roc files in the same directory
     /// and includes additional known modules (e.g., from platform exposes).
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
@@ -1396,6 +1412,7 @@ pub const PackageEnv = struct {
         package_name: []const u8,
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
+        pre_resolved_imports: []const messages.CanonicalizeImport,
     ) !void {
         const gpa = roc_ctx.gpa;
 
@@ -1429,16 +1446,28 @@ pub const PackageEnv = struct {
             const exists = roc_ctx.fileExists(file_path);
             if (!exists) continue;
 
+            // Check pre-resolved imports first (e.g., from coordinator's built dependency list)
+            const pre_resolved_env: ?*const ModuleEnv = blk: {
+                for (pre_resolved_imports) |pre| {
+                    if (std.mem.eql(u8, pre.import_name, sibling_name)) break :blk pre.module_env;
+                }
+                break :blk null;
+            };
+
+            if (pre_resolved_env) |sibling_env| {
+                const statement_idx = computeSiblingStatementIdx(sibling_env, sibling_name);
+                try module_envs_map.put(sibling_ident, .{
+                    .env = sibling_env,
+                    .statement_idx = statement_idx,
+                    .qualified_type_ident = qualified_ident,
+                });
+                continue;
+            }
+
             // Try to get actual env from resolver if available
             if (resolver) |res| {
                 if (res.getEnv(res.ctx, package_name, sibling_name)) |sibling_env| {
-                    // Resolver has actual env - use it
-                    const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
-                        const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse break :stmt_blk null;
-                        const type_node_idx = sibling_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
-                        break :stmt_blk @enumFromInt(type_node_idx);
-                    };
-
+                    const statement_idx = computeSiblingStatementIdx(sibling_env, sibling_name);
                     try module_envs_map.put(sibling_ident, .{
                         .env = sibling_env,
                         .statement_idx = statement_idx,
@@ -1454,7 +1483,6 @@ pub const PackageEnv = struct {
                 try module_envs_map.put(sibling_ident, .{
                     .env = builtin_module_env, // Placeholder
                     .qualified_type_ident = qualified_ident,
-                    .is_placeholder = true, // Mark as placeholder
                 });
             }
         }
@@ -1493,7 +1521,9 @@ pub const PackageEnv = struct {
                 .statement_idx = statement_idx,
                 .qualified_type_ident = base_ident,
                 .is_package_qualified = true,
-                // Mark as placeholder if using builtin env as fallback (actual env not available yet)
+                // Mark as placeholder if using builtin env as fallback (actual env not available yet).
+                // The canonicalizer then defers member lookups via e_lookup_pending, which
+                // resolvePendingLookups() resolves once all dependencies are compiled.
                 .is_placeholder = (actual_env == builtin_module_env),
             };
 
@@ -1530,9 +1560,9 @@ pub const PackageEnv = struct {
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
-        target: roc_target.RocTarget,
-        roc_ctx: ?CoreCtx,
-    ) !Check {
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    ) !TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
@@ -1567,21 +1597,39 @@ pub const PackageEnv = struct {
         // For app modules with platform requirements, defer finalizing numeric defaults
         // until after platform requirements are checked, so numeric literals can be
         // constrained by platform types (e.g., I64) before defaulting to Dec.
-        if (env.defer_numeric_defaults) {
-            try checker.checkFileSkipNumericDefaults();
-        } else {
-            try checker.checkFile();
-        }
-
-        // After type checking, evaluate top-level declarations at compile time
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target, roc_ctx);
-        defer comptime_evaluator.deinit();
-        _ = try comptime_evaluator.evalAll();
+        // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
+        try checker.checkFile();
 
         module_envs_map.deinit();
 
-        return checker;
+        if (checkerHasArtifactBlockingProblems(&checker) or
+            env.types.containsErrContent() or
+            !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
+        {
+            return .{
+                .checker = checker,
+                .checked_artifact = null,
+            };
+        }
+
+        var checked_artifact = try publishCheckedArtifactFromCheckedModule(
+            gpa,
+            env,
+            imported_envs,
+            imported_artifacts,
+            .{
+                .platform_requirement_context = null,
+                .platform_app_relation = null,
+                .explicit_roots = &.{},
+                .available_artifacts = available_artifacts,
+            },
+        );
+        errdefer checked_artifact.deinit(gpa);
+
+        return .{
+            .checker = checker,
+            .checked_artifact = checked_artifact,
+        };
     }
 
     pub fn publishCheckedArtifactFromCheckedModule(
@@ -1733,13 +1781,15 @@ pub const PackageEnv = struct {
         const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
         defer self.gpa.free(available_artifacts);
 
-        // Resolve pending lookups that were deferred during canonicalization
-        // This converts e_lookup_pending to e_lookup_external now that all dependencies are available
-        env.store.resolvePendingLookups(env, imported_envs.items);
+        // Resolve type lookups that were deferred during canonicalization
+        env.store.resolveDeferredTypeLookups(env, imported_envs.items);
 
         const check_start = if (!threading.is_freestanding) self.roc_ctx.timestampNow() else 0;
-        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target, self.roc_ctx);
-        defer checker.deinit();
+        var typecheck_out = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, imported_artifacts.items, available_artifacts);
+        defer typecheck_out.deinit();
+        if (typecheck_out.checked_artifact != null) {
+            st.replaceCheckedArtifact(typecheck_out.takeCheckedArtifact());
+        }
         const check_end = if (!threading.is_freestanding) self.roc_ctx.timestampNow() else 0;
         if (!threading.is_freestanding) {
             self.total_type_checking_ns += @intCast(check_end - check_start);
@@ -1747,9 +1797,9 @@ pub const PackageEnv = struct {
 
         // Build reports from problems
         const check_diag_start = if (!threading.is_freestanding) self.roc_ctx.timestampNow() else 0;
-        var rb = try ReportBuilder.init(self.gpa, env, env, &checker.snapshots, &checker.problems, st.path, imported_envs.items, &checker.import_mapping, &checker.regions);
+        var rb = try ReportBuilder.init(self.gpa, env, env, &typecheck_out.checker.snapshots, &typecheck_out.checker.problems, st.path, imported_envs.items, &typecheck_out.checker.import_mapping, &typecheck_out.checker.regions);
         defer rb.deinit();
-        for (checker.problems.problems.items) |prob| {
+        for (typecheck_out.checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
             try st.reports.append(self.gpa, rep);
         }

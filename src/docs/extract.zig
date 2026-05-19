@@ -434,6 +434,212 @@ fn filterTypeModuleEntries(
     }
 }
 
+fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel.DocEntry)) !void {
+    // Find the Builtin opaque entry
+    var builtin_idx: ?usize = null;
+    for (entries_list.items, 0..) |*entry, idx| {
+        if (entry.kind == .@"opaque" and std.mem.eql(u8, entry.name, "Builtin")) {
+            builtin_idx = idx;
+            break;
+        }
+    }
+    const bi = builtin_idx orelse return;
+    const builtin_children = entries_list.items[bi].children;
+
+    // Process each child — move it under its proper parent
+    for (builtin_children) |child| {
+        try reparentDottedChild(gpa, entries_list, child);
+    }
+
+    // Free the Builtin entry's children array (entries were moved out)
+    gpa.free(builtin_children);
+    entries_list.items[bi].children = try gpa.alloc(DocModel.DocEntry, 0);
+
+    // Remove the Builtin entry itself (preserving source order)
+    var builtin_entry = entries_list.orderedRemove(bi);
+    builtin_entry.deinit(gpa);
+
+    // Also strip "Builtin." prefix from top-level entries and re-parent them.
+    const prefix = "Builtin.";
+    for (entries_list.items) |*entry| {
+        if (std.mem.startsWith(u8, entry.name, prefix)) {
+            const old_name = entry.name;
+            const stripped = old_name[prefix.len..];
+            const new_name = try gpa.dupe(u8, stripped);
+            gpa.free(old_name);
+            entry.name = new_name;
+        }
+    }
+
+    // Second pass: re-parent dotted entries under their parent types
+    var j: usize = 0;
+    while (j < entries_list.items.len) {
+        const entry = &entries_list.items[j];
+        if (std.mem.indexOfScalar(u8, entry.name, '.')) |dot_idx| {
+            const parent_name = entry.name[0..dot_idx];
+            const method_short_name = entry.name[dot_idx + 1 ..];
+
+            var parent_idx_opt: ?usize = null;
+            for (entries_list.items, 0..) |*potential_parent, idx| {
+                if (idx != j and std.mem.eql(u8, potential_parent.name, parent_name)) {
+                    parent_idx_opt = idx;
+                    break;
+                }
+            }
+
+            if (parent_idx_opt) |parent_idx| {
+                const parent_ptr = &entries_list.items[parent_idx];
+                const method_entry = try moveEntryForReparenting(gpa, entry, method_short_name);
+
+                if (std.mem.indexOfScalar(u8, method_short_name, '.')) |_| {
+                    var children_list = std.ArrayList(DocModel.DocEntry).empty;
+                    for (parent_ptr.children) |c| {
+                        try children_list.append(gpa, c);
+                    }
+                    gpa.free(parent_ptr.children);
+                    try reparentDottedChildInto(gpa, &children_list, method_entry);
+                    parent_ptr.children = try children_list.toOwnedSlice(gpa);
+                } else {
+                    try appendChildEntry(gpa, parent_ptr, method_entry);
+                }
+
+                var removed = entries_list.orderedRemove(j);
+                removed.deinit(gpa);
+                continue;
+            }
+        }
+        j += 1;
+    }
+
+    // Remove top-level value entries that are not part of the public API.
+    var k: usize = 0;
+    while (k < entries_list.items.len) {
+        const entry = &entries_list.items[k];
+        if (entry.kind == .value and entry.children.len == 0) {
+            var removed = entries_list.orderedRemove(k);
+            removed.deinit(gpa);
+            continue;
+        }
+        k += 1;
+    }
+}
+
+/// Recursively re-parent a child with a dotted name into the correct position in entries_list.
+fn reparentDottedChild(
+    gpa: Allocator,
+    entries_list: *std.ArrayList(DocModel.DocEntry),
+    child: DocModel.DocEntry,
+) !void {
+    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
+        try entries_list.append(gpa, child);
+        return;
+    };
+
+    const parent_name = child.name[0..dot_idx];
+    const remainder = child.name[dot_idx + 1 ..];
+
+    var parent: ?*DocModel.DocEntry = null;
+    for (entries_list.items) |*entry| {
+        if (std.mem.eql(u8, entry.name, parent_name)) {
+            parent = entry;
+            break;
+        }
+    }
+
+    if (parent == null) {
+        const group_name = try gpa.dupe(u8, parent_name);
+        errdefer gpa.free(group_name);
+        const empty = try gpa.alloc(DocModel.DocEntry, 0);
+        errdefer gpa.free(empty);
+
+        try entries_list.append(gpa, DocModel.DocEntry{
+            .name = group_name,
+            .kind = .nominal,
+            .type_signature = null,
+            .doc_comment = null,
+            .children = empty,
+        });
+        parent = &entries_list.items[entries_list.items.len - 1];
+    }
+
+    const p = parent.?;
+
+    var new_child = child;
+    const short_name = try gpa.dupe(u8, remainder);
+    gpa.free(child.name);
+    new_child.name = short_name;
+
+    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
+        var children_list = std.ArrayList(DocModel.DocEntry).empty;
+        for (p.children) |c| {
+            try children_list.append(gpa, c);
+        }
+        gpa.free(p.children);
+        try reparentDottedChildInto(gpa, &children_list, new_child);
+        p.children = try children_list.toOwnedSlice(gpa);
+    } else {
+        try appendChildEntry(gpa, p, new_child);
+    }
+}
+
+/// Like reparentDottedChild but operates on a children ArrayList (for nested levels).
+fn reparentDottedChildInto(
+    gpa: Allocator,
+    children_list: *std.ArrayList(DocModel.DocEntry),
+    child: DocModel.DocEntry,
+) !void {
+    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
+        try children_list.append(gpa, child);
+        return;
+    };
+
+    const parent_name = child.name[0..dot_idx];
+    const remainder = child.name[dot_idx + 1 ..];
+
+    var parent: ?*DocModel.DocEntry = null;
+    for (children_list.items) |*entry| {
+        if (std.mem.eql(u8, entry.name, parent_name)) {
+            parent = entry;
+            break;
+        }
+    }
+
+    if (parent == null) {
+        const group_name = try gpa.dupe(u8, parent_name);
+        errdefer gpa.free(group_name);
+        const empty = try gpa.alloc(DocModel.DocEntry, 0);
+        errdefer gpa.free(empty);
+
+        try children_list.append(gpa, DocModel.DocEntry{
+            .name = group_name,
+            .kind = .nominal,
+            .type_signature = null,
+            .doc_comment = null,
+            .children = empty,
+        });
+        parent = &children_list.items[children_list.items.len - 1];
+    }
+
+    const p = parent.?;
+
+    var new_child = child;
+    const short_name = try gpa.dupe(u8, remainder);
+    gpa.free(child.name);
+    new_child.name = short_name;
+
+    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
+        var sub_children = std.ArrayList(DocModel.DocEntry).empty;
+        for (p.children) |c| {
+            try sub_children.append(gpa, c);
+        }
+        gpa.free(p.children);
+        try reparentDottedChildInto(gpa, &sub_children, new_child);
+        p.children = try sub_children.toOwnedSlice(gpa);
+    } else {
+        try appendChildEntry(gpa, p, new_child);
+    }
+}
+
 // --- Internal helpers ---
 
 fn extractDefEntry(

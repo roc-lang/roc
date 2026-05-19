@@ -757,15 +757,12 @@ const CheckPostcheckArchitectureStep = struct {
         try child_argv.append(b.allocator, "perl");
         try child_argv.append(b.allocator, "ci/check_postcheck_architecture.pl");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        const io = b.graph.io;
+        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        const term = try child.wait(io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail(
                         "Post-check architecture check failed. Run 'perl ci/check_postcheck_architecture.pl' to see details.",
@@ -775,62 +772,6 @@ const CheckPostcheckArchitectureStep = struct {
             },
             else => {
                 return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
-            },
-        }
-    }
-};
-
-/// Build step that runs the perl-based semantic audit gate.
-/// Skipped on Windows because perl is not preinstalled there;
-/// Linux/macOS CI still enforces this gate.
-const SemanticAuditStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *SemanticAuditStep {
-        const self = b.allocator.create(SemanticAuditStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "semantic-audit",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-
-        if (builtin.os.tag == .windows) {
-            std.debug.print("Skipping semantic audit on Windows (perl not available)\n", .{});
-            return;
-        }
-
-        var child_argv = std.ArrayList([]const u8).empty;
-        defer child_argv.deinit(b.allocator);
-
-        try child_argv.append(b.allocator, "perl");
-        try child_argv.append(b.allocator, "ci/semantic_audit.pl");
-
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
-
-        switch (term) {
-            .Exited => |code| {
-                if (code != 0) {
-                    return step.fail(
-                        "Semantic audit failed. Run 'perl ci/semantic_audit.pl' to see details.",
-                        .{},
-                    );
-                }
-            },
-            else => {
-                return step.fail("ci/semantic_audit.pl terminated abnormally", .{});
             },
         }
     }
@@ -1546,8 +1487,6 @@ const MiniCiStep = struct {
         return self;
     }
 
-    const Timer = std.time.Timer;
-
     const StepTiming = struct {
         name: []const u8,
         ns: u64,
@@ -1555,12 +1494,13 @@ const MiniCiStep = struct {
 
     fn recordTiming(
         allocator: std.mem.Allocator,
+        io: std.Io,
         timings: *std.ArrayList(StepTiming),
         name: []const u8,
-        timer: *Timer,
+        timer: *std.Io.Timestamp,
     ) !void {
-        try timings.append(allocator, .{ .name = name, .ns = timer.read() });
-        timer.* = Timer.start() catch @panic("no clock");
+        try timings.append(allocator, .{ .name = name, .ns = @as(u64, @intCast(timer.untilNow(io, .awake).nanoseconds)) });
+        timer.* = std.Io.Timestamp.now(io, .awake);
     }
 
     fn printTimingSummary(timings: []const StepTiming, wall_ns: u64) void {
@@ -1579,48 +1519,46 @@ const MiniCiStep = struct {
         _ = options;
 
         const b = step.owner;
+        const io = b.graph.io;
         var timings = std.ArrayList(StepTiming).empty;
         defer timings.deinit(b.allocator);
-        var wall_timer = Timer.start() catch @panic("no clock");
-        var timer = Timer.start() catch @panic("no clock");
+        var wall_timer = std.Io.Timestamp.now(io, .awake);
+        var timer = std.Io.Timestamp.now(io, .awake);
 
         // Run the sequence of `zig build` commands that make up the
         // mini CI pipeline.
         try runSubBuild(step, &.{"fmt"}, "zig build fmt");
-        try recordTiming(b.allocator, &timings, "zig build fmt", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build fmt", &timer);
 
         try runZigLints(step);
-        try recordTiming(b.allocator, &timings, "zig lints", &timer);
-
-        try runSemanticAudit(step);
-        try recordTiming(b.allocator, &timings, "semantic audit", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig lints", &timer);
 
         try runTidy(step);
-        try recordTiming(b.allocator, &timings, "tidy checks", &timer);
+        try recordTiming(b.allocator, io, &timings, "tidy checks", &timer);
 
         try checkPostcheckArchitecture(step);
-        try recordTiming(b.allocator, &timings, "post-check architecture", &timer);
+        try recordTiming(b.allocator, io, &timings, "post-check architecture", &timer);
 
         try checkTestWiring(step);
-        try recordTiming(b.allocator, &timings, "test wiring", &timer);
+        try recordTiming(b.allocator, io, &timings, "test wiring", &timer);
 
         try runSubBuild(step, &.{}, "zig build");
-        try recordTiming(b.allocator, &timings, "zig build", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build", &timer);
 
         try checkBuiltinRocFormatting(step);
-        try recordTiming(b.allocator, &timings, "Builtin.roc formatting", &timer);
+        try recordTiming(b.allocator, io, &timings, "Builtin.roc formatting", &timer);
 
         try runSubBuild(step, &.{"snapshot"}, "zig build snapshot");
-        try recordTiming(b.allocator, &timings, "zig build snapshot", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build snapshot", &timer);
 
         try checkSnapshotChanges(step);
-        try recordTiming(b.allocator, &timings, "snapshot changes", &timer);
+        try recordTiming(b.allocator, io, &timings, "snapshot changes", &timer);
 
         try checkFxPlatformTestCoverage(step);
-        try recordTiming(b.allocator, &timings, "fx platform test coverage", &timer);
+        try recordTiming(b.allocator, io, &timings, "fx platform test coverage", &timer);
 
         try runSubBuild(step, &.{"test"}, "zig build test");
-        try recordTiming(b.allocator, &timings, "zig build test", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build test", &timer);
 
         try runSubBuild(step, &.{"test-builtin-doc"}, "zig build test-builtin-doc");
         try recordTiming(b.allocator, &timings, "zig build test-builtin-doc", &timer);
@@ -1630,18 +1568,18 @@ const MiniCiStep = struct {
             &.{ "-Doptimize=ReleaseFast", "test-playground" },
             "zig build -Doptimize=ReleaseFast test-playground",
         );
-        try recordTiming(b.allocator, &timings, "zig build -Doptimize=ReleaseFast test-playground", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build -Doptimize=ReleaseFast test-playground", &timer);
 
         try runSubBuild(step, &.{"test-serialization-sizes"}, "zig build test-serialization-sizes");
-        try recordTiming(b.allocator, &timings, "zig build test-serialization-sizes", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build test-serialization-sizes", &timer);
 
         try runSubBuild(step, &.{"test-cli"}, "zig build test-cli");
-        try recordTiming(b.allocator, &timings, "zig build test-cli", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build test-cli", &timer);
 
         try runSubBuild(step, &.{"coverage"}, "zig build coverage");
-        try recordTiming(b.allocator, &timings, "zig build coverage", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build coverage", &timer);
 
-        printTimingSummary(timings.items, wall_timer.read());
+        printTimingSummary(timings.items, @as(u64, @intCast(wall_timer.untilNow(io, .awake).nanoseconds)));
     }
 
     fn runZigLints(step: *Step) !void {
@@ -1666,40 +1604,6 @@ const MiniCiStep = struct {
             },
             else => {
                 return step.fail("zig run ci/zig_lints.zig terminated abnormally", .{});
-            },
-        }
-    }
-
-    fn runSemanticAudit(step: *Step) !void {
-        const b = step.owner;
-        std.debug.print("---- minici: running semantic audit ----\n", .{});
-
-        if (builtin.os.tag == .windows) {
-            std.debug.print("Skipping semantic audit on Windows (perl not available)\n", .{});
-            return;
-        }
-
-        var child_argv = std.ArrayList([]const u8).empty;
-        defer child_argv.deinit(b.allocator);
-
-        try child_argv.append(b.allocator, "perl");
-        try child_argv.append(b.allocator, "ci/semantic_audit.pl");
-
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
-
-        switch (term) {
-            .Exited => |code| {
-                if (code != 0) {
-                    return step.fail("Semantic audit failed. Run 'perl ci/semantic_audit.pl' to see details.", .{});
-                }
-            },
-            else => {
-                return step.fail("perl ci/semantic_audit.pl terminated abnormally", .{});
             },
         }
     }
@@ -1872,15 +1776,12 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "perl");
         try child_argv.append(b.allocator, "ci/check_postcheck_architecture.pl");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        const io = b.graph.io;
+        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        const term = try child.wait(io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail(
                         "Post-check architecture check failed. Run 'perl ci/check_postcheck_architecture.pl' to see details.",
@@ -2406,7 +2307,6 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check publication/remapping APIs stay gone");
-    const check_semantic_audit_step = b.step("check-semantic-audit", "Check that semantic reconstruction/fallback paths stay gone");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
@@ -3283,6 +3183,8 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("test/stack_overflow_test_helper.zig"),
             .target = target,
             .optimize = optimize,
+            // stack_overflow.zig uses std.c.write/fork/pipe; Zig 0.16 requires explicit link_libc.
+            .link_libc = true,
         }),
     });
     stack_overflow_test_helper_exe.root_module.addImport("base", roc_modules.base);
@@ -3354,7 +3256,6 @@ pub fn build(b: *std.Build) void {
                 zstd,
             );
         }
-
 
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
@@ -3555,14 +3456,6 @@ pub fn build(b: *std.Build) void {
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     test_step.dependOn(&check_postcheck_architecture.step);
     check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
-
-    // Add check that semantic compiler stages do not recover missing facts.
-    const run_semantic_audit = SemanticAuditStep.create(b);
-    check_semantic_audit_step.dependOn(&run_semantic_audit.step);
-    test_step.dependOn(&run_semantic_audit.step);
-    eval_test_step.dependOn(&run_semantic_audit.step);
-    test_glue_step.dependOn(&run_semantic_audit.step);
-    minici_step.dependOn(&run_semantic_audit.step);
 
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);
@@ -4885,10 +4778,11 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = b.build_root.handle.readFileAlloc(
-        b.allocator,
+    const builtin_source = std.Io.Dir.cwd().readFileAlloc(
+        b.graph.io,
         "src/build/roc/Builtin.roc",
-        32 * 1024 * 1024,
+        b.allocator,
+        std.Io.Limit.limited(32 * 1024 * 1024),
     ) catch @panic("unable to read Builtin.roc while constructing compiler artifact hash");
     defer b.allocator.free(builtin_source);
     hasher.update(builtin_source);

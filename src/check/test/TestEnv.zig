@@ -15,6 +15,7 @@ const TypedCIR = @import("../typed_cir.zig");
 const report_mod = @import("../report.zig");
 
 const testing = std.testing;
+// Allocators was removed in Zig 0.16 migration
 
 const compiled_builtins = @import("compiled_builtins");
 
@@ -392,10 +393,6 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) !usize {
     const gpa = std.testing.allocator;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 
@@ -405,7 +402,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -418,7 +415,8 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 
     try module_env.initCIRFields(module_name);
 
-    var czer = try Can.initModule(&allocators, &module_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
+    var czer = try Can.initModule(roc_ctx, &module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,

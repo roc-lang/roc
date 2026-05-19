@@ -510,6 +510,24 @@ pub fn testing(gpa: Allocator, arena: Allocator) Self {
     return .{ .ctx = null, .vtable = testing_vtable, .std_io = undefined, .gpa = gpa, .arena = arena };
 }
 
+/// Write data to a file path relative to the current working directory.
+/// Exposed so backend/eval code can write files without a full CoreCtx instance.
+pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) !void {
+    return std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sub_path, .data = data });
+}
+
+/// Returns an Io suitable for single-threaded use (e.g. test helpers, subprocess workers).
+/// Not available on freestanding targets.
+pub const singleThreadedIo = if (@import("builtin").target.os.tag != .freestanding) struct {
+    pub fn call() std.Io {
+        return std.Io.Threaded.global_single_threaded.io();
+    }
+}.call else struct {
+    pub fn call() std.Io {
+        @panic("singleThreadedIo not available on freestanding");
+    }
+}.call;
+
 // --- OS implementations ---
 
 fn osReadFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
@@ -734,6 +752,25 @@ fn testingStat(_: ?*anyopaque, _: std.Io, _: []const u8) StatError!FileInfo {
 
 fn testingListDir(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) ListError![]FileEntry {
     @panic("listDir should not be called in this test");
+}
+
+fn testingDirName(_: ?*anyopaque, _: std.Io, path: []const u8) ?[]const u8 {
+    if (std.mem.findScalarLast(u8, path, '/')) |last_slash| {
+        if (last_slash == 0) return "/";
+        return path[0..last_slash];
+    }
+    return null;
+}
+
+fn testingBaseName(_: ?*anyopaque, _: std.Io, path: []const u8) []const u8 {
+    if (std.mem.findScalarLast(u8, path, '/')) |last_slash| {
+        return path[last_slash + 1 ..];
+    }
+    return path;
+}
+
+fn testingJoinPath(_: ?*anyopaque, _: std.Io, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
+    return std.fs.path.join(allocator, parts);
 }
 
 fn testingCanonicalize(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CanonicalizeError![]const u8 {

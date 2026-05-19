@@ -9,13 +9,11 @@ const layout = @import("layout");
 const lir = @import("lir");
 const LlvmBuilder = @import("Builder.zig");
 
-const LirExprStore = lir.LirExprStore;
 const LirExprId = lir.LirExprId;
 const LirPatternId = lir.LirPatternId;
 const Symbol = lir.Symbol;
 const LirProc = lir.LirProc;
 const CFStmtId = lir.CFStmtId;
-
 
 const Allocator = std.mem.Allocator;
 
@@ -870,10 +868,6 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    fn isFloatLayout(l: layout.Idx) bool {
-        return l == .f32 or l == .f64;
-    }
-
     /// Convert a layout.Idx to the LLVM type used for struct fields.
     /// Unlike layoutToLlvmType, this maps bool to i8 (1 byte in memory)
     /// instead of i1 (1 bit), matching the layout store's memory representation.
@@ -926,50 +920,6 @@ pub const MonoLlvmCodeGen = struct {
         return val;
     }
 
-    fn coerceValueToLayout(self: *MonoLlvmCodeGen, val: LlvmBuilder.Value, target_layout: layout.Idx) Error!LlvmBuilder.Value {
-        if (val == .none) return error.CompilationFailed;
-
-        const wip = self.wip orelse return error.CompilationFailed;
-        const target_type = try self.layoutToLlvmTypeFull(target_layout);
-        const actual_type = val.typeOfWip(wip);
-
-        if (actual_type == target_type) return val;
-
-        if (target_layout == .bool and isIntType(actual_type) and actual_type != .i1) {
-            return wip.cast(.trunc, val, .i1, "") catch return error.CompilationFailed;
-        }
-
-        if (target_layout == .bool and actual_type == .ptr) {
-            const raw_bool = wip.load(.normal, .i8, val, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.CompilationFailed;
-            return wip.cast(.trunc, raw_bool, .i1, "") catch return error.CompilationFailed;
-        }
-
-        if (actual_type == .i1 and target_type == .i8) {
-            return wip.cast(.zext, val, .i8, "") catch return error.CompilationFailed;
-        }
-
-        if (isIntType(actual_type) and isIntType(target_type)) {
-            const actual_bits = intTypeBits(actual_type);
-            const target_bits = intTypeBits(target_type);
-            if (actual_bits < target_bits) {
-                return wip.cast(if (isSigned(target_layout)) .sext else .zext, val, target_type, "") catch return error.CompilationFailed;
-            }
-            if (actual_bits > target_bits) {
-                return wip.cast(.trunc, val, target_type, "") catch return error.CompilationFailed;
-            }
-        }
-
-        if (isIntType(actual_type) and (target_type == .float or target_type == .double)) {
-            return wip.cast(if (isSigned(target_layout)) .sitofp else .uitofp, val, target_type, "") catch return error.CompilationFailed;
-        }
-
-        if ((actual_type == .float or actual_type == .double) and isIntType(target_type)) {
-            return wip.cast(if (isSigned(target_layout)) .fptosi else .fptoui, val, target_type, "") catch return error.CompilationFailed;
-        }
-
-        return val;
-    }
-
     fn isIntType(t: LlvmBuilder.Type) bool {
         return t == .i1 or t == .i8 or t == .i16 or t == .i32 or t == .i64 or t == .i128;
     }
@@ -984,75 +934,6 @@ pub const MonoLlvmCodeGen = struct {
             .i128 => 128,
             else => 0,
         };
-    }
-
-    fn coerceValueToType(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, expected_type: LlvmBuilder.Type, value_layout: ?layout.Idx) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const actual_type = value.typeOfWip(wip);
-
-        if (actual_type == expected_type) return value;
-
-        if (expected_type == .i1 and isIntType(actual_type)) {
-            return wip.cast(.trunc, value, .i1, "") catch return error.CompilationFailed;
-        }
-
-        if (actual_type == .i1 and expected_type == .i8) {
-            return wip.cast(.zext, value, .i8, "") catch return error.CompilationFailed;
-        }
-
-        if (isIntType(actual_type) and isIntType(expected_type)) {
-            const actual_bits = intTypeBits(actual_type);
-            const expected_bits = intTypeBits(expected_type);
-            if (actual_bits < expected_bits) {
-                const signed = if (value_layout) |l| isSigned(l) else false;
-                return wip.cast(if (signed) .sext else .zext, value, expected_type, "") catch return error.CompilationFailed;
-            }
-            if (actual_bits > expected_bits) {
-                return wip.cast(.trunc, value, expected_type, "") catch return error.CompilationFailed;
-            }
-        }
-
-        if (isIntType(actual_type) and (expected_type == .float or expected_type == .double)) {
-            const signed = if (value_layout) |l| isSigned(l) else false;
-            return wip.cast(if (signed) .sitofp else .uitofp, value, expected_type, "") catch return error.CompilationFailed;
-        }
-
-        if ((actual_type == .float or actual_type == .double) and isIntType(expected_type)) {
-            const signed = if (value_layout) |l| isSigned(l) else false;
-            return wip.cast(if (signed) .fptosi else .fptoui, value, expected_type, "") catch return error.CompilationFailed;
-        }
-
-        if ((actual_type == .float or actual_type == .double) and (expected_type == .float or expected_type == .double)) {
-            return wip.cast(if (actual_type == .float) .fpext else .fptrunc, value, expected_type, "") catch return error.CompilationFailed;
-        }
-
-        if (actual_type.isPointer(builder) and expected_type.isPointer(builder)) {
-            return wip.cast(.bitcast, value, expected_type, "") catch return error.CompilationFailed;
-        }
-
-        if (!actual_type.isPointer(builder) and expected_type.isPointer(builder)) {
-            if (value_layout) |layout_idx| {
-                return try self.materializeGeneratedValueToPtr(value, layout_idx);
-            }
-        }
-
-        return value;
-    }
-
-    fn materializeGeneratedValueToPtr(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const size = try self.materializedLayoutSize(layout_idx);
-        const byte_array_type = builder.arrayType(size, .i8) catch return error.OutOfMemory;
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(8);
-        const alloca_ptr = wip.alloca(.normal, byte_array_type, .none, alignment, .default, "coerce_tmp") catch return error.CompilationFailed;
-
-        const zero_byte = builder.intValue(.i8, 0) catch return error.OutOfMemory;
-        const size_val = builder.intValue(.i32, size) catch return error.OutOfMemory;
-        _ = wip.callMemSet(alloca_ptr, alignment, zero_byte, size_val, .normal, false) catch return error.CompilationFailed;
-        _ = wip.store(.normal, value, alloca_ptr, alignment) catch return error.CompilationFailed;
-        return alloca_ptr;
     }
 
     fn llvmTypeByteSize(t: LlvmBuilder.Type) u64 {
@@ -1244,7 +1125,6 @@ pub const MonoLlvmCodeGen = struct {
         // the current function returns.
         const min_align: u64 = @max(tu_align_bytes, 8);
         const padded_size: u32 = @intCast((@as(u64, tu_size) + min_align - 1) / min_align * min_align);
-        const forced_alignment = LlvmBuilder.Alignment.fromByteUnits(min_align);
         const roc_ops = self.roc_ops_arg orelse return error.CompilationFailed;
         const ptr_type = builder.ptrType(.default) catch return error.CompilationFailed;
         const size_val_i64 = builder.intValue(.i64, padded_size) catch return error.OutOfMemory;

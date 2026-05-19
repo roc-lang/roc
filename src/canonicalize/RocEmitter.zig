@@ -435,7 +435,9 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitExpr(eq.rhs);
         },
         .e_type_method_call => |method_call| {
-            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            const alias_str = try std.fmt.allocPrint(self.allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            defer self.allocator.free(alias_str);
+            try self.write(alias_str);
             try self.write(".");
             try self.write(self.module_env.getIdent(method_call.method_name));
             try self.write("(");
@@ -447,7 +449,9 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write(")");
         },
         .e_type_dispatch_call => |method_call| {
-            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            const alias_str = try std.fmt.allocPrint(self.allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            defer self.allocator.free(alias_str);
+            try self.write(alias_str);
             try self.write(".");
             try self.write(self.module_env.getIdent(method_call.method_name));
             try self.write("(");

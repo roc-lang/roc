@@ -947,9 +947,9 @@ test "roc test cache invalidated by source change (dev)" {
     defer tmp_dir.cleanup();
 
     const source_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(1, 2) == 3 }\n";
-    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = source_content });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = source_content });
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const file_path = try std.fs.path.join(gpa, &.{ tmp_path, "CacheTest.roc" });
@@ -958,17 +958,17 @@ test "roc test cache invalidated by source change (dev)" {
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+    try testing.expect(result1.term == .exited and result1.term.exited == 0);
 
     const updated_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(2, 3) == 5 }\n";
-    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = updated_content });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = updated_content });
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") == null);
+    try testing.expect(result2.term == .exited and result2.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result2.stdout, "(cached)") == null);
 }
 
 fn testVerboseWorksFromCache(opt: []const u8) !void {
@@ -1530,17 +1530,17 @@ test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "overflowed its stack") == null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Segmentation fault") == null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "passed") != null);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "overflowed its stack") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Segmentation fault") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "passed") != null);
 }
 
 fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) !void {
-    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, expected_pass_count) != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "failed") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "FAIL:") == null);
+    try std.testing.expect(result.term == .exited and result.term.exited == 0);
+    try std.testing.expect(std.mem.find(u8, result.stdout, expected_pass_count) != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "failed") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "FAIL:") == null);
 }
 
 test "roc test issue 9392 numeric utility expects are deterministic with no cache" {
@@ -1595,10 +1595,11 @@ test "roc bundle complex_package includes all transitively imported modules" {
 
     // Create a unique output directory so the produced .tar.zst does not
     // pollute the working tree and parallel test runs do not collide.
-    const out_dir_rel = try std.fmt.allocPrint(gpa, ".zig-cache/roc-bundle-test/{d}", .{std.time.nanoTimestamp()});
+    const now_ts = std.Io.Timestamp.now(std.testing.io, .real);
+    const out_dir_rel = try std.fmt.allocPrint(gpa, ".zig-cache/roc-bundle-test/{d}", .{now_ts.nanoseconds});
     defer gpa.free(out_dir_rel);
-    try std.fs.cwd().makePath(out_dir_rel);
-    defer std.fs.cwd().deleteTree(out_dir_rel) catch {};
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, out_dir_rel);
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, out_dir_rel) catch {};
 
     // Pass the entry point as a path relative to cwd (the project root): the
     // bundle command stores paths verbatim in the archive and rejects

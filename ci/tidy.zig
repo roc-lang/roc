@@ -627,7 +627,7 @@ const DeadFilesDetector = struct {
         definition_count: u32,
         is_src: bool,
     };
-    const FileMap = std.AutoArrayHashMap(FileName, FileState);
+    const FileMap = std.array_hash_map.Auto(FileName, FileState);
 
     files: FileMap,
 

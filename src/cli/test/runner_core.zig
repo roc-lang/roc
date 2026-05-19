@@ -37,32 +37,6 @@ pub const TestStats = struct {
     }
 };
 
-fn createIsolatedTestCacheDir(allocator: Allocator, std_io: std.Io) ![]u8 {
-    const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-    // Get a nanosecond timestamp for uniqueness across runs
-    var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &ts);
-    const nano_ts: u64 = @intCast(ts.sec * std.time.ns_per_s + ts.nsec);
-    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        nano_ts,
-        cache_dir_id,
-    });
-    defer allocator.free(cache_leaf);
-
-    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", allocator);
-    defer allocator.free(cwd_path);
-
-    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
-    defer allocator.free(cache_rel);
-
-    std.Io.Dir.cwd().createDirPath(std_io, cache_rel) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
-}
-
 fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
     const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
     const environ: std.process.Environ = .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
@@ -80,7 +54,8 @@ fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []cons
     return std.process.run(allocator, std_io, .{
         .argv = argv,
         .environ_map = &env_map,
-        .max_output_bytes = max_output_bytes,
+        .stdout_limit = std.Io.Limit.limited(max_output_bytes),
+        .stderr_limit = std.Io.Limit.limited(max_output_bytes),
     });
 }
 
@@ -386,7 +361,7 @@ pub fn runWithValgrind(
     }, valgrind_max_output_bytes) catch |err| {
         std.debug.print("FAIL (valgrind runner error: {})\n", .{err});
         switch (err) {
-            error.StdoutStreamTooLong, error.StderrStreamTooLong => {
+            error.StreamTooLong => {
                 std.debug.print("       Valgrind output exceeded {d} bytes\n", .{valgrind_max_output_bytes});
             },
             else => {},

@@ -102,6 +102,16 @@ const PathUtils = struct {
     }
 };
 
+/// Controls which post-check publication work runs after ordinary checking has completed.
+pub const PostCheckPublicationMode = enum {
+    /// No post-check work (diagnostics only).
+    none,
+    /// Validate platform/app type-level relations (for `roc check`).
+    platform_relations,
+    /// Full executable artifact publication including MIR/LIR lowering (for `roc build`).
+    executable_artifacts,
+};
+
 // BuildEnv: workspace-level orchestrator for multi-package builds with local-only shorthands.
 //
 // Responsibilities:

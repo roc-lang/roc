@@ -1,6 +1,7 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");

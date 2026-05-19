@@ -80,6 +80,7 @@ const Symbol = lir.Symbol;
 const JoinPointId = lir.JoinPointId;
 const LocalId = lir.LocalId;
 const LocalSpan = lir.LocalSpan;
+const LirPatternId = lir.LirPatternId;
 // Layout store for accessing struct/tag field offsets
 const LayoutStore = layout.Store;
 const RcOp = layout.RcOp;
@@ -7263,7 +7264,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             return disc_reg;
         }
-
 
         /// After the outer tag discriminant has matched, emit discriminant checks for any
         /// nested .tag arg patterns. For example, for the branch `Err(Exit(code))`, after

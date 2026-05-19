@@ -136,7 +136,6 @@ test "platform resolution - insecure HTTP URL rejected" {
     try testing.expectError(error.CliError, result);
 }
 
-
 test "integration - shared memory setup and parsing" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -333,11 +332,10 @@ test "integration - automatic module dependency ordering" {
     defer gpa.free(roc_path);
 
     // This should compile successfully because modules are automatically sorted
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
+    _ = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile with automatic dependency ordering: {}\n", .{err});
         return err;
     };
-    _ = shm_result;
 }
 
 test "integration - transitive module imports (module A imports module B)" {
@@ -373,11 +371,10 @@ test "integration - transitive module imports (module A imports module B)" {
     defer gpa.free(roc_path);
 
     // This should compile successfully now that we pass sibling modules during compilation
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
+    _ = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile transitive import test: {}\n", .{err});
         return err;
     };
-    _ = shm_result;
 }
 
 test "integration - diamond dependency pattern (A imports B and C, both import D)" {
@@ -420,11 +417,10 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     defer gpa.free(roc_path);
 
     // This should compile successfully with correct dependency ordering
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
+    _ = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile diamond dependency test: {}\n", .{err});
         return err;
     };
-    _ = shm_result;
 }
 
 test "integration - direct Core and Utils calls from app" {
@@ -456,9 +452,8 @@ test "integration - direct Core and Utils calls from app" {
     const roc_path = std.fs.path.join(gpa, &.{ cwd_path, "test/str/app_direct_core.roc" }) catch return;
     defer gpa.free(roc_path);
 
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
+    _ = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile direct Core call test: {}\n", .{err});
         return err;
     };
-    _ = shm_result;
 }

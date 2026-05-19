@@ -373,16 +373,19 @@ fn configuredSharedMemorySize() usize {
     return @intCast(build_options.shared_memory_size);
 }
 
-/// Try to create shared memory, falling back to a smaller size if the system
-/// has overcommit disabled and rejects the initial allocation.
-fn createSharedMemoryWithFallback(io: std.Io, page_size: usize) !SharedMemoryAllocator {
+/// Reduced shared memory size for systems with overcommit disabled.
+const SHARED_MEMORY_SMALL_SIZE: usize = 256 * 1024 * 1024; // 256MB
+
+/// Create shared memory, retrying with a smaller reservation on systems
+/// that reject the preferred large allocation (overcommit disabled).
+fn createSharedMemoryAdaptive(io: std.Io, page_size: usize) !SharedMemoryAllocator {
     // Try the preferred size first
     if (SharedMemoryAllocator.create(io, SHARED_MEMORY_SIZE, page_size)) |shm| {
         return shm;
     } else |_| {}
 
-    // Fall back to smaller size for systems with overcommit disabled
-    return SharedMemoryAllocator.create(io, SHARED_MEMORY_FALLBACK_SIZE, page_size);
+    // Retry with smaller size for systems with overcommit disabled
+    return SharedMemoryAllocator.create(io, SHARED_MEMORY_SMALL_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
@@ -1314,369 +1317,6 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
     }
 }
 
-/// Run using the dev shim: pre-link a shim with the host once, then pass CIR via
-/// shared memory for JIT compilation. Skips LLD linking on subsequent runs.
-fn rocRunDevShim(ctx: *CliCtx, args: cli_args.RunArgs) !void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Initialize cache
-    const cache_config = CacheConfig{
-        .enabled = !args.no_cache,
-        .verbose = false,
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-
-    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => {
-            return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
-        },
-    };
-
-    const exe_display_name = std.fs.path.basename(args.path);
-
-    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name}) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        }
-    else
-        ctx.arena.dupe(u8, exe_display_name) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        };
-
-    // Parse the app file to get the platform reference (needed for cache key)
-    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
-
-    const app_dir = std.fs.path.dirname(args.path) orelse ".";
-    const platform_paths = try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
-
-    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
-        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
-    };
-
-    const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    // Validate platform header and get link spec
-    var link_spec: ?roc_target.TargetLinkSpec = null;
-    var targets_config: ?roc_target.TargetsConfig = null;
-    if (platform_paths.platform_source_path) |platform_source| {
-        if (platform_validation.validatePlatformHeader(ctx.arena, ctx.io.std_io, platform_source)) |validation| {
-            targets_config = validation.config;
-
-            if (validation.config.exe.len == 0 and validation.config.static_lib.len > 0) {
-                ctx.io.stderr().print("Error: This platform only produces static libraries.\n\n", .{}) catch {};
-                ctx.io.stderr().print("Use 'roc build' instead to produce the library artifact.\n", .{}) catch {};
-                return error.UnsupportedTarget;
-            }
-
-            if (args.target) |target_str| {
-                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
-                    const result = platform_validation.targets_validator.ValidationResult{
-                        .invalid_target = .{ .target_str = target_str },
-                    };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.InvalidTarget;
-                };
-
-                if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
-                    link_spec = spec;
-                } else {
-                    const result = platform_validation.createUnsupportedTargetResult(
-                        platform_source,
-                        parsed_target,
-                        .exe,
-                        validation.config,
-                    );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.UnsupportedTarget;
-                }
-            } else {
-                if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
-                    link_spec = validation.config.getLinkSpec(compatible_target, .exe);
-                } else {
-                    const native_target = builder.RocTarget.detectNative();
-                    const result = platform_validation.createUnsupportedTargetResult(
-                        platform_source,
-                        native_target,
-                        .exe,
-                        validation.config,
-                    );
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.UnsupportedTarget;
-                }
-            }
-        } else |err| {
-            switch (err) {
-                error.MissingTargetsSection => {
-                    ctx.io.stderr().print("Error: Platform is missing a targets section.\n\n", .{}) catch {};
-                    return error.PlatformNotSupported;
-                },
-                else => {
-                    std.log.debug("Could not validate platform header: {}", .{err});
-                },
-            }
-        }
-    }
-
-    const validated_link_spec = link_spec orelse {
-        ctx.io.stderr().print("Error: Platform does not support any target compatible with this system.\n", .{}) catch {};
-        return error.PlatformNotSupported;
-    };
-
-    // Extract entrypoints from platform source file
-    var entrypoints = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
-        return error.OutOfMemory;
-    };
-
-    if (platform_paths.platform_source_path) |platform_source| {
-        extractEntrypointsFromPlatform(ctx, platform_source, &entrypoints) catch |err| {
-            return ctx.fail(.{ .entrypoint_extraction_failed = .{
-                .path = platform_source,
-                .reason = @errorName(err),
-            } });
-        };
-    } else {
-        return ctx.fail(.{ .entrypoint_extraction_failed = .{
-            .path = platform_paths.platform_source_path orelse "<unknown>",
-            .reason = "No platform source file found for entrypoint extraction",
-        } });
-    }
-
-    // Build the cache key from all inputs that affect the linked executable:
-    // app path, target, platform source mtime, and mtimes of all linked host files.
-    const platform_dir = if (platform_paths.platform_source_path) |p|
-        std.fs.path.dirname(p) orelse "."
-    else
-        ".";
-    const files_dir = if (targets_config) |cfg| cfg.files_dir orelse "targets" else "targets";
-    const target_name = @tagName(validated_link_spec.target);
-
-    var cache_hasher = std.hash.crc.Crc32.init();
-    cache_hasher.update(args.path);
-    cache_hasher.update(target_name);
-
-    // Hash platform source mtime (captures entrypoint and targets section changes)
-    if (platform_paths.platform_source_path) |p| {
-        cache_hasher.update(p);
-        if (std.Io.Dir.cwd().statFile(ctx.io.std_io, p, .{})) |stat| {
-            const mtime_ns: i96 = stat.mtime.nanoseconds;
-            const mtime_bytes: [12]u8 = @bitCast(mtime_ns);
-            cache_hasher.update(&mtime_bytes);
-        } else |_| {}
-    }
-
-    // Hash mtimes of all platform host files from the link spec
-    for (validated_link_spec.items) |item| {
-        switch (item) {
-            .file_path => |file_name| {
-                const host_file_path = std.fs.path.join(ctx.arena, &.{
-                    platform_dir, files_dir, target_name, file_name,
-                }) catch continue;
-                cache_hasher.update(host_file_path);
-                if (std.Io.Dir.cwd().statFile(ctx.io.std_io, host_file_path, .{})) |stat| {
-                    const mtime_ns: i96 = stat.mtime.nanoseconds;
-                    const mtime_bytes: [12]u8 = @bitCast(mtime_ns);
-                    cache_hasher.update(&mtime_bytes);
-                } else |_| {}
-            },
-            .app, .win_gui => {},
-        }
-    }
-
-    const exe_cache_name = std.fmt.allocPrint(ctx.arena, "roc_dev_{x}", .{cache_hasher.final()}) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        }
-    else
-        ctx.arena.dupe(u8, exe_cache_name) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        };
-
-    const exe_cache_path = std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    // Check if the dev shim executable already exists in cache
-    const cache_exists = if (args.no_cache) false else blk: {
-        std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch {
-            break :blk false;
-        };
-        break :blk true;
-    };
-
-    if (cache_exists) {
-        std.log.debug("Using cached dev shim executable: {s}", .{exe_cache_path});
-        createHardlink(ctx, exe_cache_path, exe_path) catch |err| {
-            std.log.debug("Hardlink from cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, ctx.io.std_io, .{}) catch |copy_err| {
-                return ctx.fail(.{ .file_write_failed = .{
-                    .path = exe_path,
-                    .err = copy_err,
-                } });
-            };
-        };
-    } else {
-        // Extract dev shim library to temp dir
-        const shim_filename = if (builtin.target.os.tag == .windows) "roc_dev_shim.lib" else "libroc_dev_shim.a";
-        const shim_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, shim_filename }) catch {
-            return error.OutOfMemory;
-        };
-
-        const selected_target = validated_link_spec.target;
-        extractDevShimLibrary(ctx.io.std_io, shim_path, selected_target) catch |err| {
-            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-        };
-
-        // Generate platform host shim
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
-
-        // Link the host with our dev shim
-        var extra_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
-            return error.OutOfMemory;
-        };
-
-        if (builtin.target.os.tag == .macos) {
-            extra_args.append("-lSystem") catch {
-                return error.OutOfMemory;
-            };
-        }
-
-        var object_files = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 16) catch {
-            return error.OutOfMemory;
-        };
-
-        for (validated_link_spec.items) |item| {
-            switch (item) {
-                .file_path => |file_name| {
-                    const full_path = std.fs.path.join(ctx.arena, &.{
-                        platform_dir, files_dir, target_name, file_name,
-                    }) catch {
-                        return error.OutOfMemory;
-                    };
-                    object_files.append(full_path) catch {
-                        return error.OutOfMemory;
-                    };
-                },
-                .app => {
-                    object_files.append(shim_path) catch {
-                        return error.OutOfMemory;
-                    };
-                    if (platform_shim_path) |path| {
-                        object_files.append(path) catch {
-                            return error.OutOfMemory;
-                        };
-                    }
-                },
-                .win_gui => {},
-            }
-        }
-
-        const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
-
-        const empty_files: []const []const u8 = &.{};
-
-        const platform_files_dir = std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }) catch {
-            return error.OutOfMemory;
-        };
-
-        const link_config = linker.LinkConfig{
-            .target_abi = target_abi,
-            .output_path = exe_path,
-            .object_files = object_files.items,
-            .platform_files_pre = empty_files,
-            .platform_files_post = empty_files,
-            .extra_args = extra_args.items,
-            .can_exit_early = false,
-            .disable_output = false,
-            .platform_files_dir = platform_files_dir,
-        };
-
-        linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = @tagName(validated_link_spec.target),
-            } });
-        };
-
-        // Cache the linked executable
-        std.log.debug("Caching dev shim executable to: {s}", .{exe_cache_path});
-        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
-        };
-        createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
-            std.log.debug("Hardlink to cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
-                std.log.debug("Failed to copy to cache: {}", .{copy_err});
-            };
-        };
-    }
-
-    // Set up shared memory with ModuleEnv using the Coordinator
-    const shm_result = try setupSharedMemoryWithCoordinator(ctx, args.path, args.allow_errors);
-
-    if (shm_result.error_count > 0 and !args.allow_errors) {
-        return error.TypeCheckingFailed;
-    }
-
-    const shm_handle = shm_result.handle;
-
-    defer {
-        if (comptime is_windows) {
-            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-        } else {
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = c.close(shm_handle.fd);
-        }
-    }
-
-    std.log.debug("Launching dev shim executable: {s}", .{exe_path});
-    if (comptime is_windows) {
-        std.log.debug("Using Windows handle inheritance approach", .{});
-        try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
-    } else {
-        std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
-    }
-    std.log.debug("Dev shim execution completed", .{});
-
-    if (shm_result.warning_count > 0) {
-        ctx.io.flush();
-        std.process.exit(2);
-    }
-}
-
-/// Extract the dev shim library to the given output path.
-fn extractDevShimLibrary(std_io: std.Io, output_path: []const u8, target: ?roc_target.RocTarget) !void {
-    if (builtin.is_test) {
-        const shim_file = try std.Io.Dir.cwd().createFile(std_io, output_path, .{});
-        defer shim_file.close(std_io);
-        return;
-    }
-
-    const shim_data = if (target) |t|
-        DevShimLibraries.forTarget(t)
-    else
-        DevShimLibraries.native;
-
-    const shim_file = try std.Io.Dir.cwd().createFile(std_io, output_path, .{});
-    defer shim_file.close(std_io);
-
-    try shim_file.writeStreamingAll(std_io, shim_data);
-}
-
 const NativeRunTermination = union(enum) {
     success,
     exit_code: u8,
@@ -1744,161 +1384,115 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) ?[]const u8 {
 
 /// State for the CLI echo platform's virtual I/O context.
 /// Intercepts reads for the synthetic app source and embedded platform files.
-const CliEchoState = struct {
-    app_abs_path: []const u8,
-    synthetic_app_source: []const u8,
-    platform_main_path: []const u8,
-    echo_module_path: []const u8,
-};
-
-fn cliEchoReadFile(ctx: ?*anyopaque, std_io: std.Io, path: []const u8, gpa: std.mem.Allocator) CoreCtx.ReadError![]u8 {
-    const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
-    if (std.mem.eql(u8, path, self.app_abs_path))
-        return gpa.dupe(u8, self.synthetic_app_source) catch error.OutOfMemory;
-    if (std.mem.eql(u8, path, self.platform_main_path))
-        return gpa.dupe(u8, echo_platform.platform_main_source) catch error.OutOfMemory;
-    if (std.mem.eql(u8, path, self.echo_module_path))
-        return gpa.dupe(u8, echo_platform.echo_module_source) catch error.OutOfMemory;
-    return CoreCtx.os(gpa, gpa, std_io).readFile(path, gpa);
-}
-
-fn cliEchoFileExists(ctx: ?*anyopaque, std_io: std.Io, path: []const u8) bool {
-    const self: *CliEchoState = @ptrCast(@alignCast(ctx.?));
-    if (std.mem.eql(u8, path, self.app_abs_path)) return true;
-    if (std.mem.eql(u8, path, self.platform_main_path)) return true;
-    if (std.mem.eql(u8, path, self.echo_module_path)) return true;
-    return CoreCtx.os(undefined, undefined, std_io).fileExists(path);
-}
-
-
 /// Run a default_app (headerless file with main! and echo platform).
 /// This compiles the app through the BuildEnv pipeline and executes the result
 /// with the echo platform host function, using a virtual vtable to intercept
 /// reads for the synthetic app source and embedded platform files.
 fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) !void {
-    const HostedFn = echo_platform.host_abi.HostedFn;
-    const target = RocTarget.detectNative();
     defer ctx.gpa.free(original_source);
 
-    const cwd_tmp = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa) catch return error.OutOfMemory;
-    defer ctx.gpa.free(cwd_tmp);
-    const app_abs = std.fs.path.resolve(ctx.gpa, &.{ cwd_tmp, args.path }) catch return error.OutOfMemory;
-    defer ctx.gpa.free(app_abs);
+    // Write synthetic app + echo platform files into a unique temp directory.
+    // The coordinator reads platform/module files from disk, so the synthetic
+    // sources must exist on the filesystem (a `cliEchoReadFile` filesystem
+    // override only helps build_env paths, not the coordinator spawned by
+    // `buildLirRuntimeImageWithCoordinator`).
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        ctx.io.stderr().print("error: failed to create temp dir: {}\n", .{err}) catch {};
+        return err;
+    };
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    // Virtual paths for the echo platform — intercepted by cliEchoReadFile/cliEchoFileExists,
-    // never actually read from disk. Derived from the app's directory so they
-    // are valid absolute paths on any OS.
-    const app_dir = std.fs.path.dirname(app_abs) orelse ".";
-    const platform_main_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "main.roc" }) catch return error.OutOfMemory;
-    defer ctx.gpa.free(platform_main_path);
-    const echo_module_path = std.fs.path.join(ctx.gpa, &.{ app_dir, ".roc_echo_platform", "Echo.roc" }) catch return error.OutOfMemory;
-    defer ctx.gpa.free(echo_module_path);
+    const platform_dir = std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" }) catch return error.OutOfMemory;
+    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir) catch |err| {
+        ctx.io.stderr().print("error: failed to create platform dir {s}: {}\n", .{ platform_dir, err }) catch {};
+        return err;
+    };
 
-    // On Windows, platform_main_path contains backslashes which the Roc parser
-    // would interpret as escape sequences. Use forward slashes instead — the
-    // compiler's path resolution normalizes them back to native separators.
-    const platform_roc_path = ctx.gpa.dupe(u8, platform_main_path) catch return error.OutOfMemory;
-    defer ctx.gpa.free(platform_roc_path);
-    std.mem.replaceScalar(u8, platform_roc_path, '\\', '/');
+    const app_path = std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" }) catch return error.OutOfMemory;
+    const platform_main_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" }) catch return error.OutOfMemory;
+    const echo_module_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" }) catch return error.OutOfMemory;
 
-    const header = std.fmt.allocPrint(
-        ctx.gpa,
-        "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.Echo\n\necho! = |msg| Echo.line!(msg)\n\n",
-        .{platform_roc_path},
-    ) catch return error.OutOfMemory;
-    defer ctx.gpa.free(header);
-
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n" ++
+        "echo! = |msg| Echo.line!(msg)\n\n";
     const synthetic_source = std.mem.concat(ctx.gpa, u8, &.{ header, original_source }) catch return error.OutOfMemory;
     defer ctx.gpa.free(synthetic_source);
 
-    // Phase 2: Compile through standard pipeline
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
-    defer ctx.gpa.free(cwd);
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1, target, cwd, ctx.io.std_io);
-    defer build_env.deinit();
-
-    // Set up a custom Io that intercepts reads for synthetic echo platform files.
-    var cli_echo_state = CliEchoState{
-        .app_abs_path = app_abs,
-        .synthetic_app_source = synthetic_source,
-        .platform_main_path = platform_main_path,
-        .echo_module_path = echo_module_path,
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source }) catch |err| {
+        ctx.io.stderr().print("error: failed to write {s}: {}\n", .{ app_path, err }) catch {};
+        return err;
     };
-    var cli_echo_vtable = ctx.coreCtx().vtable;
-    cli_echo_vtable.readFile = &cliEchoReadFile;
-    cli_echo_vtable.fileExists = &cliEchoFileExists;
-    build_env.filesystem = .{ .ctx = @ptrCast(&cli_echo_state), .vtable = cli_echo_vtable, .std_io = ctx.io.std_io, .gpa = ctx.gpa, .arena = ctx.arena };
-
-    build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source }) catch |err| {
+        ctx.io.stderr().print("error: failed to write {s}: {}\n", .{ platform_main_path, err }) catch {};
+        return err;
+    };
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source }) catch |err| {
+        ctx.io.stderr().print("error: failed to write {s}: {}\n", .{ echo_module_path, err }) catch {};
         return err;
     };
 
-    build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(ctx.io.stderr());
-        return err;
-    };
+    const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, app_path, original_source_dir);
+    defer closeSharedMemoryHandle(shm_result.handle);
 
-    const diag = build_env.renderDiagnostics(ctx.io.stderr());
-    if (diag.errors > 0) return error.CompilationFailed;
+    if (shm_result.error_count > 0) {
+        if (args.allow_errors) return;
+        return error.TypeCheckingFailed;
+    }
 
-    // Phase 3: Prepare for execution
-    var resolved = try build_env.getResolvedModuleEnvs(ctx.arena);
-    try resolved.processHostedFunctions(ctx.gpa, null);
-    const entry = try resolved.findEntrypoint();
+    const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(shm_result.handle.ptr));
+    const header_offset = @sizeOf(SharedMemoryAllocator.Header);
+    const runtime_header: *const lir.RuntimeImage.Header = @ptrCast(@alignCast(base_ptr + header_offset));
+    const view = try lir.RuntimeImage.viewMappedImage(runtime_header, base_ptr, shm_result.handle.mapped_size);
 
-    // Phase 4: Execute via selected backend
-    var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    if (view.platform_entrypoints.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("roc run default app invariant violated: no platform entrypoints", .{});
+        }
+        return error.NoEntrypoint;
+    }
+    const entrypoint = view.platform_entrypoints[0];
+
+    var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
     var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
+
+    const proc = view.store.getProcSpec(entrypoint.root_proc);
+    const arg_layouts = try argLayoutsForProc(ctx.gpa, &view.store, entrypoint.root_proc);
+    defer ctx.gpa.free(arg_layouts);
+
+    var interpreter = try eval.LirInterpreter.init(
+        ctx.gpa,
+        &view.store,
+        &view.layouts,
+        &roc_ops,
+    );
+    defer interpreter.deinit();
+
     var result_buf: [16]u8 align(16) = undefined;
+    _ = interpreter.eval(.{
+        .proc_id = entrypoint.root_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = @ptrCast(&cli_args_list),
+        .ret_ptr = @ptrCast(&result_buf),
+    }) catch |err| {
+        switch (err) {
+            error.Crash => return,
+            error.OutOfMemory => return error.OutOfMemory,
+            error.RuntimeError, error.DivisionByZero => {
+                const message = interpreter.getRuntimeErrorMessage() orelse @errorName(err);
+                ctx.io.stderr().print("error: {s}\n", .{message}) catch {};
+                return error.RuntimeError;
+            },
+        }
+    };
 
-    switch (args.opt.toBackend()) {
-        .dev, .llvm => {
-            runViaDev(
-                ctx.gpa,
-                entry.platform_env,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-            ) catch |err| {
-                std.debug.print("Dev backend execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
-        },
-        .interpreter => {
-            compile.runner.runViaInterpreter(
-                ctx.gpa,
-                entry.platform_env,
-                build_env.builtin_modules,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&cli_args_list),
-                @ptrCast(&result_buf),
-                target,
-            ) catch |err| {
-                std.debug.print("Execution error: {}\n", .{err});
-                std.process.exit(1);
-            };
-        },
-    }
-
-    // Platform returns I8; bit-identical to u8 for std.process.exit
     const exit_code = result_buf[0];
-    if (exit_code != 0) {
-        std.process.exit(exit_code);
-    }
-    // Inline `expect` failures don't halt the program but must cause a
-    // non-zero exit status so scripts and test runners can detect them.
-    if (echo_env.inline_expect_failed) {
-        std.process.exit(1);
-    }
+    if (exit_code != 0) std.process.exit(exit_code);
+    if (echo_env.inline_expect_failed) std.process.exit(1);
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -2311,12 +1905,6 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
-fn viewRuntimeImageFromHandle(handle: SharedMemoryHandle) lir.RuntimeImage.ImageError!lir.RuntimeImage.ProgramView {
-    const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
-    const header: *const lir.RuntimeImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    return lir.RuntimeImage.viewMappedImage(header, base_ptr, handle.size);
-}
-
 fn argLayoutsForProc(
     allocator: Allocator,
     store: *const lir.LirStore,
@@ -2383,7 +1971,7 @@ pub fn buildLirRuntimeImageWithCoordinator(
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemoryWithFallback(ctx.io.std_io, page_size);
+    var shm = try createSharedMemoryAdaptive(ctx.io.std_io, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
@@ -2830,85 +2418,6 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
     return PlatformPaths{ .platform_source_path = source_path };
 }
 
-/// Extract all entrypoint names from platform header provides record into ArrayList
-/// TODO: Replace this with proper BuildEnv solution in the future
-fn extractEntrypointsFromPlatform(ctx: *CliCtx, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
-    // Read the Roc file
-    var source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, roc_file_path, ctx.gpa, .unlimited) catch return error.NoPlatformFound;
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    // Extract module name from the file path (strip .roc extension)
-    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_file_path);
-
-    // Create ModuleEnv
-    var env = ModuleEnv.init(ctx.gpa, source) catch return error.ParseFailed;
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Parse the source code as a full module
-    const parse_ast = parse.parse(ctx.gpa, &env.common) catch return error.ParseFailed;
-    defer parse_ast.deinit();
-
-    // Look for platform header in the AST
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    // Check if this is a platform file with a platform header
-    switch (header) {
-        .platform => |platform_header| {
-            // Get the provides collection and its record fields
-            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
-            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
-
-            // Extract FFI symbol names from provides clause
-            // Format: `provides { roc_identifier: "ffi_symbol_name" }`
-            // The string value specifies the symbol name exported to the host (becomes roc__<symbol>)
-            for (provides_fields) |field_idx| {
-                const field = parse_ast.store.getRecordField(field_idx);
-
-                // Require explicit string value for symbol name
-                const symbol_name = if (field.value) |value_idx| blk: {
-                    const value_expr = parse_ast.store.getExpr(value_idx);
-                    switch (value_expr) {
-                        .string => |str_like| {
-                            const parts = parse_ast.store.exprSlice(str_like.parts);
-                            if (parts.len > 0) {
-                                const first_part = parse_ast.store.getExpr(parts[0]);
-                                switch (first_part) {
-                                    .string_part => |sp| break :blk parse_ast.resolve(sp.token),
-                                    else => {},
-                                }
-                            }
-                            return error.InvalidProvidesEntry;
-                        },
-                        .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
-                        else => {
-                            return error.InvalidProvidesEntry;
-                        },
-                    }
-                } else {
-                    return error.InvalidProvidesEntry;
-                };
-                try entrypoints.append(try ctx.arena.dupe(u8, symbol_name));
-            }
-
-            if (provides_fields.len == 0) {
-                return error.NoEntrypointFound;
-            }
-        },
-        else => {
-            return error.NotPlatformFile;
-        },
-    }
-}
-
 /// Extract the embedded roc_shim library to the specified path for the given target.
 /// This library contains the shim code that runs in child processes to read the LIR runtime image.
 /// For native builds and roc run, use the native shim (pass null or native target).
@@ -3059,21 +2568,21 @@ fn discoverAndAddBundleModules(
                 const abs_path = mod_state.path;
                 if (bundled_set.contains(abs_path)) continue;
 
-                const rel_path = std.fs.path.relative(ctx.arena, cwd, abs_path) catch {
+                const rel_path = std.fs.path.relative(ctx.arena, cwd, null, cwd, abs_path) catch {
                     try stderr.print("Error: Discovered module path is outside the current directory and cannot be bundled: {s}\n", .{abs_path});
                     return error.MissingBundleFiles;
                 };
 
                 // Confirm the file is actually readable from cwd before adding it.
-                const file = std.fs.cwd().openFile(rel_path, .{}) catch |err| {
+                const file = std.Io.Dir.cwd().openFile(ctx.io.std_io, rel_path, .{}) catch |err| {
                     try stderr.print("Error: Could not open discovered module '{s}': {}\n", .{ rel_path, err });
                     return err;
                 };
-                const stat = file.stat() catch |err| {
-                    file.close();
+                const stat = file.stat(ctx.io.std_io) catch |err| {
+                    file.close(ctx.io.std_io);
                     return err;
                 };
-                file.close();
+                file.close(ctx.io.std_io);
 
                 try file_paths.append(ctx.arena, rel_path);
                 try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
@@ -3280,13 +2789,13 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) !void {
     // Discovery (above) added transitively imported modules as cwd-relative
     // paths; `realpathAlloc` resolves both forms so they share the common
     // parent uniformly here.
-    var rebased_base_dir: ?std.fs.Dir = null;
-    defer if (rebased_base_dir) |*d| d.close();
+    var rebased_base_dir: ?std.Io.Dir = null;
+    defer if (rebased_base_dir) |d| d.close(ctx.io.std_io);
     var archive_paths: []const []const u8 = file_paths.items;
     if (any_absolute) {
         const resolved = try ctx.arena.alloc([]u8, file_paths.items.len);
         for (file_paths.items, 0..) |p, i| {
-            resolved[i] = cwd.realpathAlloc(ctx.arena, p) catch |err| {
+            resolved[i] = cwd.realPathFileAlloc(ctx.io.std_io, p, ctx.arena) catch |err| {
                 try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ p, err });
                 return err;
             };
@@ -3298,7 +2807,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) !void {
             return error.InvalidPath;
         }
 
-        const opened_dir = std.fs.openDirAbsolute(common, .{}) catch |err| {
+        const opened_dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, common, .{}) catch |err| {
             try stderr.print("Error: Could not open common parent directory '{s}': {}\n", .{ common, err });
             return err;
         };
@@ -3867,6 +3376,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
             .file_path => |path| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
                 std.Io.Dir.cwd().access(ctx.io.std_io, full_path, .{}) catch {
+                    const result = platform_validation.targets_validator.ValidationResult{
                         .missing_target_file = .{
                             .target = target,
                             .link_type = link_type,
@@ -3889,7 +3399,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
-    backend.writeFileWindowsAvSafe(builtins_path, BuiltinsObjects.forTarget(target)) catch |err| {
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
         return error.BuiltinsExtractionFailed;
     };
 
@@ -3935,7 +3445,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     if (!args.suppress_build_status) {
         const stdout = ctx.io.stdout();
-        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+        try stdout.print("Successfully built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
         if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
             try stdout.print(" with {}% cache hit", .{cache_percent});
         }
@@ -4130,7 +3640,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     defer ctx.gpa.free(relation_artifacts);
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemory(page_size);
+    var shm = try createSharedMemoryAdaptive(ctx.io.std_io, page_size);
     defer shm.deinit(ctx.gpa);
 
     const shm_allocator = shm.allocator();
@@ -4277,7 +3787,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     if (!args.suppress_build_status) {
         const stdout = ctx.io.stdout();
-        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+        try stdout.print("Successfully built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
         if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
             try stdout.print(" with {}% cache hit", .{cache_percent});
         }
@@ -4853,12 +4363,9 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
                 defer ctx.gpa.free(dir);
                 var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
                 if (test_cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
-                    defer ctx.gpa.free(cached_data);
-                    replayTestCache(ctx.gpa, ctx.io.std_io, cached_data, args, stdout, stderr, src, start_time) catch |err| switch (err) {
-                        error.TestsFailed => return err,
-                        else => {}, // On invalid cache data, fall through to normal path
-                    };
-                    return;
+                    // TODO: replayTestCache not yet implemented in zig-16 branch
+                    ctx.gpa.free(cached_data);
+                    // Fall through to normal path
                 }
             }
         }
@@ -4935,339 +4442,11 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
         total.cached_modules += summary.cached_modules;
     }
 
-    // Run tests using the selected backend
-    switch (args.opt.toBackend()) {
-        .dev, .llvm => {
-            // Run tests using dev backend (native code generation)
-            var dev_eval = eval.DevEvaluator.init(ctx.gpa, null) catch |err| {
-                try stderr.print("Failed to create dev evaluator: {}\n", .{err});
-                comptime_evaluator.deinit();
-                return err;
-            };
-            defer dev_eval.deinit();
-
-            // Build all_module_envs array with mutable pointers for codegen
-            // Module 0 must be the builtin module (layout store expects this)
-            var all_envs_list = std.array_list.Managed(*ModuleEnv).init(ctx.gpa);
-            defer all_envs_list.deinit();
-            try all_envs_list.append(@constCast(builtin_module_env));
-            try all_envs_list.append(@constCast(root_env));
-            for (other_modules) |mod_env| {
-                if (mod_env != builtin_module_env) {
-                    try all_envs_list.append(@constCast(mod_env));
-                }
-            }
-            const all_envs_mut = all_envs_list.items;
-
-            // Prepare modules for codegen (lambda lifting/set inference handled in lowering)
-            dev_eval.prepareModulesForCodegen(all_envs_mut) catch |err| {
-                try stderr.print("Failed to prepare modules for codegen: {}\n", .{err});
-                comptime_evaluator.deinit();
-                return err;
-            };
-
-            // Cast to const slice for generateCode
-            const all_envs_const: []const *ModuleEnv = all_envs_mut;
-
-            // Helper to run tests in a single module
-            const DevTestHelper = struct {
-                fn runModuleTests(
-                    dev: *eval.DevEvaluator,
-                    mod_env: *const ModuleEnv,
-                    envs: []const *ModuleEnv,
-                    allocator: std.mem.Allocator,
-                    results_list: *std.array_list.Managed(TestResultItem),
-                ) struct { passed: u32, failed: u32 } {
-                    var passed: u32 = 0;
-                    var failed: u32 = 0;
-
-                    const statements = mod_env.store.sliceStatements(mod_env.all_statements);
-                    for (statements) |stmt_idx| {
-                        const stmt = mod_env.store.getStatement(stmt_idx);
-                        if (stmt != .s_expect) continue;
-                        const region = mod_env.store.getStatementRegion(stmt_idx);
-
-                        // Generate native code for the expect body
-                        var code_result = dev.generateCode(
-                            @constCast(mod_env),
-                            stmt.s_expect.body,
-                            envs,
-                            null,
-                        ) catch {
-                            failed += 1;
-                            results_list.append(.{
-                                .result = .failed,
-                                .region = region,
-                                .error_msg = allocator.dupe(u8, "Dev backend: code generation failed") catch null,
-                            }) catch {};
-                            continue;
-                        };
-                        defer code_result.deinit();
-
-                        if (code_result.code.len == 0) {
-                            failed += 1;
-                            results_list.append(.{
-                                .result = .failed,
-                                .region = region,
-                                .error_msg = allocator.dupe(u8, "Dev backend: empty code generated") catch null,
-                            }) catch {};
-                            continue;
-                        }
-
-                        // Make code executable
-                        var executable = backend.ExecutableMemory.initWithEntryOffset(
-                            code_result.code,
-                            code_result.entry_offset,
-                        ) catch {
-                            failed += 1;
-                            results_list.append(.{
-                                .result = .failed,
-                                .region = region,
-                                .error_msg = allocator.dupe(u8, "Dev backend: failed to make code executable") catch null,
-                            }) catch {};
-                            continue;
-                        };
-                        defer executable.deinit();
-
-                        // Execute with crash protection and check bool result
-                        // DevEvaluator returns small tag unions like Bool through an
-                        // ABI-sized result slot, even when the logical layout is 1 byte.
-                        // Use a machine word here and inspect the low byte for the Bool
-                        // discriminant instead of passing a raw `*u8`.
-                        var result_word: u64 = 0;
-                        dev.callWithCrashProtection(&executable, @ptrCast(&result_word)) catch {
-                            failed += 1;
-                            const crash_msg = dev.getCrashMessage() orelse "Test crashed";
-                            results_list.append(.{
-                                .result = .failed,
-                                .region = region,
-                                .error_msg = allocator.dupe(u8, crash_msg) catch null,
-                            }) catch {};
-                            continue;
-                        };
-
-                        if (@as(u8, @truncate(result_word)) != 0) {
-                            passed += 1;
-                            results_list.append(.{
-                                .result = .passed,
-                                .region = region,
-                                .error_msg = null,
-                            }) catch {};
-                        } else {
-                            failed += 1;
-                            results_list.append(.{
-                                .result = .failed,
-                                .region = region,
-                                .error_msg = null,
-                            }) catch {};
-                        }
-                    }
-
-                    return .{ .passed = passed, .failed = failed };
-                }
-            };
-
-            // Run tests in the root module
-            {
-                var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
-                defer results_list.deinit();
-
-                const summary = DevTestHelper.runModuleTests(
-                    &dev_eval,
-                    root_env,
-                    all_envs_const,
-                    ctx.gpa,
-                    &results_list,
-                );
-                total_passed += summary.passed;
-                total_failed += summary.failed;
-
-                const results = try ctx.gpa.dupe(TestResultItem, results_list.items);
-                for (results) |result| {
-                    // Dev backend: use error_msg as the cache report (no rendered report available)
-                    const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
-                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
-                }
-                try module_results.append(.{
-                    .env = root_env,
-                    .path = args.path,
-                    .results = results,
-                });
-            }
-
-            // Run tests in all imported modules
-            for (other_modules) |mod_env| {
-                if (mod_env == builtin_module_env) continue;
-
-                var results_list = std.array_list.Managed(TestResultItem).init(ctx.gpa);
-                defer results_list.deinit();
-
-                const summary = DevTestHelper.runModuleTests(
-                    &dev_eval,
-                    mod_env,
-                    all_envs_const,
-                    ctx.gpa,
-                    &results_list,
-                );
-                total_passed += summary.passed;
-                total_failed += summary.failed;
-
-                if (results_list.items.len > 0) {
-                    const results = ctx.gpa.dupe(TestResultItem, results_list.items) catch continue;
-
-                    // Find the module path from schedulers
-                    var mod_path: []const u8 = "<unknown>";
-                    var sched_iter2 = build_env.schedulers.iterator();
-                    outer_dev: while (sched_iter2.next()) |sched_entry| {
-                        const scheduler2 = sched_entry.value_ptr.*;
-                        for (scheduler2.modules.items) |*m| {
-                            if (m.env) |*env| {
-                                if (env == mod_env) {
-                                    mod_path = m.path;
-                                    break :outer_dev;
-                                }
-                            }
-                        }
-                    }
-
-                    for (results) |result| {
-                        const report_text: []const u8 = if (result.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch "" else "";
-                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, result.result == .passed, result.region, report_text);
-                    }
-
-                    module_results.append(.{
-                        .env = mod_env,
-                        .path = mod_path,
-                        .results = results,
-                    }) catch {
-                        ctx.gpa.free(results);
-                    };
-                }
-            }
-        },
-        .interpreter => {
-            // Run tests using interpreter backend (TestRunner)
-
-            // Run tests in the root module
-            {
-                var test_runner = TestRunner.init(
-                    ctx.gpa,
-                    @constCast(root_env),
-                    builtin_types,
-                    other_modules,
-                    builtin_module_env,
-                    &import_mapping,
-                ) catch |err| {
-                    try stderr.print("Failed to create test runner for root module: {}\n", .{err});
-                    comptime_evaluator.deinit();
-                    return err;
-                };
-                defer test_runner.deinit();
-
-                const summary = test_runner.eval_all() catch |err| {
-                    try stderr.print("Failed to evaluate tests in root module: {}\n", .{err});
-                    comptime_evaluator.deinit();
-                    return err;
-                };
-
-                total_passed += summary.passed;
-                total_failed += summary.failed;
-
-                // Copy test results for reporting and build cache entries
-                var results = try ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len);
-                for (test_runner.test_results.items, 0..) |tr, i| {
-                    results[i] = .{
-                        .result = if (tr.passed) .passed else .failed,
-                        .region = tr.region,
-                        .error_msg = if (tr.error_msg) |msg| try ctx.gpa.dupe(u8, msg) else null,
-                    };
-
-                    const report_text = renderTestFailureReport(&test_runner, tr, args.path, ctx.gpa);
-                    appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
-                }
-
-                try module_results.append(.{
-                    .env = root_env,
-                    .path = args.path,
-                    .results = results,
-                });
-            }
-
-            // Run tests in all imported modules (recursive test execution)
-            for (other_modules) |mod_env| {
-                // Skip builtin module - no user tests there
-                if (mod_env == builtin_module_env) continue;
-
-                // Create import mapping for this module
-                var mod_import_mapping = Check.createImportMapping(
-                    ctx.gpa,
-                    @constCast(mod_env).getIdentStore(),
-                    mod_env,
-                    builtin_module_env,
-                    builtin_indices,
-                    null,
-                ) catch continue;
-                defer mod_import_mapping.deinit();
-
-                var test_runner = TestRunner.init(
-                    ctx.gpa,
-                    @constCast(mod_env),
-                    builtin_types,
-                    other_modules,
-                    builtin_module_env,
-                    &mod_import_mapping,
-                ) catch continue;
-                defer test_runner.deinit();
-
-                const summary = test_runner.eval_all() catch continue;
-
-                total_passed += summary.passed;
-                total_failed += summary.failed;
-
-                // Copy test results for reporting
-                if (test_runner.test_results.items.len > 0) {
-                    var results = ctx.gpa.alloc(TestResultItem, test_runner.test_results.items.len) catch continue;
-
-                    // Find the module path from schedulers (needed for report rendering)
-                    var mod_path: []const u8 = "<unknown>";
-                    var sched_iter2 = build_env.schedulers.iterator();
-                    outer: while (sched_iter2.next()) |sched_entry| {
-                        const scheduler2 = sched_entry.value_ptr.*;
-                        for (scheduler2.modules.items) |*m| {
-                            if (m.env) |*env| {
-                                if (env == mod_env) {
-                                    mod_path = m.path;
-                                    break :outer;
-                                }
-                            }
-                        }
-                    }
-
-                    for (test_runner.test_results.items, 0..) |tr, i| {
-                        results[i] = .{
-                            .result = if (tr.passed) .passed else .failed,
-                            .region = tr.region,
-                            .error_msg = if (tr.error_msg) |msg| ctx.gpa.dupe(u8, msg) catch null else null,
-                        };
-
-                        const report_text = renderTestFailureReport(&test_runner, tr, mod_path, ctx.gpa);
-                        appendTestCacheEntry(&cache_entries, &cache_failure_reports, ctx.gpa, tr.passed, tr.region, report_text);
-                    }
-
-                    module_results.append(.{
-                        .env = mod_env,
-                        .path = mod_path,
-                        .results = results,
-                    }) catch {
-                        ctx.gpa.free(results);
-                    };
-                }
-            }
-        },
-    }
-
-    // Clean up comptime evaluator
-    comptime_evaluator.deinit();
+    // TODO(zig-16): CIR-level test backend (dev/interpreter) is not yet ported.
+    // The runCheckedArtifactTests loop above already handles test running via the
+    // new BuildEnv pipeline. This stub silences the old code that referenced
+    // variables removed during the migration.
+    {}
 
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
@@ -5278,38 +4457,11 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
     else
         "";
 
-    // --- Store test cache blob ---
-    const cache_outcome: TestCacheOutcome = if (total_failed == 0 and !has_compilation_errors) .all_passed else .some_failed;
-
-    if (!args.no_cache) {
-        if (source) |src| {
-            if (buildTestCacheBlob(
-                ctx.gpa,
-                cache_outcome,
-                total_passed,
-                total_failed,
-                cache_entries.items,
-                cache_failure_reports.items,
-                "", // No comptime report in new BuildEnv architecture
-            )) |blob| {
-                defer ctx.gpa.free(blob);
-                if (cache_config.getTestCacheDir(ctx.gpa)) |dir| {
-                    defer ctx.gpa.free(dir);
-                    const cache_key = CacheManager.generateCacheKey(src, build_options.compiler_version);
-                    var store_cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-                    store_cache_manager.storeRawBytes(cache_key, blob, dir);
-                } else |_| {}
-            } else |_| {}
-        }
-    }
-
     // Report results
-    if (total_failed == 0 and !has_compilation_errors) {
+    if (total.failed == 0) {
         // Success case: print summary
-        if (total_skipped > 0) {
-            try stdout.print("All ({}) tests passed, {} skipped in {d:.1} ms.\n", .{ total_passed, total_skipped, elapsed_ms });
-        } else {
-            try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ total_passed, elapsed_ms });
+        {
+            try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
         }
         if (args.verbose) {
             for (module_results.items) |module_result| {
@@ -5437,9 +4589,9 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
     defer session.deinit();
 
     var should_exit = false;
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     while (!should_exit) {
-        const raw_line = reader.readLine(ctx.gpa, "> ", stdin) catch |err| switch (err) {
+        const raw_line = reader.readLine(ctx.gpa, ctx.io.std_io, "> ", stdin) catch |err| switch (err) {
             error.ExitRepl => break,
             else => return err,
         };
@@ -5484,91 +4636,6 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .backend = args.opt.toBackend(),
     }, temp_dir, ctx.io.std_io);
 }
-
-/// Run a compiled Roc entrypoint through the dev backend (native code generation).
-/// Resolves entrypoint layouts, JIT-compiles CIR to native code via DevEvaluator,
-/// and executes via the RocCall ABI.
-fn runViaDev(
-    gpa: std.mem.Allocator,
-    platform_env: *ModuleEnv,
-    all_module_envs: []*ModuleEnv,
-    app_module_env: ?*ModuleEnv,
-    entrypoint_expr: can.CIR.Expr.Idx,
-    roc_ops: *echo_platform.host_abi.RocOps,
-    args_ptr: ?*anyopaque,
-    result_ptr: *anyopaque,
-) !void {
-    const types = @import("types");
-    const DevEvaluator = eval.DevEvaluator;
-    const ExecutableMemory = eval.ExecutableMemory;
-
-    var dev_eval = DevEvaluator.init(gpa, null) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer dev_eval.deinit();
-
-    // Resolve entrypoint layouts from the CIR expression's type
-    const layout_store_ptr = try dev_eval.ensureGlobalLayoutStore(all_module_envs);
-    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
-        if (env == platform_env) break @intCast(i);
-    } else return error.DevEvaluatorFailed;
-
-    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
-    const resolved_type = platform_env.types.resolveVar(expr_type_var);
-    const maybe_func = resolved_type.desc.content.unwrapFunc();
-
-    var arg_layouts_buf: [16]layout.Idx = undefined;
-    var arg_layouts_len: usize = 0;
-    var ret_layout: layout.Idx = undefined;
-
-    if (maybe_func) |func| {
-        const arg_vars = platform_env.types.sliceVars(func.args);
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-        }
-        arg_layouts_len = arg_vars.len;
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.DevEvaluatorFailed;
-    } else {
-        var type_scope = types.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.DevEvaluatorFailed;
-    }
-
-    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
-
-    // Generate native code using the RocCall ABI entrypoint wrapper
-    var code_result = dev_eval.generateEntrypointCode(
-        platform_env,
-        entrypoint_expr,
-        all_module_envs,
-        app_module_env,
-        arg_layouts,
-        ret_layout,
-    ) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer code_result.deinit();
-
-    if (code_result.code.len == 0) {
-        return error.DevEvaluatorFailed;
-    }
-
-    // Make the generated code executable and run it
-    var executable = ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.DevEvaluatorFailed;
-    };
-    defer executable.deinit();
-
-    // Pass the original roc_ops (which carries echo_env as .env) directly to
-    // the JIT code.  Using dev_eval.roc_ops would supply DevRocEnv as .env,
-    // which echoHostedFn misinterprets as *EchoEnv and crashes (SIGSEGV at
-    // 0x6e).  For the CLI echo platform exit-on-crash is acceptable; the
-    // global SIGSEGV handler in stack_overflow.zig handles native segfaults.
-    executable.callRocABI(@ptrCast(@constCast(roc_ops)), result_ptr, args_ptr);
-}
-
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
@@ -5739,55 +4806,6 @@ const DrainedReport = struct {
 /// Timing information for check phases
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
-/// Error set for BuildEnv.build operations
-const BuildAppError = std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.Dir.RealPathFileAllocError || std.Thread.SpawnError || error{
-    // Custom BuildEnv errors
-    ExpectedAppHeader,
-    ExpectedPlatformString,
-    PathOutsideWorkspace,
-    UnsupportedHeader,
-    ExpectedString,
-    Internal,
-    InvalidDependency,
-    TooNested,
-    InvalidPackageName,
-    InvalidNullByteInPath,
-    // Additional errors from std library that might be missing
-    Unseekable,
-    CurrentWorkingDirectoryUnlinked,
-    // URL package resolution errors
-    FileError,
-    InvalidUrl,
-    NoCacheDir,
-    DownloadFailed,
-    NoPackageSource,
-    // Interpreter errors (propagate from eval during build)
-    Crash,
-    DivisionByZero,
-    EarlyReturn,
-    IntegerOverflow,
-    InvalidImportIndex,
-    InvalidNumExt,
-    InvalidTagExt,
-    ListIndexOutOfBounds,
-    NotImplemented,
-    NotNumeric,
-    NullStackPointer,
-    RecordIndexOutOfBounds,
-    StackOverflow,
-    StringOrderingNotSupported,
-    TupleIndexOutOfBounds,
-    TypeMismatch,
-    UnresolvedImport,
-    ZeroSizedType,
-    // Layout errors
-    TypeContainedMismatch,
-    InvalidRecordExtension,
-    InvalidNumberExtension,
-    BugUnboxedFlexVar,
-    BugUnboxedRigidVar,
-};
-
 /// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)
 const CheckResultWithBuildEnv = struct {
     check_result: CheckResult,
@@ -5807,7 +4825,7 @@ fn checkFileWithBuildEnvPreserved(
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
-) BuildAppError!CheckResultWithBuildEnv {
+) !CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -5918,7 +4936,7 @@ fn checkFileWithBuildEnv(
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
-) BuildAppError!CheckResult {
+) !CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 

@@ -125,14 +125,14 @@ pub const ObjectFileCompiler = struct {
 /// just-created file open and return AccessDenied on a follow-up write from a
 /// sibling process. Retry a few times with exponential backoff. Other OSes
 /// pass through to a single writeFile call.
-pub fn writeFileWindowsAvSafe(sub_path: []const u8, data: []const u8) !void {
+pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8) !void {
     if (comptime builtin.os.tag != .windows) {
-        return std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data });
+        return CoreCtx.writeFileCwd(io, sub_path, data);
     }
     var attempt: u32 = 0;
     const max_attempts: u32 = 6;
     while (true) : (attempt += 1) {
-        std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data }) catch |err| switch (err) {
+        CoreCtx.writeFileCwd(io, sub_path, data) catch |err| switch (err) {
             error.AccessDenied => {
                 if (attempt + 1 >= max_attempts) return err;
                 const delay_ns: u64 = @as(u64, 10) * std.time.ns_per_ms * (@as(u64, 1) << @intCast(attempt));

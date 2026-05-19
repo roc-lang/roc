@@ -1077,7 +1077,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         // clicking a sidebar entry from another module's page navigates to
         // the correct module page (not just changes the fragment on the
         // current page).
-        var module_link_prefix = std.ArrayList(u8){};
+        var module_link_prefix = std.ArrayList(u8).empty;
         defer module_link_prefix.deinit(gpa);
         if (ctx.single_module_at_root) {
             if (base.len == 0) {
@@ -1788,40 +1788,6 @@ fn renderDocTypeHtml(
     }
 }
 
-/// Resolve a short type name to its full path within current module
-/// For example, "Dec" -> "Num.Dec"
-fn resolveTypeNameToFullPath(
-    ctx: *const RenderContext,
-    type_name: []const u8,
-) ?[]const u8 {
-    // If it already has a dot, it's a full path
-    if (std.mem.find(u8, type_name, ".") != null) {
-        return type_name;
-    }
-
-    // Search current module entries for a match
-    if (ctx.current_module_entries) |entries| {
-        for (entries) |*entry| {
-            // Check if entry.name ends with ".{type_name}"
-            // This handles cases like "Num.Dec" where type_name is "Dec"
-            if (std.mem.endsWith(u8, entry.name, type_name)) {
-                const dot_pos = entry.name.len - type_name.len;
-                if (dot_pos == 0) {
-                    // Exact match (top-level type like "Bool")
-                    return type_name;
-                } else if (dot_pos > 0 and entry.name[dot_pos - 1] == '.') {
-                    // Match after a dot (nested type like "Num.Dec")
-                    return entry.name;
-                }
-            }
-        }
-    }
-
-    // Default to original name if not found
-    return type_name;
-}
-
-
 /// Check whether a type reference is linkable.
 fn resolveTypeLink(
     ctx: *const RenderContext,
@@ -2031,7 +1997,7 @@ test "writeDocRefHref reports broken shorthand refs" {
     // Render to a tmp dir so we exercise the full pipeline.
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     var broken_links: std.ArrayListUnmanaged(BrokenLink) = .empty;
@@ -2043,7 +2009,7 @@ test "writeDocRefHref reports broken shorthand refs" {
         broken_links.deinit(gpa);
     }
 
-    try renderPackageDocs(gpa, &package_docs, tmp_path, &broken_links);
+    try renderPackageDocs(gpa, std.testing.io, &package_docs, tmp_path, &broken_links);
 
     // Exactly the `[div_by]` ref should be flagged. It sits on the third
     // line of the doc, which started at source line 41 → expected line 43.

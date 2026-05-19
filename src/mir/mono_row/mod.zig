@@ -283,25 +283,25 @@ pub const Store = struct {
 
     fn buildRecordKeyFromMonoFields(self: *Store, fields: MonoType.Fields) Allocator.Error!void {
         self.scratch_key.clearRetainingCapacity();
-        try self.scratch_key.writer(self.allocator).print("record:{d}|", .{fields.len});
+        try self.scratch_key.print(self.allocator, "record:{d}|", .{fields.len});
         for (fields) |field| {
-            try self.scratch_key.writer(self.allocator).print("{d}|", .{@intFromEnum(field.name)});
+            try self.scratch_key.print(self.allocator, "{d}|", .{@intFromEnum(field.name)});
         }
     }
 
     fn buildRecordKeyFromLabels(self: *Store, labels: []const canonical.RecordFieldLabelId) Allocator.Error!void {
         self.scratch_key.clearRetainingCapacity();
-        try self.scratch_key.writer(self.allocator).print("record:{d}|", .{labels.len});
+        try self.scratch_key.print(self.allocator, "record:{d}|", .{labels.len});
         for (labels) |label| {
-            try self.scratch_key.writer(self.allocator).print("{d}|", .{@intFromEnum(label)});
+            try self.scratch_key.print(self.allocator, "{d}|", .{@intFromEnum(label)});
         }
     }
 
     fn buildTagUnionKeyFromMonoTags(self: *Store, source_tags: MonoType.Tags) Allocator.Error!void {
         self.scratch_key.clearRetainingCapacity();
-        try self.scratch_key.writer(self.allocator).print("tag_union:{d}|", .{source_tags.len});
+        try self.scratch_key.print(self.allocator, "tag_union:{d}|", .{source_tags.len});
         for (source_tags) |source_tag| {
-            try self.scratch_key.writer(self.allocator).print("{d}:{d}|", .{
+            try self.scratch_key.print(self.allocator, "{d}:{d}|", .{
                 @intFromEnum(source_tag.name),
                 source_tag.args.len,
             });
@@ -310,9 +310,9 @@ pub const Store = struct {
 
     fn buildTagUnionKeyFromDescriptors(self: *Store, source_tags: []const TagShapeDescriptor) Allocator.Error!void {
         self.scratch_key.clearRetainingCapacity();
-        try self.scratch_key.writer(self.allocator).print("tag_union:{d}|", .{source_tags.len});
+        try self.scratch_key.print(self.allocator, "tag_union:{d}|", .{source_tags.len});
         for (source_tags) |source_tag| {
-            try self.scratch_key.writer(self.allocator).print("{d}:{d}|", .{
+            try self.scratch_key.print(self.allocator, "{d}:{d}|", .{
                 @intFromEnum(source_tag.name),
                 source_tag.payload_arity,
             });

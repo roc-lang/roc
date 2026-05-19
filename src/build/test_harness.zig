@@ -13,7 +13,44 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
-pub const Timer = std.time.Timer;
+/// Monotonic timer replacement for std.time.Timer (removed in Zig 0.16).
+pub const Timer = struct {
+    start_ns: u64,
+
+    pub const Error = error{UnsupportedClock};
+
+    pub fn start() Error!Timer {
+        return .{ .start_ns = readMonotonicNs() };
+    }
+
+    /// Returns elapsed nanoseconds since start.
+    pub fn read(self: *Timer) u64 {
+        return readMonotonicNs() - self.start_ns;
+    }
+
+    /// Returns elapsed nanoseconds and resets the timer.
+    pub fn lap(self: *Timer) u64 {
+        const now = readMonotonicNs();
+        const elapsed = now - self.start_ns;
+        self.start_ns = now;
+        return elapsed;
+    }
+
+    fn readMonotonicNs() u64 {
+        if (builtin.os.tag == .linux) {
+            var ts: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
+            var ts: std.c.timespec = undefined;
+            _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        } else {
+            // Fallback: use a simple counter (Windows, etc.)
+            return 0;
+        }
+    }
+};
 /// Whether the platform supports `fork` for child process spawning.
 pub const has_fork = (builtin.os.tag != .windows);
 
@@ -101,13 +138,86 @@ const job_object = if (builtin.os.tag == .windows) struct {
     }
 } else struct {};
 
+// POSIX compatibility helpers (removed from std.posix in Zig 0.16)
+//
+// Many POSIX functions moved out of std.posix into std.c (C bindings) or
+// std.os.linux (raw syscalls) in Zig 0.16.  These thin wrappers restore the
+// error-union API we relied on previously.
+
+/// milliTimestamp: replacement for std.time.milliTimestamp (removed in Zig 0.16).
+pub fn milliTimestamp() i64 {
+    if (builtin.os.tag == .linux) {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        const ns = @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        return @as(i64, @intCast(ns / 1_000_000));
+    }
+    // Fallback for non-Linux: use epoch-relative value via C clock
+    return @as(i64, @intCast(std.os.linux.clock_gettime(.REALTIME, &std.os.linux.timespec{}) / 1_000_000));
+}
+
+/// pipe: returns [2]fd_t or error.
+pub fn pipe() error{PipeFailed}![2]posix.fd_t {
+    var fds: [2]posix.fd_t = undefined;
+    const rc = std.c.pipe(&fds);
+    if (rc != 0) return error.PipeFailed;
+    return fds;
+}
+
+/// close: closes a file descriptor (ignores errors).
+pub fn closeFd(fd: posix.fd_t) void {
+    _ = std.c.close(fd);
+}
+
+/// fork: wrapper around std.c.fork that returns pid_t or error.
+pub fn fork() error{ForkFailed}!posix.pid_t {
+    const pid = std.c.fork();
+    if (pid < 0) return error.ForkFailed;
+    return pid;
+}
+
+/// Holds the process id and exit status from waitpid.
+pub const WaitResult = struct { pid: posix.pid_t, status: u32 };
+/// Waits for a child process and returns its pid and raw status.
+pub fn waitpid(pid: posix.pid_t, flags: c_int) WaitResult {
+    var status: c_int = 0;
+    const result = std.c.waitpid(pid, &status, flags);
+    return .{ .pid = result, .status = @bitCast(status) };
+}
+
+/// posixRead: read from fd, returns bytes read or error.
+pub fn posixRead(fd: posix.fd_t, buf: []u8) error{ReadFailed}!usize {
+    const rc = std.c.read(fd, buf.ptr, buf.len);
+    if (rc < 0) return error.ReadFailed;
+    return @intCast(rc);
+}
+
+/// posixKill: send signal to pid.
+fn posixKill(pid: posix.pid_t, sig: posix.SIG) error{KillFailed}!void {
+    const rc = std.c.kill(pid, sig);
+    if (rc != 0) return error.KillFailed;
+}
+
+/// posixPoll: poll file descriptors.
+fn posixPoll(fds: []posix.pollfd, timeout: c_int) error{PollFailed}!usize {
+    const rc = std.c.poll(fds.ptr, @intCast(fds.len), timeout);
+    if (rc < 0) return error.PollFailed;
+    return @intCast(rc);
+}
+
+// End POSIX compatibility helpers
+
 // Pipe I/O helpers
 
 /// Write all bytes to fd, looping on partial writes.
 pub fn writeAll(fd: posix.fd_t, data: []const u8) void {
     var written: usize = 0;
     while (written < data.len) {
-        written += posix.write(fd, data[written..]) catch return;
+        // Use raw Linux syscall since std.posix.write was removed in Zig 0.16
+        const rc = std.os.linux.write(fd, data.ptr + written, data.len - written);
+        // Negative result (when cast to isize) means an error occurred
+        if (@as(isize, @bitCast(rc)) < 0) return;
+        written += rc;
     }
 }
 
@@ -322,10 +432,12 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
 }
 
 /// Parse standard harness flags from argv.
-pub fn parseStandardArgs(allocator: Allocator) !StandardArgs {
-    const raw_args = try std.process.argsAlloc(allocator);
+pub fn parseStandardArgs(allocator: Allocator, process_args: std.process.Args) !StandardArgs {
+    const raw_args = try process_args.toSlice(allocator);
     // Don't free — we reference slices from it.
-    return parseStandardArgsFromSlice(raw_args, allocator);
+    // Cast from []const [:0]const u8 to []const []const u8.
+    const raw_args_plain: []const []const u8 = @ptrCast(raw_args);
+    return parseStandardArgsFromSlice(raw_args_plain, allocator);
 }
 
 test "parseStandardArgsFromSlice preserves help and explicit timeout" {
@@ -430,14 +542,14 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
         var global_slots: ?[]?ChildSlot = null;
 
-        fn sigintHandler(_: c_int) callconv(.c) void {
+        fn sigintHandler(_: posix.SIG) callconv(.c) void {
             const slots = global_slots orelse return;
             for (slots) |slot_opt| {
                 if (slot_opt) |slot| {
                     if (cfg.use_process_groups) {
-                        posix.kill(-slot.pid, posix.SIG.KILL) catch {};
+                        posixKill(-slot.pid, posix.SIG.KILL) catch {};
                     } else {
-                        posix.kill(slot.pid, posix.SIG.KILL) catch {};
+                        posixKill(slot.pid, posix.SIG.KILL) catch {};
                     }
                 }
             }
@@ -455,17 +567,17 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
 
-            const pipe_fds = posix.pipe() catch return false;
+            const pipe_fds = pipe() catch return false;
 
-            const pid = posix.fork() catch {
-                posix.close(pipe_fds[0]);
-                posix.close(pipe_fds[1]);
+            const pid = fork() catch {
+                closeFd(pipe_fds[0]);
+                closeFd(pipe_fds[1]);
                 return false;
             };
 
             if (pid == 0) {
                 // === Child process ===
-                posix.close(pipe_fds[0]);
+                closeFd(pipe_fds[0]);
 
                 if (cfg.use_process_groups) {
                     _ = std.c.setsid();
@@ -476,17 +588,17 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 const result = cfg.runTest(allocator, specs[test_idx]);
                 cfg.serialize(pipe_fds[1], result);
-                posix.close(pipe_fds[1]);
+                closeFd(pipe_fds[1]);
                 std.c._exit(0);
             }
 
             // === Parent ===
-            posix.close(pipe_fds[1]);
+            closeFd(pipe_fds[1]);
             slot.* = .{
                 .pid = pid,
                 .pipe_fd = pipe_fds[0],
                 .test_index = test_idx,
-                .start_time_ms = std.time.milliTimestamp(),
+                .start_time_ms = milliTimestamp(),
                 .buf = .empty,
                 .timed_out = false,
             };
@@ -498,9 +610,9 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             slot.* = null;
 
             drainPipe(s.pipe_fd, &s.buf);
-            posix.close(s.pipe_fd);
+            closeFd(s.pipe_fd);
 
-            const wait_result = posix.waitpid(s.pid, 0);
+            const wait_result = waitpid(s.pid, 0);
             const term_signal: u8 = @truncate(wait_result.status & 0x7f);
 
             if (s.timed_out or term_signal == 9) {
@@ -518,7 +630,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         fn drainPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) void {
             var read_buf: [4096]u8 = undefined;
             while (true) {
-                const n = posix.read(fd, &read_buf) catch break;
+                const n = posixRead(fd, &read_buf) catch break;
                 if (n == 0) break;
                 buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch break;
             }
@@ -571,7 +683,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             const poll_map = gpa.alloc(usize, max_children) catch return;
             defer gpa.free(poll_map);
 
-            const is_tty = posix.isatty(2);
+            // std.posix.isatty was removed in Zig 0.16; use std.c.isatty instead.
+            const is_tty = std.c.isatty(2) != 0;
 
             var next_test: usize = 0;
             var completed: usize = 0;
@@ -604,13 +717,13 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
                 if (n_poll == 0) break;
 
-                _ = posix.poll(poll_fds[0..n_poll], 500) catch 0;
+                _ = posixPoll(poll_fds[0..n_poll], 500) catch 0;
 
                 for (poll_fds[0..n_poll], 0..) |pfd, pi| {
                     const slot_idx = poll_map[pi];
                     if (pfd.revents & posix.POLL.IN != 0) {
                         var read_buf: [4096]u8 = undefined;
-                        const n = posix.read(pfd.fd, &read_buf) catch 0;
+                        const n = posixRead(pfd.fd, &read_buf) catch 0;
                         if (n > 0) {
                             if (slots[slot_idx]) |*s| {
                                 s.buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch {};
@@ -633,7 +746,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 // Check timeouts
                 if (timeout_ms > 0) {
-                    const now = std.time.milliTimestamp();
+                    const now = milliTimestamp();
                     for (slots) |*slot_opt| {
                         if (slot_opt.*) |*slot| {
                             const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
@@ -642,9 +755,9 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                                 const test_name = cfg.getName(specs[slot.test_index]);
                                 std.debug.print("\n  HANG  {s}  ({d}ms) — killing\n", .{ test_name, elapsed });
                                 if (cfg.use_process_groups) {
-                                    posix.kill(-slot.pid, posix.SIG.KILL) catch {};
+                                    posixKill(-slot.pid, posix.SIG.KILL) catch {};
                                 } else {
-                                    posix.kill(slot.pid, posix.SIG.KILL) catch {};
+                                    posixKill(slot.pid, posix.SIG.KILL) catch {};
                                 }
                             }
                         }
@@ -812,7 +925,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 state.slots_mutex.lock();
                 state.slots[slot_idx] = ActiveChild{
                     .child = &child,
-                    .start_ms = std.time.milliTimestamp(),
+                    .start_ms = milliTimestamp(),
                     .timed_out = false,
                 };
                 state.slots_mutex.unlock();
@@ -886,7 +999,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 std.Thread.sleep(100 * std.time.ns_per_ms);
                 if (state.timeout_ms == 0) continue;
 
-                const now = std.time.milliTimestamp();
+                const now = milliTimestamp();
                 state.slots_mutex.lock();
                 defer state.slots_mutex.unlock();
                 for (state.slots) |*slot_opt| {
@@ -943,7 +1056,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     while (!self.done.load(.acquire)) {
                         std.Thread.sleep(100 * std.time.ns_per_ms);
                         if (self.done.load(.acquire)) return;
-                        if (std.time.milliTimestamp() >= self.deadline_ms) {
+                        if (milliTimestamp() >= self.deadline_ms) {
                             self.timed_out.store(true, .release);
                             _ = self.child_ptr.kill() catch {};
                             return;
@@ -954,7 +1067,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
             var watch = Watch{
                 .child_ptr = &child,
-                .deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms)),
+                .deadline_ms = milliTimestamp() + @as(i64, @intCast(timeout_ms)),
                 .timed_out = std.atomic.Value(bool).init(false),
                 .done = std.atomic.Value(bool).init(false),
             };

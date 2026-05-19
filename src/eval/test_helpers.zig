@@ -12,6 +12,7 @@ const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const lir = @import("lir");
+const CoreCtx = @import("ctx").CoreCtx;
 
 const builtin_loading = @import("builtin_loading.zig");
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
@@ -19,7 +20,6 @@ const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
 const Can = can.Can;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -41,7 +41,7 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         return 64 * 1024;
     }
 
-    fn create(size: usize, page_size: usize) !@This() {
+    fn create(_: anytype, size: usize, page_size: usize) !@This() {
         const aligned_size = std.mem.alignForward(usize, size, page_size);
         const buffer = try std.heap.wasm_allocator.alignedAlloc(
             u8,
@@ -73,6 +73,7 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
     fn updateHeader(_: *@This()) void {}
 } else @import("ipc").SharedMemoryAllocator;
 
+/// Monotonic stage timer (std.time.Timer was removed in Zig 0.16).
 const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
     fn start() !@This() {
         return .{};
@@ -81,7 +82,23 @@ const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
     fn read(_: *@This()) u64 {
         return 0;
     }
-} else std.time.Timer;
+} else struct {
+    start_ns: u64,
+
+    fn start() error{}!@This() {
+        return .{ .start_ns = readNs() };
+    }
+
+    fn read(self: *@This()) u64 {
+        return readNs() - self.start_ns;
+    }
+
+    fn readNs() u64 {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    }
+};
 
 /// Public `SourceKind` declaration.
 pub const SourceKind = enum {
@@ -703,17 +720,12 @@ pub fn parseCheckModule(
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    errdefer allocators.deinit();
-
     var parse_elapsed: u64 = 0;
     var parse_timer = try StageTimer.start();
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(allocator, &module_env.common);
     parse_elapsed = parse_timer.read();
     errdefer {
         parse_ast.deinit();
-        allocators.deinit();
     }
     parse_ast.store.emptyScratch();
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
@@ -744,7 +756,8 @@ pub fn parseCheckModule(
 
     const czer = try allocator.create(Can);
     errdefer allocator.destroy(czer);
-    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    const roc_ctx = @import("ctx").CoreCtx.testing(allocator, allocator);
+    czer.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
@@ -817,7 +830,10 @@ fn lowerParsedProgramToLir(
     }
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(EVAL_SHARED_MEMORY_SIZE, page_size);
+    var shm = if (comptime builtin.target.os.tag == .freestanding)
+        try SharedMemoryAllocator.create({}, EVAL_SHARED_MEMORY_SIZE, page_size)
+    else
+        try SharedMemoryAllocator.create(CoreCtx.singleThreadedIo(), EVAL_SHARED_MEMORY_SIZE, page_size);
     errdefer shm.deinit(allocator);
 
     const shm_allocator = shm.allocator();

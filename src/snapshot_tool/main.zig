@@ -58,60 +58,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
     std.debug.defaultPanic(msg, @returnAddress());
 }
 
-/// Unix signal handler for catching segfaults and illegal instructions from
-/// generated code. Uses the same panic_jmp mechanism as the panic handler.
-/// Not available on Windows (no POSIX signals).
-fn crashSignalHandler(_: std.posix.SIG) callconv(.c) void {
-    if (panic_jmp) |jmp| {
-        panic_msg = "signal: segfault or illegal instruction in generated code";
-        gpa_poisoned = true;
-        panic_jmp = null;
-        sljmp.longjmp(jmp, 2);
-    }
-    // No protection active — reset to default handler and re-raise.
-    const dfl = std.posix.Sigaction{
-        .handler = .{ .handler = std.posix.SIG.DFL },
-        .mask = std.posix.sigemptyset(),
-        .flags = 0,
-    };
-    std.posix.sigaction(std.posix.SIG.SEGV, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.BUS, &dfl, null);
-    std.posix.sigaction(std.posix.SIG.ILL, &dfl, null);
-}
-
-/// SIGALRM handler for catching infinite loops in generated code.
-fn alarmSignalHandler(_: std.posix.SIG) callconv(.c) void {
-    if (panic_jmp) |jmp| {
-        panic_msg = "timeout: dev backend execution exceeded time limit";
-        gpa_poisoned = true;
-        panic_jmp = null;
-        sljmp.longjmp(jmp, 3);
-    }
-}
-
-fn installCrashSignalHandlers() void {
-    const native_os = @import("builtin").os.tag;
-    if (comptime native_os == .windows) return;
-
-    const sa = std.posix.Sigaction{
-        .handler = .{ .handler = &crashSignalHandler },
-        .mask = std.posix.sigemptyset(),
-        .flags = std.os.linux.SA.NODEFER,
-    };
-    std.posix.sigaction(std.posix.SIG.SEGV, &sa, null);
-    std.posix.sigaction(std.posix.SIG.BUS, &sa, null);
-    std.posix.sigaction(std.posix.SIG.ILL, &sa, null);
-
-    const alarm_sa = std.posix.Sigaction{
-        .handler = .{ .handler = &alarmSignalHandler },
-        .mask = std.posix.sigemptyset(),
-        .flags = std.os.linux.SA.NODEFER,
-    };
-    std.posix.sigaction(std.posix.SIG.ALRM, &alarm_sa, null);
-}
-
-const Repl = repl.Repl;
-const CrashContext = eval_mod.CrashContext;
+const CacheModule = compile.manager.CacheModule;
 const roc_target = @import("roc_target");
 const CoreCtx = compile.CoreCtx;
 const CommonEnv = base.CommonEnv;
@@ -1205,7 +1152,7 @@ fn processSnapshotContent(
             module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             const roc_ctx_for_check = CoreCtx.default(allocator, allocator, app_io);
-            var checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
                 roc_ctx_for_check,
                 allocator,
                 can_ir,
@@ -1305,26 +1252,8 @@ fn processSnapshotContent(
 
     // Lambda lifting and lambda set inference are now handled during CIR→MIR and MIR→LIR lowering
 
-    // Run constant folding for mono tests
-    if (content.meta.node_type == .mono) {
-        if (config.builtin_module) |builtin_env| {
-            const BuiltinTypes = eval_mod.BuiltinTypes;
-            const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
-            const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
-            const imported_envs: []const *const ModuleEnv = builtin_modules.items;
-            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping, roc_target.RocTarget.detectNative(), null);
-            defer comptime_evaluator.deinit();
-
-            // First evaluate any top-level defs
-            _ = try comptime_evaluator.evalAll();
-
-            // Then evaluate and fold the standalone expression if present
-            if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
-                _ = try comptime_evaluator.evalAndFoldExpr(expr_idx);
-            }
-        }
-    }
-
+    // TODO: Run constant folding for mono tests once ComptimeEvaluator is available in zig-16 branch.
+    // if (content.meta.node_type == .mono) { ... }
 
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
@@ -4381,12 +4310,8 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?Snapsho
     errdefer module_env.deinit();
     module_env.common.source = line;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     const ast = single_module.parseSingleModule(
-        &allocators,
+        allocator,
         module_env,
         .file,
         .{ .module_name = "repl" },
@@ -4422,11 +4347,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) !?AS
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 
@@ -4562,10 +4483,6 @@ fn renderSnapshotReplTypeProblems(
     defer module_env.deinit();
     var can_ir = &module_env;
 
-    var allocators: single_module.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     const parse_mode: single_module.ParseMode = switch (source_kind) {
         // REPL expression lines are identified through the statement parser once
         // they are known not to be definitions. The diagnostic renderer must use
@@ -4575,7 +4492,7 @@ fn renderSnapshotReplTypeProblems(
         .module => .file,
     };
     const parse_ast = try single_module.parseSingleModule(
-        &allocators,
+        allocator,
         can_ir,
         parse_mode,
         .{ .module_name = "repl" },
@@ -4591,7 +4508,8 @@ fn renderSnapshotReplTypeProblems(
         .builtin_indices = config.builtin_indices,
     };
 
-    var czer = try Can.initModule(&allocators, can_ir, parse_ast, .{
+    const roc_ctx_repl = CoreCtx.default(allocator, allocator, app_io);
+    var czer = try Can.initModule(roc_ctx_repl, can_ir, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_env,
             .builtin_indices = config.builtin_indices,
@@ -4691,7 +4609,7 @@ fn renderSnapshotReplTypeProblems(
         try report.render(&rendered.writer, .markdown);
     }
     const raw = try rendered.toOwnedSlice();
-    const trimmed = std.mem.trimRight(u8, raw, "\r\n");
+    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
     if (trimmed.len == raw.len) return raw;
     const out = try allocator.dupe(u8, trimmed);
     allocator.free(raw);

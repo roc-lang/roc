@@ -234,7 +234,7 @@ pub fn init(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    try preflightForTypeChecking(mutable_cir);
+    try preflightForTypeChecking(mutable_cir, imported_modules);
     return initAssumePrepared(
         gpa,
         types,
@@ -277,6 +277,7 @@ pub fn initWithOwnerModules(
 /// This is intentionally private so `Check.init` is the only public entry point.
 fn preflightForTypeChecking(
     cir: *ModuleEnv,
+    imported_modules: []const *const ModuleEnv,
 ) std.mem.Allocator.Error!void {
     try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
     const import_count: usize = @intCast(cir.imports.imports.items.items.len);
@@ -2893,12 +2894,12 @@ fn checkPatternHelp(
     };
 
     switch (pattern) {
-        .assign => |_| {
+        .assign => {
             // Assigned variables start out as flex (initialized in preflight),
             // and their type is refined by usage. Reassignments reuse the same
             // pattern var, so never overwrite existing constraints here.
         },
-        .underscore => |_| {
+        .underscore => {
             // Underscore can be anything; leave its placeholder flex intact.
         },
         // str //

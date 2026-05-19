@@ -461,12 +461,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 // Prefer a per-build scratch dir so parallel `roc build` invocations
                 // don't race on a shared zig-out/bin/stack_probe.obj (truncated
                 // writes from one linker can corrupt what another linker is reading).
-                const probe_dir = config.scratch_dir orelse (std.fs.selfExeDirPathAlloc(ctx.arena) catch return LinkError.OutOfMemory);
+                const probe_dir = config.scratch_dir orelse (std.process.executableDirPathAlloc(ctx.io.std_io, ctx.arena) catch return LinkError.OutOfMemory);
                 const stack_probe_path = std.fs.path.join(ctx.arena, &.{
                     probe_dir,
                     "stack_probe.obj",
                 }) catch return LinkError.OutOfMemory;
-                @import("backend").writeFileWindowsAvSafe(stack_probe_path, stack_probe_obj) catch return LinkError.OutOfMemory;
+                @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, stack_probe_path, stack_probe_obj) catch return LinkError.OutOfMemory;
                 try args.append(stack_probe_path);
             }
         },

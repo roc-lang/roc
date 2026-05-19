@@ -10,11 +10,60 @@ const ctx_mod = @import("ctx");
 const can = @import("can");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
+pub const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CoreCtx = ctx_mod.CoreCtx;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
+
+/// Result of a cache lookup operation
+pub const CacheResult = union(enum) {
+    hit: struct {
+        module_env: *ModuleEnv,
+        error_count: u32,
+        warning_count: u32,
+        /// The backing buffer that contains the deserialized ModuleEnv data.
+        cache_data: CacheModule.CacheData,
+    },
+    miss: struct {
+        key: [32]u8,
+    },
+    not_enabled,
+
+    /// Free the cache data backing buffer (only for hit results)
+    pub fn deinit(self: *CacheResult, allocator: Allocator) void {
+        switch (self.*) {
+            .hit => |*h| h.cache_data.deinit(allocator),
+            .miss, .not_enabled => {},
+        }
+    }
+};
+
+/// Information about an import for metadata cache
+pub const ImportInfo = struct {
+    package: []const u8,
+    module: []const u8,
+    source_hash: [32]u8,
+
+    pub fn deinit(self: *ImportInfo, allocator: Allocator) void {
+        if (self.package.len > 0) allocator.free(self.package);
+        if (self.module.len > 0) allocator.free(self.module);
+    }
+};
+
+/// Cached metadata about a module's imports and diagnostic counts
+pub const CacheMetadata = struct {
+    imports: []ImportInfo,
+    full_cache_key: [32]u8,
+    error_count: u32,
+    warning_count: u32,
+
+    pub fn deinit(self: *CacheMetadata, allocator: Allocator) void {
+        for (self.imports) |*imp| imp.deinit(allocator);
+        allocator.free(self.imports);
+    }
+};
 
 /// Public `CacheManager` declaration.
 pub const CacheManager = struct {
@@ -195,6 +244,12 @@ pub const CacheManager = struct {
         defer self.allocator.free(cache_subdir);
 
         return std.fs.path.join(self.allocator, &.{ cache_subdir, filename });
+    }
+
+    fn ensureCacheSubdir(self: *Self, cache_key: [32]u8) !void {
+        const entries_dir = try self.config.getCacheEntriesDir(self.allocator);
+        defer self.allocator.free(entries_dir);
+        return self.ensureCacheSubdirIn(cache_key, entries_dir);
     }
 
     pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) !void {

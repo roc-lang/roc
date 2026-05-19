@@ -14,7 +14,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const handlers = @import("builtins").handlers;
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
-const STACK_OVERFLOW_TEST_HELPER_ENV_VAR = "ROC_STACK_OVERFLOW_TEST_HELPER";
 
 /// Error message to display on stack overflow
 const STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";

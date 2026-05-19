@@ -6906,7 +6906,7 @@ const ComptimeReifier = struct {
     ) Allocator.Error!ReifiedValue {
         const layout = self.layouts.getLayout(layout_idx);
         if (layout.tag != .scalar) reifierInvariant("scalar checked type did not lower to scalar layout");
-        const scalar = layout.data.scalar;
+        const scalar = layout.getScalar();
         return switch (scalar.tag) {
             .str => self.reifyStr(layout_idx, value),
             .int => blk: {
@@ -6914,11 +6914,11 @@ const ComptimeReifier = struct {
                 const size: usize = @intCast(self.layouts.layoutSize(layout));
                 @memcpy(bytes[0..size], value.readBytes(size));
                 break :blk .{
-                    .schema = try self.values.addSchema(.{ .int = scalar.data.int }),
+                    .schema = try self.values.addSchema(.{ .int = scalar.getInt() }),
                     .value = try self.values.addValue(.{ .int_bytes = bytes }),
                 };
             },
-            .frac => switch (scalar.data.frac) {
+            .frac => switch (scalar.getFrac()) {
                 .f32 => .{
                     .schema = try self.values.addSchema(.{ .frac = .f32 }),
                     .value = try self.values.addValue(.{ .f32 = value.read(f32) }),

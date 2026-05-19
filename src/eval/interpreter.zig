@@ -1200,6 +1200,8 @@ pub const Interpreter = struct {
                     self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
                 }
             },
+        }
+    }
 
     fn debugIndent(indent: usize) []const u8 {
         const spaces = "                                ";
@@ -1441,7 +1443,8 @@ pub const Interpreter = struct {
         frame: *Frame,
         start_stmt: CFStmtId,
     ) Error!ExecOutcome {
-        var current = start_stmt;        while (true) {
+        var current = start_stmt;
+        while (true) {
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
                 .assign_ref => |assign| {
@@ -1810,7 +1813,7 @@ pub const Interpreter = struct {
 
         var visited = std.AutoHashMap(CFStmtId, void).init(self.evalAllocator());
         defer visited.deinit();
-        var stack = std.ArrayListUnmanaged(CFStmtId){};
+        var stack = std.ArrayListUnmanaged(CFStmtId).empty;
         defer stack.deinit(self.evalAllocator());
         stack.append(self.evalAllocator(), body) catch return;
 

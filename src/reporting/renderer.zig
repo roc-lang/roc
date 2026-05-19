@@ -536,7 +536,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: *std.Io.Writer, con
                 try writer.writeAll(" ");
             }
         },
-        .horizontal_rule => |_| {
+        .horizontal_rule => {
             try writer.writeAll("\n---\n");
         },
         .annotation_start, .annotation_end => {}, // Handled in annotated case

@@ -305,7 +305,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 49;
+pub const MODULEENV_EXPR_NODE_COUNT = 50;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -4455,9 +4455,10 @@ pub const Serialized = extern struct {
     }
 };
 
-/// Resolve all pending lookups in this store.
+/// Resolve all pending lookups (both expressions and types) in this store.
 /// Called before type-checking, when all dependencies are canonicalized.
-/// This converts expr_pending_lookup to expr_external_lookup (or leaves as-is for error).
+/// This converts e_lookup_pending to e_lookup_external (for expressions) and
+/// pending ty_apply/ty_lookup bases to external (for types).
 pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *const @TypeOf(env.*)) void {
     const trace_pending = @import("build_options").trace_build;
 
@@ -4465,127 +4466,107 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
 
     if (comptime trace_pending) {
         std.debug.print("[PENDING] resolvePendingLookups: module={s} nodes_len={} imported_envs.len={}\n", .{ env.module_name, nodes_len, imported_envs.len });
-        for (imported_envs) |ie| {
-            std.debug.print("[PENDING]   imported: {s}\n", .{ie.module_name});
-        }
     }
 
-    // Iterate through all nodes to find pending lookups
     var i: usize = 0;
     while (i < nodes_len) : (i += 1) {
         const node_idx: Node.Idx = @enumFromInt(@as(u32, @intCast(i)));
         const node = store.nodes.get(node_idx);
 
-        if (node.tag == .expr_pending_lookup) {
-            const payload = node.getPayload().expr_pending_lookup;
-            const ident_idx: Ident.Idx = @bitCast(payload.ident_idx);
+        if (node.tag != .expr_pending_lookup) continue;
 
-            // Get the import name from the module index
-            const module_idx_int = payload.module_idx;
-            if (module_idx_int < env.imports.imports.items.items.len) {
-                const import_str_idx = env.imports.imports.items.items[module_idx_int];
-                const import_name = env.getString(import_str_idx);
-                const member_name = env.getIdent(ident_idx);
+        const payload = node.getPayload().expr_pending_lookup;
+        const ident_idx: Ident.Idx = @bitCast(payload.ident_idx);
 
-                if (comptime trace_pending) {
-                    std.debug.print("[PENDING] Found pending lookup: import={s} member={s}\n", .{ import_name, member_name });
-                }
+        // Get the import name from the module index
+        const module_idx_int = payload.module_idx;
+        if (module_idx_int >= env.imports.imports.items.items.len) continue;
 
-                // Extract base module name for qualified imports (e.g., "pf.Stdout" -> "Stdout")
-                const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
-                    import_name[dot_idx + 1 ..]
-                else
-                    import_name;
+        const import_str_idx = env.imports.imports.items.items[module_idx_int];
+        const import_name = env.getString(import_str_idx);
+        const member_name = env.getIdent(ident_idx);
 
-                // Extract base member name (e.g., "pf.Stdout.line!" -> "line!")
-                // The member_name may be fully qualified, so we take everything after the last dot
-                const base_member_name = if (std.mem.findScalarLast(u8, member_name, '.')) |dot_idx|
-                    member_name[dot_idx + 1 ..]
-                else
-                    member_name;
+        // Extract base module name for qualified imports (e.g., "pf.Stdout" -> "Stdout")
+        const base_import_name = if (std.mem.findScalarLast(u8, import_name, '.')) |dot_idx|
+            import_name[dot_idx + 1 ..]
+        else
+            import_name;
 
-                if (comptime trace_pending) {
-                    std.debug.print("[PENDING]   base_import_name={s} base_member_name={s}\n", .{ base_import_name, base_member_name });
-                }
+        // Extract base member name (e.g., "pf.Stdout.line!" -> "line!")
+        const base_member_name = if (std.mem.findScalarLast(u8, member_name, '.')) |dot_idx|
+            member_name[dot_idx + 1 ..]
+        else
+            member_name;
 
-                // Find the target module env
-                var target_env: ?*const @TypeOf(env.*) = null;
-                for (imported_envs) |imported_env| {
-                    if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
-                        target_env = imported_env;
-                        break;
-                    }
-                }
-
-                if (target_env) |tenv| {
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING]   Found target env: {s}\n", .{tenv.module_name});
-                    }
-
-                    // For methods on opaque types, the exposed name is qualified like "Stdout.line!"
-                    // Build the qualified name: {module_name}.{member_name}
-                    var qualified_buf: [512]u8 = undefined;
-                    const qualified_member_name = std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ base_import_name, base_member_name }) catch base_member_name;
-
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING]   Looking for qualified name: {s}\n", .{qualified_member_name});
-                    }
-
-                    // Try to resolve the pending lookup in order of preference:
-                    // 1. Full member_name directly (for nested module access like "Outer.Inner.inner")
-                    // 2. Qualified name (for methods on opaque types like "Outer.method")
-                    // 3. Base member name only (for simple exports)
-                    const target_node_idx_opt: ?u16 = blk: {
-                        // First try the full member_name (for nested module access)
-                        if (tenv.common.findIdent(member_name)) |full_ident| {
-                            if (tenv.getExposedNodeIndexById(full_ident)) |idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Found via full member name: {}\n", .{idx});
-                                }
-                                break :blk idx;
-                            }
-                        }
-                        // Try the qualified name (for methods on opaque types)
-                        if (tenv.common.findIdent(qualified_member_name)) |qident| {
-                            if (tenv.getExposedNodeIndexById(qident)) |idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Found via qualified name: {}\n", .{idx});
-                                }
-                                break :blk idx;
-                            }
-                        }
-                        // Fall back to base member name (for regular exports)
-                        if (tenv.common.findIdent(base_member_name)) |member_ident| {
-                            if (comptime trace_pending) {
-                                std.debug.print("[PENDING]   Found member ident: {}\n", .{@as(u32, @bitCast(member_ident))});
-                            }
-                            if (tenv.getExposedNodeIndexById(member_ident)) |idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Found via base name: {}\n", .{idx});
-                                }
-                                break :blk idx;
-                            }
-                        }
-                        break :blk null;
-                    };
-
-                    if (target_node_idx_opt) |target_node_idx| {
-                        // Successfully resolved - update to external lookup
-                        var new_node = Node.init(.expr_external_lookup);
-                        new_node.setPayload(.{ .expr_external_lookup = .{
-                            .module_idx = payload.module_idx,
-                            .target_node_idx = target_node_idx,
-                            .ident_idx = payload.ident_idx,
-                        } });
-                        store.nodes.set(node_idx, new_node);
-                    }
-                } else {
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING]   Target env not found\n", .{});
-                    }
-                }
+        // Find the target module env by name match
+        var target_env: ?*const @TypeOf(env.*) = null;
+        for (imported_envs) |imported_env| {
+            if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
+                target_env = imported_env;
+                break;
             }
-        } else if (node.tag == .ty_apply) {
+        }
+
+        const tenv = target_env orelse continue;
+
+        // Try resolution in order:
+        // 1. Full member_name (for nested module access like "Outer.Inner.inner")
+        // 2. Qualified "Module.member" (for methods on opaque types like "Stdout.line!")
+        // 3. Base member name only (for simple exports)
+        const target_node_idx_opt: ?u16 = blk: {
+            if (tenv.common.findIdent(member_name)) |full_ident| {
+                if (tenv.getExposedNodeIndexById(full_ident)) |idx| break :blk idx;
+            }
+
+            var qualified_buf: [512]u8 = undefined;
+            const qualified_member_name = std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ base_import_name, base_member_name }) catch base_member_name;
+            if (tenv.common.findIdent(qualified_member_name)) |qident| {
+                if (tenv.getExposedNodeIndexById(qident)) |idx| break :blk idx;
+            }
+
+            if (tenv.common.findIdent(base_member_name)) |bident| {
+                if (tenv.getExposedNodeIndexById(bident)) |idx| break :blk idx;
+            }
+
+            break :blk null;
+        };
+
+        if (target_node_idx_opt) |target_node_idx| {
+            var new_node = Node.init(.expr_external_lookup);
+            new_node.setPayload(.{ .expr_external_lookup = .{
+                .module_idx = payload.module_idx,
+                .target_node_idx = target_node_idx,
+                .ident_idx = payload.ident_idx,
+            } });
+            store.nodes.set(node_idx, new_node);
+        }
+    }
+
+    // Also resolve any deferred type lookups (ty_apply / ty_lookup with pending base).
+    resolveDeferredTypeLookups(store, env, imported_envs);
+}
+
+/// Resolve all deferred type lookups in this store.
+/// Called before type-checking, when all dependencies are canonicalized.
+pub fn resolveDeferredTypeLookups(store: *NodeStore, env: anytype, imported_envs: []const *const @TypeOf(env.*)) void {
+    const trace_pending = @import("build_options").trace_build;
+
+    const nodes_len = store.nodes.len();
+
+    if (comptime trace_pending) {
+        std.debug.print("[LOOKUP] resolveDeferredTypeLookups: module={s} nodes_len={} imported_envs.len={}\n", .{ env.module_name, nodes_len, imported_envs.len });
+        for (imported_envs) |ie| {
+            std.debug.print("[LOOKUP]   imported: {s}\n", .{ie.module_name});
+        }
+    }
+
+    // Iterate through all nodes to find deferred type lookups
+    var i: usize = 0;
+    while (i < nodes_len) : (i += 1) {
+        const node_idx: Node.Idx = @enumFromInt(@as(u32, @intCast(i)));
+        const node = store.nodes.get(node_idx);
+
+        if (node.tag == .ty_apply) {
             // Check if this type apply has a pending base
             const payload = node.getPayload().ty_apply;
             const apply_data = store.type_apply_data.items.items[payload.type_apply_data_idx];

@@ -5,10 +5,14 @@
 
 const std = @import("std");
 const parse = @import("parse");
+const can = @import("can");
+const base = @import("base");
 const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
+const ModuleEnv = can.ModuleEnv;
+const Can = can.Can;
 
 /// Extract unqualified sibling module imports from a parsed AST.
 /// Returns module names that:
@@ -220,8 +224,6 @@ pub fn addImportedModulesToEnvMap(
             try module_envs_map.put(module_ident, .{
                 .env = placeholder_env,
                 .qualified_type_ident = qualified_ident,
-                // Mark as placeholder so canonicalizer skips member validation
-                .is_placeholder = true,
             });
         }
     }

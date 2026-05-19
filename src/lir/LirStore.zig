@@ -18,6 +18,9 @@ const Local = ir.Local;
 const LocalId = ir.LocalId;
 const LocalSpan = ir.LocalSpan;
 const Symbol = ir.Symbol;
+const LirPattern = ir.LirPattern;
+const LirPatternId = ir.LirPatternId;
+const LirPatternSpan = ir.LirPatternSpan;
 
 const Self = @This();
 
@@ -29,6 +32,8 @@ proc_specs: std.ArrayList(LirProcSpec),
 strings: base.StringLiteral.Store,
 allocator: Allocator,
 next_synthetic_symbol: u64,
+patterns: std.ArrayList(LirPattern),
+pattern_ids: std.ArrayList(LirPatternId),
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -41,6 +46,8 @@ pub fn init(allocator: Allocator) Self {
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
+        .patterns = std.ArrayList(LirPattern).empty,
+        .pattern_ids = std.ArrayList(LirPatternId).empty,
     };
 }
 
@@ -52,6 +59,33 @@ pub fn deinit(self: *Self) void {
     self.local_ids.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
     self.strings.deinit(self.allocator);
+    self.patterns.deinit(self.allocator);
+    self.pattern_ids.deinit(self.allocator);
+}
+
+/// Appends a pattern and returns its id.
+pub fn addPattern(self: *Self, pattern: LirPattern) Allocator.Error!LirPatternId {
+    const id: LirPatternId = @enumFromInt(self.patterns.items.len);
+    try self.patterns.append(self.allocator, pattern);
+    return id;
+}
+
+/// Returns the pattern for a given id.
+pub fn getPattern(self: *const Self, id: LirPatternId) LirPattern {
+    return self.patterns.items[@intFromEnum(id)];
+}
+
+/// Appends a slice of pattern ids and returns the span.
+pub fn addPatternSpan(self: *Self, ids: []const LirPatternId) Allocator.Error!LirPatternSpan {
+    const start: u32 = @intCast(self.pattern_ids.items.len);
+    try self.pattern_ids.appendSlice(self.allocator, ids);
+    return .{ .start = start, .len = @intCast(ids.len) };
+}
+
+/// Returns the pattern ids for a given span.
+pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) []const LirPatternId {
+    if (span.len == 0) return &.{};
+    return self.pattern_ids.items[span.start .. span.start + span.len];
 }
 
 /// Returns a fresh synthetic symbol for compiler-generated locals and procs.

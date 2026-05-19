@@ -22,7 +22,7 @@ const RocStr = builtins.str.RocStr;
 const CheckError = error{StaticDataHostCheckFailed};
 
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.DebugAllocator(.{}),
     dealloc_count: usize,
 };
 
@@ -94,7 +94,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = argv;
 
     var host_env = HostEnv{
-        .gpa = std.heap.GeneralPurposeAllocator(.{}){},
+        .gpa = std.heap.DebugAllocator(.{}){},
         .dealloc_count = 0,
     };
     defer _ = host_env.gpa.deinit();

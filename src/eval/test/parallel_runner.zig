@@ -240,8 +240,8 @@ fn forkAndEval(
         return .{ .success = result };
     }
 
-    const disable_fork =
-        (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_NO_FORK") catch null) != null;
+    // std.process.getEnvVarOwned was removed in Zig 0.16; use std.c.getenv instead.
+    const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
     if (disable_fork) {
         const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
@@ -249,21 +249,21 @@ fn forkAndEval(
         return .{ .success = result };
     }
 
-    const pipe_fds = posix.pipe() catch {
+    const pipe_fds = harness.pipe() catch {
         return .{ .fork_failed = {} };
     };
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = harness.fork() catch {
+        harness.closeFd(pipe_read);
+        harness.closeFd(pipe_write);
         return .{ .fork_failed = {} };
     };
 
     if (fork_result == 0) {
         // === Child process ===
-        posix.close(pipe_read);
+        harness.closeFd(pipe_read);
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
         // immediately so the OS reclaims everything — no deinit needed.
@@ -273,28 +273,19 @@ fn forkAndEval(
             // Write error name to pipe so parent can report it, then exit 2
             // to distinguish "error with name" from other failures.
             const name = @errorName(err);
-            var w: usize = 0;
-            while (w < name.len) {
-                w += posix.write(pipe_write, name[w..]) catch break;
-            }
-            posix.close(pipe_write);
+            harness.writeAll(pipe_write, name);
+            harness.closeFd(pipe_write);
             std.c._exit(2);
         };
         // Write the result string to the pipe.
-        var written: usize = 0;
-        while (written < result_str.len) {
-            written += posix.write(pipe_write, result_str[written..]) catch {
-                posix.close(pipe_write);
-                std.c._exit(1);
-            };
-        }
+        harness.writeAll(pipe_write, result_str);
 
-        posix.close(pipe_write);
+        harness.closeFd(pipe_write);
         std.c._exit(0);
     }
 
     // === Parent process ===
-    posix.close(pipe_write);
+    harness.closeFd(pipe_write);
 
     // Read pipe FIRST (before waitpid) to avoid deadlock when child output
     // exceeds the pipe buffer (~64KB). The read returns EOF when the child
@@ -303,7 +294,7 @@ fn forkAndEval(
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
     while (true) {
-        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+        const bytes_read = harness.posixRead(pipe_read, &read_buf) catch {
             read_error = true;
             break;
         };
@@ -313,10 +304,10 @@ fn forkAndEval(
             break;
         };
     }
-    posix.close(pipe_read);
+    harness.closeFd(pipe_read);
 
     // Now reap the child.
-    const wait_result = posix.waitpid(fork_result, 0);
+    const wait_result = harness.waitpid(fork_result, 0);
 
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
@@ -945,12 +936,12 @@ fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
 /// per-worker; we strip any pre-existing instance so we don't double-add).
-fn buildWorkerArgvTemplate(arena: std.mem.Allocator) ![]const []const u8 {
-    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path_slice = try std.fs.selfExePath(&self_path_buf);
-    const self_path = try arena.dupe(u8, self_path_slice);
+fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) ![]const []const u8 {
+    // std.fs.selfExePath was removed in Zig 0.16; use std.process.executablePathAlloc instead.
+    const self_path = try std.process.executablePathAlloc(io, arena);
 
-    const original_args = try std.process.argsAlloc(arena);
+    const raw = try process_args.toSlice(arena);
+    const original_args: []const []const u8 = @ptrCast(raw);
 
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     try argv.append(arena, self_path);
@@ -1379,21 +1370,20 @@ const WorkerTrace = struct {
 
     fn init() WorkerTrace {
         const enabled = blk: {
-            const v = std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_TIME_WORKER") catch null;
-            if (v) |val| {
-                std.heap.page_allocator.free(val);
+            const v = std.c.getenv("ROC_EVAL_TIME_WORKER");
+            if (v) |_| {
                 break :blk true;
             }
             break :blk false;
         };
-        const now = std.time.nanoTimestamp();
+        const now = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
         const start_ns: u64 = @intCast(@max(0, now));
         return .{ .enabled = enabled, .start_ns = start_ns, .last_ns = start_ns };
     }
 
     fn stamp(self: *WorkerTrace, label: []const u8) void {
         if (!self.enabled) return;
-        const now: u64 = @intCast(@max(0, std.time.nanoTimestamp()));
+        const now: u64 = @intCast(@max(0, std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds));
         const since_start_us = (now -| self.start_ns) / 1_000;
         const since_last_us = (now -| self.last_ns) / 1_000;
         self.last_ns = now;
@@ -1402,18 +1392,20 @@ const WorkerTrace = struct {
 };
 
 /// Entry point for the parallel eval test runner.
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var trace_worker = WorkerTrace.init();
     trace_worker.stamp("main entry");
 
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
     trace_worker.stamp("gpa init");
 
+    const io = init.io;
+
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
-    const cli = try harness.parseStandardArgs(args_arena.allocator());
+    const cli = try harness.parseStandardArgs(args_arena.allocator(), init.minimal.args);
     trace_worker.stamp("parseStandardArgs");
 
     if (cli.help_requested) {
@@ -1483,7 +1475,7 @@ pub fn main() !void {
             .backends = backends,
             .expected_str = outcome.expected_str,
         };
-        serializeResultForPool(std.fs.File.stdout().handle, result);
+        serializeResultForPool(std.posix.STDOUT_FILENO, result);
         trace_worker.stamp("serialize done");
         return;
     }
@@ -1496,15 +1488,14 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
-        const stdin = std.fs.File.stdin();
-        const stdout_handle = std.fs.File.stdout().handle;
+        const stdout_handle = std.posix.STDOUT_FILENO;
 
         var line_buf: [32]u8 = undefined;
         outer: while (true) {
             var line_len: usize = 0;
             while (true) {
                 if (line_len >= line_buf.len) break :outer; // malformed
-                const n = stdin.read(line_buf[line_len .. line_len + 1]) catch break :outer;
+                const n = std.posix.read(std.posix.STDIN_FILENO, line_buf[line_len .. line_len + 1]) catch break :outer;
                 if (n == 0) break :outer; // EOF — parent done
                 if (line_buf[line_len] == '\n') break;
                 line_len += 1;
@@ -1533,8 +1524,9 @@ pub fn main() !void {
         return;
     }
 
-    const disable_fork_env = std.process.getEnvVarOwned(gpa, "ROC_EVAL_NO_FORK") catch null;
-    defer if (disable_fork_env) |value| gpa.free(value);
+    // In Zig 0.16, std.process.getEnvVarOwned was removed.
+    // Use std.process.Environ.getPosix instead (no allocation needed).
+    const disable_fork_env: ?[:0]const u8 = std.process.Environ.getPosix(init.minimal.environ, "ROC_EVAL_NO_FORK");
 
     // Coverage mode and ROC_EVAL_NO_FORK use a simple single-threaded loop: no
     // outer fork, no watchdog, no threads. ROC_EVAL_NO_FORK is also consumed by
@@ -1598,7 +1590,7 @@ pub fn main() !void {
     // Build a worker_argv_template so Windows can spawn `Child` workers that
     // re-invoke this binary with `--worker <idx>`. On POSIX the template is
     // unused (fork path doesn't re-exec) but we build it uniformly.
-    const worker_argv_template = try buildWorkerArgvTemplate(args_arena.allocator());
+    const worker_argv_template = try buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
     Pool.run(tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
 
