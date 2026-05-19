@@ -8,6 +8,6 @@ type=repl
 » List.swap([10, 20, 30], 1, 1)
 ~~~
 # OUTPUT
-[10.0, 20.0, 30.0]
+Ok([10.0, 20.0, 30.0])
 # PROBLEMS
 NIL

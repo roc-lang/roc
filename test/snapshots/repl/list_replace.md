@@ -8,6 +8,6 @@ type=repl
 » List.replace([10, 20, 30], 1, 99)
 ~~~
 # OUTPUT
-{ list: [10.0, 99.0, 30.0], value: 20.0 }
+Ok({ list: [10.0, 99.0, 30.0], prev: 20.0 })
 # PROBLEMS
 NIL

@@ -8,6 +8,6 @@ type=repl
 » List.set([10, 20, 30], 1, 99)
 ~~~
 # OUTPUT
-[10.0, 99.0, 30.0]
+Ok([10.0, 99.0, 30.0])
 # PROBLEMS
 NIL

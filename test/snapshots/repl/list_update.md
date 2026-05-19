@@ -8,6 +8,6 @@ type=repl
 » List.update([10, 20, 30], 1, |x| x + 5)
 ~~~
 # OUTPUT
-[10.0, 25.0, 30.0]
+Ok([10.0, 25.0, 30.0])
 # PROBLEMS
 NIL

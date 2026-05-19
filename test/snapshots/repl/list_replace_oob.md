@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=List.replace on out-of-bounds index returns the original list and the input value
+description=List.replace on out-of-bounds index returns Err(OutOfBounds)
 type=repl
 ~~~
 # SOURCE
@@ -8,6 +8,6 @@ type=repl
 » List.replace([10, 20, 30], 5, 99)
 ~~~
 # OUTPUT
-{ list: [10.0, 20.0, 30.0], value: 99.0 }
+Err(OutOfBounds)
 # PROBLEMS
 NIL

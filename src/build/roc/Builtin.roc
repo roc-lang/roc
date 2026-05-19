@@ -535,63 +535,61 @@ Builtin :: [].{
 		subscript = |list, index| List.get(list, index)
 
 		## Replaces the element at the given index with a new value.
-		##
-		## If the index is outside the bounds of the list, returns the original
-		## list unmodified.
 		## ```roc
-		## expect [10, 20, 30].set(1, 99) == [10, 99, 30]
+		## expect [10, 20, 30].set(1, 99) == Ok([10, 99, 30])
 		##
-		## expect [10, 20, 30].set(5, 99) == [10, 20, 30]
+		## expect [10, 20, 30].set(5, 99) == Err(OutOfBounds)
 		## ```
-		set : List(a), U64, a -> List(a)
-		set = |list, index, value| if index < List.len(list) {
-			list_set_unsafe(list, index, value)
-		} else {
-			list
-		}
+		set : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
+		set = |list, index, value| 
+			if index < List.len(list) {
+				Ok(list_set_unsafe(list, index, value))
+			} else {
+				Err(OutOfBounds)
+			}
 
 		## Replaces the element at the given index, returning both the updated list
 		## and the value that was replaced.
-		##
-		## If the index is outside the bounds of the list, returns the original list
-		## along with the input value (as if the replacement happened at a no-op slot).
 		## ```roc
-		## expect [10, 20, 30].replace(1, 99) == { list: [10, 99, 30], value: 20 }
-		## expect [10, 20, 30].replace(5, 99) == { list: [10, 20, 30], value: 99 }
+		## expect [10, 20, 30].replace(1, 99) == Ok({ list: [10, 99, 30], prev: 20 })
+		## expect [10, 20, 30].replace(5, 99) == Err(OutOfBounds)
 		## ```
-		replace : List(a), U64, a -> { list : List(a), value : a }
-		replace = |list, index, new_value| if index < List.len(list) {
-			list_replace_unsafe(list, index, new_value)
+		replace : List(a), U64, a -> Try({ list : List(a), prev : a }, [OutOfBounds, ..])
+		replace = |list, index, new_value| 
+		if index < List.len(list) {
+			Ok(list_replace_unsafe(list, index, new_value))
 		} else {
-			{ list, value: new_value }
+			Err(OutOfBounds)
 		}
 
 		## Updates the element at the given index by applying a function to it.
-		##
-		## If the index is outside the bounds of the list, returns the original
-		## list unmodified.
 		## ```roc
-		## expect [10, 20, 30].update(1, |x| x + 5) == [10, 25, 30]
+		## expect [10, 20, 30].update(1, |x| x + 5) == Ok([10, 25, 30])
 		##
-		## expect [10, 20, 30].update(5, |x| x + 5) == [10, 20, 30]
+		## expect [10, 20, 30].update(5, |x| x + 5) == Err(OutOfBounds)
 		## ```
-		update : List(a), U64, (a -> a) -> List(a)
+		update : List(a), U64, (a -> a) -> Try(List(a), [OutOfBounds, ..])
 		update = |list, index, func| if index < List.len(list) {
-			list_replace_unsafe(list, index, func(list_get_unsafe(list, index))).list
+			Ok(list_replace_unsafe(list, index, func(list_get_unsafe(list, index))).list)
 		} else {
-			list
+			Err(OutOfBounds)
 		}
 
 		## Exchanges the elements at the two given indices.
-		##
-		## If either index is outside the bounds of the list, or both indices are
-		## equal, returns the list unchanged.
 		## ```roc
-		## expect [10, 20, 30, 40].swap(0, 3) == [40, 20, 30, 10]
+		## expect [10, 20, 30, 40].swap(0, 3) == Ok([40, 20, 30, 10])
 		##
-		## expect [10, 20, 30].swap(0, 5) == [10, 20, 30]
+		## expect [10, 20, 30].swap(0, 5) == Err(OutOfBounds)
 		## ```
-		swap : List(a), U64, U64 -> List(a)
+		swap : List(a), U64, U64 -> Try(List(a), [OutOfBounds, ..])
+		swap = |list, index_1, index_2| {
+			len = List.len(list)
+			if index_1 < len and index_2 < len {
+				Ok(list_swap_unsafe(list, index_1, index_2))
+			} else {
+				Err(OutOfBounds)
+			}
+		}
 
 		## Returns the reversed list.
 		## ```roc
@@ -1121,7 +1119,10 @@ Builtin :: [].{
 		split_at = |list, idx| {
 			before = list.sublist({ start: 0, len: idx })
 			len = list.len()
-			others = list.sublist({ start: idx, len: len - idx })
+			others = if idx > len
+				[]
+			else
+				list.sublist({ start: idx, len: len - idx })
 			{ before, others }
 		}
 
@@ -7774,7 +7775,10 @@ list_set_unsafe : List(item), U64, item -> List(item)
 
 # Implemented by the compiler, does not perform bounds checks.
 # Returns the new list paired with the value that was replaced.
-list_replace_unsafe : List(item), U64, item -> { list : List(item), value : item }
+list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item }
+
+# Implemented by the compiler, does not perform bounds checks
+list_swap_unsafe : List(item), U64, U64 -> List(item)
 
 # Implemented by the compiler, ensures at least spare additional elements of capacity
 list_reserve : List(item), U64 -> List(item)
