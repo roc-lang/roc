@@ -319,10 +319,26 @@ pub const CanonicalCallableSetMember = struct {
     capture_shape_key: CaptureShapeKey,
 };
 
+/// Public `CallableGroupWorkMember` declaration.
+pub const CallableGroupWorkMember = struct {
+    proc_value: canonical.ProcedureCallableRef,
+    source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
+    source_proc: canonical.MirProcedureRef,
+    published_proc_value: ?canonical.ProcedureCallableRef = null,
+    published_source_proc: ?canonical.MirProcedureRef = null,
+    lifted_owner_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
+    target_instance: ProcRepresentationInstanceId,
+};
+
 /// Public `CanonicalCallableSetDescriptor` declaration.
 pub const CanonicalCallableSetDescriptor = struct {
     key: CanonicalCallableSetKey,
     members: []const CanonicalCallableSetMember,
+};
+
+const CallableGroupWorkSet = struct {
+    group: RepresentationGroupId,
+    members: std.ArrayList(CallableGroupWorkMember),
 };
 
 /// Public `SessionExecutableTypePayloadId` declaration.
@@ -635,6 +651,33 @@ fn structuralChildKindFromEdgeKind(kind: RepresentationEdgeKind) ?StructuralChil
         .capture_value,
         => null,
     };
+}
+
+fn callableGroupWorkMemberEquivalent(
+    a: CallableGroupWorkMember,
+    b: CallableGroupWorkMember,
+) bool {
+    if (!callableGroupWorkMemberSameIdentity(a, b)) return false;
+    if (a.source_fn_ty_payload != b.source_fn_ty_payload) return false;
+    if ((a.published_proc_value == null) != (b.published_proc_value == null)) return false;
+    if (a.published_proc_value) |left| {
+        if (!canonical.procedureCallableRefEql(left, b.published_proc_value.?)) return false;
+    }
+    if ((a.published_source_proc == null) != (b.published_source_proc == null)) return false;
+    if (a.published_source_proc) |left| {
+        if (!canonical.mirProcedureRefEql(left, b.published_source_proc.?)) return false;
+    }
+    return a.lifted_owner_source_fn_ty_payload == b.lifted_owner_source_fn_ty_payload;
+}
+
+fn callableGroupWorkMemberSameIdentity(
+    a: CallableGroupWorkMember,
+    b: CallableGroupWorkMember,
+) bool {
+    if (!canonical.mirProcedureRefEql(a.source_proc, b.source_proc)) return false;
+    if (!canonical.procedureCallableRefEql(a.proc_value, b.proc_value)) return false;
+    if (a.target_instance != b.target_instance) return false;
+    return true;
 }
 
 /// Public `CallableMemberInstanceId` declaration.
@@ -1804,6 +1847,7 @@ pub const RepresentationStore = struct {
     solved_structural_child_roots_published: bool = false,
     representation_edges: std.ArrayList(RepresentationEdge) = .empty,
     representation_requirements: std.ArrayList(RepresentationRequirement) = .empty,
+    callable_group_worksets: std.ArrayList(CallableGroupWorkSet) = .empty,
     callable_emission_plans: []CallableValueEmissionPlan = &.{},
     finite_erased_adapter_demands: []FiniteErasedAdapterDemand = &.{},
     callable_construction_plans: []CallableSetConstructionPlan = &.{},
@@ -1899,6 +1943,8 @@ pub const RepresentationStore = struct {
             if (provenance.len > 0) self.allocator.free(provenance);
         }
         if (self.group_erasure_provenance.len > 0) self.allocator.free(self.group_erasure_provenance);
+        self.clearCallableGroupWorksets();
+        self.callable_group_worksets.deinit(self.allocator);
         self.representation_requirements.deinit(self.allocator);
         self.representation_edges.deinit(self.allocator);
         self.solved_structural_child_roots.deinit();
@@ -2011,9 +2057,83 @@ pub const RepresentationStore = struct {
         return id;
     }
 
+    pub fn addCallableGroupWorkMember(
+        self: *RepresentationStore,
+        group: RepresentationGroupId,
+        member: CallableGroupWorkMember,
+    ) std.mem.Allocator.Error!bool {
+        self.verifyReservedGroup(group, "callable group work member");
+        const set = try self.callableGroupWorkSetFor(group);
+        for (set.members.items) |existing| {
+            if (callableGroupWorkMemberEquivalent(existing, member)) return false;
+            if (callableGroupWorkMemberSameIdentity(existing, member)) {
+                debug.invariant(false, "lambda-solved invariant violated: callable group work member identity was added with different metadata");
+                unreachable;
+            }
+        }
+        try set.members.append(self.allocator, member);
+        return true;
+    }
+
+    pub fn callableGroupWorkMembers(
+        self: *const RepresentationStore,
+        group: RepresentationGroupId,
+    ) []const CallableGroupWorkMember {
+        self.verifyReservedGroup(group, "callable group work member lookup");
+        for (self.callable_group_worksets.items) |set| {
+            if (set.group == group) return set.members.items;
+        }
+        return &.{};
+    }
+
+    pub fn callableGroupWorkSetCount(self: *const RepresentationStore) usize {
+        return self.callable_group_worksets.items.len;
+    }
+
+    pub fn callableGroupWorkSetAt(
+        self: *const RepresentationStore,
+        index: usize,
+    ) struct { group: RepresentationGroupId, members: []const CallableGroupWorkMember } {
+        if (index >= self.callable_group_worksets.items.len) {
+            debug.invariant(false, "lambda-solved invariant violated: callable group workset index out of range");
+            unreachable;
+        }
+        const set = self.callable_group_worksets.items[index];
+        return .{ .group = set.group, .members = set.members.items };
+    }
+
+    fn callableGroupWorkSetFor(
+        self: *RepresentationStore,
+        group: RepresentationGroupId,
+    ) std.mem.Allocator.Error!*CallableGroupWorkSet {
+        for (self.callable_group_worksets.items) |*set| {
+            if (set.group == group) return set;
+        }
+        const index = self.callable_group_worksets.items.len;
+        try self.callable_group_worksets.append(self.allocator, .{
+            .group = group,
+            .members = .empty,
+        });
+        return &self.callable_group_worksets.items[index];
+    }
+
+    fn clearCallableGroupWorksets(self: *RepresentationStore) void {
+        for (self.callable_group_worksets.items) |*set| {
+            set.members.deinit(self.allocator);
+        }
+        self.callable_group_worksets.clearRetainingCapacity();
+    }
+
     fn verifyReservedRoot(self: *const RepresentationStore, root: RepRootId, comptime label: []const u8) void {
         if (@intFromEnum(root) >= self.roots_len) {
             debug.invariant(false, "lambda-solved invariant violated: " ++ label ++ " referenced an unreserved root");
+            unreachable;
+        }
+    }
+
+    fn verifyReservedGroup(self: *const RepresentationStore, group: RepresentationGroupId, comptime label: []const u8) void {
+        if (@intFromEnum(group) >= self.groups_len) {
+            debug.invariant(false, "lambda-solved invariant violated: " ++ label ++ " referenced an unreserved group");
             unreachable;
         }
     }
@@ -2049,6 +2169,7 @@ pub const RepresentationStore = struct {
         }
         if (self.group_erasure_provenance.len > 0) self.allocator.free(self.group_erasure_provenance);
         self.group_erasure_provenance = &.{};
+        self.clearCallableGroupWorksets();
     }
 
     pub fn publishRootGroups(
@@ -2075,6 +2196,11 @@ pub const RepresentationStore = struct {
         }
         try self.publishSolvedStructuralChildRoots();
         self.solved_structural_child_roots_published = true;
+    }
+
+    pub fn hasPublishedSolvedGroups(self: *const RepresentationStore) bool {
+        return self.root_groups.len == @as(usize, @intCast(self.roots_len)) and
+            self.solved_structural_child_roots_published;
     }
 
     pub fn groupForRoot(self: *const RepresentationStore, root: RepRootId) RepresentationGroupId {

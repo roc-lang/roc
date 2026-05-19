@@ -1100,10 +1100,32 @@ Finite callable sets are canonical maps of exact callable member instances:
 The left-hand side is identity. The right-hand side is descriptor payload.
 Capture slots, capture shapes, and executable payload keys are not identity
 material, because recursive callable captures can mention the callable set being
-defined. Lambda-solved may use private mutable callable-group work tables while
-solving the fixed point, but a callable-set descriptor is a published compiler
-fact. It is published exactly once, after every member identity and every
-reachable capture-payload callable dependency for that group has been solved.
+defined. Lambda-solved uses private mutable callable-group work tables while
+solving the fixed point. These work tables contain member identities only:
+selected procedure callable, source procedure identity, selected procedure
+representation instance, source function type payload, and imported/published
+procedure references. They do not contain capture schemas, executable payload
+keys, callable-set descriptor keys, runtime encodings, or emission plans.
+
+Representation-edge discovery and executable-demand discovery may consume these
+private member identity tables before descriptor publication. For example, a
+pending `call_value` edge can add direct-call representation edges to every
+currently known member target, and a later fixed-point iteration can add edges
+for newly discovered member targets. Those provisional edges are idempotent
+solve-state updates. They are not a published descriptor, and they are not a
+value emission plan.
+
+The same rule applies when a callable value is produced by value flow rather
+than by a local callable constructor. A call result, alias, join, or projection
+can be function-typed without carrying constructor metadata of its own. Before
+descriptor publication, consumers use the solved callable group to read the
+private member identity table. After descriptor publication, final value
+metadata consumes the group's published callable emission. It never invents
+members from the value's type shape.
+
+A callable-set descriptor is a published compiler fact. It is published exactly
+once, after every member identity and every reachable capture-payload callable
+dependency for that group has been solved.
 
 Before descriptor publication, lambda-solved recursively walks each selected
 target capture's explicit value metadata: aliases, projections, nominal

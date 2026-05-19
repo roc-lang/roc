@@ -774,10 +774,23 @@ const ProcedureInstanceRegistry = struct {
                 if (!value_store.callSiteSourceMatchBranchReachable(call_site)) continue;
                 const callee = call_site.callee orelse continue;
                 const callee_info = value_store.values.items[@intFromEnum(callee)];
-                const callable = callee_info.callable orelse continue;
+                const callee_group = self.callableGroupForValueInfo(store, callee_info, callee_info.callable) orelse continue;
+                if (callee_info.callable == null) {
+                    for (store.callableGroupWorkMembers(callee_group)) |member| {
+                        changed = (try self.materializeInstance(member.target_instance)) or changed;
+                    }
+                    continue;
+                }
+                const callable = callee_info.callable.?;
                 const emission = store.callableEmissionPlan(callable.emission_plan);
                 const finite_key = switch (emission) {
                     .finite => |key| key,
+                    .pending_proc_value => {
+                        for (store.callableGroupWorkMembers(callee_group)) |member| {
+                            changed = (try self.materializeInstance(member.target_instance)) or changed;
+                        }
+                        continue;
+                    },
                     else => continue,
                 };
                 const descriptor = store.callableSetDescriptor(finite_key) orelse {
@@ -789,6 +802,32 @@ const ProcedureInstanceRegistry = struct {
             }
         }
         return changed;
+    }
+
+    fn callableGroupForValueInfo(
+        self: *ProcedureInstanceRegistry,
+        store: *const repr.RepresentationStore,
+        value_info: repr.ValueInfo,
+        callable: ?repr.CallableValueInfo,
+    ) ?repr.RepresentationGroupId {
+        if (callable) |info| return store.groupForRoot(info.callable_root);
+        if (!self.valueHasFunctionType(value_info.logical_ty)) return null;
+        const callable_root = store.solvedStructuralChildRoot(value_info.root, .function_callable) orelse value_info.root;
+        return store.groupForRoot(callable_root);
+    }
+
+    fn valueHasFunctionType(
+        self: *ProcedureInstanceRegistry,
+        ty: Type.TypeVarId,
+    ) bool {
+        const root = self.program.types.unlinkConst(ty);
+        return switch (self.program.types.getNode(root)) {
+            .content => |content| switch (content) {
+                .func => true,
+                else => false,
+            },
+            else => false,
+        };
     }
 
     fn reserveFiniteErasedAdapterMembers(self: *ProcedureInstanceRegistry) Allocator.Error!bool {
@@ -1897,7 +1936,7 @@ fn verifySealedLambdaSolvedProgram(program: *const Program) void {
         }
     }
     for (program.solve_sessions.items) |session| {
-        if (session.representation_store.root_groups.len != @as(usize, @intCast(session.representation_store.roots_len))) {
+        if (!session.representation_store.hasPublishedSolvedGroups()) {
             lambdaInvariant("lambda-solved sealed program contains a solve session without a complete root group table");
         }
         for (session.representation_store.box_boundaries) |boundary| {
@@ -3912,6 +3951,11 @@ const CrossProcedureRepresentationLinker = struct {
     representation_store: *repr.RepresentationStore,
     value_store: *repr.ValueInfoStore,
 
+    const PendingCallValueEdgeProgress = struct {
+        changed: bool = false,
+        resolved: bool = false,
+    };
+
     fn appendCallSiteEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!bool {
         var changed = false;
         for (self.value_store.call_sites.items) |*call_site| {
@@ -3919,22 +3963,23 @@ const CrossProcedureRepresentationLinker = struct {
             if (call_site.representation_edges_resolved) continue;
             const dispatch = call_site.dispatch orelse {
                 const callee = call_site.callee orelse lambdaInvariant("lambda-solved unresolved call site has no callee");
-                if (try self.appendPendingCallValueEdges(call_site, callee)) {
+                const progress = try self.appendPendingCallValueEdges(call_site, callee);
+                if (progress.changed) changed = true;
+                if (progress.resolved) {
                     call_site.representation_edges_resolved = true;
-                    changed = true;
                 }
                 continue;
             };
             switch (dispatch) {
                 .call_proc => |target| {
-                    try self.appendDirectCallEdges(call_site.*, target);
+                    _ = try self.appendDirectCallEdges(call_site.*, target);
                     call_site.representation_edges_resolved = true;
                     changed = true;
                 },
                 .call_value_finite => |plan_id| {
                     const plan = self.value_store.callValueFiniteDispatchPlan(plan_id);
                     for (self.value_store.sliceCallValueFiniteDispatchBranches(plan.branches)) |branch| {
-                        try self.appendDirectCallEdges(call_site.*, branch.target_instance);
+                        _ = try self.appendDirectCallEdges(call_site.*, branch.target_instance);
                     }
                     call_site.representation_edges_resolved = true;
                     changed = true;
@@ -3950,7 +3995,8 @@ const CrossProcedureRepresentationLinker = struct {
         self: *CrossProcedureRepresentationLinker,
         call_site: repr.CallSiteInfo,
         target_id: repr.ProcRepresentationInstanceId,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
+        var changed = false;
         const target = self.procInstance(target_id);
         const args = self.value_store.sliceValueSpan(call_site.args);
         const params = self.valueStoreFor(target).sliceValueSpan(target.public_roots.params);
@@ -3958,67 +4004,98 @@ const CrossProcedureRepresentationLinker = struct {
             lambdaInvariant("lambda-solved call_proc representation edge arity differs from target params");
         }
         for (args, params, 0..) |arg, param, i| {
-            _ = try self.representation_store.appendRepresentationEdge(.{
+            changed = (try self.appendRepresentationEdgeIfMissing(.{
                 .from = .{ .local = self.valueRoot(arg) },
                 .to = .{ .procedure_public = self.publicRootRef(target_id, target, param) },
                 .kind = .{ .call_arg = @intCast(i) },
-            });
+            })) or changed;
         }
-        _ = try self.representation_store.appendRepresentationEdge(.{
+        changed = (try self.appendRepresentationEdgeIfMissing(.{
             .from = .{ .procedure_function_root = self.publicFunctionRootRef(target_id, target.public_roots.function_root) },
             .to = .{ .local = call_site.requested_fn_root },
             .kind = .value_alias,
-        });
-        _ = try self.representation_store.appendRepresentationEdge(.{
+        })) or changed;
+        changed = (try self.appendRepresentationEdgeIfMissing(.{
             .from = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
             .to = .{ .local = self.valueRoot(call_site.result) },
             .kind = .call_result,
-        });
+        })) or changed;
+        return changed;
     }
 
     fn appendFiniteCallValueEdges(
         self: *CrossProcedureRepresentationLinker,
         call_site: repr.CallSiteInfo,
         key: repr.CanonicalCallableSetKey,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const descriptor = self.representation_store.callableSetDescriptor(key) orelse {
             lambdaInvariant("lambda-solved finite call_value representation edge has no callable-set descriptor");
         };
         if (descriptor.members.len == 0) {
             lambdaInvariant("lambda-solved finite call_value representation edge reached empty callable-set descriptor");
         }
+        var changed = false;
         for (descriptor.members) |member| {
-            try self.appendDirectCallEdges(call_site, member.target_instance);
+            changed = (try self.appendDirectCallEdges(call_site, member.target_instance)) or changed;
         }
+        return changed;
+    }
+
+    fn appendCallableGroupWorksetCallValueEdges(
+        self: *CrossProcedureRepresentationLinker,
+        call_site: repr.CallSiteInfo,
+        group: repr.RepresentationGroupId,
+    ) Allocator.Error!?bool {
+        const members = self.representation_store.callableGroupWorkMembers(group);
+        if (members.len == 0) return null;
+        var changed = false;
+        for (members) |member| {
+            changed = (try self.appendDirectCallEdges(call_site, member.target_instance)) or changed;
+        }
+        return changed;
     }
 
     fn appendPendingCallValueEdges(
         self: *CrossProcedureRepresentationLinker,
         call_site: *repr.CallSiteInfo,
         callee: repr.ValueInfoId,
-    ) Allocator.Error!bool {
+    ) Allocator.Error!PendingCallValueEdgeProgress {
         const value_info = self.value_store.values.items[@intFromEnum(callee)];
         const callable = value_info.callable orelse {
-            if (self.valueHasFunctionType(value_info.logical_ty)) return false;
+            if (self.valueHasFunctionType(value_info.logical_ty)) {
+                if (!self.representation_store.hasPublishedSolvedGroups()) return .{};
+                const group = self.callableGroupForValueInfo(value_info, null);
+                if (try self.appendCallableGroupWorksetCallValueEdges(call_site.*, group)) |edge_changed| {
+                    return .{ .changed = edge_changed, .resolved = false };
+                }
+                return .{};
+            }
             lambdaInvariant("lambda-solved pending call_value has non-callable callee");
         };
         switch (self.representation_store.callableEmissionPlan(callable.emission_plan)) {
             .finite => |key| {
-                try self.appendFiniteCallValueEdges(call_site.*, key);
-                return true;
+                _ = try self.appendFiniteCallValueEdges(call_site.*, key);
+                return .{ .changed = true, .resolved = true };
             },
-            .pending_proc_value => return false,
+            .pending_proc_value => {
+                if (!self.representation_store.hasPublishedSolvedGroups()) return .{};
+                const group = self.callableGroupForValueInfo(value_info, callable);
+                if (try self.appendCallableGroupWorksetCallValueEdges(call_site.*, group)) |edge_changed| {
+                    return .{ .changed = edge_changed, .resolved = false };
+                }
+                return .{};
+            },
             .already_erased => |erased| {
                 call_site.dispatch = .{ .call_value_erased = erased.sig_key };
-                return true;
+                return .{ .changed = true, .resolved = true };
             },
             .erase_finite_set => |erase| {
                 call_site.dispatch = .{ .call_value_erased = erase.adapter.erased_fn_sig_key };
-                return true;
+                return .{ .changed = true, .resolved = true };
             },
             .erase_proc_value => |erase| {
                 call_site.dispatch = .{ .call_value_erased = erase.erased_fn_sig_key };
-                return true;
+                return .{ .changed = true, .resolved = true };
             },
         }
     }
@@ -4035,6 +4112,16 @@ const CrossProcedureRepresentationLinker = struct {
             },
             else => false,
         };
+    }
+
+    fn callableGroupForValueInfo(
+        self: *CrossProcedureRepresentationLinker,
+        value_info: repr.ValueInfo,
+        callable: ?repr.CallableValueInfo,
+    ) repr.RepresentationGroupId {
+        if (callable) |info| return self.representation_store.groupForRoot(info.callable_root);
+        const callable_root = self.representation_store.solvedStructuralChildRoot(value_info.root, .function_callable) orelse value_info.root;
+        return self.representation_store.groupForRoot(callable_root);
     }
 
     fn appendProcValueEdges(self: *CrossProcedureRepresentationLinker) Allocator.Error!void {
@@ -4054,27 +4141,38 @@ const CrossProcedureRepresentationLinker = struct {
             const target_params = self.valueStoreFor(target).sliceValueSpan(target.public_roots.params);
             for (target_params, 0..) |target_param, i| {
                 const arg_root = self.structuralChildRoot(callable.whole_function_root, .{ .function_arg = @intCast(i) });
-                _ = try self.representation_store.appendRepresentationEdge(.{
+                _ = try self.appendRepresentationEdgeIfMissing(.{
                     .from = .{ .procedure_public = self.publicRootRef(target_id, target, target_param) },
                     .to = .{ .local = arg_root },
                     .kind = .{ .call_arg = @intCast(i) },
                 });
             }
             const return_root = self.structuralChildRoot(callable.whole_function_root, .function_return);
-            _ = try self.representation_store.appendRepresentationEdge(.{
+            _ = try self.appendRepresentationEdgeIfMissing(.{
                 .from = .{ .local = return_root },
                 .to = .{ .procedure_public = self.publicRootRef(target_id, target, target.public_roots.ret) },
                 .kind = .call_result,
             });
             for (source_captures, target_captures, 0..) |source_capture, target_capture, raw_slot| {
                 try self.publishProcedureCaptureSource(target_id, @intCast(raw_slot), source_capture);
-                _ = try self.representation_store.appendRepresentationEdge(.{
+                _ = try self.appendRepresentationEdgeIfMissing(.{
                     .from = .{ .local = self.valueRoot(source_capture) },
                     .to = .{ .procedure_public = self.publicRootRef(target_id, target, target_capture) },
                     .kind = .capture_value,
                 });
             }
         }
+    }
+
+    fn appendRepresentationEdgeIfMissing(
+        self: *CrossProcedureRepresentationLinker,
+        edge: repr.RepresentationEdge,
+    ) Allocator.Error!bool {
+        for (self.representation_store.representation_edges.items) |existing| {
+            if (representationEdgeEql(existing, edge)) return false;
+        }
+        _ = try self.representation_store.appendRepresentationEdge(edge);
+        return true;
     }
 
     fn structuralChildRoot(
@@ -4459,7 +4557,7 @@ fn propagatePendingComptimeDependencyOrigins(
     records: []const ProcBuildRecord,
 ) Allocator.Error!void {
     for (program.solve_sessions.items, 0..) |*session, raw_session| {
-        if (session.representation_store.root_groups.len == 0) continue;
+        if (!session.representation_store.hasPublishedSolvedGroups()) continue;
         {
             var propagator = PendingComptimeDependencyPropagator{
                 .allocator = program.allocator,
@@ -5184,7 +5282,6 @@ fn assignCallableEmissionPlans(
                 .session = session,
                 .group_sets = .empty,
                 .group_set_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
-                .pending_proc_members = .empty,
                 .group_publish_states = std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState).init(program.allocator),
                 .erased_groups = .empty,
                 .erased_group_index = std.AutoHashMap(repr.RepresentationGroupId, usize).init(program.allocator),
@@ -5205,12 +5302,6 @@ const CallableGroupSet = struct {
     group: repr.RepresentationGroupId,
     members: std.ArrayList(repr.CanonicalCallableSetMember),
     key: ?repr.CanonicalCallableSetKey = null,
-};
-
-const PendingProcValueGroupMember = struct {
-    group: repr.RepresentationGroupId,
-    source: ProcValueCallableSource,
-    resolved: bool = false,
 };
 
 const ProcValueCallableSource = struct {
@@ -5251,7 +5342,6 @@ const CallableEmissionAssigner = struct {
     session: *repr.RepresentationSolveSession,
     group_sets: std.ArrayList(CallableGroupSet),
     group_set_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
-    pending_proc_members: std.ArrayList(PendingProcValueGroupMember),
     group_publish_states: std.AutoHashMap(repr.RepresentationGroupId, CallableGroupPublishState),
     erased_groups: std.ArrayList(ErasedGroupProvenance),
     erased_group_index: std.AutoHashMap(repr.RepresentationGroupId, usize),
@@ -5274,7 +5364,6 @@ const CallableEmissionAssigner = struct {
         }
         self.group_set_index.deinit();
         self.group_sets.deinit(self.allocator);
-        self.pending_proc_members.deinit(self.allocator);
         self.group_publish_states.deinit();
     }
 
@@ -5284,7 +5373,9 @@ const CallableEmissionAssigner = struct {
         try self.collectBoxErasureRequirements();
         try self.publishGroupErasureProvenance();
         try self.collectFiniteCallableContributions();
+        if (self.mode == .allow_pending_call_values) return;
         try self.publishCallableGroupSets();
+        try self.publishTypeOnlyErasedFunctionGroupEmissions();
         try self.assignValueEmissionPlans();
     }
 
@@ -5331,18 +5422,11 @@ const CallableEmissionAssigner = struct {
                     .finite => |key| {
                         switch (callable.source) {
                             .proc_value => |source| {
-                                try self.appendPendingProcValueGroupMember(group, .{
-                                    .proc = source.proc,
-                                    .published_proc = source.published_proc,
-                                    .target_instance = source.target_instance,
-                                    .captures = source.captures,
-                                    .fn_ty = source.fn_ty,
-                                    .source_fn_ty_payload = source.source_fn_ty_payload,
-                                });
+                                try self.addGroupCallableWorkMember(group, try self.workMemberForProcValueSource(source));
                             },
                             .finite_set,
                             .erased_adapter,
-                            => try self.addCallableSetDescriptorMembers(group, key),
+                            => try self.addCallableSetDescriptorWorkMembers(group, key),
                             .already_erased => {},
                         }
                     },
@@ -5351,45 +5435,23 @@ const CallableEmissionAssigner = struct {
                             .proc_value => |source| source,
                             else => lambdaInvariant("lambda-solved pending proc-value emission has non-proc callable source"),
                         };
-                        _ = try self.groupSetFor(group);
-                        try self.appendPendingProcValueGroupMember(group, .{
-                            .proc = source.proc,
-                            .published_proc = source.published_proc,
-                            .target_instance = source.target_instance,
-                            .captures = source.captures,
-                            .fn_ty = source.fn_ty,
-                            .source_fn_ty_payload = source.source_fn_ty_payload,
-                        });
+                        try self.addGroupCallableWorkMember(group, try self.workMemberForProcValueSource(source));
                     },
                     .erase_proc_value => {
                         const source = switch (callable.source) {
                             .proc_value => |source| source,
                             else => lambdaInvariant("lambda-solved proc-value erase emission has non-proc callable source"),
                         };
-                        try self.appendPendingProcValueGroupMember(group, .{
-                            .proc = source.proc,
-                            .published_proc = source.published_proc,
-                            .target_instance = source.target_instance,
-                            .captures = source.captures,
-                            .fn_ty = source.fn_ty,
-                            .source_fn_ty_payload = source.source_fn_ty_payload,
-                        });
+                        try self.addGroupCallableWorkMember(group, try self.workMemberForProcValueSource(source));
                     },
                     .erase_finite_set => |erase| {
                         switch (callable.source) {
                             .proc_value => |source| {
-                                try self.appendPendingProcValueGroupMember(group, .{
-                                    .proc = source.proc,
-                                    .published_proc = source.published_proc,
-                                    .target_instance = source.target_instance,
-                                    .captures = source.captures,
-                                    .fn_ty = source.fn_ty,
-                                    .source_fn_ty_payload = source.source_fn_ty_payload,
-                                });
+                                try self.addGroupCallableWorkMember(group, try self.workMemberForProcValueSource(source));
                             },
                             .finite_set,
                             .erased_adapter,
-                            => try self.addCallableSetDescriptorMembers(group, erase.adapter.callable_set_key),
+                            => try self.addCallableSetDescriptorWorkMembers(group, erase.adapter.callable_set_key),
                             .already_erased => {},
                         }
                     },
@@ -5399,19 +5461,7 @@ const CallableEmissionAssigner = struct {
         }
     }
 
-    fn appendPendingProcValueGroupMember(
-        self: *CallableEmissionAssigner,
-        group: repr.RepresentationGroupId,
-        source: ProcValueCallableSource,
-    ) Allocator.Error!void {
-        _ = try self.groupSetFor(group);
-        try self.pending_proc_members.append(self.allocator, .{
-            .group = group,
-            .source = source,
-        });
-    }
-
-    fn addCallableSetDescriptorMembers(
+    fn addCallableSetDescriptorWorkMembers(
         self: *CallableEmissionAssigner,
         group: repr.RepresentationGroupId,
         key: repr.CanonicalCallableSetKey,
@@ -5420,8 +5470,17 @@ const CallableEmissionAssigner = struct {
             lambdaInvariant("lambda-solved callable emission referenced a missing callable-set descriptor");
         };
         for (descriptor.members) |member| {
-            try self.validateSealedMemberCaptureDependencies(member);
-            try self.addGroupCallableMember(group, member);
+            try self.addGroupCallableWorkMember(group, workMemberFromCanonicalMember(member));
+        }
+    }
+
+    fn addGroupCallableWorkMember(
+        self: *CallableEmissionAssigner,
+        group: repr.RepresentationGroupId,
+        member: repr.CallableGroupWorkMember,
+    ) Allocator.Error!void {
+        if (try self.representationStore().addCallableGroupWorkMember(group, member)) {
+            self.changed = true;
         }
     }
 
@@ -5471,8 +5530,12 @@ const CallableEmissionAssigner = struct {
     }
 
     fn publishCallableGroupSets(self: *CallableEmissionAssigner) Allocator.Error!void {
-        for (self.group_sets.items) |set| {
-            _ = try self.ensureGroupSetPublished(set.group);
+        var raw_set: usize = 0;
+        while (raw_set < self.representationStore().callableGroupWorkSetCount()) : (raw_set += 1) {
+            const workset = self.representationStore().callableGroupWorkSetAt(raw_set);
+            if (!try self.ensureGroupSetPublished(workset.group)) {
+                lambdaInvariant("lambda-solved strict callable emission assignment left a callable group unpublished");
+            }
         }
     }
 
@@ -5489,18 +5552,20 @@ const CallableEmissionAssigner = struct {
         try self.group_publish_states.put(group, .resolving);
         errdefer _ = self.group_publish_states.remove(group);
 
-        if (!try self.resolvePendingMembersForGroup(group)) {
-            _ = self.group_publish_states.remove(group);
-            return false;
-        }
-
-        const set = self.callableGroupSet(group) orelse {
+        const work_members = self.representationStore().callableGroupWorkMembers(group);
+        if (work_members.len == 0) {
             if (self.mode == .allow_pending_call_values) {
                 _ = self.group_publish_states.remove(group);
                 return false;
             }
-            lambdaInvariant("lambda-solved callable group has no callable-set record");
-        };
+            lambdaInvariant("lambda-solved callable group has no callable work table");
+        }
+        if (!try self.populateGroupSetFromWorkMembers(group, work_members)) {
+            _ = self.group_publish_states.remove(group);
+            return false;
+        }
+        const set = self.callableGroupSet(group) orelse
+            lambdaInvariant("lambda-solved callable group work table did not produce a callable-set record");
         if (set.members.items.len == 0) {
             if (self.mode == .allow_pending_call_values) {
                 _ = self.group_publish_states.remove(group);
@@ -5520,22 +5585,23 @@ const CallableEmissionAssigner = struct {
         return true;
     }
 
-    fn resolvePendingMembersForGroup(
+    fn populateGroupSetFromWorkMembers(
         self: *CallableEmissionAssigner,
         group: repr.RepresentationGroupId,
+        work_members: []const repr.CallableGroupWorkMember,
     ) Allocator.Error!bool {
-        for (self.pending_proc_members.items) |*pending| {
-            if (pending.resolved or pending.group != group) continue;
-            if (!try self.ensureFunctionCaptureGroupsPublished(pending.source)) return false;
-            const member = try self.memberForProcValueSource(pending.source);
+        for (work_members) |work| {
+            if (!try self.ensureTargetCaptureCallableDependenciesPublished(work.target_instance)) return false;
+        }
+        for (work_members) |work| {
+            const member = try self.memberForWorkMember(work);
             defer if (member.capture_slots.len > 0) self.allocator.free(member.capture_slots);
             try self.addGroupCallableMember(group, member);
-            pending.resolved = true;
         }
         return true;
     }
 
-    fn ensureFunctionCaptureGroupsPublished(
+    fn ensureProcValueSourceCaptureCallableDependenciesPublished(
         self: *CallableEmissionAssigner,
         source: ProcValueCallableSource,
     ) Allocator.Error!bool {
@@ -5566,46 +5632,6 @@ const CallableEmissionAssigner = struct {
             )) return false;
         }
         return true;
-    }
-
-    fn validateSealedMemberCaptureDependencies(
-        self: *CallableEmissionAssigner,
-        member: repr.CanonicalCallableSetMember,
-    ) Allocator.Error!void {
-        const target_record = self.recordForInstance(member.target_instance);
-        if (!mirProcedureBodyIdentityEql(target_record.proc, member.source_proc)) {
-            lambdaInvariant("lambda-solved sealed callable-set member target instance has a different source procedure");
-        }
-        const target_value_store = self.valueStoreFor(target_record);
-        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
-        if (target_captures.len != member.capture_slots.len) {
-            lambdaInvariant("lambda-solved sealed callable-set member capture arity differs from target captures");
-        }
-        var visited = std.AutoHashMap(CapturedPayloadValueKey, void).init(self.allocator);
-        defer visited.deinit();
-        for (target_captures) |target_capture| {
-            if (!try self.ensureCapturedPayloadValueCallableDependenciesPublished(
-                target_record,
-                target_value_store,
-                target_capture,
-                &visited,
-            )) {
-                lambdaInvariant("lambda-solved sealed callable-set member contains unpublished callable capture dependencies");
-            }
-        }
-        const computed_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
-        defer if (computed_slots.len > 0) self.allocator.free(computed_slots);
-        if (computed_slots.len != member.capture_slots.len) {
-            lambdaInvariant("lambda-solved sealed callable-set member capture schema arity differs from target captures");
-        }
-        for (computed_slots, member.capture_slots) |computed, sealed| {
-            if (computed.slot != sealed.slot or
-                !repr.canonicalTypeKeyEql(computed.source_ty, sealed.source_ty) or
-                !repr.canonicalExecValueTypeKeyEql(computed.exec_value_ty, sealed.exec_value_ty))
-            {
-                lambdaInvariant("lambda-solved sealed callable-set member capture schema differs from selected target instance");
-            }
-        }
     }
 
     fn ensureCapturedPayloadValueCallableDependenciesPublished(
@@ -5682,6 +5708,9 @@ const CallableEmissionAssigner = struct {
         group: repr.RepresentationGroupId,
     ) Allocator.Error!bool {
         if (self.representationStore().callableGroupEmission(group) != null) return true;
+        if (self.representationStore().callableGroupWorkMembers(group).len > 0) {
+            return try self.ensureGroupSetPublished(group);
+        }
         if (self.callableGroupSet(group) != null) return try self.ensureGroupSetPublished(group);
         if (self.erasedProvenance(group) != null) {
             try self.ensureTypeOnlyErasedFunctionGroupEmission(group);
@@ -5753,7 +5782,6 @@ const CallableEmissionAssigner = struct {
             if (visited.contains(current)) continue;
             try visited.put(current, {});
             try self.addErasedGroupProvenance(current, provenance);
-            try self.ensureTypeOnlyErasedFunctionGroupEmission(current);
             for (self.representationStore().representation_edges.items) |edge| {
                 if (!edgePropagatesBoxErasure(edge.kind)) continue;
                 const from_root = self.endpointRootInSession(edge.from) orelse continue;
@@ -5780,11 +5808,19 @@ const CallableEmissionAssigner = struct {
             }
         }
     }
+
+    fn publishTypeOnlyErasedFunctionGroupEmissions(self: *CallableEmissionAssigner) Allocator.Error!void {
+        for (self.erased_groups.items) |entry| {
+            try self.ensureTypeOnlyErasedFunctionGroupEmission(entry.group);
+        }
+    }
+
     fn ensureTypeOnlyErasedFunctionGroupEmission(
         self: *CallableEmissionAssigner,
         group: repr.RepresentationGroupId,
     ) Allocator.Error!void {
         if (self.representationStore().callableGroupEmission(group) != null) return;
+        if (self.representationStore().callableGroupWorkMembers(group).len > 0) return;
         if (self.callableGroupSet(group) != null) return;
         const provenance = self.erasedProvenance(group) orelse return;
         if (provenance.len == 0) return;
@@ -5899,12 +5935,14 @@ const CallableEmissionAssigner = struct {
                     lambdaInvariant("lambda-solved callable value reached emission assignment without a solved callable group");
                 const group_set = self.callableGroupSet(group) orelse {
                     if (value_info.callable == null and self.valueHasFunctionType(value_info.logical_ty)) {
+                        if (self.representationStore().callableGroupEmission(group)) |emission| {
+                            value_info.callable = try self.adoptPublishedGroupEmission(value_info.*, emission);
+                            self.changed = true;
+                            continue;
+                        }
                         if (self.erasedProvenance(group)) |provenance| {
                             const value_id: repr.ValueInfoId = @enumFromInt(@as(u32, @intCast(raw_value)));
-                            const callable = if (self.representationStore().callableGroupEmission(group)) |emission|
-                                try self.adoptAlreadyErasedGroupEmission(value_info.*, emission)
-                            else
-                                try self.synthesizeAlreadyErasedCallableInfo(record, value_store, value_id, value_info.*, provenance);
+                            const callable = try self.synthesizeAlreadyErasedCallableInfo(record, value_store, value_id, value_info.*, provenance);
                             value_info.callable = callable;
                             self.changed = true;
                             if (self.representationStore().callableGroupEmission(group) == null) {
@@ -6021,7 +6059,7 @@ const CallableEmissionAssigner = struct {
         if (!repr.canonicalTypeKeyEql(source.fn_ty, erased.sig_key.source_fn_ty)) {
             lambdaInvariant("lambda-solved direct proc-value erased emission source type differs from erased signature");
         }
-        if (!try self.ensureFunctionCaptureGroupsPublished(source)) {
+        if (!try self.ensureProcValueSourceCaptureCallableDependenciesPublished(source)) {
             lambdaInvariant("lambda-solved proc-value erase plan capture dependencies were not solved before capture schema computation");
         }
         const target_record = self.recordForInstance(source.target_instance);
@@ -6119,6 +6157,45 @@ const CallableEmissionAssigner = struct {
             .callable_root = callable_root,
             .source = .{ .finite_set = group_key },
             .emission_plan = try self.representationStore().appendFiniteCallableEmissionPlan(group_key),
+            .construction_plan = null,
+        };
+    }
+
+    fn adoptPublishedGroupEmission(
+        self: *CallableEmissionAssigner,
+        value_info: repr.ValueInfo,
+        emission: repr.CallableValueEmissionPlanId,
+    ) Allocator.Error!repr.CallableValueInfo {
+        return switch (self.representationStore().callableEmissionPlan(emission)) {
+            .finite,
+            .erase_finite_set,
+            => try self.adoptFiniteGroupEmission(value_info, emission),
+            .already_erased => try self.adoptAlreadyErasedGroupEmission(value_info, emission),
+            .pending_proc_value,
+            .erase_proc_value,
+            => lambdaInvariant("lambda-solved unconstructed function value reached a non-group callable emission"),
+        };
+    }
+
+    fn adoptFiniteGroupEmission(
+        self: *CallableEmissionAssigner,
+        value_info: repr.ValueInfo,
+        emission: repr.CallableValueEmissionPlanId,
+    ) Allocator.Error!repr.CallableValueInfo {
+        const group_key = switch (self.representationStore().callableEmissionPlan(emission)) {
+            .finite => |key| key,
+            .erase_finite_set => |erase| erase.adapter.callable_set_key,
+            else => lambdaInvariant("lambda-solved finite callable value reached non-finite group emission"),
+        };
+        if (!self.valueHasFunctionType(value_info.logical_ty)) {
+            lambdaInvariant("lambda-solved finite group emission was attached to a non-function value");
+        }
+        const callable_root = self.callableRootForFunctionRoot(value_info.root);
+        return .{
+            .whole_function_root = value_info.root,
+            .callable_root = callable_root,
+            .source = .{ .finite_set = group_key },
+            .emission_plan = emission,
             .construction_plan = null,
         };
     }
@@ -6389,10 +6466,10 @@ const CallableEmissionAssigner = struct {
         lambdaInvariant("lambda-solved callable construction selected member missing from solved group callable set");
     }
 
-    fn memberForProcValueSource(
+    fn workMemberForProcValueSource(
         self: *CallableEmissionAssigner,
         source: anytype,
-    ) Allocator.Error!repr.CanonicalCallableSetMember {
+    ) Allocator.Error!repr.CallableGroupWorkMember {
         const target_id = source.target_instance;
         const target_record = self.recordForInstance(target_id);
         if (!mirProcedureBodyIdentityEql(target_record.proc, source.proc)) {
@@ -6407,12 +6484,8 @@ const CallableEmissionAssigner = struct {
         if (source.captures.len != target_captures.len) {
             lambdaInvariant("lambda-solved proc-value callable capture arity differs from target captures");
         }
-        const capture_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
-        errdefer if (capture_slots.len > 0) self.allocator.free(capture_slots);
-        const capture_shape_key = repr.captureShapeKeyForSlots(capture_slots);
 
         return .{
-            .member = canonical.onlyCallableSetMemberId(),
             .proc_value = source.proc.callable,
             .source_fn_ty_payload = source.source_fn_ty_payload,
             .source_proc = target_record.proc,
@@ -6428,8 +6501,45 @@ const CallableEmissionAssigner = struct {
                 => null,
             },
             .target_instance = target_id,
+        };
+    }
+
+    fn memberForWorkMember(
+        self: *CallableEmissionAssigner,
+        work: repr.CallableGroupWorkMember,
+    ) Allocator.Error!repr.CanonicalCallableSetMember {
+        const target_record = self.recordForInstance(work.target_instance);
+        if (!mirProcedureBodyIdentityEql(target_record.proc, work.source_proc)) {
+            lambdaInvariant("lambda-solved callable group work member target instance has a different procedure body identity");
+        }
+        const target_value_store = self.valueStoreFor(target_record);
+        const target_captures = target_value_store.sliceValueSpan(target_record.public_roots.captures);
+        const capture_slots = try self.captureSlotsForTargetValues(target_record, target_captures);
+        errdefer if (capture_slots.len > 0) self.allocator.free(capture_slots);
+        const capture_shape_key = repr.captureShapeKeyForSlots(capture_slots);
+        return .{
+            .member = canonical.onlyCallableSetMemberId(),
+            .proc_value = work.proc_value,
+            .source_fn_ty_payload = work.source_fn_ty_payload,
+            .source_proc = target_record.proc,
+            .published_proc_value = work.published_proc_value,
+            .published_source_proc = work.published_source_proc,
+            .lifted_owner_source_fn_ty_payload = work.lifted_owner_source_fn_ty_payload,
+            .target_instance = work.target_instance,
             .capture_slots = capture_slots,
             .capture_shape_key = capture_shape_key,
+        };
+    }
+
+    fn workMemberFromCanonicalMember(member: repr.CanonicalCallableSetMember) repr.CallableGroupWorkMember {
+        return .{
+            .proc_value = member.proc_value,
+            .source_fn_ty_payload = member.source_fn_ty_payload,
+            .source_proc = member.source_proc,
+            .published_proc_value = member.published_proc_value,
+            .published_source_proc = member.published_source_proc,
+            .lifted_owner_source_fn_ty_payload = member.lifted_owner_source_fn_ty_payload,
+            .target_instance = member.target_instance,
         };
     }
 
@@ -7172,6 +7282,79 @@ fn edgePropagatesBoxErasure(kind: repr.RepresentationEdgeKind) bool {
         .capture_value,
         => false,
         .child => true,
+    };
+}
+
+fn representationEdgeEql(
+    left: repr.RepresentationEdge,
+    right: repr.RepresentationEdge,
+) bool {
+    return representationEndpointEql(left.from, right.from) and
+        representationEndpointEql(left.to, right.to) and
+        representationEdgeKindEql(left.kind, right.kind);
+}
+
+fn representationEndpointEql(
+    left: repr.RepresentationEndpoint,
+    right: repr.RepresentationEndpoint,
+) bool {
+    return switch (left) {
+        .local => |a| switch (right) {
+            .local => |b| a == b,
+            else => false,
+        },
+        .procedure_public => |a| switch (right) {
+            .procedure_public => |b| a.instance == b.instance and a.value == b.value and a.rep_root == b.rep_root,
+            else => false,
+        },
+        .procedure_function_root => |a| switch (right) {
+            .procedure_function_root => |b| a.instance == b.instance and a.rep_root == b.rep_root,
+            else => false,
+        },
+    };
+}
+
+fn representationEdgeKindEql(
+    left: repr.RepresentationEdgeKind,
+    right: repr.RepresentationEdgeKind,
+) bool {
+    return switch (left) {
+        .value_alias => switch (right) {
+            .value_alias => true,
+            else => false,
+        },
+        .value_move => switch (right) {
+            .value_move => true,
+            else => false,
+        },
+        .branch_join => switch (right) {
+            .branch_join => true,
+            else => false,
+        },
+        .loop_phi => switch (right) {
+            .loop_phi => true,
+            else => false,
+        },
+        .mutable_version => switch (right) {
+            .mutable_version => true,
+            else => false,
+        },
+        .call_arg => |a| switch (right) {
+            .call_arg => |b| a == b,
+            else => false,
+        },
+        .call_result => switch (right) {
+            .call_result => true,
+            else => false,
+        },
+        .capture_value => switch (right) {
+            .capture_value => true,
+            else => false,
+        },
+        .child => |a| switch (right) {
+            .child => |b| representationChildKindMatches(a, b),
+            else => false,
+        },
     };
 }
 
