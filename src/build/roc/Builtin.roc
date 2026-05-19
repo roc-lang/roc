@@ -373,38 +373,28 @@ Builtin :: [].{
 	Iter(item) :: {
 		# The sequence being iterated, or e.g. a range, is captured in the next thunk.
 		len_if_known : [Known(U64), Unknown],
-		next : {} -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done],
+		next : () -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done],
 	}.{
 		custom : source, [Known(U64), Unknown], (source -> Try((item, Iter(item)), [NoMore])) -> Iter(item)
 		custom = |source, len_if_known, next| {
 			len_if_known,
-			next: |{}|
+			next: ||
 				match next(source) {
-					Ok((item, iter)) => One({ item, rest: iter })
+					Ok((item, rest_iter)) => One({ item, rest: rest_iter })
 					Err(NoMore) => Done
 				},
 		}
 
-		range : I64, I64 -> Iter(I64)
-		range = |start, end| {
-			len_if_known: Unknown,
-			next: |{}|
-				if start == end {
-					Done
-				} else {
-					step = if start < end 1.I64 else -1.I64
-
-					One({ item: start, rest: Iter.range(start + step, end) })
-				},
-		}
+		iter : Iter(item) -> Iter(item)
+		iter = |self| self
 
 		map : Iter(a), (a -> b) -> Iter(b)
-		map = |iter, transform|
-			match iter {
+		map = |iterator, transform|
+			match iterator {
 				{ len_if_known, next } => {
 					len_if_known,
-					next: |{}|
-						match next({}) {
+					next: ||
+						match next() {
 							Done => Done
 							Skip(n) => Skip(n)
 							One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
@@ -413,12 +403,12 @@ Builtin :: [].{
 			}
 
 		keep_if : Iter(a), (a -> Bool) -> Iter(a)
-		keep_if = |iter, predicate|
-			match iter {
+		keep_if = |iterator, predicate|
+			match iterator {
 				{ next, .. } => {
 					len_if_known: Unknown,
-					next: |{}| {
-						match next({}) {
+					next: || {
+						match next() {
 							Done => Done
 							Skip(n) => Skip(n)
 							One({ item, rest }) =>
@@ -426,7 +416,7 @@ Builtin :: [].{
 									One({ item, rest: Iter.keep_if(rest, predicate) })
 								} else {
 									kept_rest = Iter.keep_if(rest, predicate)
-									(kept_rest.next)({})
+									(kept_rest.next)()
 								}
 							}
 					},
@@ -434,18 +424,18 @@ Builtin :: [].{
 			}
 
 		drop_if : Iter(a), (a -> Bool) -> Iter(a)
-		drop_if = |iter, predicate|
-			match iter {
+		drop_if = |iterator, predicate|
+			match iterator {
 				{ next, .. } => {
 					len_if_known: Unknown,
-					next: |{}| {
-						match next({}) {
+					next: || {
+						match next() {
 							Done => Done
 							Skip(n) => Skip(n)
 							One({ item, rest }) =>
 								if predicate(item) {
 									dropped_rest = Iter.drop_if(rest, predicate)
-									(dropped_rest.next)({})
+									(dropped_rest.next)()
 								} else {
 									One({ item, rest: Iter.drop_if(rest, predicate) })
 								}
@@ -455,8 +445,8 @@ Builtin :: [].{
 			}
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
-		fold = |iter, acc, step|
-			match (iter.next)({}) {
+		fold = |iterator, acc, step|
+			match (iterator.next)() {
 				Done => acc
 				Skip(_) => acc
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
@@ -488,7 +478,7 @@ Builtin :: [].{
 
 				{
 					len_if_known: Known(len - index),
-					next: |{}|
+					next: ||
 						if index == len {
 							Done
 						} else {
@@ -2073,31 +2063,31 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(U8, [BadNumStr, ..])
 
-			## List of integers beginning with this `U8` and ending with the other `U8`.
+			## Iterator of integers beginning with this `U8` and ending with the other `U8`.
 			## (Use [U8.until] instead to end with the other `U8` minus one.)
-			## Returns an empty list if this `U8` is greater than the other.
+			## Returns an empty iterator if this `U8` is greater than the other.
 			## ```roc
-			## expect U8.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U8.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U8.to(3, 3) == [3]
+			## expect Iter.fold(U8.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U8.to(5, 2) == []
+			## expect Iter.fold(U8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U8, U8 -> List(U8)
-			to = |start, end| range_to(start, end)
+			to : U8, U8 -> Iter(U8)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `U8` and ending with the other `U8` minus one.
+			## Iterator of integers beginning with this `U8` and ending with the other `U8` minus one.
 			## (Use [U8.to] instead to end with the other `U8` exactly, instead of minus one.)
-			## Returns an empty list if this `U8` is greater than or equal to the other.
+			## Returns an empty iterator if this `U8` is greater than or equal to the other.
 			## ```roc
-			## expect U8.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U8.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U8.until(3, 3) == []
+			## expect Iter.fold(U8.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U8.until(5, 2) == []
+			## expect Iter.fold(U8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U8, U8 -> List(U8)
-			until = |start, end| range_until(start, end)
+			until : U8, U8 -> Iter(U8)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 
@@ -2390,31 +2380,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I8, U8 -> I8
 
-			## List of integers beginning with this `I8` and ending with the other `I8`.
+			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
 			## (Use [I8.until] instead to end with the other `I8` minus one.)
-			## Returns an empty list if this `I8` is greater than the other.
+			## Returns an empty iterator if this `I8` is greater than the other.
 			## ```roc
-			## expect I8.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I8.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I8.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I8.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I8.to(5, 2) == []
+			## expect Iter.fold(I8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I8, I8 -> List(I8)
-			to = |start, end| range_to(start, end)
+			to : I8, I8 -> Iter(I8)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `I8` and ending with the other `I8` minus one.
+			## Iterator of integers beginning with this `I8` and ending with the other `I8` minus one.
 			## (Use [I8.to] instead to end with the other `I8` exactly, instead of minus one.)
-			## Returns an empty list if this `I8` is greater than or equal to the other.
+			## Returns an empty iterator if this `I8` is greater than or equal to the other.
 			## ```roc
-			## expect I8.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I8.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I8.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I8.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I8.until(5, 2) == []
+			## expect Iter.fold(I8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I8, I8 -> List(I8)
-			until = |start, end| range_until(start, end)
+			until : I8, I8 -> Iter(I8)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -2762,31 +2752,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U16, U8 -> U16
 
-			## List of integers beginning with this `U16` and ending with the other `U16`.
+			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
-			## Returns an empty list if this `U16` is greater than the other.
+			## Returns an empty iterator if this `U16` is greater than the other.
 			## ```roc
-			## expect U16.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U16.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U16.to(3, 3) == [3]
+			## expect Iter.fold(U16.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U16.to(5, 2) == []
+			## expect Iter.fold(U16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U16, U16 -> List(U16)
-			to = |start, end| range_to(start, end)
+			to : U16, U16 -> Iter(U16)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `U16` and ending with the other `U16` minus one.
+			## Iterator of integers beginning with this `U16` and ending with the other `U16` minus one.
 			## (Use [U16.to] instead to end with the other `U16` exactly, instead of minus one.)
-			## Returns an empty list if this `U16` is greater than or equal to the other.
+			## Returns an empty iterator if this `U16` is greater than or equal to the other.
 			## ```roc
-			## expect U16.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U16.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U16.until(3, 3) == []
+			## expect Iter.fold(U16.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U16.until(5, 2) == []
+			## expect Iter.fold(U16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U16, U16 -> List(U16)
-			until = |start, end| range_until(start, end)
+			until : U16, U16 -> Iter(U16)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3138,31 +3128,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I16, U8 -> I16
 
-			## List of integers beginning with this `I16` and ending with the other `I16`.
+			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
-			## Returns an empty list if this `I16` is greater than the other.
+			## Returns an empty iterator if this `I16` is greater than the other.
 			## ```roc
-			## expect I16.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I16.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I16.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I16.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I16.to(5, 2) == []
+			## expect Iter.fold(I16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I16, I16 -> List(I16)
-			to = |start, end| range_to(start, end)
+			to : I16, I16 -> Iter(I16)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `I16` and ending with the other `I16` minus one.
+			## Iterator of integers beginning with this `I16` and ending with the other `I16` minus one.
 			## (Use [I16.to] instead to end with the other `I16` exactly, instead of minus one.)
-			## Returns an empty list if this `I16` is greater than or equal to the other.
+			## Returns an empty iterator if this `I16` is greater than or equal to the other.
 			## ```roc
-			## expect I16.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I16.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I16.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I16.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I16.until(5, 2) == []
+			## expect Iter.fold(I16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I16, I16 -> List(I16)
-			until = |start, end| range_until(start, end)
+			until : I16, I16 -> Iter(I16)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build an [I16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3527,31 +3517,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U32, U8 -> U32
 
-			## List of integers beginning with this `U32` and ending with the other `U32`.
+			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
-			## Returns an empty list if this `U32` is greater than the other.
+			## Returns an empty iterator if this `U32` is greater than the other.
 			## ```roc
-			## expect U32.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U32.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U32.to(3, 3) == [3]
+			## expect Iter.fold(U32.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U32.to(5, 2) == []
+			## expect Iter.fold(U32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U32, U32 -> List(U32)
-			to = |start, end| range_to(start, end)
+			to : U32, U32 -> Iter(U32)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `U32` and ending with the other `U32` minus one.
+			## Iterator of integers beginning with this `U32` and ending with the other `U32` minus one.
 			## (Use [U32.to] instead to end with the other `U32` exactly, instead of minus one.)
-			## Returns an empty list if this `U32` is greater than or equal to the other.
+			## Returns an empty iterator if this `U32` is greater than or equal to the other.
 			## ```roc
-			## expect U32.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U32.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U32.until(3, 3) == []
+			## expect Iter.fold(U32.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U32.until(5, 2) == []
+			## expect Iter.fold(U32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U32, U32 -> List(U32)
-			until = |start, end| range_until(start, end)
+			until : U32, U32 -> Iter(U32)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3941,31 +3931,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I32, U8 -> I32
 
-			## List of integers beginning with this `I32` and ending with the other `I32`.
+			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
-			## Returns an empty list if this `I32` is greater than the other.
+			## Returns an empty iterator if this `I32` is greater than the other.
 			## ```roc
-			## expect I32.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I32.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I32.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I32.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I32.to(5, 2) == []
+			## expect Iter.fold(I32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I32, I32 -> List(I32)
-			to = |start, end| range_to(start, end)
+			to : I32, I32 -> Iter(I32)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `I32` and ending with the other `I32` minus one.
+			## Iterator of integers beginning with this `I32` and ending with the other `I32` minus one.
 			## (Use [I32.to] instead to end with the other `I32` exactly, instead of minus one.)
-			## Returns an empty list if this `I32` is greater than or equal to the other.
+			## Returns an empty iterator if this `I32` is greater than or equal to the other.
 			## ```roc
-			## expect I32.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I32.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I32.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I32.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I32.until(5, 2) == []
+			## expect Iter.fold(I32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I32, I32 -> List(I32)
-			until = |start, end| range_until(start, end)
+			until : I32, I32 -> Iter(I32)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build an [I32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4350,31 +4340,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U64, U8 -> U64
 
-			## List of integers beginning with this `U64` and ending with the other `U64`.
+			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
-			## Returns an empty list if this `U64` is greater than the other.
+			## Returns an empty iterator if this `U64` is greater than the other.
 			## ```roc
-			## expect U64.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U64.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U64.to(3, 3) == [3]
+			## expect Iter.fold(U64.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U64.to(5, 2) == []
+			## expect Iter.fold(U64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U64, U64 -> List(U64)
-			to = |start, end| range_to(start, end)
+			to : U64, U64 -> Iter(U64)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `U64` and ending with the other `U64` minus one.
+			## Iterator of integers beginning with this `U64` and ending with the other `U64` minus one.
 			## (Use [U64.to] instead to end with the other `U64` exactly, instead of minus one.)
-			## Returns an empty list if this `U64` is greater than or equal to the other.
+			## Returns an empty iterator if this `U64` is greater than or equal to the other.
 			## ```roc
-			## expect U64.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U64.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U64.until(3, 3) == []
+			## expect Iter.fold(U64.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U64.until(5, 2) == []
+			## expect Iter.fold(U64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U64, U64 -> List(U64)
-			until = |start, end| range_until(start, end)
+			until : U64, U64 -> Iter(U64)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4806,31 +4796,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I64, U8 -> I64
 
-			## List of integers beginning with this `I64` and ending with the other `I64`.
+			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
-			## Returns an empty list if this `I64` is greater than the other.
+			## Returns an empty iterator if this `I64` is greater than the other.
 			## ```roc
-			## expect I64.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I64.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I64.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I64.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I64.to(5, 2) == []
+			## expect Iter.fold(I64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I64, I64 -> List(I64)
-			to = |start, end| range_to(start, end)
+			to : I64, I64 -> Iter(I64)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `I64` and ending with the other `I64` minus one.
+			## Iterator of integers beginning with this `I64` and ending with the other `I64` minus one.
 			## (Use [I64.to] instead to end with the other `I64` exactly, instead of minus one.)
-			## Returns an empty list if this `I64` is greater than or equal to the other.
+			## Returns an empty iterator if this `I64` is greater than or equal to the other.
 			## ```roc
-			## expect I64.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I64.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I64.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I64.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I64.until(5, 2) == []
+			## expect Iter.fold(I64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I64, I64 -> List(I64)
-			until = |start, end| range_until(start, end)
+			until : I64, I64 -> Iter(I64)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build an [I64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5231,31 +5221,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U128, U8 -> U128
 
-			## List of integers beginning with this `U128` and ending with the other `U128`.
+			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
-			## Returns an empty list if this `U128` is greater than the other.
+			## Returns an empty iterator if this `U128` is greater than the other.
 			## ```roc
-			## expect U128.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U128.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U128.to(3, 3) == [3]
+			## expect Iter.fold(U128.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U128.to(5, 2) == []
+			## expect Iter.fold(U128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U128, U128 -> List(U128)
-			to = |start, end| range_to(start, end)
+			to : U128, U128 -> Iter(U128)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `U128` and ending with the other `U128` minus one.
+			## Iterator of integers beginning with this `U128` and ending with the other `U128` minus one.
 			## (Use [U128.to] instead to end with the other `U128` exactly, instead of minus one.)
-			## Returns an empty list if this `U128` is greater than or equal to the other.
+			## Returns an empty iterator if this `U128` is greater than or equal to the other.
 			## ```roc
-			## expect U128.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U128.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U128.until(3, 3) == []
+			## expect Iter.fold(U128.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U128.until(5, 2) == []
+			## expect Iter.fold(U128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U128, U128 -> List(U128)
-			until = |start, end| range_until(start, end)
+			until : U128, U128 -> Iter(U128)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5726,31 +5716,31 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I128, U8 -> I128
 
-			## List of integers beginning with this `I128` and ending with the other `I128`.
+			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
-			## Returns an empty list if this `I128` is greater than the other.
+			## Returns an empty iterator if this `I128` is greater than the other.
 			## ```roc
-			## expect I128.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I128.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I128.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I128.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I128.to(5, 2) == []
+			## expect Iter.fold(I128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I128, I128 -> List(I128)
-			to = |start, end| range_to(start, end)
+			to : I128, I128 -> Iter(I128)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of integers beginning with this `I128` and ending with the other `I128` minus one.
+			## Iterator of integers beginning with this `I128` and ending with the other `I128` minus one.
 			## (Use [I128.to] instead to end with the other `I128` exactly, instead of minus one.)
-			## Returns an empty list if this `I128` is greater than or equal to the other.
+			## Returns an empty iterator if this `I128` is greater than or equal to the other.
 			## ```roc
-			## expect I128.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I128.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I128.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I128.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I128.until(5, 2) == []
+			## expect Iter.fold(I128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I128, I128 -> List(I128)
-			until = |start, end| range_until(start, end)
+			until : I128, I128 -> Iter(I128)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6449,34 +6439,34 @@ Builtin :: [].{
 			## [Dec] has more precision than [F64] in its fractional range.
 			to_f64 : Dec -> F64
 
-			## List of decimals beginning with this `Dec` and ending with the
+			## Iterator of decimals beginning with this `Dec` and ending with the
 			## other `Dec`, stepping by `1.0`. (Use [Dec.until] instead to end with
-			## the other `Dec` minus one.) Returns an empty list if this `Dec`
+			## the other `Dec` minus one.) Returns an empty iterator if this `Dec`
 			## is greater than the other.
 			## ```roc
-			## expect Dec.to(1.0, 4.0) == [1.0, 2.0, 3.0, 4.0]
+			## expect Iter.fold(Dec.to(1.0, 4.0), [], |acc, item| acc.append(item)) == [1.0, 2.0, 3.0, 4.0]
 			##
-			## expect Dec.to(-2.0, 1.0) == [-2.0, -1.0, 0.0, 1.0]
+			## expect Iter.fold(Dec.to(-2.0, 1.0), [], |acc, item| acc.append(item)) == [-2.0, -1.0, 0.0, 1.0]
 			##
-			## expect Dec.to(5.0, 2.0) == []
+			## expect Iter.fold(Dec.to(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : Dec, Dec -> List(Dec)
-			to = |start, end| range_to(start, end)
+			to : Dec, Dec -> Iter(Dec)
+			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
 
-			## List of decimals beginning with this `Dec` and ending with the
+			## Iterator of decimals beginning with this `Dec` and ending with the
 			## other `Dec` minus one, stepping by `1.0`. (Use [Dec.to] instead to
 			## end with the other `Dec` exactly, instead of minus one.) Returns
-			## an empty list if this `Dec` is greater than or equal to the
+			## an empty iterator if this `Dec` is greater than or equal to the
 			## other.
 			## ```roc
-			## expect Dec.until(1.0, 4.0) == [1.0, 2.0, 3.0]
+			## expect Iter.fold(Dec.until(1.0, 4.0), [], |acc, item| acc.append(item)) == [1.0, 2.0, 3.0]
 			##
-			## expect Dec.until(-2.0, 1.0) == [-2.0, -1.0, 0.0]
+			## expect Iter.fold(Dec.until(-2.0, 1.0), [], |acc, item| acc.append(item)) == [-2.0, -1.0, 0.0]
 			##
-			## expect Dec.until(5.0, 2.0) == []
+			## expect Iter.fold(Dec.until(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : Dec, Dec -> List(Dec)
-			until = |start, end| range_until(start, end)
+			until : Dec, Dec -> Iter(Dec)
+			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
 
 			## Encode a Dec using a format that provides encode_dec
 			encode : Dec, fmt -> Try(encoded, err)
@@ -7453,26 +7443,26 @@ Builtin :: [].{
 
 }
 
-range_to = |var $current, end| {
-	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
-
-	while $current <= end {
-		$answer = $answer.append($current)
-		$current = $current + 1
-	}
-
-	$answer
+range_to : item, item, (item, item -> Bool), (item -> item) -> Iter(item)
+range_to = |current, end, is_in_range, step| {
+	len_if_known: Unknown,
+	next: ||
+		if is_in_range(current, end) {
+			One({ item: current, rest: range_to(step(current), end, is_in_range, step) })
+		} else {
+			Done
+		},
 }
 
-range_until = |var $current, end| {
-	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
-
-	while $current < end {
-		$answer = $answer.append($current)
-		$current = $current + 1
-	}
-
-	$answer
+range_until : item, item, (item, item -> Bool), (item -> item) -> Iter(item)
+range_until = |current, end, is_in_range, step| {
+	len_if_known: Unknown,
+	next: ||
+		if is_in_range(current, end) {
+			One({ item: current, rest: range_until(step(current), end, is_in_range, step) })
+		} else {
+			Done
+		},
 }
 
 # Implemented by the compiler, does not perform bounds checks

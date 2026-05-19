@@ -2533,6 +2533,16 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "32" },
     },
+    .{
+        .name = "inspect: Iter.iter returns the same iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter().iter()
+        \\    Iter.fold(iter, 0.I64, |acc, item| acc + item)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
@@ -2633,9 +2643,61 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
     },
-    .{ .name = "inspect: U32.to builds inclusive range", .source = "1.U32.to(5.U32)", .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" } },
-    .{ .name = "inspect: U32.until builds exclusive range", .source = "0.U32.until(3.U32)", .expected = .{ .inspect_str = "[0, 1, 2]" } },
-    .{ .name = "inspect: I64.until builds exclusive range", .source = "-2.I64.until(2.I64)", .expected = .{ .inspect_str = "[-2, -1, 0, 1]" } },
+    .{
+        .name = "inspect: U32.to builds inclusive range iterator",
+        .source = "Iter.fold(1.U32.to(5.U32), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
+    },
+    .{
+        .name = "inspect: U32.until builds exclusive range iterator",
+        .source = "Iter.fold(0.U32.until(3.U32), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[0, 1, 2]" },
+    },
+    .{
+        .name = "inspect: I64.until builds exclusive range iterator",
+        .source = "Iter.fold((-2.I64).until(2.I64), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[-2, -1, 0, 1]" },
+    },
+    .{
+        .name = "inspect: numeric to methods all return iterators",
+        .source =
+        \\{
+        \\    u8 = Iter.fold(1.U8.to(3.U8), 0.U8, |acc, item| acc + item)
+        \\    i8 = Iter.fold((-1.I8).to(1.I8), 0.I8, |acc, item| acc + item)
+        \\    u16 = Iter.fold(1.U16.to(3.U16), 0.U16, |acc, item| acc + item)
+        \\    i16 = Iter.fold((-1.I16).to(1.I16), 0.I16, |acc, item| acc + item)
+        \\    u32 = Iter.fold(1.U32.to(3.U32), 0.U32, |acc, item| acc + item)
+        \\    i32 = Iter.fold((-1.I32).to(1.I32), 0.I32, |acc, item| acc + item)
+        \\    u64 = Iter.fold(1.U64.to(3.U64), 0.U64, |acc, item| acc + item)
+        \\    i64 = Iter.fold((-1.I64).to(1.I64), 0.I64, |acc, item| acc + item)
+        \\    u128 = Iter.fold(1.U128.to(3.U128), 0.U128, |acc, item| acc + item)
+        \\    i128 = Iter.fold((-1.I128).to(1.I128), 0.I128, |acc, item| acc + item)
+        \\    dec = Iter.fold(Dec.to(1.0, 3.0), 0.0.Dec, |acc, item| acc + item)
+        \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6.0)" },
+    },
+    .{
+        .name = "inspect: numeric until methods all return iterators",
+        .source =
+        \\{
+        \\    u8 = Iter.fold(1.U8.until(3.U8), 0.U64, |acc, _| acc + 1)
+        \\    i8 = Iter.fold((-1.I8).until(1.I8), 0.U64, |acc, _| acc + 1)
+        \\    u16 = Iter.fold(1.U16.until(3.U16), 0.U64, |acc, _| acc + 1)
+        \\    i16 = Iter.fold((-1.I16).until(1.I16), 0.U64, |acc, _| acc + 1)
+        \\    u32 = Iter.fold(1.U32.until(3.U32), 0.U64, |acc, _| acc + 1)
+        \\    i32 = Iter.fold((-1.I32).until(1.I32), 0.U64, |acc, _| acc + 1)
+        \\    u64 = Iter.fold(1.U64.until(3.U64), 0.U64, |acc, _| acc + 1)
+        \\    i64 = Iter.fold((-1.I64).until(1.I64), 0.U64, |acc, _| acc + 1)
+        \\    u128 = Iter.fold(1.U128.until(3.U128), 0.U64, |acc, _| acc + 1)
+        \\    i128 = Iter.fold((-1.I128).until(1.I128), 0.U64, |acc, _| acc + 1)
+        \\    dec = Iter.fold(Dec.until(1.0, 3.0), 0.U64, |acc, _| acc + 1)
+        \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2)" },
+    },
     .{
         .name = "inspect: generic local attached method specialization on nominal",
         .source_kind = .module,

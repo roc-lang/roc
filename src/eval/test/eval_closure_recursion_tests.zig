@@ -1237,33 +1237,33 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Iter(item) :: {
-        \\    next : {} -> [One({ item : item, rest : Iter(item) }), Done],
+        \\    next : () -> [One({ item : item, rest : Iter(item) }), Done],
         \\}.{
-        \\    range : I64, I64 -> Iter(I64)
-        \\    range = |start, end| {
-        \\        next: |{}|
-        \\            if start == end {
-        \\                Done
-        \\            } else {
-        \\                One({ item: start, rest: Iter.range(start + 1.I64, end) })
-        \\            },
-        \\    }
-        \\
         \\    map : Iter(a), (a -> b) -> Iter(b)
         \\    map = |iter, transform| {
-        \\        next: |{}|
-        \\            match (iter.next)({}) {
+        \\        next: ||
+        \\            match (iter.next)() {
         \\                One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
         \\                Done => Done
         \\            },
         \\    }
         \\}
         \\
+        \\range_to : I64, I64 -> Iter(I64)
+        \\range_to = |start, end| {
+        \\    next: ||
+        \\        if start == end {
+        \\            Done
+        \\        } else {
+        \\            One({ item: start, rest: range_to(start + 1.I64, end) })
+        \\        },
+        \\}
+        \\
         \\main = {
-        \\    mapped = Iter.map(Iter.range(1.I64, 3.I64), |n| n * 2.I64)
-        \\    match (mapped.next)({}) {
+        \\    mapped = Iter.map(range_to(1.I64, 3.I64), |n| n * 2.I64)
+        \\    match (mapped.next)() {
         \\        One({ item: first, rest }) =>
-        \\            match (rest.next)({}) {
+        \\            match (rest.next)() {
         \\                One({ item: second, rest: _ }) => first * 10.I64 + second
         \\                Done => -2.I64
         \\            }
@@ -1277,10 +1277,10 @@ pub const tests = [_]TestCase{
         .name = "inspect: returned closure calls captured function argument",
         .source =
         \\{
-        \\    wrap : (I64 -> I64) -> { next : {} -> I64 }
-        \\    wrap = |transform| { next: |{}| transform(1.I64) }
+        \\    wrap : (I64 -> I64) -> { next : () -> I64 }
+        \\    wrap = |transform| { next: || transform(1.I64) }
         \\    wrapped = wrap(|_| 9.I64)
-        \\    (wrapped.next)({})
+        \\    (wrapped.next)()
         \\}
         ,
         .expected = .{ .inspect_str = "9" },
@@ -1290,36 +1290,36 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Iter(item) :: {
-        \\    next : {} -> [One({ item : item, rest : Iter(item) }), Done],
+        \\    next : () -> [One({ item : item, rest : Iter(item) }), Done],
         \\}.{
-        \\    range : I64, I64 -> Iter(I64)
-        \\    range = |start, end| {
-        \\        next: |{}|
-        \\            if start == end {
-        \\                Done
-        \\            } else {
-        \\                One({ item: start, rest: Iter.range(start + 1.I64, end) })
-        \\            },
-        \\    }
-        \\
         \\    keep_if : Iter(a), (a -> Bool) -> Iter(a)
         \\    keep_if = |iter, pred| {
-        \\        next: |{}|
-        \\            match (iter.next)({}) {
+        \\        next: ||
+        \\            match (iter.next)() {
         \\                One({ item, rest }) =>
         \\                    if pred(item) {
         \\                        One({ item, rest: Iter.keep_if(rest, pred) })
         \\                    } else {
-        \\                        (Iter.keep_if(rest, pred).next)({})
+        \\                        (Iter.keep_if(rest, pred).next)()
         \\                    }
         \\                Done => Done
         \\            },
         \\    }
         \\}
         \\
+        \\range_to : I64, I64 -> Iter(I64)
+        \\range_to = |start, end| {
+        \\    next: ||
+        \\        if start == end {
+        \\            Done
+        \\        } else {
+        \\            One({ item: start, rest: range_to(start + 1.I64, end) })
+        \\        },
+        \\}
+        \\
         \\main = {
-        \\    kept = Iter.keep_if(Iter.range(1.I64, 4.I64), |item| item == 2.I64)
-        \\    match (kept.next)({}) {
+        \\    kept = Iter.keep_if(range_to(1.I64, 4.I64), |item| item == 2.I64)
+        \\    match (kept.next)() {
         \\        One({ item }) => item
         \\        Done => -1.I64
         \\    }
@@ -1332,25 +1332,15 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Iter(item) :: {
-        \\    next : {} -> [One({ item : item, rest : Iter(item) }), Done],
+        \\    next : () -> [One({ item : item, rest : Iter(item) }), Done],
         \\}.{
-        \\    range : I64, I64 -> Iter(I64)
-        \\    range = |start, end| {
-        \\        next: |{}|
-        \\            if start == end {
-        \\                Done
-        \\            } else {
-        \\                One({ item: start, rest: Iter.range(start + 1.I64, end) })
-        \\            },
-        \\    }
-        \\
         \\    drop_if : Iter(a), (a -> Bool) -> Iter(a)
         \\    drop_if = |iter, pred| {
-        \\        next: |{}|
-        \\            match (iter.next)({}) {
+        \\        next: ||
+        \\            match (iter.next)() {
         \\                One({ item, rest }) =>
         \\                    if pred(item) {
-        \\                        (Iter.drop_if(rest, pred).next)({})
+        \\                        (Iter.drop_if(rest, pred).next)()
         \\                    } else {
         \\                        One({ item, rest: Iter.drop_if(rest, pred) })
         \\                    }
@@ -1359,9 +1349,19 @@ pub const tests = [_]TestCase{
         \\    }
         \\}
         \\
+        \\range_to : I64, I64 -> Iter(I64)
+        \\range_to = |start, end| {
+        \\    next: ||
+        \\        if start == end {
+        \\            Done
+        \\        } else {
+        \\            One({ item: start, rest: range_to(start + 1.I64, end) })
+        \\        },
+        \\}
+        \\
         \\main = {
-        \\    dropped = Iter.drop_if(Iter.range(1.I64, 4.I64), |item| item == 1.I64)
-        \\    match (dropped.next)({}) {
+        \\    dropped = Iter.drop_if(range_to(1.I64, 4.I64), |item| item == 1.I64)
+        \\    match (dropped.next)() {
         \\        One({ item }) => item
         \\        Done => -1.I64
         \\    }
