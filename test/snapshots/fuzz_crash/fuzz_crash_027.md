@@ -2296,12 +2296,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1662)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1682)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 1629)
+																		(e-dispatch-call (method "statod") (constraint-fn-var 1649)
 																			(receiver
 																				(e-match
 																					(match

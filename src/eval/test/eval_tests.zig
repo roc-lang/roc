@@ -2543,6 +2543,50 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "3" },
     },
+    .{
+        .name = "inspect: Iter.keep_if emits skip with rest iterator",
+        .source =
+        \\match Iter.next(Iter.keep_if([1.I64, 2].iter(), |item| item > 1)) {
+        \\    Skip({ count, rest }) => count == 1 and Iter.fold(rest, 0.I64, |acc, item| acc + item) == 2
+        \\    _ => Bool.False
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: Iter.keep_if fold continues after skips",
+        .source =
+        \\{
+        \\    iter = Iter.keep_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 0)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2, 4]" },
+    },
+    .{
+        .name = "inspect: Iter.drop_if fold continues after skips",
+        .source =
+        \\{
+        \\    iter = Iter.drop_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 0)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "for loop over filtered iterator continues after skips",
+        .source =
+        \\{
+        \\    iter = Iter.keep_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 1)
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },

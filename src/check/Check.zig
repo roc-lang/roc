@@ -1003,6 +1003,7 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
 
     const item_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("item"));
     const rest_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
+    const count_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("count"));
     const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const record_fields = [_]types_mod.RecordField{
         .{ .name = item_ident, .var_ = item_var },
@@ -1015,6 +1016,17 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
     } } }, env, Region.zero());
 
     const u64_var = try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, Region.zero());
+    const skip_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
+    const skip_record_fields = [_]types_mod.RecordField{
+        .{ .name = count_ident, .var_ = u64_var },
+        .{ .name = rest_ident, .var_ = iter_var },
+    };
+    const skip_record_fields_range = try self.types.appendRecordFields(&skip_record_fields);
+    const skip_payload_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = skip_record_fields_range,
+        .ext = skip_record_ext,
+    } } }, env, Region.zero());
+
     const done_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Done"));
     const one_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("One"));
     const skip_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Skip"));
@@ -1022,7 +1034,7 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
     const tags = [_]types_mod.Tag{
         try self.types.mkTag(done_ident, &.{}),
         try self.types.mkTag(one_ident, &.{payload_record}),
-        try self.types.mkTag(skip_ident, &.{u64_var}),
+        try self.types.mkTag(skip_ident, &.{skip_payload_record}),
     };
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
     return try self.types.mkTagUnion(&tags, ext_var);

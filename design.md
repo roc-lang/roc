@@ -570,7 +570,7 @@ two static-dispatch obligations created by the loop:
 
 ```text
 iter : iterable -> Iter(item)
-next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done]
+next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done]
 ```
 
 The loop pattern owns the `item` type variable. The iterable expression owns the
@@ -593,7 +593,10 @@ MIR calls, mutable state, `while`, and `match`:
                 body
                 {}
             }
-            Skip(_) => break
+            Skip({ rest, .. }) => {
+                #for_iter = rest
+                {}
+            }
             Done => break
         }
     }
@@ -612,7 +615,7 @@ runtime layouts. Lists participate only by publishing
 `List.iter : List(item) -> Iter(item)`, numeric ranges participate only by
 returning `Iter(item)` from their checked `.to` and `.until` methods, and
 `Iter` participates by publishing `Iter.iter : Iter(item) -> Iter(item)` and
-`Iter.next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done]`.
+`Iter.next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done]`.
 
 ## MIR Stage Ownership
 

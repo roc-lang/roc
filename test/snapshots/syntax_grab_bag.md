@@ -2486,12 +2486,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1864)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1884)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1831)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1851)
 																			(receiver
 																				(e-match
 																					(match

@@ -11627,7 +11627,7 @@ const BodyLowerer = struct {
         const branches = [_]Ast.Branch{
             try self.lowerIteratorDoneBranch(step_info, unit_ty),
             try self.lowerIteratorOneBranch(pattern, body, iterator_symbol, iterator_info, step_info, unit_ty),
-            try self.lowerIteratorSkipBranch(step_info, unit_ty),
+            try self.lowerIteratorSkipBranch(iterator_symbol, iterator_info, step_info, unit_ty),
         };
         return try self.program.ast.addExprWithSource(unit_ty, .{}, .{ .match_ = .{
             .cond = next_call.expr,
@@ -11660,6 +11660,8 @@ const BodyLowerer = struct {
 
     fn lowerIteratorSkipBranch(
         self: *BodyLowerer,
+        iterator_symbol: Ast.Symbol,
+        iterator_info: ConcreteTypeInfo,
         step_info: ConcreteTypeInfo,
         unit_ty: Type.TypeId,
     ) Allocator.Error!Ast.Branch {
@@ -11669,11 +11671,48 @@ const BodyLowerer = struct {
         const payload_infos = try self.concreteTagPayloadInfosForUnionType(step_info.source_ref, skip_label);
         defer if (payload_infos.len != 0) self.allocator.free(payload_infos);
         if (payload_infos.len != 1) invariantViolation("mono iterator-for Skip source payload count disagreed with runtime type");
+
+        const count_label = try self.program.canonical_names.internRecordFieldLabel("count");
+        const rest_label = try self.program.canonical_names.internRecordFieldLabel("rest");
+        const count_info = try self.concreteRecordFieldInfo(payload_infos[0].source_ref, count_label);
+        const rest_info = try self.concreteRecordFieldInfo(payload_infos[0].source_ref, rest_label);
+        if (!self.program.types.equalIds(rest_info.ty, iterator_info.ty)) {
+            invariantViolation("mono iterator-for Skip rest field type did not match iterator state type");
+        }
+
+        const rest_symbol = try self.program.addSyntheticSymbol();
+        const fields = [_]Ast.RecordFieldPattern{
+            .{
+                .field = count_label,
+                .pattern = try self.program.ast.addPat(.{
+                    .ty = count_info.ty,
+                    .source_ty = count_info.source_ty,
+                    .data = .wildcard,
+                }),
+            },
+            .{
+                .field = rest_label,
+                .pattern = try self.program.ast.addPat(.{
+                    .ty = rest_info.ty,
+                    .source_ty = rest_info.source_ty,
+                    .data = .{ .var_ = rest_symbol },
+                }),
+            },
+        };
         const payload_pat = try self.program.ast.addPat(.{
             .ty = payload_infos[0].ty,
             .source_ty = payload_infos[0].source_ty,
-            .data = .wildcard,
+            .data = .{ .record = .{
+                .fields = try self.program.ast.addRecordFieldPatternSpan(&fields),
+                .rest = null,
+            } },
         });
+        const rest_expr = try self.program.ast.addExprWithSource(iterator_info.ty, iterator_info.source_ty, .{ .var_ = rest_symbol });
+        const reassign = try self.program.ast.addStmt(.{ .reassign = .{
+            .target = iterator_symbol,
+            .body = rest_expr,
+        } });
+        const unit = try self.program.ast.addExpr(unit_ty, .unit);
         return .{
             .pat = try self.program.ast.addPat(.{
                 .ty = step_info.ty,
@@ -11684,7 +11723,10 @@ const BodyLowerer = struct {
                     .args = try self.program.ast.addPatSpan(&.{payload_pat}),
                 } },
             }),
-            .body = try self.lowerIteratorBreakBody(unit_ty),
+            .body = try self.program.ast.addExpr(unit_ty, .{ .block = .{
+                .stmts = try self.program.ast.addStmtSpan(&.{reassign}),
+                .final_expr = unit,
+            } }),
         };
     }
 

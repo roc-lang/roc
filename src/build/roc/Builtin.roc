@@ -373,7 +373,7 @@ Builtin :: [].{
 	Iter(item) :: {
 		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
 		len_if_known : [Known(U64), Unknown],
-		step : () -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done],
+		step : () -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done],
 	}.{
 		custom : source, [Known(U64), Unknown], (source -> Try((item, Iter(item)), [NoMore])) -> Iter(item)
 		custom = |source, len_if_known, advance| {
@@ -388,7 +388,7 @@ Builtin :: [].{
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
-		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip(U64), Done]
+		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done]
 		next = |iterator| (iterator.step)()
 
 		map : Iter(a), (a -> b) -> Iter(b)
@@ -399,7 +399,7 @@ Builtin :: [].{
 					step: ||
 						match step() {
 							Done => Done
-							Skip(n) => Skip(n)
+							Skip({ count, rest }) => Skip({ count, rest: Iter.map(rest, transform) })
 							One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
 						},
 				}
@@ -413,13 +413,12 @@ Builtin :: [].{
 					step: || {
 						match step() {
 							Done => Done
-							Skip(n) => Skip(n)
+							Skip({ count, rest }) => Skip({ count, rest: Iter.keep_if(rest, predicate) })
 							One({ item, rest }) =>
 								if predicate(item) {
 									One({ item, rest: Iter.keep_if(rest, predicate) })
 								} else {
-									kept_rest = Iter.keep_if(rest, predicate)
-									Iter.next(kept_rest)
+									Skip({ count: 1, rest: Iter.keep_if(rest, predicate) })
 								}
 							}
 					},
@@ -434,11 +433,10 @@ Builtin :: [].{
 					step: || {
 						match step() {
 							Done => Done
-							Skip(n) => Skip(n)
+							Skip({ count, rest }) => Skip({ count, rest: Iter.drop_if(rest, predicate) })
 							One({ item, rest }) =>
 								if predicate(item) {
-									dropped_rest = Iter.drop_if(rest, predicate)
-									Iter.next(dropped_rest)
+									Skip({ count: 1, rest: Iter.drop_if(rest, predicate) })
 								} else {
 									One({ item, rest: Iter.drop_if(rest, predicate) })
 								}
@@ -451,7 +449,7 @@ Builtin :: [].{
 		fold = |iterator, acc, step|
 			match Iter.next(iterator) {
 				Done => acc
-				Skip(_) => acc
+				Skip({ rest, .. }) => Iter.fold(rest, acc, step)
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
 	}
