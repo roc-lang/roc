@@ -12,13 +12,13 @@ const builtin = @import("builtin");
 
 /// Returns a minimal std.Io implementation for shim and platform-host code.
 pub fn io() std.Io {
-    if (comptime builtin.os.tag != .linux) {
-        return std.Io.failing;
-    }
-
-    return .{
-        .userdata = null,
-        .vtable = &linux_vtable,
+    return switch (comptime builtin.os.tag) {
+        .linux => .{ .userdata = null, .vtable = &linux_vtable },
+        .windows => .{ .userdata = null, .vtable = &windows_vtable },
+        // TODO macOS vtable mirroring linux_vtable using std.c primitives
+        // (read/write/pread/close, _NSGetExecutablePath, os_unfair_lock for
+        // stderr, optionally __ulock_wait/__ulock_wake for futex).
+        else => std.Io.failing,
     };
 }
 
@@ -330,5 +330,236 @@ fn linuxFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
     const linux = std.os.linux;
     for (files) |file| {
         _ = linux.close(file.handle);
+    }
+}
+
+const windows_vtable: std.Io.VTable = blk: {
+    var vtable = std.Io.failing.vtable.*;
+    vtable.futexWait = windowsFutexWait;
+    vtable.futexWaitUncancelable = windowsFutexWaitUncancelable;
+    vtable.futexWake = windowsFutexWake;
+    vtable.operate = windowsOperate;
+    vtable.processExecutablePath = windowsProcessExecutablePath;
+    vtable.lockStderr = windowsLockStderr;
+    vtable.tryLockStderr = windowsTryLockStderr;
+    vtable.unlockStderr = windowsUnlockStderr;
+    vtable.swapCancelProtection = windowsSwapCancelProtection;
+    vtable.fileClose = windowsFileClose;
+    break :blk vtable;
+};
+
+const win = struct {
+    const BOOL = std.os.windows.BOOL;
+    const DWORD = std.os.windows.DWORD;
+    const HANDLE = std.os.windows.HANDLE;
+    const SRWLOCK = std.os.windows.SRWLOCK;
+
+    const OVERLAPPED = extern struct {
+        Internal: usize,
+        InternalHigh: usize,
+        DUMMY: extern union {
+            Pointer: ?*anyopaque,
+            Offset: extern struct { Low: DWORD, High: DWORD },
+        },
+        hEvent: ?HANDLE,
+    };
+
+    extern "kernel32" fn WriteFile(
+        hFile: HANDLE,
+        lpBuffer: [*]const u8,
+        nNumberOfBytesToWrite: DWORD,
+        lpNumberOfBytesWritten: ?*DWORD,
+        lpOverlapped: ?*OVERLAPPED,
+    ) callconv(.winapi) BOOL;
+
+    extern "kernel32" fn ReadFile(
+        hFile: HANDLE,
+        lpBuffer: [*]u8,
+        nNumberOfBytesToRead: DWORD,
+        lpNumberOfBytesRead: ?*DWORD,
+        lpOverlapped: ?*OVERLAPPED,
+    ) callconv(.winapi) BOOL;
+
+    extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(.winapi) BOOL;
+
+    extern "kernel32" fn GetModuleFileNameW(
+        hModule: ?*anyopaque,
+        lpFilename: [*]u16,
+        nSize: DWORD,
+    ) callconv(.winapi) DWORD;
+};
+
+var windows_stderr_writer: std.Io.File.Writer = undefined;
+var windows_stderr_writer_initialized = false;
+var windows_stderr_lock: win.SRWLOCK = .{};
+
+fn windowsInitStderrWriter() void {
+    if (windows_stderr_writer_initialized) return;
+    windows_stderr_writer = std.Io.File.stderr().writerStreaming(io(), &.{});
+    windows_stderr_writer_initialized = true;
+}
+
+// RtlWaitOnAddress is the Windows futex analogue (available since Win8).
+fn windowsFutexWait(_: ?*anyopaque, ptr: *const u32, expected: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+    windowsFutexWaitUncancelable(null, ptr, expected);
+}
+
+fn windowsFutexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
+    if (builtin.single_threaded) unreachable;
+    var compare = expected;
+    _ = std.os.windows.ntdll.RtlWaitOnAddress(
+        @ptrCast(ptr),
+        @ptrCast(&compare),
+        @sizeOf(u32),
+        null,
+    );
+}
+
+fn windowsFutexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
+    if (max_waiters == 0 or builtin.single_threaded) return;
+    if (max_waiters == 1) {
+        std.os.windows.ntdll.RtlWakeAddressSingle(@ptrCast(ptr));
+    } else {
+        std.os.windows.ntdll.RtlWakeAddressAll(@ptrCast(ptr));
+    }
+}
+
+fn windowsOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+    return switch (operation) {
+        .file_read_streaming => |op| .{ .file_read_streaming = windowsFileReadStreaming(op.file, op.data) },
+        .file_write_streaming => |op| .{ .file_write_streaming = windowsFileWriteStreaming(op.file, op.header, op.data, op.splat) },
+        .device_io_control => std.Io.failing.vtable.operate(null, operation) catch unreachable,
+        .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
+    };
+}
+
+fn windowsLockStderr(_: ?*anyopaque, terminal_mode: ?std.Io.Terminal.Mode) std.Io.Cancelable!std.Io.LockedStderr {
+    windowsInitStderrWriter();
+    std.os.windows.ntdll.RtlAcquireSRWLockExclusive(&windows_stderr_lock);
+    return .{
+        .file_writer = &windows_stderr_writer,
+        .terminal_mode = terminal_mode orelse .no_color,
+    };
+}
+
+fn windowsTryLockStderr(_: ?*anyopaque, _: ?std.Io.Terminal.Mode) std.Io.Cancelable!?std.Io.LockedStderr {
+    windowsInitStderrWriter();
+    if (std.os.windows.ntdll.RtlTryAcquireSRWLockExclusive(&windows_stderr_lock) == .FALSE) return null;
+    return .{
+        .file_writer = &windows_stderr_writer,
+        .terminal_mode = .no_color,
+    };
+}
+
+fn windowsUnlockStderr(_: ?*anyopaque) void {
+    if (windows_stderr_writer.err == null) windows_stderr_writer.interface.flush() catch {};
+    windows_stderr_writer.err = null;
+    windows_stderr_writer.interface.end = 0;
+    windows_stderr_writer.interface.buffer = &.{};
+    std.os.windows.ntdll.RtlReleaseSRWLockExclusive(&windows_stderr_lock);
+}
+
+fn windowsSwapCancelProtection(_: ?*anyopaque, _: std.Io.CancelProtection) std.Io.CancelProtection {
+    return .unblocked;
+}
+
+fn windowsProcessExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
+    var wbuf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
+    const n = win.GetModuleFileNameW(null, &wbuf, wbuf.len);
+    if (n == 0) return error.Unexpected;
+    if (n == wbuf.len) {
+        // Buffer too small per Win32 docs; also signaled via GetLastError == ERROR_INSUFFICIENT_BUFFER.
+        return error.NameTooLong;
+    }
+    const wide_slice = wbuf[0..n];
+    const required = std.unicode.calcWtf8Len(wide_slice);
+    if (required > out_buffer.len) return error.NameTooLong;
+    return std.unicode.wtf16LeToWtf8(out_buffer, wide_slice);
+}
+
+fn windowsFileReadStreaming(
+    file: std.Io.File,
+    data: []const []u8,
+) std.Io.Operation.FileReadStreaming.Result {
+    for (data) |buffer| {
+        if (buffer.len == 0) continue;
+        return windowsRead(file.handle, buffer);
+    }
+    return 0;
+}
+
+fn windowsRead(handle: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
+    const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
+    var read_count: win.DWORD = 0;
+    if (win.ReadFile(handle, buffer.ptr, want, &read_count, null) == .FALSE) {
+        return switch (std.os.windows.GetLastError()) {
+            .BROKEN_PIPE, .HANDLE_EOF => error.EndOfStream,
+            .NO_DATA => error.WouldBlock,
+            .INVALID_HANDLE => error.NotOpenForReading,
+            .ACCESS_DENIED => error.AccessDenied,
+            .LOCK_VIOLATION => error.LockViolation,
+            .IO_DEVICE, .CRC, .NET_WRITE_FAULT => error.InputOutput,
+            .OPERATION_ABORTED => error.Unexpected,
+            else => error.Unexpected,
+        };
+    }
+    if (read_count == 0) return error.EndOfStream;
+    return read_count;
+}
+
+fn windowsFileWriteStreaming(
+    file: std.Io.File,
+    header: []const u8,
+    data: []const []const u8,
+    splat: usize,
+) std.Io.Operation.FileWriteStreaming.Result {
+    var total: usize = 0;
+
+    if (header.len > 0) {
+        const n = try windowsWrite(file.handle, header);
+        total += n;
+        if (n < header.len) return total;
+    }
+
+    for (data, 0..) |buffer, index| {
+        const repeat_count = if (index == data.len - 1) splat else 1;
+        for (0..repeat_count) |_| {
+            if (buffer.len == 0) continue;
+            const n = try windowsWrite(file.handle, buffer);
+            total += n;
+            if (n < buffer.len) return total;
+        }
+    }
+
+    return total;
+}
+
+fn windowsWrite(handle: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
+    const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
+    var written: win.DWORD = 0;
+    if (win.WriteFile(handle, buffer.ptr, want, &written, null) == .FALSE) {
+        return switch (std.os.windows.GetLastError()) {
+            .INVALID_USER_BUFFER => error.SystemResources,
+            .NOT_ENOUGH_MEMORY => error.SystemResources,
+            .OPERATION_ABORTED => error.Unexpected,
+            .NOT_ENOUGH_QUOTA => error.SystemResources,
+            .IO_PENDING => error.Unexpected,
+            .BROKEN_PIPE => error.BrokenPipe,
+            .INVALID_HANDLE => error.NotOpenForWriting,
+            .LOCK_VIOLATION => error.LockViolation,
+            .NETNAME_DELETED => error.BrokenPipe,
+            .ACCESS_DENIED => error.AccessDenied,
+            .IO_DEVICE, .CRC, .NET_WRITE_FAULT => error.InputOutput,
+            .DISK_FULL, .HANDLE_DISK_FULL => error.NoSpaceLeft,
+            .NO_DATA => error.WouldBlock,
+            else => error.Unexpected,
+        };
+    }
+    return written;
+}
+
+fn windowsFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
+    for (files) |file| {
+        _ = win.CloseHandle(file.handle);
     }
 }
