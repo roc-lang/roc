@@ -2417,9 +2417,10 @@ pub fn build(b: *std.Build) void {
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
-    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + glue)");
+    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
     const test_platforms_step = b.step("test-platforms", "Test platform integration (int/str/fx build and run)");
     const test_subcommands_step = b.step("test-subcommands", "Test roc CLI subcommands (check, build, run, fmt, etc.)");
+    const test_echo_step = b.step("test-echo", "Test the echo platform (headerless app) integration");
     const test_glue_step = b.step("test-glue", "Test the roc glue command");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -2732,6 +2733,29 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
         test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
 
+        // test-echo: echo platform (headerless app) tests
+        const echo_tests = b.addTest(.{
+            .name = "echo_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/echo_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_echo_tests = b.addRunArtifact(echo_tests);
+        if (run_args.len != 0) {
+            run_echo_tests.addArgs(run_args);
+        }
+        run_echo_tests.step.dependOn(&install.step);
+        run_echo_tests.step.dependOn(build_test_hosts_step);
+
+        // Print "All N tests passed" via the same summary step the rest of the suite uses.
+        const echo_tests_summary = TestsSummaryStep.create(b, test_filters, 0);
+        echo_tests_summary.addRun(&run_echo_tests.step);
+        test_echo_step.dependOn(&echo_tests_summary.step);
+
         // test-glue: glue command integration tests
         const glue_test = b.addTest(.{
             .name = "glue_test",
@@ -2751,9 +2775,10 @@ pub fn build(b: *std.Build) void {
         run_glue_test_step = &run_glue_test.step;
         test_glue_step.dependOn(&run_glue_test.step);
 
-        // test-cli: umbrella depending on all three
+        // test-cli: umbrella depending on all four
         test_cli_step.dependOn(test_platforms_step);
         test_cli_step.dependOn(test_subcommands_step);
+        test_cli_step.dependOn(test_echo_step);
         test_cli_step.dependOn(test_glue_step);
     }
 

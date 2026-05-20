@@ -616,6 +616,7 @@ const DeadFilesDetector = struct {
             "glue_test.zig", // Glue generation tests
             "host.zig", // Glue platform host
             "roc_subcommands.zig", // CLI subcommand tests
+            "echo_tests.zig", // Echo platform (headerless app) tests
             "test_runner.zig", // Test runner executable
             "llvm_evaluator.zig", // LLVM evaluator executable
             "darwin_compat.zig", // Compiled to .o by build.zig for macOS linking
