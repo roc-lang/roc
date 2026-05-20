@@ -396,22 +396,8 @@ pub const StaticDispatchPlanTable = struct {
         const module_env = module.moduleEnvConst();
         for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
             const for_node_idx: CIR.Node.Idx = @enumFromInt(for_plan.node_idx);
-            const node_tag = module.nodeTag(for_node_idx);
-            const pattern_idx: CIR.Pattern.Idx, const iterable_idx: CIR.Expr.Idx = switch (node_tag) {
-                .expr_for => blk: {
-                    const for_expr: CIR.Expr.Idx = @enumFromInt(for_plan.node_idx);
-                    const expr = module.expr(for_expr).data.e_for;
-                    break :blk .{ expr.patt, expr.expr };
-                },
-                .statement_for => blk: {
-                    const for_stmt: CIR.Statement.Idx = @enumFromInt(for_plan.node_idx);
-                    const stmt = module.getStatement(for_stmt).s_for;
-                    break :blk .{ stmt.patt, stmt.expr };
-                },
-                else => if (@import("builtin").mode == .Debug) {
-                    std.debug.panic("checked static dispatch iterator-for plan referenced non-for node {d}", .{for_plan.node_idx});
-                } else unreachable,
-            };
+            const pattern_idx: CIR.Pattern.Idx = @enumFromInt(for_plan.pattern_idx);
+            const iterable_idx: CIR.Expr.Idx = @enumFromInt(for_plan.iterable_idx);
 
             const iterable_expr = checkedExprIdForSource(checked_bodies, iterable_idx);
             const item_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.patternType(pattern_idx));

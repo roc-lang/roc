@@ -1279,6 +1279,7 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -1410,6 +1411,7 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();

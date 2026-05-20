@@ -262,6 +262,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         &module_env.store.regions,
         module_builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
 
     try checker.checkFile();
@@ -373,6 +374,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         &module_env.store.regions,
         module_builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
 
     try checker.checkFile();

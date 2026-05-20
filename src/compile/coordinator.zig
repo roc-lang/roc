@@ -1119,7 +1119,7 @@ pub const Coordinator = struct {
             .package => .package,
             .platform => .platform,
             .hosted => .hosted,
-            .deprecated_module => .deprecated_module,
+            .module => .module,
             .malformed => .malformed,
         };
     }

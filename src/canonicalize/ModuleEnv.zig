@@ -38,7 +38,7 @@ pub const ModuleKind = union(enum) {
     package,
     platform,
     hosted,
-    deprecated_module,
+    module,
     malformed,
 
     /// Extern-compatible tag for serialization
@@ -49,7 +49,7 @@ pub const ModuleKind = union(enum) {
         package,
         platform,
         hosted,
-        deprecated_module,
+        module,
         malformed,
     };
 
@@ -72,7 +72,7 @@ pub const ModuleKind = union(enum) {
                 .package => .{ .tag = .package, .payload = .{ .none = 0 } },
                 .platform => .{ .tag = .platform, .payload = .{ .none = 0 } },
                 .hosted => .{ .tag = .hosted, .payload = .{ .none = 0 } },
-                .deprecated_module => .{ .tag = .deprecated_module, .payload = .{ .none = 0 } },
+                .module => .{ .tag = .module, .payload = .{ .none = 0 } },
                 .malformed => .{ .tag = .malformed, .payload = .{ .none = 0 } },
             };
         }
@@ -85,7 +85,7 @@ pub const ModuleKind = union(enum) {
                 .package => .package,
                 .platform => .platform,
                 .hosted => .hosted,
-                .deprecated_module => .deprecated_module,
+                .module => .module,
                 .malformed => .malformed,
             };
         }
@@ -411,6 +411,8 @@ pub const MethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
 /// publish an explicit iterator-for plan for mono lowering.
 pub const ForLoopDispatchPlan = extern struct {
     node_idx: u32,
+    pattern_idx: u32,
+    iterable_idx: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
 
@@ -554,7 +556,7 @@ pub fn relocate(self: *Self, offset: isize) void {
 
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
-    self.module_kind = .deprecated_module; // Placeholder - set to actual kind during header canonicalization
+    self.module_kind = .module; // Placeholder - set to actual kind during header canonicalization
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
@@ -589,7 +591,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .gpa = gpa,
         .common = common,
         .types = try TypeStore.initFromSourceLen(gpa, source_len),
-        .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
+        .module_kind = .module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -2693,14 +2695,20 @@ pub fn varFrom(idx: anytype) TypeVar {
 pub fn recordForLoopDispatchPlan(
     self: *Self,
     node_idx: Node.Idx,
+    pattern_idx: Node.Idx,
+    iterable_idx: Node.Idx,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
+    const raw_pattern: u32 = @intFromEnum(pattern_idx);
+    const raw_iterable: u32 = @intFromEnum(iterable_idx);
     for (self.for_loop_dispatch_plans.items.items) |*plan| {
         if (plan.node_idx != raw_node) continue;
         plan.* = .{
             .node_idx = raw_node,
+            .pattern_idx = raw_pattern,
+            .iterable_idx = raw_iterable,
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
         };
@@ -2708,6 +2716,8 @@ pub fn recordForLoopDispatchPlan(
     }
     _ = try self.for_loop_dispatch_plans.append(self.gpa, .{
         .node_idx = raw_node,
+        .pattern_idx = raw_pattern,
+        .iterable_idx = raw_iterable,
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
     });

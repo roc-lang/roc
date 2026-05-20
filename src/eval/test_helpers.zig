@@ -101,6 +101,11 @@ const AvailableImport = struct {
     statement_idx: ?CIR.Statement.Idx,
 };
 
+const ModuleValidation = enum {
+    roc_check,
+    checked_artifact,
+};
+
 /// Public `CheckedModule` declaration.
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
@@ -108,6 +113,7 @@ pub const CheckedModule = struct {
     can: *Can,
     checker: *Check,
     imported_envs: []*const ModuleEnv,
+    auto_imported_types: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     owned_source: ?[]u8 = null,
     published_owns_module_env: bool = false,
     parse_ns: u64 = 0,
@@ -140,6 +146,7 @@ pub const ParsedResources = struct {
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     imported_envs: []*const ModuleEnv,
+    auto_imported_types: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     extra_modules: []CheckedModule,
     parse_ns: u64 = 0,
     canonicalize_ns: u64 = 0,
@@ -155,6 +162,8 @@ pub const ParsedResources = struct {
         for (self.import_artifacts) |*artifact| artifact.deinit(allocator);
         allocator.free(self.import_artifacts);
         allocator.free(self.imported_envs);
+        self.auto_imported_types.deinit();
+        allocator.destroy(self.auto_imported_types);
         allocator.destroy(self.checker);
         allocator.destroy(self.can);
     }
@@ -297,6 +306,7 @@ pub fn parseAndCheckProgramForProblems(
             import_module.source,
             false,
             true,
+            .checked_artifact,
             &.{},
             builtin_module.env,
             builtin_indices,
@@ -322,6 +332,7 @@ pub fn parseAndCheckProgramForProblems(
         source,
         false,
         false,
+        .checked_artifact,
         &.{},
         builtin_module.env,
         builtin_indices,
@@ -542,6 +553,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
             import_module.source,
             false,
             true,
+            .checked_artifact,
             &.{},
             builtin_module.env,
             builtin_indices,
@@ -581,6 +593,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         source,
         inspect_wrap,
         false,
+        .checked_artifact,
         explicit_eval_root_names,
         builtin_module.env,
         builtin_indices,
@@ -672,6 +685,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
         .imported_envs = main_checked.imported_envs,
+        .auto_imported_types = main_checked.auto_imported_types,
         .extra_modules = try extra_modules.toOwnedSlice(allocator),
         .parse_ns = main_checked.parse_ns,
         .canonicalize_ns = main_checked.canonicalize_ns,
@@ -687,6 +701,7 @@ pub fn parseCheckModule(
     source: []const u8,
     inspect_wrap: bool,
     hosted_transform: bool,
+    validation: ModuleValidation,
     explicit_root_names: []const []const u8,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
@@ -715,7 +730,6 @@ pub fn parseCheckModule(
         parse_ast.deinit();
         allocators.deinit();
     }
-    parse_ast.store.emptyScratch();
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
         return error.ParseError;
     }
@@ -756,11 +770,21 @@ pub fn parseCheckModule(
 
     var can_timer = try StageTimer.start();
     try czer.canonicalizeFile();
+    switch (validation) {
+        .roc_check => try czer.validateForChecking(),
+        .checked_artifact => try czer.validateForExplicitRoots(),
+    }
     if (hosted_transform) {
         var modified_defs = try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
         defer modified_defs.deinit(module_env.gpa);
     }
     const can_elapsed = can_timer.read();
+
+    const auto_imported_types = try allocator.create(std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType));
+    errdefer allocator.destroy(auto_imported_types);
+    auto_imported_types.* = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    errdefer auto_imported_types.deinit();
+    try Can.populateModuleEnvs(auto_imported_types, module_env, builtin_module_env, builtin_indices);
 
     const imported_envs_len: usize = if (available_imports.len == 0 and source_kind == .expr) 1 else available_imports.len + 2;
     const imported_envs = try allocator.alloc(*const ModuleEnv, imported_envs_len);
@@ -783,10 +807,11 @@ pub fn parseCheckModule(
         &module_env.types,
         module_env,
         imported_envs,
-        null,
+        auto_imported_types,
         &module_env.store.regions,
         builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
     var check_timer = try StageTimer.start();
     try checker.checkFile();
@@ -798,6 +823,7 @@ pub fn parseCheckModule(
         .can = czer,
         .checker = checker,
         .imported_envs = imported_envs,
+        .auto_imported_types = auto_imported_types,
         .owned_source = owned_source,
         .parse_ns = parse_elapsed,
         .canonicalize_ns = can_elapsed,
@@ -810,9 +836,19 @@ fn lowerParsedProgramToLir(
     resources: *ParsedResources,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
+    return lowerArtifactSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
+}
+
+/// Lower an already-published checked artifact set to a runtime image.
+pub fn lowerArtifactSetToLir(
+    allocator: Allocator,
+    root_artifact: *check.CheckedArtifact.CheckedModuleArtifact,
+    import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
+    target_usize: base.target.TargetUsize,
+) !LoweredProgram {
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_artifacts.len);
     defer allocator.free(import_views);
-    for (resources.import_artifacts, 0..) |*artifact, i| {
+    for (import_artifacts, 0..) |*artifact, i| {
         import_views[i] = check.CheckedArtifact.importedView(artifact);
     }
 
@@ -826,10 +862,10 @@ fn lowerParsedProgramToLir(
     const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
         shm_allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = check.CheckedArtifact.loweringView(root_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = root_artifact.root_requests.requests },
         .{
             .target_usize = target_usize,
         },
@@ -1003,6 +1039,8 @@ fn cleanupCheckedModule(allocator: Allocator, module: CheckedModule) void {
     module.can.deinit();
     module.parse_ast.deinit();
     allocator.free(module.imported_envs);
+    module.auto_imported_types.deinit();
+    allocator.destroy(module.auto_imported_types);
     if (!module.published_owns_module_env) {
         module.module_env.deinit();
         if (module.owned_source) |owned_source| allocator.free(owned_source);

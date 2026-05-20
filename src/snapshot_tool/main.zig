@@ -1127,6 +1127,7 @@ fn processSnapshotContent(
             &can_ir.store.regions,
             builtin_ctx,
         );
+        checker.fixupTypeWriter();
         try checker.checkExprRepl(expr_idx.idx);
         module_envs_for_repl_expr = module_envs; // Keep alive
         break :blk checker;
@@ -1181,6 +1182,7 @@ fn processSnapshotContent(
                 &can_ir.store.regions,
                 builtin_ctx,
             );
+            checker.fixupTypeWriter();
             try checker.checkFile();
             module_envs_for_snippet = module_envs; // Keep alive
             break :blk checker;
@@ -2890,6 +2892,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize type checker: {}", .{ source_path, err });
         return false;
     };
+    checker.fixupTypeWriter();
     defer checker.deinit();
 
     checker.checkFile() catch |err| {
@@ -4519,6 +4522,7 @@ fn renderSnapshotReplTypeProblems(
         &can_ir.store.regions,
         builtin_ctx,
     );
+    checker.fixupTypeWriter();
     defer checker.deinit();
 
     const check_result: anyerror!void = switch (source_kind) {

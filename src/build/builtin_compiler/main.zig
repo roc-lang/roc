@@ -1750,6 +1750,7 @@ fn compileModule(
         &module_env.store.regions,
         builtin_ctx,
     );
+    checker.fixupTypeWriter();
     defer checker.deinit();
 
     try checker.checkFile();

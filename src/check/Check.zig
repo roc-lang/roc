@@ -6420,7 +6420,7 @@ fn checkIteratorForLoop(
         loop_region,
     );
 
-    try self.cir.recordForLoopDispatchPlan(loop_node, iter_fn_var, next_fn_var);
+    try self.cir.recordForLoopDispatchPlan(loop_node, ModuleEnv.nodeIdxFrom(pattern), ModuleEnv.nodeIdxFrom(iterable), iter_fn_var, next_fn_var);
 
     does_fx = try self.checkExpr(body, env, Expected.none()) or does_fx;
     return does_fx;

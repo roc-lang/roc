@@ -2336,7 +2336,7 @@ pub fn canonicalizeFile(
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
         .module => |h| {
-            self.env.module_kind = .deprecated_module;
+            self.env.module_kind = .module;
             // Emit deprecation warning
             const header_region = self.parse_ir.tokenizedRegionToRegion(h.region);
             try self.env.pushDiagnostic(.{
@@ -3354,9 +3354,40 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                 try self.reportTypeModuleOrDefaultAppError();
             }
         },
-        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
             // No validation needed for these module kinds in checking mode
         },
+    }
+
+    try self.env.publishScratchDiagnostics();
+}
+
+/// Finalize a module that will be published through explicit checked-artifact
+/// root requests instead of Roc's user-facing `roc check` app/type-module
+/// validation.
+pub fn validateForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    if (self.parse_ir.hasErrors()) {
+        try self.env.publishScratchDiagnostics();
+        return;
+    }
+
+    switch (self.env.module_kind) {
+        .type_module => |*main_type_ident| {
+            if (self.findMatchingTypeIdent()) |result| {
+                if (result.kind == .nominal or result.kind == .@"opaque") {
+                    main_type_ident.* = result.ident;
+                    try self.exposeTypeModuleMainType(result);
+                } else {
+                    self.env.module_kind = .module;
+                }
+            } else {
+                self.env.module_kind = .module;
+            }
+        },
+        else => {},
     }
 
     try self.env.publishScratchDiagnostics();
@@ -3382,7 +3413,7 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
                 try self.reportExecutionRequiresAppOrDefaultApp();
             }
         },
-        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
             // No validation needed for these module kinds in execution mode
         },
     }

@@ -579,6 +579,12 @@ loop iterator state as its operand. The plan stores those operands explicitly
 instead of pretending that `next` was called on the original iterable
 expression or that it had no arguments.
 
+Checking records the loop pattern id and iterable expression id in the
+front-end loop-dispatch record at the same time it creates the `iter` and
+`next` constraints. Checked artifact publication consumes those ids directly.
+It must not reopen the source `for` node to recover the pattern or iterable
+operand.
+
 The loop pattern owns the `item` type variable. The iterable expression owns the
 `iterable` type variable. Checking connects those variables directly by the
 published `iter` callable type, then connects the loop-local iterator and the
