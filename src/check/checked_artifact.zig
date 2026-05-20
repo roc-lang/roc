@@ -1204,6 +1204,7 @@ pub const CheckedStaticDispatchConstraint = struct {
     origin: types.StaticDispatchConstraint.Origin,
     binop_negated: bool = false,
     num_literal: ?types.NumeralInfo = null,
+    resolved_owner: ?static_dispatch.MethodOwner = null,
 };
 
 /// Public `NumericDefaultPhase` declaration.
@@ -2180,6 +2181,7 @@ pub const CheckedTypeStore = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
+                .resolved_owner = constraint.resolved_owner,
             };
         }
         return out;
@@ -3365,6 +3367,24 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeBool(num_literal.is_negative);
                 self.writeBool(num_literal.is_fractional);
             }
+            try self.writeMethodOwner(constraint.resolved_owner);
+        }
+    }
+
+    fn writeMethodOwner(self: *SubstitutedCheckedTypeKeyBuilder, owner: ?static_dispatch.MethodOwner) Allocator.Error!void {
+        self.writeBool(owner != null);
+        if (owner) |resolved| {
+            switch (resolved) {
+                .builtin => |builtin_owner| {
+                    self.writeTag("builtin_owner");
+                    self.writeTag(@tagName(builtin_owner));
+                },
+                .nominal => |nominal| {
+                    self.writeTag("nominal_owner");
+                    self.writeBytes(self.names.moduleNameText(nominal.module_name));
+                    self.writeBytes(self.names.typeNameText(nominal.type_name));
+                },
+            }
         }
     }
 
@@ -3757,9 +3777,275 @@ fn copyCheckedStaticDispatchConstraints(
             .origin = constraint.origin,
             .binop_negated = constraint.binop_negated,
             .num_literal = constraint.num_literal,
+            .resolved_owner = null,
         };
     }
     return out;
+}
+
+fn publishStaticDispatchConstraintOwnerResolutions(
+    allocator: Allocator,
+    checked_types: *CheckedTypeStore,
+    names: *canonical.CanonicalNameStore,
+    method_registry: *const static_dispatch.MethodRegistry,
+    imports: []const PublishImportArtifact,
+    relation_artifacts: []const ImportedModuleView,
+) Allocator.Error!void {
+    const is_eq = try names.internMethodName("is_eq");
+
+    for (checked_types.payloads) |*payload| {
+        switch (payload.*) {
+            .flex => |flex| {
+                const resolved_owner = try uniquePublishedStaticDispatchOwner(
+                    allocator,
+                    names,
+                    method_registry,
+                    imports,
+                    relation_artifacts,
+                    flex.constraints,
+                    flex.numeric_default_phase,
+                    is_eq,
+                );
+                const constraints = try copyStaticDispatchConstraintsWithOwner(allocator, flex.constraints, resolved_owner);
+                allocator.free(flex.constraints);
+                payload.* = .{ .flex = .{
+                    .name = flex.name,
+                    .constraints = constraints,
+                    .numeric_default_phase = flex.numeric_default_phase,
+                } };
+            },
+            .rigid => |rigid| {
+                const resolved_owner = try uniquePublishedStaticDispatchOwner(
+                    allocator,
+                    names,
+                    method_registry,
+                    imports,
+                    relation_artifacts,
+                    rigid.constraints,
+                    rigid.numeric_default_phase,
+                    is_eq,
+                );
+                const constraints = try copyStaticDispatchConstraintsWithOwner(allocator, rigid.constraints, resolved_owner);
+                allocator.free(rigid.constraints);
+                payload.* = .{ .rigid = .{
+                    .name = rigid.name,
+                    .constraints = constraints,
+                    .numeric_default_phase = rigid.numeric_default_phase,
+                } };
+            },
+            else => {},
+        }
+    }
+}
+
+fn copyStaticDispatchConstraintsWithOwner(
+    allocator: Allocator,
+    constraints: []const CheckedStaticDispatchConstraint,
+    owner: ?static_dispatch.MethodOwner,
+) Allocator.Error![]const CheckedStaticDispatchConstraint {
+    if (constraints.len == 0) return &.{};
+    const out = try allocator.alloc(CheckedStaticDispatchConstraint, constraints.len);
+    for (constraints, 0..) |constraint, i| {
+        out[i] = constraint;
+        out[i].resolved_owner = owner;
+    }
+    return out;
+}
+
+fn uniquePublishedStaticDispatchOwner(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    method_registry: *const static_dispatch.MethodRegistry,
+    imports: []const PublishImportArtifact,
+    relation_artifacts: []const ImportedModuleView,
+    constraints: []const CheckedStaticDispatchConstraint,
+    numeric_default_phase: ?NumericDefaultPhase,
+    is_eq: canonical.MethodNameId,
+) Allocator.Error!?static_dispatch.MethodOwner {
+    if (constraints.len == 0) return null;
+    if (numeric_default_phase == .mono_specialization) return null;
+    if (staticDispatchConstraintsAreOnlyMethod(constraints, is_eq)) return null;
+
+    const first_method = constraints[0].fn_name;
+    var candidates = std.ArrayList(static_dispatch.MethodOwner).empty;
+    defer candidates.deinit(allocator);
+
+    try appendStaticDispatchOwnerCandidates(allocator, names, null, method_registry, first_method, &candidates);
+    for (imports) |imported| {
+        try appendStaticDispatchOwnerCandidates(
+            allocator,
+            names,
+            imported.view.canonical_names,
+            imported.view.method_registry,
+            first_method,
+            &candidates,
+        );
+    }
+    for (relation_artifacts) |related| {
+        try appendStaticDispatchOwnerCandidates(
+            allocator,
+            names,
+            related.canonical_names,
+            related.method_registry,
+            first_method,
+            &candidates,
+        );
+    }
+
+    var selected: ?static_dispatch.MethodOwner = null;
+    for (candidates.items) |candidate| {
+        if (!try staticDispatchOwnerSatisfiesAllConstraints(
+            names,
+            method_registry,
+            imports,
+            relation_artifacts,
+            candidate,
+            constraints,
+        )) continue;
+
+        if (selected) |existing| {
+            if (!staticDispatchMethodOwnerEql(existing, candidate)) return null;
+            continue;
+        }
+        selected = candidate;
+    }
+    return selected;
+}
+
+fn staticDispatchConstraintsAreOnlyMethod(
+    constraints: []const CheckedStaticDispatchConstraint,
+    method: canonical.MethodNameId,
+) bool {
+    if (constraints.len == 0) return false;
+    for (constraints) |constraint| {
+        if (constraint.fn_name != method) return false;
+    }
+    return true;
+}
+
+fn appendStaticDispatchOwnerCandidates(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    registry_names: ?*const canonical.CanonicalNameStore,
+    registry: *const static_dispatch.MethodRegistry,
+    method: canonical.MethodNameId,
+    candidates: *std.ArrayList(static_dispatch.MethodOwner),
+) Allocator.Error!void {
+    for (registry.entries) |entry| {
+        const entry_method = try remapStaticDispatchMethodName(names, registry_names, entry.key.method);
+        if (entry_method != method) continue;
+        const owner = try remapStaticDispatchMethodOwner(names, registry_names, entry.key.owner);
+        for (candidates.items) |existing| {
+            if (staticDispatchMethodOwnerEql(existing, owner)) break;
+        } else {
+            try candidates.append(allocator, owner);
+        }
+    }
+}
+
+fn staticDispatchOwnerSatisfiesAllConstraints(
+    names: *canonical.CanonicalNameStore,
+    method_registry: *const static_dispatch.MethodRegistry,
+    imports: []const PublishImportArtifact,
+    relation_artifacts: []const ImportedModuleView,
+    owner: static_dispatch.MethodOwner,
+    constraints: []const CheckedStaticDispatchConstraint,
+) Allocator.Error!bool {
+    for (constraints) |constraint| {
+        if (!try staticDispatchMethodTargetExists(
+            names,
+            method_registry,
+            imports,
+            relation_artifacts,
+            owner,
+            constraint.fn_name,
+        )) return false;
+    }
+    return true;
+}
+
+fn staticDispatchMethodTargetExists(
+    names: *canonical.CanonicalNameStore,
+    method_registry: *const static_dispatch.MethodRegistry,
+    imports: []const PublishImportArtifact,
+    relation_artifacts: []const ImportedModuleView,
+    owner: static_dispatch.MethodOwner,
+    method: canonical.MethodNameId,
+) Allocator.Error!bool {
+    if (try staticDispatchRegistryContainsTarget(names, null, method_registry, owner, method)) return true;
+    for (imports) |imported| {
+        if (try staticDispatchRegistryContainsTarget(
+            names,
+            imported.view.canonical_names,
+            imported.view.method_registry,
+            owner,
+            method,
+        )) return true;
+    }
+    for (relation_artifacts) |related| {
+        if (try staticDispatchRegistryContainsTarget(
+            names,
+            related.canonical_names,
+            related.method_registry,
+            owner,
+            method,
+        )) return true;
+    }
+    return false;
+}
+
+fn staticDispatchRegistryContainsTarget(
+    names: *canonical.CanonicalNameStore,
+    registry_names: ?*const canonical.CanonicalNameStore,
+    registry: *const static_dispatch.MethodRegistry,
+    owner: static_dispatch.MethodOwner,
+    method: canonical.MethodNameId,
+) Allocator.Error!bool {
+    for (registry.entries) |entry| {
+        const entry_method = try remapStaticDispatchMethodName(names, registry_names, entry.key.method);
+        if (entry_method != method) continue;
+        const entry_owner = try remapStaticDispatchMethodOwner(names, registry_names, entry.key.owner);
+        if (staticDispatchMethodOwnerEql(entry_owner, owner)) return true;
+    }
+    return false;
+}
+
+fn remapStaticDispatchMethodName(
+    names: *canonical.CanonicalNameStore,
+    source_names: ?*const canonical.CanonicalNameStore,
+    method: canonical.MethodNameId,
+) Allocator.Error!canonical.MethodNameId {
+    const source = source_names orelse return method;
+    return try names.internMethodName(source.methodNameText(method));
+}
+
+fn remapStaticDispatchMethodOwner(
+    names: *canonical.CanonicalNameStore,
+    source_names: ?*const canonical.CanonicalNameStore,
+    owner: static_dispatch.MethodOwner,
+) Allocator.Error!static_dispatch.MethodOwner {
+    const source = source_names orelse return owner;
+    return switch (owner) {
+        .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+        .nominal => |nominal| .{ .nominal = .{
+            .module_name = try names.internModuleName(source.moduleNameText(nominal.module_name)),
+            .type_name = try names.internTypeName(source.typeNameText(nominal.type_name)),
+        } },
+    };
+}
+
+fn staticDispatchMethodOwnerEql(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwner) bool {
+    return switch (a) {
+        .builtin => |a_builtin| switch (b) {
+            .builtin => |b_builtin| a_builtin == b_builtin,
+            .nominal => false,
+        },
+        .nominal => |a_nominal| switch (b) {
+            .builtin => false,
+            .nominal => |b_nominal| a_nominal.module_name == b_nominal.module_name and
+                a_nominal.type_name == b_nominal.type_name,
+        },
+    };
 }
 
 fn categorizeBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
@@ -18614,6 +18900,10 @@ pub const CheckedTypeProjector = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
+                .resolved_owner = if (constraint.resolved_owner) |owner|
+                    try self.remapViewMethodOwner(source_names, owner)
+                else
+                    null,
             };
         }
         return out;
@@ -18702,6 +18992,21 @@ pub const CheckedTypeProjector = struct {
     ) Allocator.Error!canonical.MethodNameId {
         const names = source_names orelse return id;
         return try self.target.canonical_names.internMethodName(names.methodNameText(id));
+    }
+
+    fn remapViewMethodOwner(
+        self: *CheckedTypeProjector,
+        source_names: ?*const canonical.CanonicalNameStore,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!static_dispatch.MethodOwner {
+        const names = source_names orelse return owner;
+        return switch (owner) {
+            .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+            .nominal => |nominal| .{ .nominal = .{
+                .module_name = try self.target.canonical_names.internModuleName(names.moduleNameText(nominal.module_name)),
+                .type_name = try self.target.canonical_names.internTypeName(names.typeNameText(nominal.type_name)),
+            } },
+        };
     }
 
     fn remapViewRecordField(
@@ -18926,6 +19231,10 @@ pub const CheckedTypeProjector = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
+                .resolved_owner = if (constraint.resolved_owner) |owner|
+                    try self.remapMethodOwner(imported, owner)
+                else
+                    null,
             };
         }
         return out;
@@ -19037,6 +19346,20 @@ pub const CheckedTypeProjector = struct {
         id: canonical.MethodNameId,
     ) Allocator.Error!canonical.MethodNameId {
         return try self.target.canonical_names.internMethodName(imported.canonical_names.methodNameText(id));
+    }
+
+    fn remapMethodOwner(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!static_dispatch.MethodOwner {
+        return switch (owner) {
+            .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+            .nominal => |nominal| .{ .nominal = .{
+                .module_name = try self.remapModuleName(imported, nominal.module_name),
+                .type_name = try self.remapTypeName(imported, nominal.type_name),
+            } },
+        };
     }
 
     fn remapRecordField(
@@ -19179,6 +19502,10 @@ const CheckedTypeStoreImportProjector = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
+                .resolved_owner = if (constraint.resolved_owner) |owner|
+                    try self.remapMethodOwner(owner)
+                else
+                    null,
             };
         }
         return out;
@@ -19252,6 +19579,19 @@ const CheckedTypeStoreImportProjector = struct {
         id: canonical.MethodNameId,
     ) Allocator.Error!canonical.MethodNameId {
         return try self.target_names.internMethodName(self.imported.canonical_names.methodNameText(id));
+    }
+
+    fn remapMethodOwner(
+        self: *CheckedTypeStoreImportProjector,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!static_dispatch.MethodOwner {
+        return switch (owner) {
+            .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+            .nominal => |nominal| .{ .nominal = .{
+                .module_name = try self.remapModuleName(nominal.module_name),
+                .type_name = try self.remapTypeName(nominal.type_name),
+            } },
+        };
     }
 
     fn remapRecordField(
@@ -19597,6 +19937,15 @@ pub fn publishFromTypedModule(
 
     var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication);
     errdefer method_registry.deinit(allocator);
+
+    try publishStaticDispatchConstraintOwnerResolutions(
+        allocator,
+        &checked_type_publication.store,
+        &canonical_names,
+        &method_registry,
+        inputs.imports,
+        inputs.relation_artifacts,
+    );
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_type_publication, &checked_bodies);
     errdefer static_dispatch_plans.deinit(allocator);

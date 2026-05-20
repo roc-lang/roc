@@ -2576,6 +2576,10 @@ const TypeInstantiator = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
+                .resolved_owner = if (constraint.resolved_owner) |owner|
+                    try self.name_resolver.methodOwner(source_artifact, owner)
+                else
+                    null,
             };
         }
         return out;
@@ -2921,6 +2925,10 @@ const TypeInstantiator = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
+                .resolved_owner = if (constraint.resolved_owner) |owner|
+                    try self.name_resolver.methodOwner(self.template_artifact, owner)
+                else
+                    null,
             });
         }
         return try out.toOwnedSlice(self.allocator);
@@ -2944,6 +2952,10 @@ const TypeInstantiator = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
+                .resolved_owner = if (constraint.resolved_owner) |owner|
+                    try self.methodOwnerForConcreteRef(ref, owner)
+                else
+                    null,
             });
         }
         return try out.toOwnedSlice(self.allocator);
@@ -2960,7 +2972,7 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypeId {
         if (self.substitutions.get(id)) |concrete| return try self.materializeConcreteRef(concrete);
         if (self.materialized_template_roots.get(id)) |existing| return existing;
-        if (try self.resolveConstrainedTemplateVariableFromRegistry(id)) |concrete| {
+        if (try self.resolveConstrainedTemplateVariableFromPublishedOwner(id)) |concrete| {
             return try self.materializeConcreteRef(concrete);
         }
 
@@ -3485,12 +3497,12 @@ const TypeInstantiator = struct {
         const resolved = self.resolveConcreteRef(ref);
         switch (self.concretePayload(resolved)) {
             .flex => |flex| {
-                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, flex)) |concrete| {
+                if (try self.resolveConstrainedConcreteVariableFromPublishedOwner(resolved, flex)) |concrete| {
                     return try self.lowerConcreteRef(concrete);
                 }
             },
             .rigid => |rigid| {
-                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, rigid)) |concrete| {
+                if (try self.resolveConstrainedConcreteVariableFromPublishedOwner(resolved, rigid)) |concrete| {
                     return try self.lowerConcreteRef(concrete);
                 }
             },
@@ -4958,12 +4970,12 @@ const TypeInstantiator = struct {
         const resolved = self.resolveConcreteRef(ref);
         switch (self.concretePayload(resolved)) {
             .flex => |flex| {
-                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, flex)) |concrete| {
+                if (try self.resolveConstrainedConcreteVariableFromPublishedOwner(resolved, flex)) |concrete| {
                     return try self.materializeRuntimeConcreteRoot(concrete);
                 }
             },
             .rigid => |rigid| {
-                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, rigid)) |concrete| {
+                if (try self.resolveConstrainedConcreteVariableFromPublishedOwner(resolved, rigid)) |concrete| {
                     return try self.materializeRuntimeConcreteRoot(concrete);
                 }
             },
@@ -5430,7 +5442,7 @@ const TypeInstantiator = struct {
         invariantViolation("mono specialization reached a constrained concrete type variable where a concrete runtime type was required");
     }
 
-    fn resolveConstrainedTemplateVariableFromRegistry(
+    fn resolveConstrainedTemplateVariableFromPublishedOwner(
         self: *TypeInstantiator,
         id: checked_artifact.CheckedTypeId,
     ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
@@ -5443,8 +5455,8 @@ const TypeInstantiator = struct {
         if (self.isMonoSpecializationNumericFlex(variable)) return null;
         if (try self.isEqualityOnlyVariable(variable)) return null;
 
-        const owner = (try self.uniqueStaticDispatchOwnerForConstraints(variable.constraints)) orelse {
-            invariantViolation("mono specialization could not resolve constrained variable to one checked method owner");
+        const owner = (try self.publishedStaticDispatchOwnerForTemplateConstraints(variable.constraints)) orelse {
+            invariantViolation("mono specialization constrained variable needed a method owner but checking published none");
         };
 
         for (variable.constraints) |constraint| {
@@ -5465,7 +5477,7 @@ const TypeInstantiator = struct {
         return self.resolveConcreteRef(concrete);
     }
 
-    fn resolveConstrainedConcreteVariableFromRegistry(
+    fn resolveConstrainedConcreteVariableFromPublishedOwner(
         self: *TypeInstantiator,
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         variable: checked_artifact.CheckedTypeVariable,
@@ -5474,8 +5486,8 @@ const TypeInstantiator = struct {
         if (self.isMonoSpecializationNumericFlex(variable)) return null;
         if (try self.isConcreteEqualityOnlyVariable(ref, variable)) return null;
 
-        const owner = (try self.uniqueStaticDispatchOwnerForConcreteConstraints(ref, variable.constraints)) orelse {
-            invariantViolation("mono specialization could not resolve constrained concrete variable to one checked method owner");
+        const owner = (try self.publishedStaticDispatchOwnerForConcreteConstraints(ref, variable.constraints)) orelse {
+            invariantViolation("mono specialization constrained concrete variable needed a method owner but checking published none");
         };
 
         for (variable.constraints) |constraint| {
@@ -5500,153 +5512,60 @@ const TypeInstantiator = struct {
         return concrete;
     }
 
-    fn uniqueStaticDispatchOwnerForConstraints(
+    fn publishedStaticDispatchOwnerForTemplateConstraints(
         self: *TypeInstantiator,
         constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
     ) Allocator.Error!?static_dispatch.MethodOwner {
-        if (constraints.len == 0) return null;
-        const first_method = try self.name_resolver.methodName(self.template_artifact, constraints[0].fn_name);
-
-        var candidates = std.ArrayList(static_dispatch.MethodOwner).empty;
-        defer candidates.deinit(self.allocator);
-
-        try self.appendStaticDispatchOwnerCandidates(
-            self.input.root.artifact.key,
-            &self.input.root.artifact.method_registry,
-            first_method,
-            &candidates,
-        );
-        for (self.input.imports) |imported| {
-            try self.appendStaticDispatchOwnerCandidates(
-                imported.key,
-                imported.method_registry,
-                first_method,
-                &candidates,
-            );
-        }
-        for (self.input.root.relation_artifacts) |related| {
-            try self.appendStaticDispatchOwnerCandidates(
-                related.key,
-                related.method_registry,
-                first_method,
-                &candidates,
-            );
-        }
-
-        var selected: ?static_dispatch.MethodOwner = null;
-        for (candidates.items) |candidate| {
-            if (!try self.ownerSatisfiesAllStaticDispatchConstraints(candidate, constraints)) continue;
-            if (selected) |existing| {
-                if (!methodOwnerEql(existing, candidate)) {
-                    invariantViolation("mono specialization constrained variable matched multiple checked method owners");
-                }
-                continue;
-            }
-            selected = candidate;
-        }
-        return selected;
+        return try self.publishedStaticDispatchOwnerForArtifactConstraints(self.template_artifact, constraints);
     }
 
-    fn uniqueStaticDispatchOwnerForConcreteConstraints(
+    fn publishedStaticDispatchOwnerForConcreteConstraints(
         self: *TypeInstantiator,
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
         constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
     ) Allocator.Error!?static_dispatch.MethodOwner {
-        if (constraints.len == 0) return null;
-        const first_method = try self.methodNameForConcreteRef(ref, constraints[0].fn_name);
-
-        var candidates = std.ArrayList(static_dispatch.MethodOwner).empty;
-        defer candidates.deinit(self.allocator);
-
-        try self.appendStaticDispatchOwnerCandidates(
-            self.input.root.artifact.key,
-            &self.input.root.artifact.method_registry,
-            first_method,
-            &candidates,
-        );
-        for (self.input.imports) |imported| {
-            try self.appendStaticDispatchOwnerCandidates(
-                imported.key,
-                imported.method_registry,
-                first_method,
-                &candidates,
-            );
-        }
-        for (self.input.root.relation_artifacts) |related| {
-            try self.appendStaticDispatchOwnerCandidates(
-                related.key,
-                related.method_registry,
-                first_method,
-                &candidates,
-            );
-        }
-
-        var selected: ?static_dispatch.MethodOwner = null;
-        for (candidates.items) |candidate| {
-            if (!try self.ownerSatisfiesAllStaticDispatchConcreteConstraints(ref, candidate, constraints)) continue;
-            if (selected) |existing| {
-                if (!methodOwnerEql(existing, candidate)) {
-                    invariantViolation("mono specialization constrained concrete variable matched multiple checked method owners");
-                }
-                continue;
-            }
-            selected = candidate;
-        }
-        return selected;
+        const root = self.program.concrete_source_types.root(self.resolveConcreteRef(ref));
+        return switch (root.source) {
+            .artifact => |artifact_ref| try self.publishedStaticDispatchOwnerForArtifactConstraints(artifact_ref.artifact, constraints),
+            .local => publishedStaticDispatchOwnerForLocalConstraints(constraints),
+        };
     }
 
-    fn appendStaticDispatchOwnerCandidates(
+    fn publishedStaticDispatchOwnerForArtifactConstraints(
         self: *TypeInstantiator,
-        registry_artifact: checked_artifact.CheckedModuleArtifactKey,
-        registry: *const static_dispatch.MethodRegistry,
-        method: canonical.MethodNameId,
-        candidates: *std.ArrayList(static_dispatch.MethodOwner),
-    ) Allocator.Error!void {
-        for (registry.entries) |entry| {
-            const entry_method = try self.name_resolver.methodName(registry_artifact, entry.key.method);
-            if (entry_method != method) continue;
-            const owner = try self.name_resolver.methodOwner(registry_artifact, entry.key.owner);
-            for (candidates.items) |existing| {
-                if (methodOwnerEql(existing, owner)) break;
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+    ) Allocator.Error!?static_dispatch.MethodOwner {
+        var selected: ?static_dispatch.MethodOwner = null;
+        for (constraints) |constraint| {
+            const owner = constraint.resolved_owner orelse return null;
+            const resolved = try self.name_resolver.methodOwner(artifact, owner);
+            if (selected) |existing| {
+                if (!methodOwnerEql(existing, resolved)) {
+                    invariantViolation("mono specialization received one constrained variable with multiple published method owners");
+                }
             } else {
-                try candidates.append(self.allocator, owner);
+                selected = resolved;
             }
         }
+        return selected;
     }
 
-    fn ownerSatisfiesAllStaticDispatchConstraints(
-        self: *TypeInstantiator,
-        owner: static_dispatch.MethodOwner,
+    fn publishedStaticDispatchOwnerForLocalConstraints(
         constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
-    ) Allocator.Error!bool {
+    ) ?static_dispatch.MethodOwner {
+        var selected: ?static_dispatch.MethodOwner = null;
         for (constraints) |constraint| {
-            const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
-            if ((try lookupStaticDispatchMethodTarget(
-                self.input,
-                self.name_resolver,
-                owner,
-                method,
-            )) == null) return false;
+            const owner = constraint.resolved_owner orelse return null;
+            if (selected) |existing| {
+                if (!methodOwnerEql(existing, owner)) {
+                    invariantViolation("mono specialization received one local constrained variable with multiple published method owners");
+                }
+            } else {
+                selected = owner;
+            }
         }
-        return true;
-    }
-
-    fn ownerSatisfiesAllStaticDispatchConcreteConstraints(
-        self: *TypeInstantiator,
-        ref: ConcreteSourceType.ConcreteSourceTypeRef,
-        owner: static_dispatch.MethodOwner,
-        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
-    ) Allocator.Error!bool {
-        for (constraints) |constraint| {
-            const method = try self.methodNameForConcreteRef(ref, constraint.fn_name);
-            if ((try lookupStaticDispatchMethodTarget(
-                self.input,
-                self.name_resolver,
-                owner,
-                method,
-            )) == null) return false;
-        }
-        return true;
+        return selected;
     }
 
     fn concreteRefForMethodTargetCallable(
@@ -5858,6 +5777,18 @@ const TypeInstantiator = struct {
         return switch (root.source) {
             .artifact => |artifact_ref| try self.name_resolver.methodName(artifact_ref.artifact, name),
             .local => name,
+        };
+    }
+
+    fn methodOwnerForConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!static_dispatch.MethodOwner {
+        const root = self.program.concrete_source_types.root(self.resolveConcreteRef(ref));
+        return switch (root.source) {
+            .artifact => |artifact_ref| try self.name_resolver.methodOwner(artifact_ref.artifact, owner),
+            .local => owner,
         };
     }
 
@@ -11421,14 +11352,14 @@ const BodyLowerer = struct {
                 .empty_tag_union,
                 => return null,
                 .flex => |flex| {
-                    if (try self.type_instantiator.resolveConstrainedConcreteVariableFromRegistry(current, flex)) |resolved| {
+                    if (try self.type_instantiator.resolveConstrainedConcreteVariableFromPublishedOwner(current, flex)) |resolved| {
                         current = resolved;
                         continue;
                     }
                     return null;
                 },
                 .rigid => |rigid| {
-                    if (try self.type_instantiator.resolveConstrainedConcreteVariableFromRegistry(current, rigid)) |resolved| {
+                    if (try self.type_instantiator.resolveConstrainedConcreteVariableFromPublishedOwner(current, rigid)) |resolved| {
                         current = resolved;
                         continue;
                     }

@@ -2875,6 +2875,27 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(5, 108)" },
     },
     .{
+        .name = "inspect: explicit where method constraint keeps owner generic",
+        .source_kind = .module,
+        .source =
+        \\Box := [Box(U64)].{
+        \\  get : Box -> U64
+        \\  get = |Box.Box(n)| n
+        \\}
+        \\
+        \\Count := [Count(U64)].{
+        \\  get : Count -> U64
+        \\  get = |Count.Count(n)| n + 100
+        \\}
+        \\
+        \\read : item -> U64 where [item.get : item -> U64]
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Box.Box(5)), read(Count.Count(8)))
+        ,
+        .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
         .name = "inspect: cross-module attached method specialization on imported nominal",
         .source_kind = .module,
         .source =
@@ -2980,6 +3001,48 @@ const core_tests = [_]TestCase{
             },
         },
         .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: imported where helper remains generic when another owner is visible",
+        .source_kind = .module,
+        .source =
+        \\import CountMod
+        \\import Helpers
+        \\
+        \\main = Helpers.read(CountMod.Count(8))
+        ,
+        .imports = &.{
+            .{
+                .name = "BoxMod",
+                .source =
+                \\Box := [Box(U64)].{
+                \\  get : Box -> U64
+                \\  get = |Box.Box(n)| n
+                \\}
+                ,
+            },
+            .{
+                .name = "CountMod",
+                .source =
+                \\Count := [Count(U64)].{
+                \\  get : Count -> U64
+                \\  get = |Count.Count(n)| n + 100
+                \\}
+                ,
+            },
+            .{
+                .name = "Helpers",
+                .source =
+                \\module [read]
+                \\
+                \\import BoxMod
+                \\
+                \\read : item -> U64 where [item.get : item -> U64]
+                \\read = |value| value.get()
+                ,
+            },
+        },
+        .expected = .{ .inspect_str = "108" },
     },
     .{
         .name = "inspect: record field access remains separate from method calls",

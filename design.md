@@ -2348,11 +2348,15 @@ nodes are semantic identities, not parser-local source ids.
 Open variables keep any canonical source type-variable name separately from
 their artifact-local variable id. Static-dispatch constraints attached to open
 variables are checked semantic rows: `fn_name` is a canonical `MethodNameId`,
-and `fn_ty` names a checked function type root or template payload. A
-constraint row does not contain raw identifiers, source text, or a later method
-lookup result. Canonical-name remapping includes static-dispatch constraint
-function names, and debug verification rejects foreign canonical-name ids or
-constraints whose checked function payload is missing.
+`fn_ty` names a checked function type root or template payload, and
+`resolved_owner` is the checked-publication owner resolution when the constraint
+group functionally determines one runtime method owner. A constraint row does
+not contain raw identifiers, source text, or a method target. Canonical-name
+remapping includes static-dispatch constraint function names and published
+owners. Publication verifies that an owner is assigned only when the visible
+checked method registries contain every required `(MethodOwner, MethodNameId)`
+target. Debug verification rejects foreign canonical-name ids or constraints
+whose checked function payload is missing.
 
 The exact Zig field names may differ, but the store must preserve:
 
@@ -5504,20 +5508,23 @@ const MonoGraphFinalization = struct {
     equality_only_closures: Span<MonoVarId>,
     unconstrained_closures: Span<MonoVarId>,
     extension_tail_closures: Span<RowOrTagTailClosure>,
-    method_constraint_resolutions: Span<MethodRegistryIntersection>,
+    method_constraint_owner_uses: Span<PublishedMethodConstraintOwnerUse>,
     callback_return_endpoints: Span<CallbackReturnEndpoint>,
 };
 ```
 
 Delayed numerics default only after every argument, return, binder,
 static-dispatch, equality, callback, and expected-type edge has been connected.
-Variables that appear only in equality constraints close to `{}` only after the
-method registry proves no concrete owner is required. Truly unconstrained flex
-variables close to `{}` at finalization. Row and tag tails close only at
-extension edges that checking marked as sealed endpoints; an open row variable
-elsewhere remains an explicit open variable in the checked source type payload.
-Runtime variables constrained by methods resolve through method-registry
-intersections, not through name lookup or syntactic receiver shape.
+Variables that appear only in ownerless equality constraints close to `{}` only
+after checking has published that no owner-specific method is required. Truly
+unconstrained flex variables close to `{}` at finalization. Row and tag tails
+close only at extension edges that checking marked as sealed endpoints; an open
+row variable elsewhere remains an explicit open variable in the checked source
+type payload. Runtime variables constrained by methods consume the
+`resolved_owner` published on their constraint rows. Mono may look up the
+published `(MethodOwner, MethodNameId)` target to instantiate the callable, but
+it must not discover the owner by intersecting method registries, by name
+lookup, or by syntactic receiver shape.
 Callback-local return endpoints are connected before any callback body emits
 MIR. Body emission begins only after `FinalizedMonoSpecializationGraph` verifies
 that no pending graph links, unresolved numeric defaults, unchecked callback
@@ -12591,7 +12598,7 @@ Structural tests cover every type-state boundary:
 - mono finalized specialization graph lookup-only emission
 - `MonoGraphFinalization` closure rules for delayed numeric defaults,
   equality-only `{}`, unconstrained `{}`, row/tag tail extension closure,
-  method-registry intersections, callback-local return endpoints, and
+  published method-constraint owners, callback-local return endpoints, and
   graph-finalization-before-emission
 - mono numeric defaulting tests for `NumericDefaultPhase.mono_specialization`,
   defaultable arithmetic operators, comparison operand typing, delayed numeric
