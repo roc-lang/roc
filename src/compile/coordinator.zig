@@ -51,6 +51,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const CacheManager = cache_manager_mod.CacheManager;
+const app_header_mod = @import("app_header.zig");
 const roc_target = @import("roc_target");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
@@ -562,6 +563,15 @@ pub const Coordinator = struct {
             self.gpa;
     }
 
+    /// Initialize a `Coordinator`.
+    ///
+    /// `compiler_version` is a cache-key discriminant — it is incorporated
+    /// into the keys used by `cache_manager` so that artifacts from
+    /// different compiler versions (or different consumer wrappers) stay
+    /// segregated. Embedders should pass a stable string that changes
+    /// whenever their consumer's compile semantics could change, e.g.
+    /// `"my-embedder@1.2.3+roc@" ++ build_options.compiler_version`.
+    /// Mismatching across runs causes cache misses, not corruption.
     pub fn init(
         gpa: Allocator,
         mode: Mode,
@@ -693,6 +703,135 @@ pub const Coordinator = struct {
     /// Get a package by name
     pub fn getPackage(self: *Coordinator, name: []const u8) ?*PackageState {
         return self.packages.get(name);
+    }
+
+    /// Options for `discoverAppFromPath`.
+    pub const AppDiscoveryOptions = struct {
+        /// Path to the app `.roc` file, accessible via the configured Io.
+        entry_path: []const u8,
+        /// Optional override for the app module's `source_dir_override`.
+        source_dir_override: ?[]const u8 = null,
+    };
+
+    pub const AppDiscoveryError = error{
+        InvalidPlatformPath,
+        AbsolutePlatformPath,
+        UnsupportedPlatformSpec,
+        UnsupportedPackageSpec,
+    } || app_header_mod.Error || Allocator.Error;
+
+    /// Read an app `.roc` file's header, register the app + platform +
+    /// non-platform packages, and enqueue the app's parse task. After this
+    /// returns, the caller should call `start()` and `coordinatorLoop()`.
+    ///
+    /// Only relative paths (`./...`, `../...`) are supported for the platform
+    /// spec and non-platform packages — URL specs return
+    /// `error.UnsupportedPlatformSpec` or `error.UnsupportedPackageSpec`.
+    /// Embedders that need URL pre-resolution (downloading + caching) should
+    /// call `compile.app_header.parseAppHeader` themselves, resolve URLs to
+    /// local paths through their own policy, and register packages via
+    /// `ensurePackage` / `registerInlinePackage`. See
+    /// `buildLirRuntimeImageWithCoordinator` in `src/cli/main.zig` for a
+    /// worked example of the URL-aware path.
+    ///
+    /// `arena` holds strings extracted from the header (qualifiers, specs).
+    pub fn discoverAppFromPath(
+        self: *Coordinator,
+        arena: Allocator,
+        opts: AppDiscoveryOptions,
+    ) AppDiscoveryError!void {
+        const header_info = try app_header_mod.parseAppHeader(self.io, self.gpa, arena, opts.entry_path);
+
+        const app_dir = std.fs.path.dirname(opts.entry_path) orelse ".";
+
+        const app_pkg = try self.ensurePackage("app", app_dir);
+        const app_module_name = base.module_path.getModuleName(opts.entry_path);
+        const app_module_id = try app_pkg.ensureModule(self.gpa, app_module_name, opts.entry_path);
+        if (opts.source_dir_override) |source_dir| {
+            app_pkg.modules.items[app_module_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
+        }
+        app_pkg.root_module_id = app_module_id;
+        app_pkg.modules.items[app_module_id].depth = 0;
+        app_pkg.remaining_modules += 1;
+        self.total_remaining += 1;
+
+        if (header_info.platform_spec.len > 0) {
+            if (std.fs.path.isAbsolute(header_info.platform_spec)) {
+                return error.AbsolutePlatformPath;
+            }
+            if (!isRelativeSpec(header_info.platform_spec)) {
+                return error.UnsupportedPlatformSpec;
+            }
+            const platform_main_path = try std.fs.path.join(arena, &.{ app_dir, header_info.platform_spec });
+            const platform_dir = std.fs.path.dirname(platform_main_path) orelse return error.InvalidPlatformPath;
+
+            try self.registerPlatformPackage(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier);
+        }
+
+        for (header_info.non_platform_packages) |entry| {
+            if (!isRelativeSpec(entry.spec)) {
+                return error.UnsupportedPackageSpec;
+            }
+            const pkg_main_path = try std.fs.path.join(arena, &.{ app_dir, entry.spec });
+            const pkg_dir = std.fs.path.dirname(pkg_main_path) orelse ".";
+            _ = try self.registerInlinePackage(entry.shorthand, pkg_dir, app_pkg, entry.shorthand);
+        }
+
+        try self.enqueueParseTask("app", app_module_id);
+    }
+
+    /// Register the platform package (named "pf"), wire the app's shorthand
+    /// for it, ensure the platform's main module, and enqueue its parse task.
+    pub fn registerPlatformPackage(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_dir: []const u8,
+        platform_main_path: []const u8,
+        qualifier: ?[]const u8,
+    ) !void {
+        const pf_pkg = try self.ensurePackage("pf", platform_dir);
+
+        if (qualifier) |qual| {
+            try app_pkg.shorthands.put(
+                try self.gpa.dupe(u8, qual),
+                try self.gpa.dupe(u8, "pf"),
+            );
+        }
+
+        const pf_module_id = try pf_pkg.ensureModule(self.gpa, "main", platform_main_path);
+        pf_pkg.root_module_id = pf_module_id;
+        pf_pkg.modules.items[pf_module_id].depth = 1;
+        pf_pkg.remaining_modules += 1;
+        self.total_remaining += 1;
+        try self.enqueueParseTask("pf", pf_module_id);
+    }
+
+    /// Register a non-platform package and (optionally) wire a shorthand on
+    /// the app package that resolves to it. Useful for embedders that have
+    /// pre-resolved URL packages to local paths.
+    ///
+    /// Returns the new (or existing) package state.
+    pub fn registerInlinePackage(
+        self: *Coordinator,
+        package_name: []const u8,
+        package_root_dir: []const u8,
+        app_pkg: ?*PackageState,
+        shorthand_on_app: ?[]const u8,
+    ) !*PackageState {
+        const pkg = try self.ensurePackage(package_name, package_root_dir);
+        if (app_pkg) |a| {
+            if (shorthand_on_app) |sh| {
+                try a.shorthands.put(
+                    try self.gpa.dupe(u8, sh),
+                    try self.gpa.dupe(u8, package_name),
+                );
+            }
+        }
+        return pkg;
+    }
+
+    fn isRelativeSpec(spec: []const u8) bool {
+        return std.mem.startsWith(u8, spec, "./") or std.mem.startsWith(u8, spec, "../");
     }
 
     /// Return the published checked artifact for a package root module.
@@ -854,13 +993,14 @@ pub const Coordinator = struct {
         return false;
     }
 
+    /// Finalize the build's executable artifacts (link app + platform, build
+    /// the platform-app relation, republish the root artifact).
+    ///
+    /// Must only be called after `coordinatorLoop` returns and after the
+    /// caller has confirmed `hasUserErrors() == false`. Returns
+    /// `error.HasUserErrors` if called while user-facing diagnostics exist.
     pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
-        if (self.hasUserErrors()) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("compile.coordinator.finalizeExecutableArtifacts called after user-facing errors", .{});
-            }
-            unreachable;
-        }
+        if (self.hasUserErrors()) return error.HasUserErrors;
 
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
@@ -1015,6 +1155,54 @@ pub const Coordinator = struct {
             }
         }
         return false;
+    }
+
+    /// One entry yielded by `ReportIter` — a single diagnostic with the package
+    /// and module it came from. Pointers borrow from the Coordinator's storage.
+    pub const ReportEntry = struct {
+        package_name: []const u8,
+        module_name: []const u8,
+        report: *const Report,
+    };
+
+    /// Iterator over every report from every module in every package.
+    /// Borrows from `Coordinator` storage — do not mutate while iterating.
+    pub const ReportIter = struct {
+        pkg_it: std.StringHashMap(*PackageState).Iterator,
+        cur_pkg: ?*PackageState = null,
+        module_idx: usize = 0,
+        report_idx: usize = 0,
+
+        pub fn next(self: *ReportIter) ?ReportEntry {
+            while (true) {
+                if (self.cur_pkg) |pkg| {
+                    if (self.module_idx < pkg.modules.items.len) {
+                        const mod = &pkg.modules.items[self.module_idx];
+                        if (self.report_idx < mod.reports.items.len) {
+                            const report = &mod.reports.items[self.report_idx];
+                            self.report_idx += 1;
+                            return .{
+                                .package_name = pkg.name,
+                                .module_name = mod.name,
+                                .report = report,
+                            };
+                        }
+                        self.module_idx += 1;
+                        self.report_idx = 0;
+                        continue;
+                    }
+                }
+                const entry = self.pkg_it.next() orelse return null;
+                self.cur_pkg = entry.value_ptr.*;
+                self.module_idx = 0;
+                self.report_idx = 0;
+            }
+        }
+    };
+
+    /// Iterate over every diagnostic produced during compilation.
+    pub fn iterReports(self: *const Coordinator) ReportIter {
+        return .{ .pkg_it = self.packages.iterator() };
     }
 
     pub fn executableRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
@@ -1328,6 +1516,14 @@ pub const Coordinator = struct {
             }
 
             if (made_progress) {
+                iterations_without_progress = 0;
+            } else if (self.inflight.load(.acquire) > 0) {
+                // A worker is still processing a task or has one queued.
+                // `inflight` is incremented in enqueueTask before the task is
+                // sent to the channel, so it covers both "queued" and
+                // "executing". The wall-clock stuck check below would
+                // false-positive on overloaded CI when a worker is merely
+                // slow, so don't advance the counter while inflight > 0.
                 iterations_without_progress = 0;
             } else {
                 iterations_without_progress += 1;
@@ -1857,8 +2053,12 @@ pub const Coordinator = struct {
 
         for (mod.imports.items) |imp_id| {
             const imp = pkg.getModule(imp_id).?;
-            const env = imp.moduleEnv() orelse
-                std.debug.panic("compile.coordinator.buildCanonicalizeImports missing local env for {s}", .{imp.name});
+            // Skip imports whose module env is missing (e.g. the source file
+            // wasn't found during discovery). Canonicalize will emit a
+            // `module_not_found` diagnostic for the unresolved name — see
+            // src/canonicalize/can.zig where it checks `explicit_module_envs`.
+            // Mirrors the `orelse continue` handling for external_imports below.
+            const env = imp.moduleEnv() orelse continue;
             try imports.append(self.gpa, .{
                 .import_name = imp.name,
                 .module_env = env,

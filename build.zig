@@ -1632,6 +1632,9 @@ const MiniCiStep = struct {
         try runSubBuild(step, &.{"test"}, "zig build test");
         try recordTiming(b.allocator, &timings, "zig build test", &timer);
 
+        try runSubBuild(step, &.{"test-builtin-doc"}, "zig build test-builtin-doc");
+        try recordTiming(b.allocator, &timings, "zig build test-builtin-doc", &timer);
+
         try runSubBuild(
             step,
             &.{ "-Doptimize=ReleaseFast", "test-playground" },
@@ -2414,11 +2417,13 @@ pub fn build(b: *std.Build) void {
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
-    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + glue)");
+    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
     const test_platforms_step = b.step("test-platforms", "Test platform integration (int/str/fx build and run)");
     const test_subcommands_step = b.step("test-subcommands", "Test roc CLI subcommands (check, build, run, fmt, etc.)");
+    const test_echo_step = b.step("test-echo", "Test the echo platform (headerless app) integration");
     const test_glue_step = b.step("test-glue", "Test the roc glue command");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -2731,6 +2736,29 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
         test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
 
+        // test-echo: echo platform (headerless app) tests
+        const echo_tests = b.addTest(.{
+            .name = "echo_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/echo_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_echo_tests = b.addRunArtifact(echo_tests);
+        if (run_args.len != 0) {
+            run_echo_tests.addArgs(run_args);
+        }
+        run_echo_tests.step.dependOn(&install.step);
+        run_echo_tests.step.dependOn(build_test_hosts_step);
+
+        // Print "All N tests passed" via the same summary step the rest of the suite uses.
+        const echo_tests_summary = TestsSummaryStep.create(b, test_filters, 0);
+        echo_tests_summary.addRun(&run_echo_tests.step);
+        test_echo_step.dependOn(&echo_tests_summary.step);
+
         // test-glue: glue command integration tests
         const glue_test = b.addTest(.{
             .name = "glue_test",
@@ -2750,9 +2778,10 @@ pub fn build(b: *std.Build) void {
         run_glue_test_step = &run_glue_test.step;
         test_glue_step.dependOn(&run_glue_test.step);
 
-        // test-cli: umbrella depending on all three
+        // test-cli: umbrella depending on all four
         test_cli_step.dependOn(test_platforms_step);
         test_cli_step.dependOn(test_subcommands_step);
+        test_cli_step.dependOn(test_echo_step);
         test_cli_step.dependOn(test_glue_step);
     }
 
@@ -3059,12 +3088,67 @@ pub fn build(b: *std.Build) void {
             .dest_dir = .{ .override = .lib },
         });
         playground_step.dependOn(&echo_wasm_install.step);
+        echo_wasm_step.dependOn(&echo_wasm_install.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
             const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
             playground_step.dependOn(&install_file.step);
+            echo_wasm_step.dependOn(&install_file.step);
         }
+
+        // echo_native: native binary that drives the same runEcho pipeline as
+        // echo.wasm. Use it to debug compile/run failures with real stack
+        // traces. `zig build run-echo -- path/to/app.roc [--with-file Name=path] ...`
+        const echo_native_exe = b.addExecutable(.{
+            .name = "echo_native",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/echo_platform/echo_native.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_native_exe, target);
+        echo_native_exe.root_module.addImport("compile", roc_modules.compile);
+        echo_native_exe.root_module.addImport("check", roc_modules.check);
+        echo_native_exe.root_module.addImport("eval", roc_modules.eval);
+        echo_native_exe.root_module.addImport("lir", roc_modules.lir);
+        echo_native_exe.root_module.addImport("layout", roc_modules.layout);
+        echo_native_exe.root_module.addImport("base", roc_modules.base);
+        echo_native_exe.root_module.addImport("can", roc_modules.can);
+        echo_native_exe.root_module.addImport("echo_platform", roc_modules.echo_platform);
+        echo_native_exe.root_module.addImport("reporting", roc_modules.reporting);
+        echo_native_exe.root_module.addImport("roc_target", roc_modules.roc_target);
+        echo_native_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        echo_native_exe.step.dependOn(&write_compiled_builtins.step);
+
+        const echo_native_install = b.addInstallArtifact(echo_native_exe, .{});
+
+        const run_echo_step = b.step("run-echo", "Run the native echo platform driver (debug helper for echo.wasm)");
+        const run_echo_cmd = b.addRunArtifact(echo_native_exe);
+        if (run_args.len != 0) run_echo_cmd.addArgs(run_args);
+        run_echo_cmd.step.dependOn(&echo_native_install.step);
+        run_echo_step.dependOn(&run_echo_cmd.step);
+
+        // test-echo-wasm: bytebox-driven integration test that loads
+        // zig-out/lib/echo.wasm, supplies in-process js_echo + js_stderr,
+        // and asserts the tutorial example produces the expected output.
+        const echo_wasm_test_exe = b.addExecutable(.{
+            .name = "echo_wasm_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/echo-wasm-test/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_wasm_test_exe, target);
+        echo_wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+
+        const test_echo_wasm_step = b.step("test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
+        const run_echo_wasm_test = b.addRunArtifact(echo_wasm_test_exe);
+        // Ensure the wasm is built before the test runs.
+        run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
+        test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
 
     // Build playground integration tests - now enabled for all optimization modes
@@ -3276,6 +3360,58 @@ pub fn build(b: *std.Build) void {
             run_snapshot_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_snapshot_test.step);
+    }
+
+    // Add Builtin.roc doc code-block tests. Verifies every ```roc block in
+    // src/build/roc/Builtin.roc passes the in-memory equivalent of
+    // `roc check`, and either runs as `roc test` (when the block is only
+    // top-level expects) or evaluates.
+    const enable_builtin_doc_tests = b.option(bool, "builtin-doc-tests", "Enable Builtin.roc doc code-block tests") orelse true;
+    if (enable_builtin_doc_tests) {
+        const builtin_doc_test = b.addTest(.{
+            .name = "builtin_doc_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/eval/test/builtin_doc_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+            .filters = test_filters,
+        });
+        roc_modules.addAll(builtin_doc_test);
+        builtin_doc_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        builtin_doc_test.step.dependOn(&write_compiled_builtins.step);
+        try addLlvmSupportToStep(
+            b,
+            builtin_doc_test,
+            target,
+            use_system_llvm,
+            user_llvm_path,
+            roc_modules,
+            llvm_codegen_module,
+            &copy_builtins_bc.step,
+            zstd,
+        );
+        if (builtin_doc_test.root_module.resolved_target.?.result.os.tag != .windows or
+            builtin_doc_test.root_module.resolved_target.?.result.abi != .msvc)
+        {
+            builtin_doc_test.root_module.link_libcpp = true;
+        }
+        add_tracy(b, roc_modules.build_options, builtin_doc_test, target, true, flag_enable_tracy);
+
+        const run_builtin_doc_test = b.addRunArtifact(builtin_doc_test);
+        if (run_args.len != 0) {
+            run_builtin_doc_test.addArgs(run_args);
+        }
+
+        // Exposed as a dedicated step rather than included in the default
+        // `test` step: this suite currently surfaces unimplemented Builtin.roc
+        // helpers, and we don't want those known issues to block other tests.
+        const builtin_doc_test_step = b.step(
+            "test-builtin-doc",
+            "Run Builtin.roc doc code-block tests",
+        );
+        builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
     }
 
     // Add CLI test
@@ -4666,7 +4802,7 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = std.fs.cwd().readFileAlloc(
+    const builtin_source = b.build_root.handle.readFileAlloc(
         b.allocator,
         "src/build/roc/Builtin.roc",
         32 * 1024 * 1024,

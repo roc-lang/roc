@@ -616,10 +616,12 @@ const DeadFilesDetector = struct {
             "glue_test.zig", // Glue generation tests
             "host.zig", // Glue platform host
             "roc_subcommands.zig", // CLI subcommand tests
+            "echo_tests.zig", // Echo platform (headerless app) tests
             "test_runner.zig", // Test runner executable
             "llvm_evaluator.zig", // LLVM evaluator executable
             "darwin_compat.zig", // Compiled to .o by build.zig for macOS linking
             "echo.zig", // Echo platform WASM entry point
+            "echo_native.zig", // Echo platform native debug binary (zig build run-echo)
             "parallel_cli_runner.zig", // Parallel CLI test runner executable
             "test_harness.zig", // Shared test harness (added via b.addModule)
             "test_env_pkg.zig", // Typed CIR package root used via build root_source_file

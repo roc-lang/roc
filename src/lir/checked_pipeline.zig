@@ -14,6 +14,7 @@ const ir = @import("ir");
 const Arc = @import("arc.zig");
 const LowerIr = @import("lower_ir.zig");
 const LIR = @import("LIR.zig");
+const RuntimeImage = @import("runtime_image.zig");
 
 const Allocator = std.mem.Allocator;
 const checked_artifact = check.CheckedArtifact;
@@ -410,6 +411,86 @@ pub const LoweredProgram = struct {
         }
         self.runtime_value_schemas.deinit();
         self.lir_result.deinit();
+    }
+
+    /// Build the list of platform entrypoints in the order they appear in
+    /// `lir_result.root_procs`. An entrypoint is any root proc whose metadata
+    /// indicates `abi == .platform` or `exposure == .platform_required`.
+    /// Caller owns the returned slice.
+    pub fn platformEntrypoints(
+        self: *const LoweredProgram,
+        allocator: Allocator,
+    ) Allocator.Error![]RuntimeImage.PlatformEntrypoint {
+        const root_procs = self.lir_result.root_procs.items;
+        const root_metadata = self.lir_result.root_metadata.items;
+        if (root_procs.len != root_metadata.len) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "checked pipeline invariant violated: root metadata mismatch roots={d} metadata={d}",
+                    .{ root_procs.len, root_metadata.len },
+                );
+            }
+            unreachable;
+        }
+
+        var entrypoints = std.ArrayList(RuntimeImage.PlatformEntrypoint).empty;
+        errdefer entrypoints.deinit(allocator);
+
+        for (root_procs, root_metadata) |root_proc, metadata| {
+            if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
+            try entrypoints.append(allocator, .{
+                .ordinal = @intCast(entrypoints.items.len),
+                .root_proc = root_proc,
+            });
+        }
+
+        return try entrypoints.toOwnedSlice(allocator);
+    }
+
+    /// Resolve the exported/required name for each platform entrypoint
+    /// produced by `platformEntrypoints`. Each returned string is duplicated
+    /// into `allocator` (caller owns).
+    pub fn platformEntrypointNames(
+        self: *const LoweredProgram,
+        allocator: Allocator,
+        root_artifact: *const checked_artifact.CheckedModuleArtifact,
+    ) Allocator.Error![]const []const u8 {
+        const root_procs = self.lir_result.root_procs.items;
+        const root_metadata = self.lir_result.root_metadata.items;
+        if (root_procs.len != root_metadata.len) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "embedded build invariant violated: root metadata mismatch roots={d} metadata={d}",
+                    .{ root_procs.len, root_metadata.len },
+                );
+            }
+            unreachable;
+        }
+
+        var names = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (names.items) |name| allocator.free(name);
+            names.deinit(allocator);
+        }
+
+        for (root_metadata) |metadata| {
+            if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
+            const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("platform entrypoint invariant violated: missing root request order {d}", .{metadata.order});
+                }
+                unreachable;
+            };
+            const artifact_name = root_artifact.entrypointNameForRoot(root) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("platform entrypoint invariant violated: unresolved name for root kind {s}", .{@tagName(root.kind)});
+                }
+                unreachable;
+            };
+            try names.append(allocator, try allocator.dupe(u8, artifact_name));
+        }
+
+        return try names.toOwnedSlice(allocator);
     }
 };
 
