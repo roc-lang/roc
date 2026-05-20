@@ -1329,6 +1329,14 @@ pub const Coordinator = struct {
 
             if (made_progress) {
                 iterations_without_progress = 0;
+            } else if (self.inflight.load(.acquire) > 0) {
+                // A worker is still processing a task or has one queued.
+                // `inflight` is incremented in enqueueTask before the task is
+                // sent to the channel, so it covers both "queued" and
+                // "executing". The wall-clock stuck check below would
+                // false-positive on overloaded CI when a worker is merely
+                // slow, so don't advance the counter while inflight > 0.
+                iterations_without_progress = 0;
             } else {
                 iterations_without_progress += 1;
                 if (iterations_without_progress > 1000) {
