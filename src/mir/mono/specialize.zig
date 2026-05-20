@@ -2614,8 +2614,8 @@ const TypeInstantiator = struct {
         errdefer _ = self.row_clone_template_roots.remove(id);
 
         const payload: checked_artifact.CheckedTypePayload = switch (kind) {
-            .flex => .{ .flex = try self.copyTemplateVariable(variable) },
-            .rigid => .{ .rigid = try self.copyTemplateVariable(variable) },
+            .flex => .{ .flex = try self.cloneTemplateVariableForRowEquationPayload(variable) },
+            .rigid => .{ .rigid = try self.cloneTemplateVariableForRowEquationPayload(variable) },
         };
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
         const concrete = try self.sealMaterializedLocalRootRef(local_root);
@@ -2631,7 +2631,10 @@ const TypeInstantiator = struct {
         const resolved = self.resolveConcreteRef(ref);
         const root = self.program.concrete_source_types.root(resolved);
         switch (root.source) {
-            .local => |local| return local,
+            .local => |local| switch (self.concretePayload(resolved)) {
+                .record_unbound => {},
+                else => return local,
+            },
             .artifact => {},
         }
         if (self.row_clone_concrete_roots.get(resolved)) |existing| return existing;
@@ -2663,8 +2666,8 @@ const TypeInstantiator = struct {
         errdefer _ = self.row_clone_concrete_roots.remove(ref);
 
         const payload: checked_artifact.CheckedTypePayload = switch (kind) {
-            .flex => .{ .flex = try self.copyConcreteVariable(variable) },
-            .rigid => .{ .rigid = try self.copyConcreteVariable(variable) },
+            .flex => .{ .flex = try self.cloneConcreteVariableForRowEquationPayload(ref, variable) },
+            .rigid => .{ .rigid = try self.cloneConcreteVariableForRowEquationPayload(ref, variable) },
         };
         self.program.concrete_source_types.fillLocalRoot(local_root, payload);
         const concrete = try self.sealMaterializedLocalRootRef(local_root);
@@ -2678,15 +2681,18 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished checked type payload"),
-            .flex => |flex| .{ .flex = try self.copyTemplateVariable(flex) },
-            .rigid => |rigid| .{ .rigid = try self.copyTemplateVariable(rigid) },
+            .flex => |flex| .{ .flex = try self.cloneTemplateVariableForRowEquationPayload(flex) },
+            .rigid => |rigid| .{ .rigid = try self.cloneTemplateVariableForRowEquationPayload(rigid) },
             .alias => |alias| .{ .alias = .{
                 .name = try self.name_resolver.typeName(self.template_artifact, alias.name),
                 .origin_module = try self.name_resolver.moduleName(self.template_artifact, alias.origin_module),
                 .backing = try self.cloneTemplateTypeForRowEquation(alias.backing),
                 .args = try self.cloneTemplateTypeIdsForRowEquation(alias.args),
             } },
-            .record_unbound => |fields| .{ .record_unbound = try self.cloneTemplateRecordFieldsForRowEquation(fields) },
+            .record_unbound => |fields| .{ .record = .{
+                .fields = try self.cloneTemplateRecordFieldsForRowEquation(fields),
+                .ext = try self.materializeSyntheticPayload(.{ .flex = .{} }),
+            } },
             .record => |record| .{ .record = .{
                 .fields = try self.cloneTemplateRecordFieldsForRowEquation(record.fields),
                 .ext = try self.cloneTemplateTypeForRowEquation(record.ext),
@@ -2722,15 +2728,18 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
-            .flex => |flex| .{ .flex = try self.copyConcreteVariable(flex) },
-            .rigid => |rigid| .{ .rigid = try self.copyConcreteVariable(rigid) },
+            .flex => |flex| .{ .flex = try self.cloneConcreteVariableForRowEquationPayload(ref, flex) },
+            .rigid => |rigid| .{ .rigid = try self.cloneConcreteVariableForRowEquationPayload(ref, rigid) },
             .alias => |alias| .{ .alias = .{
                 .name = try self.typeNameForConcreteRef(ref, alias.name),
                 .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
                 .backing = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, alias.backing)),
                 .args = try self.cloneConcreteTypeIdsForRowEquation(ref, alias.args),
             } },
-            .record_unbound => |fields| .{ .record_unbound = try self.cloneConcreteRecordFieldsForRowEquation(ref, fields) },
+            .record_unbound => |fields| .{ .record = .{
+                .fields = try self.cloneConcreteRecordFieldsForRowEquation(ref, fields),
+                .ext = try self.materializeSyntheticPayload(.{ .flex = .{} }),
+            } },
             .record => |record| .{ .record = .{
                 .fields = try self.cloneConcreteRecordFieldsForRowEquation(ref, record.fields),
                 .ext = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, record.ext)),
@@ -2860,6 +2869,29 @@ const TypeInstantiator = struct {
         return out;
     }
 
+    fn cloneTemplateVariableForRowEquationPayload(
+        self: *TypeInstantiator,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeVariable {
+        return .{
+            .name = try self.copyOptionalText(variable.name),
+            .constraints = try self.cloneTemplateConstraintsForRowEquation(variable.constraints),
+            .numeric_default_phase = variable.numeric_default_phase,
+        };
+    }
+
+    fn cloneConcreteVariableForRowEquationPayload(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypeVariable {
+        return .{
+            .name = try self.copyOptionalText(variable.name),
+            .constraints = try self.cloneConcreteConstraintsForRowEquation(ref, variable.constraints),
+            .numeric_default_phase = variable.numeric_default_phase,
+        };
+    }
+
     fn copyTemplateVariable(
         self: *TypeInstantiator,
         variable: checked_artifact.CheckedTypeVariable,
@@ -2871,15 +2903,49 @@ const TypeInstantiator = struct {
         };
     }
 
-    fn copyConcreteVariable(
+    fn cloneTemplateConstraintsForRowEquation(
         self: *TypeInstantiator,
-        variable: checked_artifact.CheckedTypeVariable,
-    ) Allocator.Error!checked_artifact.CheckedTypeVariable {
-        return .{
-            .name = try self.copyOptionalText(variable.name),
-            .constraints = &.{},
-            .numeric_default_phase = variable.numeric_default_phase,
-        };
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+    ) Allocator.Error![]const checked_artifact.CheckedStaticDispatchConstraint {
+        if (constraints.len == 0) return &.{};
+        var out = std.ArrayList(checked_artifact.CheckedStaticDispatchConstraint).empty;
+        errdefer out.deinit(self.allocator);
+        const is_eq = try self.program.canonical_names.internMethodName("is_eq");
+        for (constraints) |constraint| {
+            const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
+            if (method == is_eq) continue;
+            try out.append(self.allocator, .{
+                .fn_name = method,
+                .fn_ty = try self.cloneTemplateTypeForRowEquation(constraint.fn_ty),
+                .origin = constraint.origin,
+                .binop_negated = constraint.binop_negated,
+                .num_literal = constraint.num_literal,
+            });
+        }
+        return try out.toOwnedSlice(self.allocator);
+    }
+
+    fn cloneConcreteConstraintsForRowEquation(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+    ) Allocator.Error![]const checked_artifact.CheckedStaticDispatchConstraint {
+        if (constraints.len == 0) return &.{};
+        var out = std.ArrayList(checked_artifact.CheckedStaticDispatchConstraint).empty;
+        errdefer out.deinit(self.allocator);
+        const is_eq = try self.program.canonical_names.internMethodName("is_eq");
+        for (constraints) |constraint| {
+            const method = try self.methodNameForConcreteRef(ref, constraint.fn_name);
+            if (method == is_eq) continue;
+            try out.append(self.allocator, .{
+                .fn_name = method,
+                .fn_ty = try self.cloneConcreteTypeForRowEquation(try self.concreteChildRef(ref, constraint.fn_ty)),
+                .origin = constraint.origin,
+                .binop_negated = constraint.binop_negated,
+                .num_literal = constraint.num_literal,
+            });
+        }
+        return try out.toOwnedSlice(self.allocator);
     }
 
     fn copyOptionalText(self: *TypeInstantiator, maybe_text: ?[]const u8) Allocator.Error!?[]const u8 {
@@ -3416,6 +3482,19 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!Type.TypeId {
         const resolved = self.resolveConcreteRef(ref);
+        switch (self.concretePayload(resolved)) {
+            .flex => |flex| {
+                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, flex)) |concrete| {
+                    return try self.lowerConcreteRef(concrete);
+                }
+            },
+            .rigid => |rigid| {
+                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, rigid)) |concrete| {
+                    return try self.lowerConcreteRef(concrete);
+                }
+            },
+            else => {},
+        }
         if (self.lowered_concrete.get(resolved)) |existing| return existing;
 
         const placeholder = try self.program.types.addType(.placeholder);
@@ -3433,8 +3512,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!Type.Content {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
-            .flex => |flex| try self.lowerClosableVariableType(flex),
-            .rigid => |rigid| try self.lowerClosableVariableType(rigid),
+            .flex => |flex| try self.lowerClosableConcreteVariableType(ref, flex),
+            .rigid => |rigid| try self.lowerClosableConcreteVariableType(ref, rigid),
             .alias => |alias| .{ .link = try self.lowerConcreteRef(try self.concreteAliasBackingRef(ref, alias)) },
             .record_unbound,
             .record,
@@ -3951,15 +4030,10 @@ const TypeInstantiator = struct {
                 .alias => |alias| current = try self.concreteAliasBackingRef(current, alias),
                 .nominal => |nominal| current = try self.concreteNominalBackingRef(current, nominal),
                 .empty_record => return .{ .ref = current, .is_open = false },
-                .record_unbound => |fields| {
-                    for (fields) |field| {
-                        try out.append(self.allocator, .{
-                            .name = try self.recordFieldNameForConcreteRef(current, field.name),
-                            .owner = current,
-                            .ty = field.ty,
-                        });
-                    }
-                    return .{ .ref = try self.emptyConcreteRecordTailRef(), .is_open = false };
+                .record_unbound => {
+                    current = try self.program.concrete_source_types.registerLocalRoot(
+                        try self.cloneConcreteTypeForRowEquation(current),
+                    );
                 },
                 .flex, .rigid => return .{ .ref = current, .is_open = true },
                 .record => |record| {
@@ -4044,12 +4118,6 @@ const TypeInstantiator = struct {
             .ext = try self.cloneConcreteTypeForRowEquation(residual_tail),
         } });
         return try self.sealMaterializedLocalRootRef(local_root);
-    }
-
-    fn emptyConcreteRecordTailRef(
-        self: *TypeInstantiator,
-    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
-        return try self.materializeSyntheticPayloadRef(.empty_record);
     }
 
     fn freshConcreteRecordTailRef(
@@ -4887,6 +4955,19 @@ const TypeInstantiator = struct {
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!checked_artifact.CheckedTypeId {
         const resolved = self.resolveConcreteRef(ref);
+        switch (self.concretePayload(resolved)) {
+            .flex => |flex| {
+                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, flex)) |concrete| {
+                    return try self.materializeRuntimeConcreteRoot(concrete);
+                }
+            },
+            .rigid => |rigid| {
+                if (try self.resolveConstrainedConcreteVariableFromRegistry(resolved, rigid)) |concrete| {
+                    return try self.materializeRuntimeConcreteRoot(concrete);
+                }
+            },
+            else => {},
+        }
         if (self.runtime_concrete_roots.get(resolved)) |existing| return existing;
 
         const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
@@ -4909,8 +4990,8 @@ const TypeInstantiator = struct {
     ) Allocator.Error!checked_artifact.CheckedTypePayload {
         return switch (payload) {
             .pending => invariantViolation("mono specialization received an unpublished runtime concrete checked type payload"),
-            .flex => |flex| try self.materializeClosableVariableType(flex),
-            .rigid => |rigid| try self.materializeClosableVariableType(rigid),
+            .flex => |flex| try self.materializeClosableConcreteVariableType(ref, flex),
+            .rigid => |rigid| try self.materializeClosableConcreteVariableType(ref, rigid),
             .alias => |alias| .{ .alias = .{
                 .name = try self.typeNameForConcreteRef(ref, alias.name),
                 .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
@@ -5259,12 +5340,32 @@ const TypeInstantiator = struct {
         return .empty_record;
     }
 
+    fn materializeClosableConcreteVariableType(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        if (self.isMonoSpecializationNumericFlex(variable)) return try self.materializeDefaultDecPayload();
+        try self.verifyClosableConcreteVariable(ref, variable);
+        return .empty_record;
+    }
+
     fn lowerClosableVariableType(
         self: *TypeInstantiator,
         variable: checked_artifact.CheckedTypeVariable,
     ) Allocator.Error!Type.Content {
         if (self.isMonoSpecializationNumericFlex(variable)) return .{ .primitive = .dec };
         try self.verifyClosableVariable(variable);
+        return .{ .record = .{ .fields = &.{} } };
+    }
+
+    fn lowerClosableConcreteVariableType(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!Type.Content {
+        if (self.isMonoSpecializationNumericFlex(variable)) return .{ .primitive = .dec };
+        try self.verifyClosableConcreteVariable(ref, variable);
         return .{ .record = .{ .fields = &.{} } };
     }
 
@@ -5317,6 +5418,17 @@ const TypeInstantiator = struct {
         invariantViolation("mono specialization reached a constrained type variable where a concrete runtime type was required");
     }
 
+    fn verifyClosableConcreteVariable(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!void {
+        if (variable.constraints.len == 0) return;
+        if (self.isMonoSpecializationNumericFlex(variable)) return;
+        if (try self.isConcreteEqualityOnlyVariable(ref, variable)) return;
+        invariantViolation("mono specialization reached a constrained concrete type variable where a concrete runtime type was required");
+    }
+
     fn resolveConstrainedTemplateVariableFromRegistry(
         self: *TypeInstantiator,
         id: checked_artifact.CheckedTypeId,
@@ -5350,6 +5462,41 @@ const TypeInstantiator = struct {
             invariantViolation("mono specialization resolved constrained variable owner but did not bind the variable");
         };
         return self.resolveConcreteRef(concrete);
+    }
+
+    fn resolveConstrainedConcreteVariableFromRegistry(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
+        if (variable.constraints.len == 0) return null;
+        if (self.isMonoSpecializationNumericFlex(variable)) return null;
+        if (try self.isConcreteEqualityOnlyVariable(ref, variable)) return null;
+
+        const owner = (try self.uniqueStaticDispatchOwnerForConcreteConstraints(ref, variable.constraints)) orelse {
+            invariantViolation("mono specialization could not resolve constrained concrete variable to one checked method owner");
+        };
+
+        for (variable.constraints) |constraint| {
+            const method = try self.methodNameForConcreteRef(ref, constraint.fn_name);
+            const target = (try lookupStaticDispatchMethodTarget(
+                self.input,
+                self.name_resolver,
+                owner,
+                method,
+            )) orelse invariantViolation("mono specialization checked method owner did not publish required method target");
+            const target_callable = try self.concreteRefForMethodTargetCallable(target);
+            try self.unifyConcreteRefs(
+                try self.concreteChildRef(ref, constraint.fn_ty),
+                target_callable,
+            );
+        }
+
+        const concrete = self.resolveConcreteRef(ref);
+        if (concrete == ref) {
+            invariantViolation("mono specialization resolved constrained concrete variable owner but did not bind the variable");
+        }
+        return concrete;
     }
 
     fn uniqueStaticDispatchOwnerForConstraints(
@@ -5399,6 +5546,54 @@ const TypeInstantiator = struct {
         return selected;
     }
 
+    fn uniqueStaticDispatchOwnerForConcreteConstraints(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+    ) Allocator.Error!?static_dispatch.MethodOwner {
+        if (constraints.len == 0) return null;
+        const first_method = try self.methodNameForConcreteRef(ref, constraints[0].fn_name);
+
+        var candidates = std.ArrayList(static_dispatch.MethodOwner).empty;
+        defer candidates.deinit(self.allocator);
+
+        try self.appendStaticDispatchOwnerCandidates(
+            self.input.root.artifact.key,
+            &self.input.root.artifact.method_registry,
+            first_method,
+            &candidates,
+        );
+        for (self.input.imports) |imported| {
+            try self.appendStaticDispatchOwnerCandidates(
+                imported.key,
+                imported.method_registry,
+                first_method,
+                &candidates,
+            );
+        }
+        for (self.input.root.relation_artifacts) |related| {
+            try self.appendStaticDispatchOwnerCandidates(
+                related.key,
+                related.method_registry,
+                first_method,
+                &candidates,
+            );
+        }
+
+        var selected: ?static_dispatch.MethodOwner = null;
+        for (candidates.items) |candidate| {
+            if (!try self.ownerSatisfiesAllStaticDispatchConcreteConstraints(ref, candidate, constraints)) continue;
+            if (selected) |existing| {
+                if (!methodOwnerEql(existing, candidate)) {
+                    invariantViolation("mono specialization constrained concrete variable matched multiple checked method owners");
+                }
+                continue;
+            }
+            selected = candidate;
+        }
+        return selected;
+    }
+
     fn appendStaticDispatchOwnerCandidates(
         self: *TypeInstantiator,
         registry_artifact: checked_artifact.CheckedModuleArtifactKey,
@@ -5425,6 +5620,24 @@ const TypeInstantiator = struct {
     ) Allocator.Error!bool {
         for (constraints) |constraint| {
             const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
+            if ((try lookupStaticDispatchMethodTarget(
+                self.input,
+                self.name_resolver,
+                owner,
+                method,
+            )) == null) return false;
+        }
+        return true;
+    }
+
+    fn ownerSatisfiesAllStaticDispatchConcreteConstraints(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        owner: static_dispatch.MethodOwner,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+    ) Allocator.Error!bool {
+        for (constraints) |constraint| {
+            const method = try self.methodNameForConcreteRef(ref, constraint.fn_name);
             if ((try lookupStaticDispatchMethodTarget(
                 self.input,
                 self.name_resolver,
@@ -5463,6 +5676,20 @@ const TypeInstantiator = struct {
         const is_eq = try self.program.canonical_names.internMethodName("is_eq");
         for (variable.constraints) |constraint| {
             const method = try self.name_resolver.methodName(self.template_artifact, constraint.fn_name);
+            if (method != is_eq) return false;
+        }
+        return true;
+    }
+
+    fn isConcreteEqualityOnlyVariable(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        variable: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!bool {
+        if (variable.constraints.len == 0) return false;
+        const is_eq = try self.program.canonical_names.internMethodName("is_eq");
+        for (variable.constraints) |constraint| {
+            const method = try self.methodNameForConcreteRef(ref, constraint.fn_name);
             if (method != is_eq) return false;
         }
         return true;
@@ -5621,6 +5848,18 @@ const TypeInstantiator = struct {
         };
     }
 
+    fn methodNameForConcreteRef(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        name: canonical.MethodNameId,
+    ) Allocator.Error!canonical.MethodNameId {
+        const root = self.program.concrete_source_types.root(self.resolveConcreteRef(ref));
+        return switch (root.source) {
+            .artifact => |artifact_ref| try self.name_resolver.methodName(artifact_ref.artifact, name),
+            .local => name,
+        };
+    }
+
     fn moduleNameForConcreteRef(
         self: *TypeInstantiator,
         ref: ConcreteSourceType.ConcreteSourceTypeRef,
@@ -5708,6 +5947,7 @@ const BodyLowerer = struct {
     local_symbols: std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol),
     local_symbol_types: std.AutoHashMap(checked_artifact.PatternBinderId, ConcreteTypeInfo),
     local_type_demands: std.AutoHashMap(checked_artifact.PatternBinderId, ConcreteSourceType.ConcreteSourceTypeRef),
+    expr_type_demands: std.AutoHashMap(checked_artifact.CheckedExprId, ConcreteSourceType.ConcreteSourceTypeRef),
     local_proc_decls: std.AutoHashMap(checked_artifact.PatternBinderId, LocalProcDecl),
     local_proc_instances: std.AutoHashMap(LocalProcInstanceKey, Ast.Symbol),
     lowered_private_captures: std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId),
@@ -5736,6 +5976,7 @@ const BodyLowerer = struct {
             .local_symbols = std.AutoHashMap(checked_artifact.PatternBinderId, Ast.Symbol).init(allocator),
             .local_symbol_types = std.AutoHashMap(checked_artifact.PatternBinderId, ConcreteTypeInfo).init(allocator),
             .local_type_demands = std.AutoHashMap(checked_artifact.PatternBinderId, ConcreteSourceType.ConcreteSourceTypeRef).init(allocator),
+            .expr_type_demands = std.AutoHashMap(checked_artifact.CheckedExprId, ConcreteSourceType.ConcreteSourceTypeRef).init(allocator),
             .local_proc_decls = std.AutoHashMap(checked_artifact.PatternBinderId, LocalProcDecl).init(allocator),
             .local_proc_instances = std.AutoHashMap(LocalProcInstanceKey, Ast.Symbol).init(allocator),
             .lowered_private_captures = std.AutoHashMap(PrivateCaptureLoweringKey, Ast.ExprId).init(allocator),
@@ -5752,6 +5993,7 @@ const BodyLowerer = struct {
         self.lowered_private_captures.deinit();
         self.local_proc_instances.deinit();
         self.local_proc_decls.deinit();
+        self.expr_type_demands.deinit();
         self.local_type_demands.deinit();
         self.local_symbol_types.deinit();
         self.local_symbols.deinit();
@@ -7410,8 +7652,13 @@ const BodyLowerer = struct {
     ) Allocator.Error!LoweredParamBundle {
         const param_types = try self.paramTypesFromConcreteFunction(source_fn);
         defer self.allocator.free(param_types);
+        const param_source_refs = try self.sourceParamRefsFromFunction(source_fn);
+        defer if (param_source_refs.len != 0) self.allocator.free(param_source_refs);
         if (patterns.len != param_types.len) {
             invariantViolation("mono body lowering procedure parameter count disagreed with requested function type");
+        }
+        if (param_source_refs.len != patterns.len) {
+            invariantViolation("mono body lowering procedure source parameter count disagreed with requested function type");
         }
         if (patterns.len == 0) return .{
             .args = Ast.Span(Ast.TypedSymbol).empty(),
@@ -7424,8 +7671,8 @@ const BodyLowerer = struct {
         errdefer destructures.deinit(self.allocator);
         var mutable_inits = std.ArrayList(MutableParamInit).empty;
         errdefer mutable_inits.deinit(self.allocator);
-        for (patterns, param_types, 0..) |pattern, param_ty, i| {
-            args[i] = try self.lowerEntryParamPatternWithType(pattern, param_ty, &destructures, &mutable_inits);
+        for (patterns, param_types, param_source_refs, 0..) |pattern, param_ty, param_source_ref, i| {
+            args[i] = try self.lowerEntryParamPatternWithType(pattern, param_ty, param_source_ref, &destructures, &mutable_inits);
         }
         return .{
             .args = try self.program.ast.addTypedSymbolSpan(args),
@@ -7443,12 +7690,14 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         pattern_id: checked_artifact.CheckedPatternId,
         param_ty: ConcreteTypeInfo,
+        param_source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
         destructures: *std.ArrayList(ParamDestructure),
         mutable_inits: *std.ArrayList(MutableParamInit),
     ) Allocator.Error!Ast.TypedSymbol {
         const pattern = self.checkedPattern(pattern_id);
         const symbol = switch (pattern.data) {
             .assign => |binder| blk: {
+                try self.recordConcreteDemandForBinder(binder, param_source_ref);
                 try self.recordConcreteTypeForBinder(binder, param_ty);
                 const binder_symbol = try self.symbolForBinder(binder);
                 if (!self.patternBinderIsReassignable(binder)) {
@@ -7654,6 +7903,7 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         expr_id: checked_artifact.CheckedExprId,
     ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        if (self.expr_type_demands.get(expr_id)) |source_ref| return source_ref;
         if (self.demandedLocalSourceRefForExpr(expr_id)) |source_ref| return source_ref;
         return try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(expr_id).ty);
     }
@@ -7676,8 +7926,9 @@ const BodyLowerer = struct {
             => |local| local.binder,
             else => return null,
         };
+        if (self.local_type_demands.get(binder)) |source_ref| return source_ref;
         if (self.local_symbol_types.get(binder)) |existing| return existing.source_ref;
-        return self.local_type_demands.get(binder);
+        return null;
     }
 
     fn runtimeConcreteTypeInfo(
@@ -7697,6 +7948,7 @@ const BodyLowerer = struct {
         expr_id: checked_artifact.CheckedExprId,
         checked_expr_ty: checked_artifact.CheckedTypeId,
     ) Allocator.Error!ConcreteTypeInfo {
+        if (self.expr_type_demands.get(expr_id)) |source_ref| return try self.runtimeConcreteTypeInfo(source_ref);
         if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty;
         const expr = self.checkedExpr(expr_id);
         return switch (expr.data) {
@@ -7823,12 +8075,12 @@ const BodyLowerer = struct {
         source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
         if (self.local_proc_decls.contains(binder)) return;
-        if (self.local_symbol_types.get(binder)) |existing| {
-            try self.type_instantiator.unifyConcreteRefs(existing.source_ref, source_ref);
-            return;
-        }
         if (self.local_type_demands.get(binder)) |existing| {
             try self.type_instantiator.unifyConcreteRefs(existing, source_ref);
+            return;
+        }
+        if (self.local_symbol_types.get(binder)) |existing| {
+            try self.type_instantiator.unifyConcreteRefs(existing.source_ref, source_ref);
             return;
         }
         try self.local_type_demands.put(binder, source_ref);
@@ -8378,9 +8630,15 @@ const BodyLowerer = struct {
             saved_local_symbols.deinit();
             return err;
         };
-        const saved_local_type_demands = self.local_type_demands.clone() catch |err| {
+        var saved_local_type_demands = self.local_type_demands.clone() catch |err| {
             saved_local_symbols.deinit();
             saved_local_symbol_types.deinit();
+            return err;
+        };
+        const saved_expr_type_demands = self.expr_type_demands.clone() catch |err| {
+            saved_local_symbols.deinit();
+            saved_local_symbol_types.deinit();
+            saved_local_type_demands.deinit();
             return err;
         };
         const saved_deferred_lambda_demands = self.deferred_lambda_demands;
@@ -8389,10 +8647,12 @@ const BodyLowerer = struct {
             self.local_symbols.deinit();
             self.local_symbol_types.deinit();
             self.local_type_demands.deinit();
+            self.expr_type_demands.deinit();
             self.deferred_lambda_demands.deinit(self.allocator);
             self.local_symbols = saved_local_symbols;
             self.local_symbol_types = saved_local_symbol_types;
             self.local_type_demands = saved_local_type_demands;
+            self.expr_type_demands = saved_expr_type_demands;
             self.deferred_lambda_demands = saved_deferred_lambda_demands;
         }
 
@@ -8914,8 +9174,9 @@ const BodyLowerer = struct {
             .as => |as| as.binder,
             else => return null,
         };
+        if (self.local_type_demands.get(binder)) |source_ref| return source_ref;
         if (self.local_symbol_types.get(binder)) |existing| return existing.source_ref;
-        return self.local_type_demands.get(binder);
+        return null;
     }
 
     fn collectExprDemand(
@@ -8924,6 +9185,7 @@ const BodyLowerer = struct {
         expected_ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
         const expr = self.checkedExpr(expr_id);
+        try self.recordExprDemand(expr_id, expected_ref);
         try self.type_instantiator.unifyTemplateWithConcrete(expr.ty, expected_ref);
         switch (expr.data) {
             .lookup_local => |lookup| try self.recordLocalLookupDemand(
@@ -9002,7 +9264,7 @@ const BodyLowerer = struct {
                 plan orelse invariantViolation("checked type dispatch call reached mono without a StaticDispatchCallPlan"),
             ),
             .field_access => |access| {
-                const receiver_ref = try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(access.receiver).ty);
+                const receiver_ref = try self.sourceRefForDemandedExpr(access.receiver);
                 try self.type_instantiator.unifyTemplateWithConcrete(
                     self.checkedExpr(access.receiver).ty,
                     receiver_ref,
@@ -9065,6 +9327,18 @@ const BodyLowerer = struct {
         }
     }
 
+    fn recordExprDemand(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+        source_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        if (self.expr_type_demands.get(expr_id)) |existing| {
+            try self.type_instantiator.unifyConcreteRefs(existing, source_ref);
+            return;
+        }
+        try self.expr_type_demands.put(expr_id, source_ref);
+    }
+
     fn collectBinopDemand(
         self: *BodyLowerer,
         binop: anytype,
@@ -9112,7 +9386,7 @@ const BodyLowerer = struct {
             return;
         }
 
-        const cond_ref = try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(match_.cond).ty);
+        const cond_ref = try self.sourceRefForDemandedExpr(match_.cond);
         for (match_.branches) |branch| {
             for (branch.patterns) |branch_pattern| {
                 try self.recordPatternDemandWithRemaps(branch_pattern.pattern, cond_ref, branch_pattern.binder_remaps);
@@ -9137,7 +9411,7 @@ const BodyLowerer = struct {
         match_: anytype,
         expected_ref: ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
-        const cond_ref = try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(match_.cond).ty);
+        const cond_ref = try self.sourceRefForDemandedExpr(match_.cond);
         for (match_.branches) |branch| {
             for (branch.patterns) |branch_pattern| {
                 try self.recordPatternDemandWithRemaps(branch_pattern.pattern, cond_ref, branch_pattern.binder_remaps);
@@ -9198,6 +9472,8 @@ const BodyLowerer = struct {
         defer self.type_instantiator = previous_instantiator;
 
         const source_fn_ty_payload = self.callSourceFnPayload(call.func, call.source_fn_ty_payload);
+        try self.bindKnownCallCalleeType(source_fn_ty_payload, call.func);
+        try self.bindKnownCallArgumentDemandTypes(source_fn_ty_payload, call.args);
         try self.unifyFunctionReturnWithConcrete(source_fn_ty_payload, expected_ref);
         const source_fn_ref = try self.concreteSourceRefForCheckedPreservingVariables(source_fn_ty_payload);
 
@@ -9229,31 +9505,30 @@ const BodyLowerer = struct {
 
         const plan = self.staticDispatchPlan(plan_id);
         try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected_ref);
+        try self.bindStaticDispatchDemandArgumentTypes(plan);
         try self.collectStaticDispatchArgumentDemand(plan);
 
         const dispatcher_info = try self.staticDispatchDispatcherTypeFromDemand(plan);
         try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_info);
 
         const method = try self.methodName(plan.method);
-        const owner = try self.methodOwnerForStaticDispatchPlanMaybe(plan, dispatcher_info);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_info);
         const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
 
         if (target) |method_target| {
             const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
             try self.type_instantiator.unifyTemplateWithConcrete(plan.callable_ty, target_callable);
-            try self.collectStaticDispatchArgumentDemand(plan);
         } else switch (plan.result_mode) {
             .value => invariantViolation("mono static dispatch value call had no checked method target"),
             .equality => |equality| {
                 if (!equality.structural_allowed) invariantViolation("mono static dispatch equality had no checked method target and structural equality is not allowed");
-                try self.collectStaticDispatchArgumentDemand(plan);
             },
         }
 
         try previous_instantiator.absorbConcreteVariableSubstitutionsFrom(&dispatch_instantiator);
     }
 
-    fn collectStaticDispatchArgumentDemand(
+    fn bindStaticDispatchDemandArgumentTypes(
         self: *BodyLowerer,
         plan: static_dispatch.StaticDispatchCallPlan,
     ) Allocator.Error!void {
@@ -9265,16 +9540,94 @@ const BodyLowerer = struct {
             .type_dispatch_call => false,
             else => plan.args.len != 0,
         };
+        var dispatcher_bound_from_argument = false;
         for (plan.args, param_templates, 0..) |arg, param_template, index| {
             const arg_ref = if (self.demandedLocalSourceRefForExpr(arg)) |known_arg_ref| blk: {
                 try self.type_instantiator.unifyTemplateWithConcrete(param_template, known_arg_ref);
                 break :blk known_arg_ref;
+            } else if (try self.knownDemandSourceRefForExpr(arg)) |known_arg_ref| blk: {
+                try self.type_instantiator.unifyTemplateWithConcrete(param_template, known_arg_ref);
+                break :blk known_arg_ref;
             } else try self.concreteSourceRefForCheckedPreservingVariables(param_template);
+
             if (dispatcher_from_first_arg and index == 0) {
                 try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, arg_ref);
+                dispatcher_bound_from_argument = true;
             }
+        }
+
+        switch (expr.data) {
+            .type_dispatch_call => {},
+            else => if (!dispatcher_bound_from_argument and plan.args.len == 0) {
+                invariantViolation("mono static dispatch plan without source dispatch syntax had no dispatcher argument");
+            },
+        }
+    }
+
+    fn collectStaticDispatchArgumentDemand(
+        self: *BodyLowerer,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!void {
+        const requested_fn_ty = try self.concreteSourceRefForCheckedPreservingVariables(plan.callable_ty);
+        const param_refs = try self.sourceParamRefsFromFunction(requested_fn_ty);
+        defer if (param_refs.len != 0) self.allocator.free(param_refs);
+        if (param_refs.len != plan.args.len) invariantViolation("mono static dispatch argument count disagreed with checked callable type");
+
+        for (plan.args, param_refs) |arg, param_ref| {
+            const arg_ref = if (self.demandedLocalSourceRefForExpr(arg)) |known_arg_ref| blk: {
+                try self.type_instantiator.unifyConcreteRefs(param_ref, known_arg_ref);
+                break :blk known_arg_ref;
+            } else param_ref;
             try self.collectExprDemand(arg, arg_ref);
         }
+    }
+
+    fn collectStaticDispatchDemandWithConcreteArgs(
+        self: *BodyLowerer,
+        expected_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        plan_id: checked_artifact.StaticDispatchPlanId,
+        arg_refs: []const ConcreteSourceType.ConcreteSourceTypeRef,
+        receiver_arg_index: ?usize,
+    ) Allocator.Error!void {
+        var dispatch_instantiator = try self.type_instantiator.fork();
+        defer dispatch_instantiator.deinit();
+
+        const previous_instantiator = self.type_instantiator;
+        self.type_instantiator = &dispatch_instantiator;
+        defer self.type_instantiator = previous_instantiator;
+
+        const plan = self.staticDispatchPlan(plan_id);
+        try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected_ref);
+
+        const param_templates = try self.templateFunctionArgTypes(plan.callable_ty);
+        if (param_templates.len != arg_refs.len) invariantViolation("mono static dispatch argument count disagreed with checked callable type");
+
+        for (arg_refs, param_templates) |arg_ref, param_template| {
+            try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ref);
+        }
+
+        const dispatcher_ref = if (receiver_arg_index) |index| blk: {
+            if (index >= arg_refs.len) invariantViolation("mono static dispatch receiver index was outside argument metadata");
+            const receiver_ref = arg_refs[index];
+            try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, receiver_ref);
+            break :blk receiver_ref;
+        } else try self.concreteSourceRefForCheckedPreservingVariables(plan.dispatcher_ty);
+
+        const method = try self.methodName(plan.method);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_ref);
+        const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
+
+        if (target) |method_target| {
+            const target_callable = try self.concreteRefForMethodTargetCallable(method_target);
+            try self.type_instantiator.unifyTemplateWithConcrete(plan.callable_ty, target_callable);
+        } else switch (plan.result_mode) {
+            .value => invariantViolation("mono static dispatch value call had no checked method target"),
+            .equality => |equality| {
+                if (!equality.structural_allowed) invariantViolation("mono static dispatch equality had no checked method target and structural equality is not allowed");
+            },
+        }
+
+        try previous_instantiator.absorbConcreteVariableSubstitutionsFrom(&dispatch_instantiator);
     }
 
     fn staticDispatchDispatcherTypeFromDemand(
@@ -9302,9 +9655,27 @@ const BodyLowerer = struct {
     ) Allocator.Error!void {
         const plan = self.iteratorForPlan(plan_id);
         const iterator_ref = try self.concreteSourceRefForCheckedPreservingVariables(plan.iterator_ty);
+        const step_ref = try self.concreteSourceRefForCheckedPreservingVariables(plan.step_ty);
         try self.collectStaticDispatchDemand(iterator_ref, plan.iter);
-        try self.recordPatternDemand(pattern, try self.concreteSourceRefForCheckedPreservingVariables(plan.item_ty));
+        const next_arg_refs = [_]ConcreteSourceType.ConcreteSourceTypeRef{iterator_ref};
+        try self.collectStaticDispatchDemandWithConcreteArgs(step_ref, plan.next, &next_arg_refs, 0);
+        const item_ref = try self.iteratorForItemRefFromStep(step_ref);
+        try self.type_instantiator.unifyTemplateWithConcrete(plan.item_ty, item_ref);
+        try self.recordPatternDemand(pattern, item_ref);
         try self.collectExprDemand(body, try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(body).ty));
+    }
+
+    fn iteratorForItemRefFromStep(
+        self: *BodyLowerer,
+        step_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const one_label = try self.program.canonical_names.internTagLabel("One");
+        const payload_refs = try self.concreteTagPayloadRefsForUnionType(step_ref, one_label);
+        defer if (payload_refs.len != 0) self.allocator.free(payload_refs);
+        if (payload_refs.len != 1) invariantViolation("mono iterator-for One step did not have exactly one source payload");
+
+        const item_label = try self.program.canonical_names.internRecordFieldLabel("item");
+        return try self.concreteRecordFieldRef(payload_refs[0], item_label);
     }
 
     fn recordLocalLookupDemand(
@@ -10197,6 +10568,19 @@ const BodyLowerer = struct {
         }
     }
 
+    fn bindKnownCallArgumentDemandTypes(
+        self: *BodyLowerer,
+        source_fn_ty: checked_artifact.CheckedTypeId,
+        args: []const checked_artifact.CheckedExprId,
+    ) Allocator.Error!void {
+        const param_templates = try self.templateFunctionArgTypes(source_fn_ty);
+        if (param_templates.len != args.len) invariantViolation("mono demand collection call argument count disagreed with checked function type");
+        for (args, param_templates) |arg, param_template| {
+            const arg_ref = (try self.knownDemandSourceRefForExpr(arg)) orelse continue;
+            try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ref);
+        }
+    }
+
     fn bindKnownConcreteCallArgumentTypes(
         self: *BodyLowerer,
         source_fn: ConcreteSourceType.ConcreteSourceTypeRef,
@@ -10273,6 +10657,28 @@ const BodyLowerer = struct {
                 break :blk try self.concreteRecordFieldInfo(receiver.source_ref, try self.recordFieldLabel(access.field_name));
             },
             else => null,
+        };
+    }
+
+    fn knownDemandSourceRefForExpr(
+        self: *BodyLowerer,
+        expr_id: checked_artifact.CheckedExprId,
+    ) Allocator.Error!?ConcreteSourceType.ConcreteSourceTypeRef {
+        if (self.expr_type_demands.get(expr_id)) |source_ref| return source_ref;
+        if (self.demandedLocalSourceRefForExpr(expr_id)) |source_ref| return source_ref;
+        if (self.concreteTypeForLookupExpr(expr_id)) |lookup_ty| return lookup_ty.source_ref;
+        if (try self.concreteTypeForConstLookupExpr(expr_id)) |const_ty| return const_ty.source_ref;
+
+        const expr = self.checkedExpr(expr_id);
+        return switch (expr.data) {
+            .field_access => |access| blk: {
+                const receiver_ref = (try self.knownDemandSourceRefForExpr(access.receiver)) orelse break :blk null;
+                break :blk try self.concreteRecordFieldRef(receiver_ref, try self.recordFieldLabel(access.field_name));
+            },
+            else => if (try self.exprPublishesMonoConcreteType(expr_id))
+                (try self.concreteResultTypeForExpr(expr_id, expr.ty)).source_ref
+            else
+                null,
         };
     }
 
@@ -10419,7 +10825,7 @@ const BodyLowerer = struct {
             .alias => |alias| try self.checkedTypeIsClosedConcreteInner(alias.backing, active),
             .record => |record| (try self.checkedTypeSpanIsClosedConcrete(record.fields, active)) and
                 try self.checkedTypeIsClosedConcreteInner(record.ext, active),
-            .record_unbound => |fields| try self.checkedTypeSpanIsClosedConcrete(fields, active),
+            .record_unbound => false,
             .tuple => |items| try self.checkedTypeIdSpanIsClosedConcrete(items, active),
             .nominal => |nominal| try self.checkedTypeIdSpanIsClosedConcrete(nominal.args, active),
             .function => |function| !function.needs_instantiation and
@@ -10508,6 +10914,10 @@ const BodyLowerer = struct {
         expected: ConcreteTypeInfo,
         plan_id: checked_artifact.StaticDispatchPlanId,
     ) Allocator.Error!Ast.ExprId {
+        const plan = self.staticDispatchPlan(plan_id);
+        const known_arg_refs = try self.knownStaticDispatchArgumentRefs(plan);
+        defer if (known_arg_refs.len != 0) self.allocator.free(known_arg_refs);
+
         var dispatch_instantiator = self.freshDispatchInstantiator();
         defer dispatch_instantiator.deinit();
 
@@ -10515,13 +10925,17 @@ const BodyLowerer = struct {
         self.type_instantiator = &dispatch_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
-        return try self.lowerStaticDispatchInCurrentInstantiation(expected, plan_id);
+        return try self.lowerStaticDispatchInCurrentInstantiation(expected, plan_id, known_arg_refs);
     }
 
     fn staticDispatchResultTypeInFreshInstantiation(
         self: *BodyLowerer,
         plan_id: checked_artifact.StaticDispatchPlanId,
     ) Allocator.Error!ConcreteTypeInfo {
+        const plan = self.staticDispatchPlan(plan_id);
+        const known_arg_refs = try self.knownStaticDispatchArgumentRefs(plan);
+        defer if (known_arg_refs.len != 0) self.allocator.free(known_arg_refs);
+
         var dispatch_instantiator = self.freshDispatchInstantiator();
         defer dispatch_instantiator.deinit();
 
@@ -10529,7 +10943,7 @@ const BodyLowerer = struct {
         self.type_instantiator = &dispatch_instantiator;
         defer self.type_instantiator = previous_instantiator;
 
-        return try self.staticDispatchResultTypeInCurrentInstantiation(plan_id);
+        return try self.staticDispatchResultTypeInCurrentInstantiation(plan_id, known_arg_refs);
     }
 
     fn freshDispatchInstantiator(self: *BodyLowerer) TypeInstantiator {
@@ -10546,14 +10960,15 @@ const BodyLowerer = struct {
     fn staticDispatchResultTypeInCurrentInstantiation(
         self: *BodyLowerer,
         plan_id: checked_artifact.StaticDispatchPlanId,
+        known_arg_refs: []const ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!ConcreteTypeInfo {
         const plan = self.staticDispatchPlan(plan_id);
 
-        try self.bindStaticDispatchKnownArgumentTypes(plan);
-        const dispatcher_info = try self.staticDispatchDispatcherType(plan);
-        try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_info.source_ref);
+        try self.bindStaticDispatchKnownArgumentTypes(plan, known_arg_refs);
+        const dispatcher_ref = try self.staticDispatchDispatcherSourceRef(plan);
+        try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_ref);
 
-        const owner = try self.methodOwnerForStaticDispatchPlanMaybe(plan, dispatcher_info.source_ref);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_ref);
         const method = try self.methodName(plan.method);
         const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
 
@@ -10575,16 +10990,17 @@ const BodyLowerer = struct {
         self: *BodyLowerer,
         expected: ConcreteTypeInfo,
         plan_id: checked_artifact.StaticDispatchPlanId,
+        known_arg_refs: []const ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!Ast.ExprId {
         const plan = self.staticDispatchPlan(plan_id);
         try self.unifyFunctionReturnWithConcrete(plan.callable_ty, expected.source_ref);
 
-        try self.bindStaticDispatchKnownArgumentTypes(plan);
+        try self.bindStaticDispatchKnownArgumentTypes(plan, known_arg_refs);
 
-        const dispatcher_info = try self.staticDispatchDispatcherType(plan);
-        try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_info.source_ref);
+        const dispatcher_ref = try self.staticDispatchDispatcherSourceRef(plan);
+        try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, dispatcher_ref);
 
-        const owner = try self.methodOwnerForStaticDispatchPlanMaybe(plan, dispatcher_info.source_ref);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_ref);
         const method = try self.methodName(plan.method);
         const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
 
@@ -10658,8 +11074,9 @@ const BodyLowerer = struct {
         };
     }
 
-    fn lowerStaticDispatchWithConcreteArgsInferred(
+    fn lowerStaticDispatchWithConcreteArgsExpected(
         self: *BodyLowerer,
+        expected: ConcreteTypeInfo,
         plan_id: checked_artifact.StaticDispatchPlanId,
         lowered_args: Ast.Span(Ast.ExprId),
         arg_infos: []const ConcreteTypeInfo,
@@ -10673,7 +11090,7 @@ const BodyLowerer = struct {
         defer self.type_instantiator = previous_instantiator;
 
         return try self.lowerStaticDispatchWithConcreteArgsInCurrentInstantiation(
-            null,
+            expected,
             plan_id,
             lowered_args,
             arg_infos,
@@ -10699,7 +11116,7 @@ const BodyLowerer = struct {
             if (index >= arg_infos.len) invariantViolation("mono static dispatch receiver index was outside argument metadata");
             break :blk arg_infos[index];
         } else try self.concreteTypeInfoForChecked(plan.dispatcher_ty);
-        const owner = try self.methodOwnerForStaticDispatchPlanMaybe(plan, dispatcher_info.source_ref);
+        const owner = try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_info.source_ref);
         const method = try self.methodName(plan.method);
         const target = if (owner) |method_owner| try self.lookupMethodTarget(method_owner, method) else null;
 
@@ -10801,29 +11218,22 @@ const BodyLowerer = struct {
     fn bindStaticDispatchKnownArgumentTypes(
         self: *BodyLowerer,
         plan: static_dispatch.StaticDispatchCallPlan,
+        known_arg_refs: []const ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
         const param_templates = try self.templateFunctionArgTypes(plan.callable_ty);
         if (param_templates.len != plan.args.len) invariantViolation("mono static dispatch argument count disagreed with checked callable type");
+        if (known_arg_refs.len != plan.args.len) invariantViolation("mono static dispatch known argument metadata count disagreed with checked callable type");
 
         const expr = self.checkedExpr(plan.expr);
         var dispatcher_bound_from_argument = false;
-        for (plan.args, param_templates, 0..) |arg, param_template, index| {
-            const arg_ty = (try self.knownConcreteResultTypeForExpr(arg)) orelse switch (expr.data) {
-                .dispatch_call,
-                .method_eq,
-                => if (index == 0)
-                    try self.concreteResultTypeForExpr(arg, self.checkedExpr(arg).ty)
-                else
-                    continue,
-                .type_dispatch_call => continue,
-                else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
-            };
-            try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ty.source_ref);
+        for (known_arg_refs, param_templates, 0..) |maybe_arg_ref, param_template, index| {
+            const arg_ref = maybe_arg_ref orelse continue;
+            try self.type_instantiator.unifyTemplateWithConcrete(param_template, arg_ref);
             switch (expr.data) {
                 .dispatch_call,
                 .method_eq,
                 => if (index == 0) {
-                    try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, arg_ty.source_ref);
+                    try self.type_instantiator.unifyTemplateWithConcrete(plan.dispatcher_ty, arg_ref);
                     dispatcher_bound_from_argument = true;
                 },
                 .type_dispatch_call => {},
@@ -10837,7 +11247,7 @@ const BodyLowerer = struct {
             => {
                 if (param_templates.len == 0) invariantViolation("mono static dispatch receiver call had no dispatcher argument slot");
                 if (!dispatcher_bound_from_argument) {
-                    const dispatcher_ref = try self.type_instantiator.concreteRefForTemplateType(plan.dispatcher_ty);
+                    const dispatcher_ref = try self.concreteSourceRefForCheckedPreservingVariables(plan.dispatcher_ty);
                     try self.type_instantiator.unifyTemplateWithConcrete(param_templates[0], dispatcher_ref);
                 }
             },
@@ -10853,10 +11263,28 @@ const BodyLowerer = struct {
         return try self.type_instantiator.concreteRefForMethodTargetCallable(method_target);
     }
 
-    fn staticDispatchDispatcherType(
+    fn knownStaticDispatchArgumentRefs(
         self: *BodyLowerer,
         plan: static_dispatch.StaticDispatchCallPlan,
-    ) Allocator.Error!ConcreteTypeInfo {
+    ) Allocator.Error![]const ?ConcreteSourceType.ConcreteSourceTypeRef {
+        if (plan.args.len == 0) return &.{};
+        const refs = try self.allocator.alloc(?ConcreteSourceType.ConcreteSourceTypeRef, plan.args.len);
+        errdefer self.allocator.free(refs);
+        for (plan.args, 0..) |arg, index| {
+            refs[index] = if (try self.knownDemandSourceRefForExpr(arg)) |demand_ref|
+                try self.type_instantiator.runtimeConcreteRef(demand_ref)
+            else if (try self.knownConcreteResultTypeForExpr(arg)) |arg_ty|
+                try self.type_instantiator.runtimeConcreteRef(arg_ty.source_ref)
+            else
+                null;
+        }
+        return refs;
+    }
+
+    fn staticDispatchDispatcherSourceRef(
+        self: *BodyLowerer,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
         const expr = self.checkedExpr(plan.expr);
         switch (expr.data) {
             .dispatch_call,
@@ -10865,7 +11293,7 @@ const BodyLowerer = struct {
             => {},
             else => invariantViolation("mono static dispatch plan was attached to a non-dispatch expression"),
         }
-        return try self.concreteTypeInfoForChecked(plan.dispatcher_ty);
+        return try self.concreteSourceRefForCheckedPreservingVariables(plan.dispatcher_ty);
     }
 
     fn methodOwnerForDispatcherSourceTypeMaybe(
@@ -10894,50 +11322,27 @@ const BodyLowerer = struct {
                 .empty_record,
                 .tag_union,
                 .empty_tag_union,
-                .flex,
-                .rigid,
                 => return null,
+                .flex => |flex| {
+                    if (try self.type_instantiator.resolveConstrainedConcreteVariableFromRegistry(current, flex)) |resolved| {
+                        current = resolved;
+                        continue;
+                    }
+                    return null;
+                },
+                .rigid => |rigid| {
+                    if (try self.type_instantiator.resolveConstrainedConcreteVariableFromRegistry(current, rigid)) |resolved| {
+                        current = resolved;
+                        continue;
+                    }
+                    return null;
+                },
                 .pending,
                 .record_unbound,
                 .function,
                 => invariantViolation("mono static dispatch dispatcher source type did not resolve to an allowed method owner"),
             }
         }
-    }
-
-    fn methodOwnerForStaticDispatchPlanMaybe(
-        self: *BodyLowerer,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        dispatcher_ref: ConcreteSourceType.ConcreteSourceTypeRef,
-    ) Allocator.Error!?static_dispatch.MethodOwner {
-        if (try self.methodOwnerForDispatcherSourceTypeMaybe(dispatcher_ref)) |owner| return owner;
-        return try self.methodOwnerForConstrainedTemplateTypeMaybe(plan.dispatcher_ty);
-    }
-
-    fn methodOwnerForConstrainedTemplateTypeMaybe(
-        self: *BodyLowerer,
-        checked_ty: checked_artifact.CheckedTypeId,
-    ) Allocator.Error!?static_dispatch.MethodOwner {
-        var current = checked_ty;
-        while (true) {
-            switch (self.type_instantiator.templatePayload(current)) {
-                .alias => |alias| current = alias.backing,
-                .nominal => |nominal| current = nominal.backing,
-                .flex => |flex| return try self.methodOwnerForConstrainedTemplateVariableMaybe(flex),
-                .rigid => |rigid| return try self.methodOwnerForConstrainedTemplateVariableMaybe(rigid),
-                else => return null,
-            }
-        }
-    }
-
-    fn methodOwnerForConstrainedTemplateVariableMaybe(
-        self: *BodyLowerer,
-        variable: checked_artifact.CheckedTypeVariable,
-    ) Allocator.Error!?static_dispatch.MethodOwner {
-        if (variable.constraints.len == 0) return null;
-        if (self.type_instantiator.isMonoSpecializationNumericFlex(variable)) return null;
-        if (try self.type_instantiator.isEqualityOnlyVariable(variable)) return null;
-        return try self.type_instantiator.uniqueStaticDispatchOwnerForConstraints(variable.constraints);
     }
 
     fn methodOwnerForInspectSourceTypeMaybe(
@@ -11148,18 +11553,23 @@ const BodyLowerer = struct {
         body: checked_artifact.CheckedExprId,
     ) Allocator.Error!Ast.ExprId {
         const plan = self.iteratorForPlan(plan_id);
-        const iterable_expr = self.checkedExpr(plan.iterable);
-        const iterable_info = try self.concreteResultTypeForExpr(plan.iterable, iterable_expr.ty);
+        if (self.demandedSourceRefForPattern(pattern)) |item_ref| {
+            try self.type_instantiator.unifyTemplateWithConcrete(plan.item_ty, item_ref);
+        }
+        const iterable_info = try self.runtimeConcreteTypeInfo(try self.sourceRefForDemandedExpr(plan.iterable));
         const iterable = try self.lowerExprConcreteExpected(plan.iterable, iterable_info);
         const iter_args = [_]Ast.ExprId{iterable};
         const iter_arg_infos = [_]ConcreteTypeInfo{iterable_info};
-        const iter_call = try self.lowerStaticDispatchWithConcreteArgsInferred(
+        const iterator_info = try self.runtimeConcreteTypeInfo(
+            try self.concreteSourceRefForCheckedPreservingVariables(plan.iterator_ty),
+        );
+        const iter_call = try self.lowerStaticDispatchWithConcreteArgsExpected(
+            iterator_info,
             plan.iter,
             try self.program.ast.addExprSpan(&iter_args),
             &iter_arg_infos,
             0,
         );
-        const iterator_info = iter_call.ret_ty;
 
         const iterator_symbol = try self.program.addSyntheticSymbol();
         const iterator_decl = try self.program.ast.addStmt(.{ .var_decl = .{
@@ -11204,13 +11614,16 @@ const BodyLowerer = struct {
         const iterator = try self.program.ast.addExprWithSource(iterator_info.ty, iterator_info.source_ty, .{ .var_ = iterator_symbol });
         const next_args = [_]Ast.ExprId{iterator};
         const next_arg_infos = [_]ConcreteTypeInfo{iterator_info};
-        const next_call = try self.lowerStaticDispatchWithConcreteArgsInferred(
+        const step_info = try self.runtimeConcreteTypeInfo(
+            try self.concreteSourceRefForCheckedPreservingVariables(plan.step_ty),
+        );
+        const next_call = try self.lowerStaticDispatchWithConcreteArgsExpected(
+            step_info,
             plan.next,
             try self.program.ast.addExprSpan(&next_args),
             &next_arg_infos,
             0,
         );
-        const step_info = next_call.ret_ty;
         const branches = [_]Ast.Branch{
             try self.lowerIteratorDoneBranch(step_info, unit_ty),
             try self.lowerIteratorOneBranch(pattern, body, iterator_symbol, iterator_info, step_info, unit_ty),
@@ -11505,17 +11918,25 @@ const BodyLowerer = struct {
         const lowered = switch (pattern.data) {
             .assign => |binder| blk: {
                 const representative = self.representativeBinderForCandidate(binder, binder_remaps);
-                try self.recordConcreteTypeForBinder(representative, expected);
-                break :blk try self.program.ast.addPat(.{ .ty = ty, .data = .{
+                const binder_expected = if (self.local_type_demands.get(representative)) |demanded_ref|
+                    try self.runtimeConcreteTypeInfo(demanded_ref)
+                else
+                    expected;
+                try self.recordConcreteTypeForBinder(representative, binder_expected);
+                break :blk try self.program.ast.addPat(.{ .ty = binder_expected.ty, .data = .{
                     .var_ = try self.symbolForBinder(representative),
                 } });
             },
             .as => |as| {
                 const representative = self.representativeBinderForCandidate(as.binder, binder_remaps);
-                try self.recordConcreteTypeForBinder(representative, expected);
+                const binder_expected = if (self.local_type_demands.get(representative)) |demanded_ref|
+                    try self.runtimeConcreteTypeInfo(demanded_ref)
+                else
+                    expected;
+                try self.recordConcreteTypeForBinder(representative, binder_expected);
                 const symbol = try self.symbolForBinder(representative);
-                const nested = try self.lowerPatternWithRemaps(expected, as.pattern, binder_remaps);
-                return try self.program.ast.addPat(.{ .ty = ty, .data = .{ .as = .{
+                const nested = try self.lowerPatternWithRemaps(binder_expected, as.pattern, binder_remaps);
+                return try self.program.ast.addPat(.{ .ty = binder_expected.ty, .data = .{ .as = .{
                     .pattern = nested,
                     .symbol = symbol,
                 } } });

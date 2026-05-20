@@ -40,11 +40,44 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
 }
 
 const RewriteOptions = struct {
-    stop: ?LIR.CFStmtId = null,
-    stop_replacement: ?LIR.CFStmtId = null,
-    keep_at_stop: ?*const OwnedSet = null,
+    boundaries: []const RewriteBoundary = &.{},
     loop_keep: ?*const OwnedSet = null,
 };
+
+const RewriteBoundary = struct {
+    stop: LIR.CFStmtId,
+    replacement: LIR.CFStmtId,
+    keep: *const OwnedSet,
+};
+
+fn rewriteBoundaryForStop(boundaries: []const RewriteBoundary, cursor: LIR.CFStmtId) ?RewriteBoundary {
+    var i = boundaries.len;
+    while (i > 0) {
+        i -= 1;
+        if (boundaries[i].stop == cursor) return boundaries[i];
+    }
+    return null;
+}
+
+fn replacementReached(boundaries: []const RewriteBoundary, cursor: LIR.CFStmtId) bool {
+    var i = boundaries.len;
+    while (i > 0) {
+        i -= 1;
+        if (boundaries[i].replacement == cursor) return true;
+    }
+    return false;
+}
+
+fn appendRewriteBoundary(
+    allocator: std.mem.Allocator,
+    boundaries: []const RewriteBoundary,
+    boundary: RewriteBoundary,
+) ResourceError![]RewriteBoundary {
+    const nested = try allocator.alloc(RewriteBoundary, boundaries.len + 1);
+    @memcpy(nested[0..boundaries.len], boundaries);
+    nested[boundaries.len] = boundary;
+    return nested;
+}
 
 const LinearRewriteFrame = struct {
     stmt: LIR.CFStmtId,
@@ -69,16 +102,12 @@ const Inserter = struct {
 
         var cursor = start;
         while (true) {
-            if (options.stop) |stop| {
-                if (cursor == stop) {
-                    const keep = options.keep_at_stop orelse arcInvariant("ARC stop reached without keep set");
-                    const replacement = options.stop_replacement orelse stop;
-                    const tail = try self.releaseDifference(owned, keep, replacement);
-                    return try self.finishLinearRewrite(&frames, tail);
-                }
+            if (rewriteBoundaryForStop(options.boundaries, cursor)) |boundary| {
+                const tail = try self.releaseDifference(owned, boundary.keep, boundary.replacement);
+                return try self.finishLinearRewrite(&frames, tail);
             }
-            if (options.stop_replacement) |replacement| {
-                if (cursor == replacement) return try self.finishLinearRewrite(&frames, cursor);
+            if (replacementReached(options.boundaries, cursor)) {
+                return try self.finishLinearRewrite(&frames, cursor);
             }
 
             const stmt = self.store.getCFStmt(cursor);
@@ -222,19 +251,19 @@ const Inserter = struct {
                     cursor = expect_stmt.next;
                 },
                 .incref => |rc| {
-                    if (options.stop_replacement == null) arcInvariant("ARC insertion received already-reference-counted LIR");
+                    if (options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
                     self.addOwnedIfRc(owned, rc.value);
                     try frames.append(self.store.allocator, .{ .stmt = cursor, .head = current_start });
                     cursor = rc.next;
                 },
                 .decref => |rc| {
-                    if (options.stop_replacement == null) arcInvariant("ARC insertion received already-reference-counted LIR");
+                    if (options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
                     owned.unset(rc.value);
                     try frames.append(self.store.allocator, .{ .stmt = cursor, .head = current_start });
                     cursor = rc.next;
                 },
                 .free => |rc| {
-                    if (options.stop_replacement == null) arcInvariant("ARC insertion received already-reference-counted LIR");
+                    if (options.boundaries.len == 0) arcInvariant("ARC insertion received already-reference-counted LIR");
                     owned.unset(rc.value);
                     try frames.append(self.store.allocator, .{ .stmt = cursor, .head = current_start });
                     cursor = rc.next;
@@ -252,9 +281,7 @@ const Inserter = struct {
                     var body_owned = try loop_keep.clone();
                     defer body_owned.deinit();
                     const body = try self.rewritePath(for_stmt.body, &body_owned, .{
-                        .stop = options.stop,
-                        .stop_replacement = options.stop_replacement,
-                        .keep_at_stop = options.keep_at_stop,
+                        .boundaries = options.boundaries,
                         .loop_keep = &loop_keep,
                     });
                     self.store.getCFStmtPtr(cursor).* = .{ .for_list = .{
@@ -490,17 +517,13 @@ const Inserter = struct {
         var loop_keep = try owned.clone();
         defer loop_keep.deinit();
         const body = try self.rewritePath(join_stmt.body, owned, .{
-            .stop = options.stop,
-            .stop_replacement = options.stop_replacement,
-            .keep_at_stop = options.keep_at_stop,
+            .boundaries = options.boundaries,
             .loop_keep = &loop_keep,
         });
         var remainder_owned = try loop_keep.clone();
         defer remainder_owned.deinit();
         const remainder = try self.rewritePath(join_stmt.remainder, &remainder_owned, .{
-            .stop = options.stop,
-            .stop_replacement = options.stop_replacement,
-            .keep_at_stop = options.keep_at_stop,
+            .boundaries = options.boundaries,
             .loop_keep = &loop_keep,
         });
         self.store.getCFStmtPtr(start).* = .{ .join = .{
@@ -564,23 +587,27 @@ const Inserter = struct {
             defer continuation_owned.deinit();
             const rewritten_continuation = try self.rewritePath(continuation, &continuation_owned, options);
 
+            const boundary = RewriteBoundary{
+                .stop = continuation,
+                .replacement = rewritten_continuation,
+                .keep = &common,
+            };
+            const nested_boundaries = try appendRewriteBoundary(self.store.allocator, options.boundaries, boundary);
+            defer if (nested_boundaries.len != 0) self.store.allocator.free(nested_boundaries);
+
             const branches = self.store.getCFSwitchBranchesMut(switch_stmt.branches);
             for (branches) |*branch| {
                 var branch_owned = try owned.clone();
                 defer branch_owned.deinit();
                 branch.body = try self.rewritePath(branch.body, &branch_owned, .{
-                    .stop = continuation,
-                    .stop_replacement = rewritten_continuation,
-                    .keep_at_stop = &common,
+                    .boundaries = nested_boundaries,
                     .loop_keep = options.loop_keep,
                 });
             }
             var default_owned_rewrite = try owned.clone();
             defer default_owned_rewrite.deinit();
             const default_branch = try self.rewritePath(switch_stmt.default_branch, &default_owned_rewrite, .{
-                .stop = continuation,
-                .stop_replacement = rewritten_continuation,
-                .keep_at_stop = &common,
+                .boundaries = nested_boundaries,
                 .loop_keep = options.loop_keep,
             });
 
@@ -1926,6 +1953,23 @@ test "RC nested match: symbol used in inner and outer match branches" {
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
     try f.expectRc(value, 0, 0, 0);
+}
+
+test "RC nested continuation preserves outer stop when inner branch breaks outward" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const acc = try f.local(f.list_i64);
+    const outer_cond = try f.local(.i64);
+    const inner_cond = try f.local(.i64);
+    const ret = try f.ret(acc);
+    const inner_continuation = try f.store.addCFStmt(.runtime_error);
+    const inner_switch = try f.switchStmt(inner_cond, inner_continuation, ret, inner_continuation);
+    const outer_switch = try f.switchStmt(outer_cond, inner_switch, ret, ret);
+    const body = try f.assignList(acc, &.{}, outer_switch);
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+    try testing.expectEqual(@as(usize, 1), f.countRc(acc, .incref));
+    try testing.expect(f.countRc(acc, .decref) >= 1);
 }
 
 test "RC match rest prelude tail-cleans outer scrutinee binding" {

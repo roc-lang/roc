@@ -1858,7 +1858,7 @@ pub const RepresentationStore = struct {
     box_payload_plans: []BoxPayloadRepresentationPlan = &.{},
     box_boundaries: []BoxBoundary = &.{},
     capture_boundaries: []CaptureBoundaryInfo = &.{},
-    value_transform_boundaries: []const ValueTransformBoundary = &.{},
+    value_transform_boundaries: std.ArrayList(ValueTransformBoundary) = .empty,
     consumer_use_plans: std.ArrayList(ConsumerUsePlan) = .empty,
     transform_endpoint_scopes: std.ArrayList(TransformEndpointScope) = .empty,
     transform_endpoint_paths: std.ArrayList(Span(TransformEndpointPathStep)) = .empty,
@@ -1937,7 +1937,7 @@ pub const RepresentationStore = struct {
         for (self.box_boundaries) |*boundary| deinitBoxPayloadRepresentationPlan(self.allocator, boundary.payload_plan);
         if (self.box_boundaries.len > 0) self.allocator.free(self.box_boundaries);
         if (self.capture_boundaries.len > 0) self.allocator.free(self.capture_boundaries);
-        if (self.value_transform_boundaries.len > 0) self.allocator.free(self.value_transform_boundaries);
+        self.value_transform_boundaries.deinit(self.allocator);
         if (self.root_groups.len > 0) self.allocator.free(self.root_groups);
         if (self.callable_group_emissions.len > 0) self.allocator.free(self.callable_group_emissions);
         for (self.group_erasure_provenance) |provenance| {
@@ -2491,13 +2491,8 @@ pub const RepresentationStore = struct {
         self: *RepresentationStore,
         boundary: ValueTransformBoundary,
     ) std.mem.Allocator.Error!ValueTransformBoundaryId {
-        const id: ValueTransformBoundaryId = @enumFromInt(@as(u32, @intCast(self.value_transform_boundaries.len)));
-        const old = self.value_transform_boundaries;
-        const next = try self.allocator.alloc(ValueTransformBoundary, old.len + 1);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = boundary;
-        if (old.len > 0) self.allocator.free(old);
-        self.value_transform_boundaries = next;
+        const id: ValueTransformBoundaryId = @enumFromInt(@as(u32, @intCast(self.value_transform_boundaries.items.len)));
+        try self.value_transform_boundaries.append(self.allocator, boundary);
         return id;
     }
 
@@ -2715,7 +2710,7 @@ pub const RepresentationStore = struct {
         self: *const RepresentationStore,
         id: ValueTransformBoundaryId,
     ) ValueTransformBoundary {
-        return self.value_transform_boundaries[@intFromEnum(id)];
+        return self.value_transform_boundaries.items[@intFromEnum(id)];
     }
 
     pub fn appendConsumerUsePlan(
@@ -2849,10 +2844,10 @@ pub const RepresentationStore = struct {
         }
         for (self.capture_boundaries, 0..) |capture, raw_id| {
             const boundary_index = @intFromEnum(capture.boundary);
-            if (boundary_index >= self.value_transform_boundaries.len) {
+            if (boundary_index >= self.value_transform_boundaries.items.len) {
                 debug.invariant(false, "lambda-solved invariant violated: capture boundary did not point at a value transform boundary");
             }
-            const boundary = self.value_transform_boundaries[boundary_index];
+            const boundary = self.value_transform_boundaries.items[boundary_index];
             const capture_id: CaptureBoundaryId = @enumFromInt(@as(u32, @intCast(raw_id)));
             switch (boundary.kind) {
                 .capture_value => |id| {
