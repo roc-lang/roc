@@ -360,7 +360,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 589)
+				(e-call (constraint-fn-var 565)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -378,7 +378,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 766)
+				(e-call (constraint-fn-var 742)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -396,7 +396,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 943)
+				(e-call (constraint-fn-var 919)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -414,7 +414,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1120)
+				(e-call (constraint-fn-var 1096)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -431,9 +431,9 @@ NO CHANGE
 							(e-num (value "0"))))))))
 	(s-expect
 		(e-binop (op "eq")
-			(e-call (constraint-fn-var 1298)
+			(e-call (constraint-fn-var 1274)
 				(e-runtime-error (tag "erroneous_value_use"))
-				(e-call (constraint-fn-var 1297)
+				(e-call (constraint-fn-var 1273)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields

@@ -8948,14 +8948,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (union_layout.tag != .tag_union) {
-                return .{ .immediate_i64 = tag.discriminant };
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "LIR/codegen invariant violated: generateZeroArgTag expected tag_union/scalar/zst layout, got {s}",
+                        .{@tagName(union_layout.tag)},
+                    );
+                }
+                unreachable;
             }
 
             const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
             const stack_size = tu_data.size;
-            if (stack_size <= 8) {
-                return .{ .immediate_i64 = tag.discriminant };
-            }
 
             const base_offset = self.codegen.allocStackSlot(stack_size);
             try self.zeroStackArea(base_offset, stack_size);
@@ -9072,9 +9075,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
             const stack_size = tu_data.size;
-            const base_offset = self.codegen.allocStackSlot(stack_size);
-            try self.zeroStackArea(base_offset, stack_size);
-
             const variants = ls.getTagUnionVariants(tu_data);
             if (@as(usize, tag.variant_index) >= variants.len) {
                 if (builtin.mode == .Debug) {
@@ -9094,6 +9094,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .discriminant = tag.discriminant,
                 });
             } else if (tag.payload) |payload_local| {
+                const base_offset = self.codegen.allocStackSlot(stack_size);
+                try self.zeroStackArea(base_offset, stack_size);
+
                 const arg_loc = self.requireExactValueLocationToLayout(
                     try self.emitValueLocal(payload_local),
                     self.valueLayout(payload_local),
@@ -9103,13 +9106,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const payload_layout = ls.getLayout(variant_payload_layout);
                 const payload_size: u32 = ls.layoutSizeAlign(payload_layout).size;
                 try self.copyBytesToStackOffset(base_offset, arg_loc, payload_size);
+
+                const disc_offset = tu_data.discriminant_offset;
+                const disc_size = tu_data.discriminant_size;
+                try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
+
+                return self.stackLocationForLayout(tag.target_layout, base_offset);
             }
 
-            const disc_offset = tu_data.discriminant_offset;
-            const disc_size = tu_data.discriminant_size;
-            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
-
-            return self.stackLocationForLayout(tag.target_layout, base_offset);
+            unreachable;
         }
 
         fn compiledProcForId(

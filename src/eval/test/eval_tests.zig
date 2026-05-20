@@ -2743,6 +2743,103 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2)" },
     },
     .{
+        .name = "inspect: checked integer arithmetic reports boundary errors",
+        .source =
+        \\{
+        \\    (
+        \\        U8.add_checked(250, 5),
+        \\        U8.add_checked(250, 6),
+        \\        U8.sub_checked(0, 1),
+        \\        U8.mul_checked(16, 16),
+        \\        U8.div_checked(1, 0),
+        \\        I8.add_checked(126, 1),
+        \\        I8.add_checked(127, 1),
+        \\        I8.add_checked(I8.lowest, -1),
+        \\        I8.sub_checked(I8.lowest, 1),
+        \\        I8.mul_checked(63, 2),
+        \\        I8.mul_checked(64, 2),
+        \\        I8.mul_checked(I8.lowest, -1),
+        \\        I8.div_checked(I8.lowest, -1),
+        \\        I8.div_checked(1, 0),
+        \\        I8.div_checked(-7, 2),
+        \\        I64.add_checked(I64.highest, -1),
+        \\        I64.add_checked(I64.highest, 1),
+        \\        U128.mul_checked(U128.highest, 2),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Ok(255), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(127), Err(Overflow), Err(Overflow), Err(Overflow), Ok(126), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(-3), Ok(9223372036854775806), Err(Overflow), Err(Overflow))" },
+    },
+    .{
+        .name = "inspect: numeric inclusive ranges stop at highest",
+        .source =
+        \\{
+        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    (
+        \\        count(U8.to(U8.highest, U8.highest)),
+        \\        count(I8.to(I8.highest, I8.highest)),
+        \\        count(U16.to(U16.highest, U16.highest)),
+        \\        count(I16.to(I16.highest, I16.highest)),
+        \\        count(U32.to(U32.highest, U32.highest)),
+        \\        count(I32.to(I32.highest, I32.highest)),
+        \\        count(U64.to(U64.highest, U64.highest)),
+        \\        count(I64.to(I64.highest, I64.highest)),
+        \\        count(U128.to(U128.highest, U128.highest)),
+        \\        count(I128.to(I128.highest, I128.highest)),
+        \\        count(Dec.to(Dec.highest, Dec.highest)),
+        \\        count(Dec.to(Dec.highest - 0.5, Dec.highest)),
+        \\        count(Dec.to(Dec.highest - 1.0, Dec.highest)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2)" },
+    },
+    .{
+        .name = "inspect: numeric exclusive ranges stop at highest",
+        .source =
+        \\{
+        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    (
+        \\        count(U8.until(U8.highest, U8.highest)),
+        \\        count(I8.until(I8.highest, I8.highest)),
+        \\        count(U16.until(U16.highest, U16.highest)),
+        \\        count(I16.until(I16.highest, I16.highest)),
+        \\        count(U32.until(U32.highest, U32.highest)),
+        \\        count(I32.until(I32.highest, I32.highest)),
+        \\        count(U64.until(U64.highest, U64.highest)),
+        \\        count(I64.until(I64.highest, I64.highest)),
+        \\        count(U128.until(U128.highest, U128.highest)),
+        \\        count(I128.until(I128.highest, I128.highest)),
+        \\        count(Dec.until(Dec.highest, Dec.highest)),
+        \\        count(Dec.until(Dec.highest - 0.5, Dec.highest)),
+        \\        count(Dec.until(Dec.highest - 1.0, Dec.highest)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1)" },
+    },
+    .{
+        .name = "inspect: numeric exclusive ranges include predecessor of highest",
+        .source =
+        \\{
+        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    (
+        \\        count(U8.until(U8.highest - 1, U8.highest)),
+        \\        count(I8.until(I8.highest - 1, I8.highest)),
+        \\        count(U16.until(U16.highest - 1, U16.highest)),
+        \\        count(I16.until(I16.highest - 1, I16.highest)),
+        \\        count(U32.until(U32.highest - 1, U32.highest)),
+        \\        count(I32.until(I32.highest - 1, I32.highest)),
+        \\        count(U64.until(U64.highest - 1, U64.highest)),
+        \\        count(I64.until(I64.highest - 1, I64.highest)),
+        \\        count(U128.until(U128.highest - 1, U128.highest)),
+        \\        count(I128.until(I128.highest - 1, I128.highest)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+    },
+    .{
         .name = "inspect: generic local attached method specialization on nominal",
         .source_kind = .module,
         .source =

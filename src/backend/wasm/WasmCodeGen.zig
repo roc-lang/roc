@@ -2853,10 +2853,22 @@ fn emitCompositeNumericOp(self: *Self, op: anytype, args: []const ProcLocalId, r
                 const import_idx = if (is_signed) self.i128_mod_s_import else self.u128_mod_import;
                 try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx orelse unreachable);
             },
-            .num_is_gt => try self.emitI128Compare(lhs_local, rhs_local, .gt),
-            .num_is_gte => try self.emitI128Compare(lhs_local, rhs_local, .gte),
-            .num_is_lt => try self.emitI128Compare(lhs_local, rhs_local, .lt),
-            .num_is_lte => try self.emitI128Compare(lhs_local, rhs_local, .lte),
+            .num_is_gt => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .gt, is_signed);
+            },
+            .num_is_gte => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .gte, is_signed);
+            },
+            .num_is_lt => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .lt, is_signed);
+            },
+            .num_is_lte => {
+                const is_signed = operand_layout == .i128 or operand_layout == .dec;
+                try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .lte, is_signed);
+            },
             .num_abs_diff => {
                 const is_signed = operand_layout == .i128 or operand_layout == .dec;
                 try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .gte, is_signed);
@@ -3470,11 +3482,6 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
 }
 
 const I128CmpOp = enum { lt, lte, gt, gte };
-
-/// Emit signed i128 comparison. Pushes i32 (0 or 1) result.
-fn emitI128Compare(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpOp) Allocator.Error!void {
-    return self.emitI128CompareWithSignedness(lhs_local, rhs_local, cmp_op, true);
-}
 
 fn emitI128CompareWithSignedness(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpOp, is_signed: bool) Allocator.Error!void {
     // Signed i128 comparison strategy:

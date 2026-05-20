@@ -1960,17 +1960,26 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
+			add_checked : U8, U8 -> Try(U8, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U8.highest, a, b)
+
 			## Subtract the second [U8] from the first.
 			## ```roc
 			## expect U8.minus(5, 3) == 2
 			## ```
 			minus : U8, U8 -> U8
 
+			sub_checked : U8, U8 -> Try(U8, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U8] values.
 			## ```roc
 			## expect U8.times(4, 3) == 12
 			## ```
 			times : U8, U8 -> U8
+
+			mul_checked : U8, U8 -> Try(U8, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U8.highest, 0, a, b)
 
 			## Divide the first [U8] by the second, discarding any remainder. Crashes if the second [U8] is zero.
 			## ```roc
@@ -1979,6 +1988,9 @@ Builtin :: [].{
 			## expect U8.div_by(11, 2) == 5
 			## ```
 			div_by : U8, U8 -> U8
+
+			div_checked : U8, U8 -> Try(U8, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U8] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U8.div_by].
@@ -2075,7 +2087,27 @@ Builtin :: [].{
 			## expect Iter.fold(U8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U8, U8 -> Iter(U8)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U8.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U8.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `U8` and ending with the other `U8` minus one.
 			## (Use [U8.to] instead to end with the other `U8` exactly, instead of minus one.)
@@ -2088,7 +2120,27 @@ Builtin :: [].{
 			## expect Iter.fold(U8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U8, U8 -> Iter(U8)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U8.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U8.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 
@@ -2291,17 +2343,26 @@ Builtin :: [].{
 			## ```
 			plus : I8, I8 -> I8
 
+			add_checked : I8, I8 -> Try(I8, [Overflow])
+			add_checked = |a, b| signed_add_checked(I8.lowest, I8.highest, 0, a, b)
+
 			## Subtract the second [I8] from the first.
 			## ```roc
 			## expect I8.minus(5, 3) == 2
 			## ```
 			minus : I8, I8 -> I8
 
+			sub_checked : I8, I8 -> Try(I8, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I8.lowest, I8.highest, 0, a, b)
+
 			## Multiply two [I8] values.
 			## ```roc
 			## expect I8.times(4, 3) == 12
 			## ```
 			times : I8, I8 -> I8
+
+			mul_checked : I8, I8 -> Try(I8, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I8.lowest, I8.highest, 0, -1, a, b)
 
 			## Divide the first [I8] by the second, discarding any remainder. Crashes if the second [I8] is zero.
 			## ```roc
@@ -2310,6 +2371,9 @@ Builtin :: [].{
 			## expect I8.div_by(11, 2) == 5
 			## ```
 			div_by : I8, I8 -> I8
+
+			div_checked : I8, I8 -> Try(I8, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I8.lowest, 0, -1, a, b)
 
 			## Divide the first [I8] by the second, truncating toward zero.
 			## ```roc
@@ -2392,7 +2456,27 @@ Builtin :: [].{
 			## expect Iter.fold(I8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I8, I8 -> Iter(I8)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I8.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I8.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8` minus one.
 			## (Use [I8.to] instead to end with the other `I8` exactly, instead of minus one.)
@@ -2405,7 +2489,27 @@ Builtin :: [].{
 			## expect Iter.fold(I8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I8, I8 -> Iter(I8)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I8.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I8.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -2670,17 +2774,26 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
+			add_checked : U16, U16 -> Try(U16, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U16.highest, a, b)
+
 			## Subtract the second [U16] from the first.
 			## ```roc
 			## expect U16.minus(5, 3) == 2
 			## ```
 			minus : U16, U16 -> U16
 
+			sub_checked : U16, U16 -> Try(U16, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U16] values.
 			## ```roc
 			## expect U16.times(4, 3) == 12
 			## ```
 			times : U16, U16 -> U16
+
+			mul_checked : U16, U16 -> Try(U16, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U16.highest, 0, a, b)
 
 			## Divide the first [U16] by the second, discarding any remainder. Crashes if the second [U16] is zero.
 			## ```roc
@@ -2689,6 +2802,9 @@ Builtin :: [].{
 			## expect U16.div_by(11, 2) == 5
 			## ```
 			div_by : U16, U16 -> U16
+
+			div_checked : U16, U16 -> Try(U16, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U16] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U16.div_by].
@@ -2764,7 +2880,27 @@ Builtin :: [].{
 			## expect Iter.fold(U16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U16, U16 -> Iter(U16)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U16.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U16.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `U16` and ending with the other `U16` minus one.
 			## (Use [U16.to] instead to end with the other `U16` exactly, instead of minus one.)
@@ -2777,7 +2913,27 @@ Builtin :: [].{
 			## expect Iter.fold(U16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U16, U16 -> Iter(U16)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U16.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U16.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3039,17 +3195,26 @@ Builtin :: [].{
 			## ```
 			plus : I16, I16 -> I16
 
+			add_checked : I16, I16 -> Try(I16, [Overflow])
+			add_checked = |a, b| signed_add_checked(I16.lowest, I16.highest, 0, a, b)
+
 			## Subtract the second [I16] from the first.
 			## ```roc
 			## expect I16.minus(5, 3) == 2
 			## ```
 			minus : I16, I16 -> I16
 
+			sub_checked : I16, I16 -> Try(I16, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I16.lowest, I16.highest, 0, a, b)
+
 			## Multiply two [I16] values.
 			## ```roc
 			## expect I16.times(4, 3) == 12
 			## ```
 			times : I16, I16 -> I16
+
+			mul_checked : I16, I16 -> Try(I16, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I16.lowest, I16.highest, 0, -1, a, b)
 
 			## Divide the first [I16] by the second, discarding any remainder. Crashes if the second [I16] is zero.
 			## ```roc
@@ -3058,6 +3223,9 @@ Builtin :: [].{
 			## expect I16.div_by(11, 2) == 5
 			## ```
 			div_by : I16, I16 -> I16
+
+			div_checked : I16, I16 -> Try(I16, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I16.lowest, 0, -1, a, b)
 
 			## Divide the first [I16] by the second, truncating toward zero.
 			## ```roc
@@ -3140,7 +3308,27 @@ Builtin :: [].{
 			## expect Iter.fold(I16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I16, I16 -> Iter(I16)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I16.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I16.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `I16` and ending with the other `I16` minus one.
 			## (Use [I16.to] instead to end with the other `I16` exactly, instead of minus one.)
@@ -3153,7 +3341,27 @@ Builtin :: [].{
 			## expect Iter.fold(I16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I16, I16 -> Iter(I16)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I16.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I16.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3435,17 +3643,26 @@ Builtin :: [].{
 			## ```
 			plus : U32, U32 -> U32
 
+			add_checked : U32, U32 -> Try(U32, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U32.highest, a, b)
+
 			## Subtract the second [U32] from the first.
 			## ```roc
 			## expect U32.minus(5, 3) == 2
 			## ```
 			minus : U32, U32 -> U32
 
+			sub_checked : U32, U32 -> Try(U32, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U32] values.
 			## ```roc
 			## expect U32.times(4, 3) == 12
 			## ```
 			times : U32, U32 -> U32
+
+			mul_checked : U32, U32 -> Try(U32, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U32.highest, 0, a, b)
 
 			## Divide the first [U32] by the second, discarding any remainder. Crashes if the second [U32] is zero.
 			## ```roc
@@ -3454,6 +3671,9 @@ Builtin :: [].{
 			## expect U32.div_by(11, 2) == 5
 			## ```
 			div_by : U32, U32 -> U32
+
+			div_checked : U32, U32 -> Try(U32, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U32] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U32.div_by].
@@ -3529,7 +3749,27 @@ Builtin :: [].{
 			## expect Iter.fold(U32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U32, U32 -> Iter(U32)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U32.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U32.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32` minus one.
 			## (Use [U32.to] instead to end with the other `U32` exactly, instead of minus one.)
@@ -3542,7 +3782,27 @@ Builtin :: [].{
 			## expect Iter.fold(U32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U32, U32 -> Iter(U32)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U32.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U32.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3842,17 +4102,26 @@ Builtin :: [].{
 			## ```
 			plus : I32, I32 -> I32
 
+			add_checked : I32, I32 -> Try(I32, [Overflow])
+			add_checked = |a, b| signed_add_checked(I32.lowest, I32.highest, 0, a, b)
+
 			## Subtract the second [I32] from the first.
 			## ```roc
 			## expect I32.minus(5, 3) == 2
 			## ```
 			minus : I32, I32 -> I32
 
+			sub_checked : I32, I32 -> Try(I32, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I32.lowest, I32.highest, 0, a, b)
+
 			## Multiply two [I32] values.
 			## ```roc
 			## expect I32.times(4, 3) == 12
 			## ```
 			times : I32, I32 -> I32
+
+			mul_checked : I32, I32 -> Try(I32, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I32.lowest, I32.highest, 0, -1, a, b)
 
 			## Divide the first [I32] by the second, discarding any remainder. Crashes if the second [I32] is zero.
 			## ```roc
@@ -3861,6 +4130,9 @@ Builtin :: [].{
 			## expect I32.div_by(11, 2) == 5
 			## ```
 			div_by : I32, I32 -> I32
+
+			div_checked : I32, I32 -> Try(I32, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I32.lowest, 0, -1, a, b)
 
 			## Divide the first [I32] by the second, truncating toward zero.
 			## ```roc
@@ -3943,7 +4215,27 @@ Builtin :: [].{
 			## expect Iter.fold(I32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I32, I32 -> Iter(I32)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I32.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I32.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `I32` and ending with the other `I32` minus one.
 			## (Use [I32.to] instead to end with the other `I32` exactly, instead of minus one.)
@@ -3956,7 +4248,27 @@ Builtin :: [].{
 			## expect Iter.fold(I32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I32, I32 -> Iter(I32)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I32.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I32.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4258,17 +4570,26 @@ Builtin :: [].{
 			## ```
 			plus : U64, U64 -> U64
 
+			add_checked : U64, U64 -> Try(U64, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U64.highest, a, b)
+
 			## Subtract the second [U64] from the first.
 			## ```roc
 			## expect U64.minus(5, 3) == 2
 			## ```
 			minus : U64, U64 -> U64
 
+			sub_checked : U64, U64 -> Try(U64, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U64] values.
 			## ```roc
 			## expect U64.times(4, 3) == 12
 			## ```
 			times : U64, U64 -> U64
+
+			mul_checked : U64, U64 -> Try(U64, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U64.highest, 0, a, b)
 
 			## Divide the first [U64] by the second, discarding any remainder. Crashes if the second [U64] is zero.
 			## ```roc
@@ -4277,6 +4598,9 @@ Builtin :: [].{
 			## expect U64.div_by(11, 2) == 5
 			## ```
 			div_by : U64, U64 -> U64
+
+			div_checked : U64, U64 -> Try(U64, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U64] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U64.div_by].
@@ -4352,7 +4676,27 @@ Builtin :: [].{
 			## expect Iter.fold(U64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U64, U64 -> Iter(U64)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U64.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U64.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64` minus one.
 			## (Use [U64.to] instead to end with the other `U64` exactly, instead of minus one.)
@@ -4365,7 +4709,27 @@ Builtin :: [].{
 			## expect Iter.fold(U64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U64, U64 -> Iter(U64)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U64.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U64.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4707,17 +5071,26 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
+			add_checked : I64, I64 -> Try(I64, [Overflow])
+			add_checked = |a, b| signed_add_checked(I64.lowest, I64.highest, 0, a, b)
+
 			## Subtract the second [I64] from the first.
 			## ```roc
 			## expect I64.minus(5, 3) == 2
 			## ```
 			minus : I64, I64 -> I64
 
+			sub_checked : I64, I64 -> Try(I64, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I64.lowest, I64.highest, 0, a, b)
+
 			## Multiply two [I64] values.
 			## ```roc
 			## expect I64.times(4, 3) == 12
 			## ```
 			times : I64, I64 -> I64
+
+			mul_checked : I64, I64 -> Try(I64, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I64.lowest, I64.highest, 0, -1, a, b)
 
 			## Divide the first [I64] by the second, discarding any remainder. Crashes if the second [I64] is zero.
 			## ```roc
@@ -4726,6 +5099,9 @@ Builtin :: [].{
 			## expect I64.div_by(11, 2) == 5
 			## ```
 			div_by : I64, I64 -> I64
+
+			div_checked : I64, I64 -> Try(I64, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I64.lowest, 0, -1, a, b)
 
 			## Divide the first [I64] by the second, truncating toward zero.
 			## ```roc
@@ -4808,7 +5184,27 @@ Builtin :: [].{
 			## expect Iter.fold(I64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I64, I64 -> Iter(I64)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I64.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I64.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `I64` and ending with the other `I64` minus one.
 			## (Use [I64.to] instead to end with the other `I64` exactly, instead of minus one.)
@@ -4821,7 +5217,27 @@ Builtin :: [].{
 			## expect Iter.fold(I64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I64, I64 -> Iter(I64)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I64.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I64.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5139,17 +5555,26 @@ Builtin :: [].{
 			## ```
 			plus : U128, U128 -> U128
 
+			add_checked : U128, U128 -> Try(U128, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U128.highest, a, b)
+
 			## Subtract the second [U128] from the first.
 			## ```roc
 			## expect U128.minus(5, 3) == 2
 			## ```
 			minus : U128, U128 -> U128
 
+			sub_checked : U128, U128 -> Try(U128, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U128] values.
 			## ```roc
 			## expect U128.times(4, 3) == 12
 			## ```
 			times : U128, U128 -> U128
+
+			mul_checked : U128, U128 -> Try(U128, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U128.highest, 0, a, b)
 
 			## Divide the first [U128] by the second, discarding any remainder. Crashes if the second [U128] is zero.
 			## ```roc
@@ -5158,6 +5583,9 @@ Builtin :: [].{
 			## expect U128.div_by(11, 2) == 5
 			## ```
 			div_by : U128, U128 -> U128
+
+			div_checked : U128, U128 -> Try(U128, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U128] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U128.div_by].
@@ -5233,7 +5661,27 @@ Builtin :: [].{
 			## expect Iter.fold(U128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : U128, U128 -> Iter(U128)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U128.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U128.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128` minus one.
 			## (Use [U128.to] instead to end with the other `U128` exactly, instead of minus one.)
@@ -5246,7 +5694,27 @@ Builtin :: [].{
 			## expect Iter.fold(U128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : U128, U128 -> Iter(U128)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U128.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U128.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5626,17 +6094,26 @@ Builtin :: [].{
 			## ```
 			plus : I128, I128 -> I128
 
+			add_checked : I128, I128 -> Try(I128, [Overflow])
+			add_checked = |a, b| signed_add_checked(I128.lowest, I128.highest, 0, a, b)
+
 			## Subtract the second [I128] from the first.
 			## ```roc
 			## expect I128.minus(5, 3) == 2
 			## ```
 			minus : I128, I128 -> I128
 
+			sub_checked : I128, I128 -> Try(I128, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I128.lowest, I128.highest, 0, a, b)
+
 			## Multiply two [I128] values.
 			## ```roc
 			## expect I128.times(4, 3) == 12
 			## ```
 			times : I128, I128 -> I128
+
+			mul_checked : I128, I128 -> Try(I128, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I128.lowest, I128.highest, 0, -1, a, b)
 
 			## Divide the first [I128] by the second, discarding any remainder. Crashes if the second [I128] is zero.
 			## ```roc
@@ -5645,6 +6122,9 @@ Builtin :: [].{
 			## expect I128.div_by(11, 2) == 5
 			## ```
 			div_by : I128, I128 -> I128
+
+			div_checked : I128, I128 -> Try(I128, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I128.lowest, 0, -1, a, b)
 
 			## Divide the first [I128] by the second, truncating toward zero.
 			## ```roc
@@ -5728,7 +6208,27 @@ Builtin :: [].{
 			## expect Iter.fold(I128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : I128, I128 -> Iter(I128)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I128.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I128.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128` minus one.
 			## (Use [I128.to] instead to end with the other `I128` exactly, instead of minus one.)
@@ -5741,7 +6241,27 @@ Builtin :: [].{
 			## expect Iter.fold(I128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : I128, I128 -> Iter(I128)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I128.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I128.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6125,11 +6645,17 @@ Builtin :: [].{
 			## ```
 			plus : Dec, Dec -> Dec
 
+			add_checked : Dec, Dec -> Try(Dec, [Overflow])
+			add_checked = |a, b| signed_add_checked(Dec.lowest, Dec.highest, 0.0, a, b)
+
 			## Subtract the second [Dec] from the first.
 			## ```roc
 			## expect Dec.minus(5.0, 3.5) == 1.5
 			## ```
 			minus : Dec, Dec -> Dec
+
+			sub_checked : Dec, Dec -> Try(Dec, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Multiply two [Dec] values.
 			## ```roc
@@ -6452,7 +6978,27 @@ Builtin :: [].{
 			## expect Iter.fold(Dec.to(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
 			to : Dec, Dec -> Iter(Dec)
-			to = |start, end| range_to(start, end, |current, last| current <= last, |current| current + 1)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match Dec.add_checked(start, 1.0) {
+									Ok(next) => if next <= end {
+										Dec.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Iterator of decimals beginning with this `Dec` and ending with the
 			## other `Dec` minus one, stepping by `1.0`. (Use [Dec.to] instead to
@@ -6467,7 +7013,27 @@ Builtin :: [].{
 			## expect Iter.fold(Dec.until(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
 			until : Dec, Dec -> Iter(Dec)
-			until = |start, end| range_until(start, end, |current, last| current < last, |current| current + 1)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match Dec.add_checked(start, 1.0) {
+									Ok(next) => if next < end {
+										Dec.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Encode a Dec using a format that provides encode_dec
 			encode : Dec, fmt -> Try(encoded, err)
@@ -7444,26 +8010,151 @@ Builtin :: [].{
 
 }
 
-range_to : item, item, (item, item -> Bool), (item -> item) -> Iter(item)
-range_to = |current, end, is_in_range, step| {
-	len_if_known: Unknown,
-	step: ||
-		if is_in_range(current, end) {
-			One({ item: current, rest: range_to(step(current), end, is_in_range, step) })
-		} else {
-			Done
-		},
-}
+unsigned_add_checked : item, item, item -> Try(item, [Overflow])
+	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
+unsigned_add_checked = |highest, a, b|
+	if a > highest - b {
+		Err(Overflow)
+	} else {
+		Ok(a + b)
+	}
 
-range_until : item, item, (item, item -> Bool), (item -> item) -> Iter(item)
-range_until = |current, end, is_in_range, step| {
-	len_if_known: Unknown,
-	step: ||
-		if is_in_range(current, end) {
-			One({ item: current, rest: range_until(step(current), end, is_in_range, step) })
+unsigned_sub_checked : item, item -> Try(item, [Overflow])
+	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+unsigned_sub_checked = |a, b|
+	if a < b {
+		Err(Overflow)
+	} else {
+		Ok(a - b)
+	}
+
+unsigned_mul_checked : item, item, item, item -> Try(item, [Overflow])
+	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
+unsigned_mul_checked = |highest, zero, a, b|
+	if b == zero {
+		Ok(zero)
+	} else if a > highest / b {
+		Err(Overflow)
+	} else {
+		Ok(a * b)
+	}
+
+unsigned_div_checked : item, item, item -> Try(item, [DivByZero])
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+unsigned_div_checked = |zero, a, b|
+	if b == zero {
+		Err(DivByZero)
+	} else {
+		Ok(a / b)
+	}
+
+signed_add_checked : item, item, item, item, item -> Try(item, [Overflow])
+	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+signed_add_checked = |lowest, highest, zero, a, b|
+	if b > zero {
+		if a > highest - b {
+			Err(Overflow)
 		} else {
-			Done
-		},
+			Ok(a + b)
+		}
+	} else if b < zero {
+		if a < lowest - b {
+			Err(Overflow)
+		} else {
+			Ok(a + b)
+		}
+	} else {
+		Ok(a)
+	}
+
+signed_sub_checked : item, item, item, item, item -> Try(item, [Overflow])
+	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+signed_sub_checked = |lowest, highest, zero, a, b|
+	if b > zero {
+		if a < lowest + b {
+			Err(Overflow)
+		} else {
+			Ok(a - b)
+		}
+	} else if b < zero {
+		if a > highest + b {
+			Err(Overflow)
+		} else {
+			Ok(a - b)
+		}
+	} else {
+		Ok(a)
+	}
+
+signed_mul_checked : item, item, item, item, item, item -> Try(item, [Overflow])
+	where [
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.is_eq : item, item -> Bool,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+		item.div_trunc_by : item, item -> item,
+	]
+signed_mul_checked = |lowest, highest, zero, neg_one, a, b|
+	if a == zero {
+		Ok(zero)
+	} else if b == zero {
+		Ok(zero)
+	} else if a == neg_one {
+		if b == lowest {
+			Err(Overflow)
+		} else {
+			Ok(zero - b)
+		}
+	} else if b == neg_one {
+		if a == lowest {
+			Err(Overflow)
+		} else {
+			Ok(zero - a)
+		}
+	} else if a > zero {
+		if b > zero {
+			if a > highest.div_trunc_by(b) {
+				Err(Overflow)
+			} else {
+				Ok(a * b)
+			}
+		} else if b < lowest.div_trunc_by(a) {
+			Err(Overflow)
+		} else {
+			Ok(a * b)
+		}
+	} else if b > zero {
+		if a < lowest.div_trunc_by(b) {
+			Err(Overflow)
+		} else {
+			Ok(a * b)
+		}
+	} else if a < highest.div_trunc_by(b) {
+		Err(Overflow)
+	} else {
+		Ok(a * b)
+	}
+
+signed_div_checked : item, item, item, item, item -> Try(item, [DivByZero, Overflow])
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+signed_div_checked = |lowest, zero, neg_one, a, b|
+	if b == zero {
+		Err(DivByZero)
+	} else if a == lowest {
+		if b == neg_one {
+			Err(Overflow)
+		} else {
+			Ok(a / b)
+		}
+	} else {
+		Ok(a / b)
+	}
+
+range_done : () -> Iter(item)
+range_done = || {
+	len_if_known: Known(0),
+	step: || Done,
 }
 
 # Implemented by the compiler, does not perform bounds checks
