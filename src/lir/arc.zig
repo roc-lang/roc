@@ -19,6 +19,12 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
         .store = store,
         .layouts = layouts,
     };
+    var local_contains_refcounted = try store.allocator.alloc(bool, store.locals.items.len);
+    defer store.allocator.free(local_contains_refcounted);
+    for (store.locals.items, 0..) |local, index| {
+        local_contains_refcounted[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
+    }
+    inserter.local_contains_refcounted = local_contains_refcounted;
 
     for (store.proc_specs.items) |*proc| {
         const body = proc.body orelse continue;
@@ -89,6 +95,7 @@ const LinearRewriteFrame = struct {
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
+    local_contains_refcounted: []const bool = &.{},
     join_bodies: ?*const JoinBodyMap = null,
 
     const CallArgOwnership = struct {
@@ -271,29 +278,6 @@ const Inserter = struct {
                 .switch_stmt => |switch_stmt| {
                     const tail = try self.rewriteSwitch(cursor, switch_stmt, owned, options);
                     return try self.finishLinearRewrite(&frames, tail);
-                },
-                .for_list => |for_stmt| {
-                    if (for_stmt.elem_source != .aliases_iterable_element) {
-                        arcInvariant("ARC insertion reached unknown for_list element ARC source");
-                    }
-                    var loop_keep = try owned.clone();
-                    defer loop_keep.deinit();
-                    var body_owned = try loop_keep.clone();
-                    defer body_owned.deinit();
-                    const body = try self.rewritePath(for_stmt.body, &body_owned, .{
-                        .boundaries = options.boundaries,
-                        .loop_keep = &loop_keep,
-                    });
-                    self.store.getCFStmtPtr(cursor).* = .{ .for_list = .{
-                        .elem = for_stmt.elem,
-                        .elem_source = for_stmt.elem_source,
-                        .iterable = for_stmt.iterable,
-                        .iterable_elem_layout = for_stmt.iterable_elem_layout,
-                        .body = body,
-                        .next = for_stmt.next,
-                    } };
-                    try frames.append(self.store.allocator, .{ .stmt = cursor, .head = current_start });
-                    cursor = for_stmt.next;
                 },
                 .join => |join_stmt| {
                     const tail = try self.rewriteJoin(cursor, join_stmt, owned, options);
@@ -481,16 +465,6 @@ const Inserter = struct {
             .free => |rc| {
                 self.store.getCFStmtPtr(frame.stmt).* = .{ .free = .{
                     .value = rc.value,
-                    .next = next,
-                } };
-            },
-            .for_list => |for_stmt| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .for_list = .{
-                    .elem = for_stmt.elem,
-                    .elem_source = for_stmt.elem_source,
-                    .iterable = for_stmt.iterable,
-                    .iterable_elem_layout = for_stmt.iterable_elem_layout,
-                    .body = for_stmt.body,
                     .next = next,
                 } };
             },
@@ -775,7 +749,6 @@ const Inserter = struct {
                     try self.analyzeUntil(switch_stmt.default_branch, &default_owned, stop, exits, loop_keep);
                     return;
                 },
-                .for_list => |for_stmt| cursor = for_stmt.next,
                 .join => |join_stmt| cursor = join_stmt.body,
                 .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash => return,
             }
@@ -848,7 +821,7 @@ const Inserter = struct {
         loop_keep: ?*const OwnedSet,
     ) ResourceError!CallArgOwnership {
         var result = CallArgOwnership{};
-        var transferred = try OwnedSet.init(self.store.allocator, owned.bits.len);
+        var transferred = try OwnedSet.init(self.store.allocator, owned.len());
         defer transferred.deinit();
 
         const locals = self.store.getLocalSpan(span);
@@ -947,10 +920,6 @@ const Inserter = struct {
                         try stack.append(self.store.allocator, branch.body);
                     }
                 },
-                .for_list => |for_stmt| {
-                    try stack.append(self.store.allocator, for_stmt.next);
-                    try stack.append(self.store.allocator, for_stmt.body);
-                },
                 .join => |join_stmt| {
                     const previous = try join_bodies.getOrPut(join_stmt.id);
                     if (previous.found_existing and previous.value_ptr.* != join_stmt.body) {
@@ -1045,11 +1014,6 @@ const Inserter = struct {
                         try stack.append(self.store.allocator, branch.body);
                     }
                 },
-                .for_list => |for_stmt| {
-                    if (for_stmt.iterable == needle) return true;
-                    try stack.append(self.store.allocator, for_stmt.next);
-                    try stack.append(self.store.allocator, for_stmt.body);
-                },
                 .join => |join_stmt| {
                     try stack.append(self.store.allocator, join_stmt.remainder);
                     try stack.append(self.store.allocator, join_stmt.body);
@@ -1097,17 +1061,16 @@ const Inserter = struct {
     }
 
     fn releaseAll(self: *Inserter, owned: *const OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var keep = try OwnedSet.init(self.store.allocator, owned.bits.len);
+        var keep = try OwnedSet.init(self.store.allocator, owned.len());
         defer keep.deinit();
         return try self.releaseDifference(owned, &keep, next);
     }
 
     fn releaseDifference(self: *Inserter, owned: *const OwnedSet, keep: *const OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         var current = next;
-        var i = owned.bits.len;
-        while (i > 0) {
-            i -= 1;
-            if (!owned.bits[i] or keep.bits[i]) continue;
+        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        while (iter.next()) |i| {
+            if (keep.bits.isSet(i)) continue;
             const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
             current = try self.releaseLocalIfRc(local, current);
         }
@@ -1132,8 +1095,9 @@ const Inserter = struct {
     }
 
     fn localContainsRefcounted(self: *const Inserter, local: LIR.LocalId) bool {
-        const layout_idx = self.store.getLocal(local).layout_idx;
-        return self.layouts.layoutContainsRefcounted(self.layouts.getLayout(layout_idx));
+        const index = @intFromEnum(local);
+        if (index >= self.local_contains_refcounted.len) arcInvariant("ARC local refcounted cache did not cover local");
+        return self.local_contains_refcounted[index];
     }
 };
 
@@ -1141,46 +1105,49 @@ const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
 
 const OwnedSet = struct {
     allocator: std.mem.Allocator,
-    bits: []bool,
+    bits: std.bit_set.DynamicBitSetUnmanaged,
 
-    fn init(allocator: std.mem.Allocator, len: usize) ResourceError!OwnedSet {
-        const bits = try allocator.alloc(bool, len);
-        @memset(bits, false);
+    fn init(allocator: std.mem.Allocator, bit_len: usize) ResourceError!OwnedSet {
+        const bits = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, bit_len);
         return .{ .allocator = allocator, .bits = bits };
     }
 
     fn deinit(self: *OwnedSet) void {
-        self.allocator.free(self.bits);
-        self.bits = &.{};
+        self.bits.deinit(self.allocator);
+        self.bits = .{};
     }
 
     fn clone(self: *const OwnedSet) ResourceError!OwnedSet {
-        const bits = try self.allocator.dupe(bool, self.bits);
+        const bits = try self.bits.clone(self.allocator);
         return .{ .allocator = self.allocator, .bits = bits };
     }
 
+    fn len(self: *const OwnedSet) usize {
+        return self.bits.capacity();
+    }
+
     fn set(self: *OwnedSet, local: LIR.LocalId) void {
-        self.bits[@intFromEnum(local)] = true;
+        self.bits.set(@intFromEnum(local));
     }
 
     fn unset(self: *OwnedSet, local: LIR.LocalId) void {
-        self.bits[@intFromEnum(local)] = false;
+        self.bits.unset(@intFromEnum(local));
     }
 
     fn contains(self: *const OwnedSet, local: LIR.LocalId) bool {
-        return self.bits[@intFromEnum(local)];
+        return self.bits.isSet(@intFromEnum(local));
     }
 
     fn intersect(self: *OwnedSet, other: *const OwnedSet) void {
-        if (self.bits.len != other.bits.len) arcInvariant("ARC owned-set intersection length mismatch");
-        for (self.bits, other.bits) |*bit, other_bit| {
-            bit.* = bit.* and other_bit;
-        }
+        if (self.len() != other.len()) arcInvariant("ARC owned-set intersection length mismatch");
+        self.bits.setIntersection(other.bits);
     }
 
     fn copyFrom(self: *OwnedSet, other: *const OwnedSet) void {
-        if (self.bits.len != other.bits.len) arcInvariant("ARC owned-set copy length mismatch");
-        @memcpy(self.bits, other.bits);
+        if (self.len() != other.len()) arcInvariant("ARC owned-set copy length mismatch");
+        const mask_bits = @bitSizeOf(std.bit_set.DynamicBitSetUnmanaged.MaskInt);
+        const num_masks = (self.bits.capacity() + mask_bits - 1) / mask_bits;
+        @memcpy(self.bits.masks[0..num_masks], other.bits.masks[0..num_masks]);
     }
 };
 
@@ -1430,17 +1397,6 @@ const ArcTest = struct {
         } });
     }
 
-    fn forList(self: *ArcTest, elem: LIR.LocalId, iterable: LIR.LocalId, elem_layout: layout_mod.Idx, body: LIR.CFStmtId, next: LIR.CFStmtId) !LIR.CFStmtId {
-        return try self.store.addCFStmt(.{ .for_list = .{
-            .elem = elem,
-            .elem_source = .aliases_iterable_element,
-            .iterable = iterable,
-            .iterable_elem_layout = elem_layout,
-            .body = body,
-            .next = next,
-        } });
-    }
-
     fn run(self: *ArcTest) !void {
         try insert(&self.store, &self.layouts);
     }
@@ -1526,7 +1482,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .runtime_error, .switch_stmt, .for_list, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .runtime_error, .switch_stmt, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -1593,26 +1549,6 @@ fn setupMutation(reuse_after: bool) !struct { fixture: ArcTest, old_value: LIR.L
     _ = try f.addProc(&.{}, body, if (reuse_after) f.list_str else .i64);
     try f.run();
     return .{ .fixture = f, .old_value = old_value, .new_value = new_value, .target = target };
-}
-
-fn setupForLoop(elem_used_twice: bool, elem_unused: bool) !struct { fixture: ArcTest, elem: LIR.LocalId, iterable: LIR.LocalId, result: LIR.LocalId } {
-    var f = try ArcTest.init(testing.allocator);
-    errdefer f.deinit();
-    const iterable = try f.local(f.list_str);
-    const elem = try f.local(.str);
-    const result = try f.local(.i64);
-    const body_result = try f.local(.i64);
-    const ret = try f.ret(result);
-    const loop_body = if (elem_unused)
-        try f.assignI64(body_result, 0, try f.store.addCFStmt(.loop_continue))
-    else
-        try f.assignCall(body_result, if (elem_used_twice) &.{ elem, elem } else &.{elem}, try f.store.addCFStmt(.loop_continue));
-    const loop = try f.forList(elem, iterable, .str, loop_body, ret);
-    const init_result = try f.assignI64(result, 0, loop);
-    const body = try f.assignList(iterable, &.{}, init_result);
-    _ = try f.addProc(&.{}, body, .i64);
-    try f.run();
-    return .{ .fixture = f, .elem = elem, .iterable = iterable, .result = result };
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
@@ -1741,25 +1677,6 @@ test "RC mutable list binding tail-cleans borrowed final use" {
     try testing.expect(scenario.fixture.countRc(scenario.target, .decref) >= 1);
 }
 
-test "RC mutable list loop accumulator tail-cleans current binding after borrowed final use" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
-    const acc = try f.local(f.list_str);
-    const next_acc = try f.local(f.list_str);
-    const iterable = try f.local(f.list_i64);
-    const elem = try f.local(.i64);
-    const ret = try f.ret(acc);
-    const loop_continue = try f.store.addCFStmt(.loop_continue);
-    const set_acc = try f.setLocal(acc, next_acc, .replace_existing, loop_continue);
-    const next_assign = try f.assignList(next_acc, &.{}, set_acc);
-    const loop = try f.forList(elem, iterable, .i64, next_assign, ret);
-    const iterable_assign = try f.assignList(iterable, &.{}, loop);
-    const body = try f.assignList(acc, &.{}, iterable_assign);
-    _ = try f.addProc(&.{}, body, f.list_str);
-    try f.run();
-    try testing.expect(f.countRc(acc, .decref) >= 1);
-}
-
 test "RC branch-aware: symbol used in both match branches — no incref at binding" {
     var scenario = try setupSwitchUse(true, true, false, false);
     defer scenario.fixture.deinit();
@@ -1844,12 +1761,6 @@ test "RC hosted call transfers unused refcounted arg to host" {
     try f.expectRc(arg, 0, 0, 0);
 }
 
-test "RC for_loop: elem used twice gets incref" {
-    var scenario = try setupForLoop(true, false);
-    defer scenario.fixture.deinit();
-    try scenario.fixture.expectRc(scenario.elem, 2, 0, 0);
-}
-
 test "RC shadowed list decl only cleans latest generation at block tail" {
     var scenario = try setupMutation(false);
     defer scenario.fixture.deinit();
@@ -1867,12 +1778,6 @@ test "RC mutation: final use of reassignable refcounted var emits tail decref" {
     var scenario = try setupMutation(true);
     defer scenario.fixture.deinit();
     try testing.expect(scenario.fixture.countRc(scenario.target, .decref) >= 1);
-}
-
-test "RC for_loop: unused refcounted elem does not decref borrowed element" {
-    var scenario = try setupForLoop(false, true);
-    defer scenario.fixture.deinit();
-    try scenario.fixture.expectRc(scenario.elem, 0, 0, 0);
 }
 
 test "RC match guard: symbol used only in guard gets proper RC ops" {
@@ -1900,13 +1805,6 @@ test "RC match guard+body: symbol used in both guard and body gets proper RC ops
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
     try testing.expect(f.countRc(value, .decref) >= 1);
-}
-
-test "RC for_loop: wrapper block has unit result layout, not elem layout" {
-    var scenario = try setupForLoop(false, true);
-    defer scenario.fixture.deinit();
-    try testing.expectEqual(layout_mod.Idx.i64, scenario.fixture.store.proc_specs.items[0].ret_layout);
-    try scenario.fixture.expectRc(scenario.elem, 0, 0, 0);
 }
 
 test "RC if_then_else: symbol used in both branches — no extra incref" {

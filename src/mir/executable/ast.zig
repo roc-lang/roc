@@ -518,11 +518,6 @@ pub const Expr = struct {
         crash: ProgramLiteralId,
         runtime_error,
         @"unreachable",
-        for_: struct {
-            patt: PatId,
-            iterable: ExprId,
-            body: ExprId,
-        },
     };
 };
 
@@ -542,11 +537,6 @@ pub const Stmt = union(enum) {
     crash: ProgramLiteralId,
     return_: ExprId,
     break_,
-    for_: struct {
-        patt: PatId,
-        iterable: ExprId,
-        body: ExprId,
-    },
     while_: struct {
         cond: BoolCondition,
         body: ExprId,

@@ -595,11 +595,6 @@ const BodyFinalizer = struct {
                 .tuple = try self.lowerExpr(access.tuple),
                 .elem_index = access.elem_index,
             } },
-            .for_ => |for_| .{ .for_ = .{
-                .patt = try self.lowerPat(for_.patt),
-                .iterable = try self.lowerExpr(for_.iterable),
-                .body = try self.lowerExpr(for_.body),
-            } },
             .let_ => |let_| try self.lowerLet(let_),
         });
     }
@@ -832,11 +827,6 @@ const BodyFinalizer = struct {
             .crash => |literal| .{ .crash = literal },
             .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
             .break_ => .break_,
-            .for_ => |for_| .{ .for_ = .{
-                .patt = try self.lowerPat(for_.patt),
-                .iterable = try self.lowerExpr(for_.iterable),
-                .body = try self.lowerExpr(for_.body),
-            } },
             .while_ => |while_| .{ .while_ = .{
                 .cond = try self.lowerExpr(while_.cond),
                 .body = try self.lowerExpr(while_.body),

@@ -573,6 +573,12 @@ iter : iterable -> Iter(item)
 next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done]
 ```
 
+These obligations are not ordinary source dispatch call plans. `iter` has the
+checked iterable expression as its operand. `next` has the compiler-created
+loop iterator state as its operand. The plan stores those operands explicitly
+instead of pretending that `next` was called on the original iterable
+expression or that it had no arguments.
+
 The loop pattern owns the `item` type variable. The iterable expression owns the
 `iterable` type variable. Checking connects those variables directly by the
 published `iter` callable type, then connects the loop-local iterator and the
@@ -1626,18 +1632,14 @@ const SetLocalWriteMode = union(enum) {
     initialize_join_param,
 };
 
-const ForListElementSource = enum {
-    aliases_iterable_element,
-};
-
 const SwitchContinuation = struct {
     continuation: LirStmtId,
 };
 ```
 
 The exact field names may differ. The distinction must not: branch result
-initialization, mutable overwrite, join-parameter transfer, and loop-element
-binding are separate operations for ARC.
+initialization, mutable overwrite, join-parameter transfer, and switch
+continuation ownership are separate operations for ARC.
 
 Direct calls and low-level calls transfer owned tokens to callees/helpers unless
 the caller needs the same local later. If the caller needs it later, ARC emits
@@ -6270,7 +6272,10 @@ root and solves again. The requirement propagates along explicit representation
 edges for aliases, value moves, returns, branch joins, loop phis, mutable
 versions, platform wrappers, function args/returns, record fields, tuple
 elements, tag payloads, list elements, boxed payloads, and nominal backings.
-Deduplication is by payload root and provenance.
+Representation edges are canonical graph facts. The representation store owns a
+single edge identity index keyed by `(from, to, kind)`; every producer inserts
+through that index instead of linearly rescanning or privately deduplicating the
+edge array. Requirement deduplication is by payload root and provenance.
 
 Erased `call_value` dispatch must be published early enough for this requirement
 step to read the erased ABI argument executable keys. This early publication
@@ -8940,6 +8945,11 @@ that can be consumed, retained, released, considered for runtime uniqueness, or
 aliased by the result appears in the corresponding set, and absent bits mean
 the operation has no such effect for that argument.
 
+The owned-token set is a packed bitset indexed by LIR local id. Whether a local
+can ever carry an RC token is computed once from its committed layout before ARC
+rewrites a procedure; ARC does not recursively re-query layout structure while
+walking control-flow edges.
+
 ```zig
 const LowLevelRcEffect = struct {
     allocates_result: bool,
@@ -8964,13 +8974,13 @@ Ordinary direct calls use the same token-transfer question as low-level calls:
 each callee parameter that consumes an owned value needs one token. If the same
 owned value appears in two consuming argument positions, ARC retains before the
 call so each parameter receives its own token. If an argument is an unowned
-alias, such as `ForListElementSource.aliases_iterable_element`, ARC retains or
-copies before a consuming call and keeps the iterable owner live through the
-call edge. “Used after call” is a CFG reachability property over jumps, joins,
-loops, keep-sets, shared continuations, early returns, and switch edges; it is
-not determined by local statement order alone. Switch-continuation summaries
-ask this same token-transfer question before final rewrite so branch-local
-retains and cleanups match the shared continuation's incoming ownership state.
+alias from an explicit projection or low-level operation, ARC retains or copies
+before a consuming call and keeps the owner live through the call edge. “Used
+after call” is a CFG reachability property over jumps, joins, loops, keep-sets,
+shared continuations, early returns, and switch edges; it is not determined by
+local statement order alone. Switch-continuation summaries ask this same
+token-transfer question before final rewrite so branch-local retains and
+cleanups match the shared continuation's incoming ownership state.
 
 Examples:
 
@@ -9027,21 +9037,15 @@ When a shared continuation has already been rewritten during the current ARC
 pass, internally inserted RC statements are part of the continuation summary.
 Backends see only the final explicit statements.
 
-Loop element aliases are explicit:
-
-```zig
-const ForListElementSource = enum {
-    aliases_iterable_element,
-    owns_copied_element,
-};
-```
-
-`aliases_iterable_element` means the loop element local borrows storage owned
-by the iterable token. ARC must not decref the element as an owned value. If the
-body needs to retain the element beyond the borrowed use, lowering emits an
-explicit retain/copy that creates a separate owned token. Loop keep-sets track
-the iterable token across calls, branches, and continues so element aliases are
-not used after the iterable has been cleaned up.
+List traversal has no LIR-specific loop statement and no hidden borrowed
+element binding. Source `for` loops lower before LIR through the iterator
+protocol. Internal list traversals lower before LIR to explicit control flow
+and low-level operations such as `List.len`, `List.get_unsafe`, mutable
+updates, joins, switches, and ordinary `while` structure. Element ownership is
+therefore carried by the low-level operation contract, for example
+`List.get_unsafe` uses `retain_result` when it copies an element out of list
+storage. ARC consumes those explicit effects and never infers list iteration or
+borrowed element lifetime from a backend loop shape.
 
 `decref` is the correctness baseline. ARC may emit `free` only when a direct
 free is mechanically justified by the layout, ownership token, and current
@@ -12765,9 +12769,9 @@ Structural tests cover every type-state boundary:
   initialization, mutable replacement ordering, join-param initialization,
   `assign_ref.local` move-vs-copy, source-token transfer, shared continuation
   summaries, and branch-local cleanup before continuation
-- `ForListElementSource.aliases_iterable_element` loop-element alias fixtures
-  proving borrowed elements are not decrefed as owned values and iterable
-  keep-sets preserve alias validity across calls, branches, and continues
+- list traversal fixtures proving internal traversals lower to explicit
+  control flow plus low-level list operations, with element ownership supplied
+  by the low-level RC-effect contract rather than a backend loop shape
 - ARC correctness baseline: `decref` before optional direct `free`, ZST
   containers as refcounted when their outer allocation has a token,
   stack-safe cleanup traversal, mutation barriers, keep-set reachability, and

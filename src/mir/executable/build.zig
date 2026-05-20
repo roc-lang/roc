@@ -7256,7 +7256,6 @@ const BodyBuilder = struct {
                     } },
                 );
             },
-            .for_ => |for_| try self.lowerForExpr(expr.ty, expr.value_info, for_),
             .capture_ref => |slot| try self.lowerCaptureRef(expr.ty, slot),
             .call_value => |call| try self.lowerCallValue(expr.ty, call),
             .call_proc => |call| try self.lowerCallProc(expr.ty, call),
@@ -7744,7 +7743,6 @@ const BodyBuilder = struct {
             .return_,
             .break_,
             => false,
-            .for_,
             .while_,
             => true,
         };
@@ -7807,7 +7805,6 @@ const BodyBuilder = struct {
             .return_,
             .break_,
             => false,
-            .for_,
             .while_,
             => true,
         };
@@ -9382,27 +9379,6 @@ const BodyBuilder = struct {
         );
     }
 
-    fn lowerForExpr(
-        self: *BodyBuilder,
-        source_ty: LambdaSolved.Type.TypeVarId,
-        value_info_id: repr.ValueInfoId,
-        for_: anytype,
-    ) Allocator.Error!Ast.ExprId {
-        var saved = std.ArrayList(SavedBinding).empty;
-        defer saved.deinit(self.allocator);
-        const patt = try self.lowerPatScoped(for_.patt, &saved);
-        defer self.restoreBindings(&saved, 0);
-        return try self.output.addExpr(
-            try self.lowerExecutableValueType(source_ty, value_info_id),
-            self.output.freshValueRef(),
-            .{ .for_ = .{
-                .patt = patt,
-                .iterable = try self.lowerExpr(for_.iterable),
-                .body = try self.lowerExpr(for_.body),
-            } },
-        );
-    }
-
     fn verifyLowLevelValueFlow(self: *const BodyBuilder, value_flow: repr.LowLevelValueFlowSignatureId) void {
         const index = @intFromEnum(value_flow);
         if (index >= self.value_store.low_level_value_flows.items.len) {
@@ -9456,17 +9432,6 @@ const BodyBuilder = struct {
                 break :blk .{ .return_ = try self.lowerReturnValue(return_.expr, return_.return_info) };
             },
             .break_ => .break_,
-            .for_ => |for_| blk: {
-                var saved = std.ArrayList(SavedBinding).empty;
-                defer saved.deinit(self.allocator);
-                const patt = try self.lowerPatScoped(for_.patt, &saved);
-                defer self.restoreBindings(&saved, 0);
-                break :blk .{ .for_ = .{
-                    .patt = patt,
-                    .iterable = try self.lowerExpr(for_.iterable),
-                    .body = try self.lowerExpr(for_.body),
-                } };
-            },
             .while_ => |while_| .{ .while_ = .{
                 .cond = blk: {
                     const lowered = try self.lowerExpr(while_.cond);

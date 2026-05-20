@@ -4197,11 +4197,7 @@ const CrossProcedureRepresentationLinker = struct {
         self: *CrossProcedureRepresentationLinker,
         edge: repr.RepresentationEdge,
     ) Allocator.Error!bool {
-        for (self.representation_store.representation_edges.items) |existing| {
-            if (representationEdgeEql(existing, edge)) return false;
-        }
-        _ = try self.representation_store.appendRepresentationEdge(edge);
-        return true;
+        return (try self.representation_store.ensureRepresentationEdge(edge)).inserted;
     }
 
     fn structuralChildRoot(
@@ -4944,10 +4940,6 @@ const SourceMatchReachabilityFinalizer = struct {
             .tag_payload => |payload| try self.finalizeExpr(payload.tag_union, value_store),
             .tuple_access => |access| try self.finalizeExpr(access.tuple, value_store),
             .return_ => |ret| try self.finalizeExpr(ret.expr, value_store),
-            .for_ => |for_| {
-                try self.finalizeExpr(for_.iterable, value_store);
-                try self.finalizeExpr(for_.body, value_store);
-            },
             .var_,
             .capture_ref,
             .int_lit,
@@ -4982,10 +4974,6 @@ const SourceMatchReachabilityFinalizer = struct {
             .expect,
             => |expr| try self.finalizeExpr(expr, value_store),
             .return_ => |ret| try self.finalizeExpr(ret.expr, value_store),
-            .for_ => |for_| {
-                try self.finalizeExpr(for_.iterable, value_store);
-                try self.finalizeExpr(for_.body, value_store);
-            },
             .while_ => |while_| {
                 try self.finalizeExpr(while_.cond, value_store);
                 try self.finalizeExpr(while_.body, value_store);
@@ -7544,79 +7532,6 @@ fn edgePropagatesBoxErasure(kind: repr.RepresentationEdgeKind) bool {
     };
 }
 
-fn representationEdgeEql(
-    left: repr.RepresentationEdge,
-    right: repr.RepresentationEdge,
-) bool {
-    return representationEndpointEql(left.from, right.from) and
-        representationEndpointEql(left.to, right.to) and
-        representationEdgeKindEql(left.kind, right.kind);
-}
-
-fn representationEndpointEql(
-    left: repr.RepresentationEndpoint,
-    right: repr.RepresentationEndpoint,
-) bool {
-    return switch (left) {
-        .local => |a| switch (right) {
-            .local => |b| a == b,
-            else => false,
-        },
-        .procedure_public => |a| switch (right) {
-            .procedure_public => |b| a.instance == b.instance and a.value == b.value and a.rep_root == b.rep_root,
-            else => false,
-        },
-        .procedure_function_root => |a| switch (right) {
-            .procedure_function_root => |b| a.instance == b.instance and a.rep_root == b.rep_root,
-            else => false,
-        },
-    };
-}
-
-fn representationEdgeKindEql(
-    left: repr.RepresentationEdgeKind,
-    right: repr.RepresentationEdgeKind,
-) bool {
-    return switch (left) {
-        .value_alias => switch (right) {
-            .value_alias => true,
-            else => false,
-        },
-        .value_move => switch (right) {
-            .value_move => true,
-            else => false,
-        },
-        .branch_join => switch (right) {
-            .branch_join => true,
-            else => false,
-        },
-        .loop_phi => switch (right) {
-            .loop_phi => true,
-            else => false,
-        },
-        .mutable_version => switch (right) {
-            .mutable_version => true,
-            else => false,
-        },
-        .call_arg => |a| switch (right) {
-            .call_arg => |b| a == b,
-            else => false,
-        },
-        .call_result => switch (right) {
-            .call_result => true,
-            else => false,
-        },
-        .capture_value => switch (right) {
-            .capture_value => true,
-            else => false,
-        },
-        .child => |a| switch (right) {
-            .child => |b| representationChildKindMatches(a, b),
-            else => false,
-        },
-    };
-}
-
 fn representationChildKindMatches(
     left: repr.RepresentationChildKind,
     right: repr.RepresentationChildKind,
@@ -8429,10 +8344,6 @@ const ValueTransformFinalizer = struct {
             .return_ => |ret| {
                 try self.finalizeReturnConsumerUse(expr_id, ret.return_info, ret.expr);
             },
-            .for_ => |for_| {
-                try self.finalizeExprConstructionUsesAtEndpoint(for_.iterable, null);
-                try self.finalizeExprConstructionUsesAtEndpoint(for_.body, null);
-            },
             .var_,
             .capture_ref,
             .int_lit,
@@ -8634,10 +8545,6 @@ const ValueTransformFinalizer = struct {
             .expr, .debug, .expect => |expr| try self.finalizeExprConstructionUsesAtEndpoint(expr, null),
             .return_ => |ret| {
                 try self.finalizeReturnConsumerUse(null, ret.return_info, ret.expr);
-            },
-            .for_ => |for_| {
-                try self.finalizeExprConstructionUsesAtEndpoint(for_.iterable, null);
-                try self.finalizeExprConstructionUsesAtEndpoint(for_.body, null);
             },
             .while_ => |while_| {
                 try self.finalizeExprConstructionUsesAtEndpoint(while_.cond, null);
@@ -11526,7 +11433,6 @@ const ValueTransformFinalizer = struct {
             .return_,
             .break_,
             => false,
-            .for_,
             .while_,
             => true,
         };
@@ -13455,7 +13361,6 @@ const BodySolver = struct {
                     .join_info = join_info,
                 } };
             },
-            .for_ => |for_| try self.lowerForExpr(value, for_),
         });
         if (can_use_expr_map) {
             try self.expr_map.put(expr_id, lowered);
@@ -13466,12 +13371,6 @@ const BodySolver = struct {
     const SavedBinding = struct {
         symbol: Ast.Symbol,
         previous: ?repr.BindingInfoId,
-    };
-
-    const LoweredFor = struct {
-        patt: Ast.PatId,
-        iterable: Ast.ExprId,
-        body: Ast.ExprId,
     };
 
     fn lowerPatScoped(
@@ -13629,38 +13528,6 @@ const BodySolver = struct {
         });
     }
 
-    fn lowerForExpr(self: *BodySolver, _: repr.ValueInfoId, for_: anytype) Allocator.Error!Ast.Expr.Data {
-        const lowered = try self.lowerForParts(for_);
-        return .{ .for_ = .{
-            .patt = lowered.patt,
-            .iterable = lowered.iterable,
-            .body = lowered.body,
-        } };
-    }
-
-    fn lowerForParts(self: *BodySolver, for_: anytype) Allocator.Error!LoweredFor {
-        const iterable = try self.lowerExpr(for_.iterable);
-        const iterable_value = self.exprValue(iterable);
-        const iterable_info = self.value_store.values.items[@intFromEnum(iterable_value)];
-        const iterable_parent_root = self.patternProjectionParentRoot(
-            self.valueRoot(iterable_value),
-            iterable_info.logical_ty,
-        );
-        const elem_root = self.structuralChildRoot(iterable_parent_root, .list_elem);
-
-        var saved = std.ArrayList(SavedBinding).empty;
-        defer saved.deinit(self.allocator);
-        const patt = try self.lowerPatScoped(for_.patt, &saved);
-        try self.publishPatternRepresentationEdges(elem_root, patt);
-        defer self.restoreBindings(&saved, 0);
-
-        return .{
-            .patt = patt,
-            .iterable = iterable,
-            .body = try self.lowerExpr(for_.body),
-        };
-    }
-
     fn lowerStmt(self: *BodySolver, stmt_id: Lifted.Ast.StmtId) Allocator.Error!Ast.StmtId {
         const stmt = self.input.getStmt(stmt_id);
         return try self.output.addStmt(switch (stmt) {
@@ -13724,14 +13591,6 @@ const BodySolver = struct {
                 } };
             },
             .break_ => .break_,
-            .for_ => |for_| blk: {
-                const lowered = try self.lowerForParts(for_);
-                break :blk .{ .for_ = .{
-                    .patt = lowered.patt,
-                    .iterable = lowered.iterable,
-                    .body = lowered.body,
-                } };
-            },
             .while_ => |while_| .{ .while_ = .{
                 .cond = try self.lowerExpr(while_.cond),
                 .body = try self.lowerExpr(while_.body),
@@ -14558,7 +14417,6 @@ const BodySolver = struct {
             .return_,
             .break_,
             => false,
-            .for_,
             .while_,
             => true,
         };

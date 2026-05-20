@@ -220,12 +220,6 @@ pub const Stmt = union(enum) {
     crash: ProgramLiteralId,
     runtime_error,
     break_,
-    for_list: struct {
-        elem: Var,
-        iterable: Var,
-        body: BlockId,
-        elem_bridge_plan: BridgePlanId,
-    },
     while_: struct {
         cond: BlockId,
         body: BlockId,

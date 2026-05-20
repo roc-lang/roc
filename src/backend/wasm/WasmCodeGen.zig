@@ -1931,12 +1931,6 @@ fn collectProcLocals(
             }
             try self.collectProcLocals(switch_stmt.default_branch, locals, visited);
         },
-        .for_list => |for_stmt| {
-            try recordProcLocal(locals, for_stmt.elem);
-            try recordProcLocal(locals, for_stmt.iterable);
-            try self.collectProcLocals(for_stmt.body, locals, visited);
-            try self.collectProcLocals(for_stmt.next, locals, visited);
-        },
         .join => |join_stmt| {
             for (self.store.getLocalSpan(join_stmt.params)) |param| try recordProcLocal(locals, param);
             try self.collectProcLocals(join_stmt.body, locals, visited);
@@ -5329,96 +5323,6 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                 try self.generateCFStmtUntil(continuation, stop);
             }
         },
-        .for_list => |for_stmt| {
-            try self.emitProcLocal(for_stmt.iterable);
-            const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(list_local);
-
-            const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(list_local);
-            try self.emitLoadOp(.i32, 4);
-            try self.emitLocalSet(len_local);
-
-            const data_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(list_local);
-            try self.emitLoadOp(.i32, 0);
-            try self.emitLocalSet(data_local);
-
-            const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-            try self.emitLocalSet(index_local);
-
-            self.body.append(self.allocator, Op.block) catch return error.OutOfMemory;
-            self.body.append(self.allocator, 0x40) catch return error.OutOfMemory;
-            self.cf_depth += 1;
-
-            self.body.append(self.allocator, Op.loop_) catch return error.OutOfMemory;
-            self.body.append(self.allocator, 0x40) catch return error.OutOfMemory;
-            self.cf_depth += 1;
-
-            const saved_loop_depth = self.loop_continue_target_depths.items.len;
-            try self.loop_continue_target_depths.append(self.allocator, self.cf_depth);
-            const saved_break_depth = self.loop_break_target_depths.items.len;
-            try self.loop_break_target_depths.append(self.allocator, self.cf_depth - 1);
-
-            try self.emitLocalGet(index_local);
-            try self.emitLocalGet(len_local);
-            self.body.append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.br_if) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-
-            const elem_layout = for_stmt.iterable_elem_layout;
-            const elem_size = self.layoutStorageByteSize(elem_layout);
-            if (elem_size == 0) {
-                self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, &self.body, 0) catch return error.OutOfMemory;
-                try self.bindAssignedLocal(for_stmt.elem);
-            } else {
-                try self.emitLocalGet(data_local);
-                try self.emitLocalGet(index_local);
-                if (elem_size != 1) {
-                    self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(elem_size)) catch return error.OutOfMemory;
-                    self.body.append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                }
-                self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-
-                if (self.isCompositeLayout(elem_layout)) {
-                    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                    try self.emitLocalSet(src_local);
-
-                    const elem_align = @max(self.layoutStorageByteAlign(elem_layout), 1);
-                    const dst_offset = try self.allocStackMemory(elem_size, elem_align);
-                    const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                    try self.emitFpOffset(dst_offset);
-                    try self.emitLocalSet(dst_local);
-
-                    try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                    try self.emitLocalGet(dst_local);
-                } else {
-                    try self.emitLoadOpForLayout(elem_layout, 0);
-                }
-                try self.bindAssignedLocal(for_stmt.elem);
-            }
-
-            try self.emitLocalGet(index_local);
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
-            self.body.append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            try self.emitLocalSet(index_local);
-
-            try self.generateCFStmtUntil(for_stmt.body, stop);
-            self.loop_continue_target_depths.shrinkRetainingCapacity(saved_loop_depth);
-            self.loop_break_target_depths.shrinkRetainingCapacity(saved_break_depth);
-
-            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-            self.cf_depth -= 1;
-            self.body.append(self.allocator, Op.end) catch return error.OutOfMemory;
-            self.cf_depth -= 1;
-
-            try self.generateCFStmtUntil(for_stmt.next, stop);
-        },
         .join => |j| {
             const jp_key = @intFromEnum(j.id);
 
@@ -5578,7 +5482,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
         .loop_continue => {
             if (builtin.mode == .Debug and self.loop_continue_target_depths.items.len == 0) {
                 std.debug.panic(
-                    "WasmCodeGen invariant violated: loop_continue encountered outside for_list",
+                    "WasmCodeGen invariant violated: loop_continue encountered outside a loop",
                     .{},
                 );
             }
@@ -5590,7 +5494,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
         .loop_break => {
             if (builtin.mode == .Debug and self.loop_break_target_depths.items.len == 0) {
                 std.debug.panic(
-                    "WasmCodeGen invariant violated: loop_break encountered outside for_list",
+                    "WasmCodeGen invariant violated: loop_break encountered outside a loop",
                     .{},
                 );
             }

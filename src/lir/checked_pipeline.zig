@@ -2227,10 +2227,6 @@ const CompileTimeDependencySummaryBuilder = struct {
             .tag_payload => |payload| try self.collectExprImmediate(payload.tag_union, value_store, representation_store, availability, concrete, call_deps),
             .tuple_access => |access| try self.collectExprImmediate(access.tuple, value_store, representation_store, availability, concrete, call_deps),
             .return_ => |ret| try self.collectExprImmediate(ret.expr, value_store, representation_store, availability, concrete, call_deps),
-            .for_ => |for_| {
-                try self.collectExprImmediate(for_.iterable, value_store, representation_store, availability, concrete, call_deps);
-                try self.collectExprImmediate(for_.body, value_store, representation_store, availability, concrete, call_deps);
-            },
         }
     }
 
@@ -2253,10 +2249,6 @@ const CompileTimeDependencySummaryBuilder = struct {
             .expect,
             => |expr| try self.collectExprImmediate(expr, value_store, representation_store, availability, concrete, call_deps),
             .return_ => |ret| try self.collectExprImmediate(ret.expr, value_store, representation_store, availability, concrete, call_deps),
-            .for_ => |for_| {
-                try self.collectExprImmediate(for_.iterable, value_store, representation_store, availability, concrete, call_deps);
-                try self.collectExprImmediate(for_.body, value_store, representation_store, availability, concrete, call_deps);
-            },
             .while_ => |while_| {
                 try self.collectExprImmediate(while_.cond, value_store, representation_store, availability, concrete, call_deps);
                 try self.collectExprImmediate(while_.body, value_store, representation_store, availability, concrete, call_deps);

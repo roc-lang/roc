@@ -490,11 +490,6 @@ const BodyLifter = struct {
                 .then_body = try self.lowerExpr(if_.then_body),
                 .else_body = try self.lowerExpr(if_.else_body),
             } },
-            .for_ => |for_| .{ .for_ = .{
-                .patt = try self.lowerPat(for_.patt),
-                .iterable = try self.lowerExpr(for_.iterable),
-                .body = try self.lowerExpr(for_.body),
-            } },
             .let_ => |let_| .{ .let_ = .{
                 .bind = .{
                     .ty = let_.bind.ty,
@@ -919,14 +914,6 @@ const BodyLifter = struct {
             .tuple_access => |access| try self.collectExprCaptures(access.tuple, bound, captures),
             .list => |items| try self.collectExprSpanCaptures(items, bound, captures),
             .return_ => |child| try self.collectExprCaptures(child, bound, captures),
-            .for_ => |for_| {
-                try self.collectExprCaptures(for_.iterable, bound, captures);
-                var pattern_binders = std.ArrayList(BoundRestore).empty;
-                defer pattern_binders.deinit(self.allocator);
-                try self.bindPatternSymbols(for_.patt, bound, &pattern_binders);
-                try self.collectExprCaptures(for_.body, bound, captures);
-                restoreBoundList(bound, pattern_binders.items);
-            },
             .int_lit,
             .frac_f32_lit,
             .frac_f64_lit,
@@ -978,14 +965,6 @@ const BodyLifter = struct {
             .debug => |expr| try self.collectExprCaptures(expr, bound, captures),
             .expect => |expr| try self.collectExprCaptures(expr, bound, captures),
             .return_ => |expr| try self.collectExprCaptures(expr, bound, captures),
-            .for_ => |for_| {
-                try self.collectExprCaptures(for_.iterable, bound, captures);
-                var pattern_binders = std.ArrayList(BoundRestore).empty;
-                defer pattern_binders.deinit(self.allocator);
-                try self.bindPatternSymbols(for_.patt, bound, &pattern_binders);
-                try self.collectExprCaptures(for_.body, bound, captures);
-                restoreBoundList(bound, pattern_binders.items);
-            },
             .while_ => |while_| {
                 try self.collectExprCaptures(while_.cond, bound, captures);
                 try self.collectExprCaptures(while_.body, bound, captures);
@@ -1258,11 +1237,6 @@ const BodyLifter = struct {
             .crash => |literal| .{ .crash = literal },
             .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
             .break_ => .break_,
-            .for_ => |for_| .{ .for_ = .{
-                .patt = try self.lowerPat(for_.patt),
-                .iterable = try self.lowerExpr(for_.iterable),
-                .body = try self.lowerExpr(for_.body),
-            } },
             .while_ => |while_| .{ .while_ = .{
                 .cond = try self.lowerExpr(while_.cond),
                 .body = try self.lowerExpr(while_.body),
@@ -1623,10 +1597,6 @@ fn collectDirectCallsFromExpr(
         .tuple_access => |access| try collectDirectCallsFromExpr(program, access.tuple, direct_calls),
         .list => |items| try collectDirectCallsFromExprSpan(program, items, direct_calls),
         .return_ => |child| try collectDirectCallsFromExpr(program, child, direct_calls),
-        .for_ => |for_| {
-            try collectDirectCallsFromExpr(program, for_.iterable, direct_calls);
-            try collectDirectCallsFromExpr(program, for_.body, direct_calls);
-        },
     }
 }
 
@@ -1657,10 +1627,6 @@ fn collectDirectCallsFromStmt(
         .break_,
         => {},
         .return_ => |expr| try collectDirectCallsFromExpr(program, expr, direct_calls),
-        .for_ => |for_| {
-            try collectDirectCallsFromExpr(program, for_.iterable, direct_calls);
-            try collectDirectCallsFromExpr(program, for_.body, direct_calls);
-        },
         .while_ => |while_| {
             try collectDirectCallsFromExpr(program, while_.cond, direct_calls);
             try collectDirectCallsFromExpr(program, while_.body, direct_calls);

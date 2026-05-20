@@ -645,11 +645,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// early return jumps to point to the epilogue.
         early_return_patches: std.ArrayList(usize),
 
-        /// Stack of active `for_list` continue targets.
+        /// Stack of active loop continue targets.
         /// `loop_continue` lowers by jumping to the innermost active loop header.
         loop_continue_targets: std.ArrayList(usize),
 
-        /// Stack markers into `loop_break_patches` for active `for_list` exits.
+        /// Stack markers into `loop_break_patches` for active loop exits.
         loop_break_patch_starts: std.ArrayList(usize),
 
         /// Jump patches emitted by `loop_break` that must target the active loop exit.
@@ -4638,12 +4638,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.collectStmtReadLocals(sw.default_branch, locals, visited);
                 },
-                .for_list => |for_stmt| {
-                    try locals.put(localKey(for_stmt.elem), for_stmt.elem);
-                    try locals.put(localKey(for_stmt.iterable), for_stmt.iterable);
-                    try self.collectStmtReadLocals(for_stmt.body, locals, visited);
-                    try self.collectStmtReadLocals(for_stmt.next, locals, visited);
-                },
                 .join => |join| {
                     try self.collectStmtReadLocals(join.body, locals, visited);
                     try self.collectStmtReadLocals(join.remainder, locals, visited);
@@ -4757,12 +4751,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.collectStmtLocals(branch.body, locals, visited);
                     }
                     try self.collectStmtLocals(sw.default_branch, locals, visited);
-                },
-                .for_list => |for_stmt| {
-                    try locals.put(localKey(for_stmt.elem), for_stmt.elem);
-                    try locals.put(localKey(for_stmt.iterable), for_stmt.iterable);
-                    try self.collectStmtLocals(for_stmt.body, locals, visited);
-                    try self.collectStmtLocals(for_stmt.next, locals, visited);
                 },
                 .join => |join| {
                     for (self.store.getLocalSpan(join.params)) |param| {
@@ -12985,10 +12973,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.generateSwitchStmt(sw);
                 },
 
-                .for_list => |for_stmt| {
-                    try self.generateForListStmt(for_stmt);
-                },
-
                 .incref => |inc| {
                     _ = try self.generateIncref(.{
                         .value = inc.value,
@@ -13022,7 +13006,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .loop_continue => {
                     if (builtin.mode == .Debug and self.loop_continue_targets.items.len == 0) {
                         std.debug.panic(
-                            "Dev/codegen invariant violated: loop_continue encountered outside for_list",
+                            "Dev/codegen invariant violated: loop_continue encountered outside a loop",
                             .{},
                         );
                     }
@@ -13034,119 +13018,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .loop_break => {
                     if (builtin.mode == .Debug and self.loop_break_patch_starts.items.len == 0) {
                         std.debug.panic(
-                            "Dev/codegen invariant violated: loop_break encountered outside for_list",
+                            "Dev/codegen invariant violated: loop_break encountered outside a loop",
                             .{},
                         );
                     }
                     try self.loop_break_patches.append(self.allocator, try self.emitJumpPlaceholder());
                 },
             }
-        }
-
-        fn generateForListStmt(self: *Self, for_stmt: anytype) Allocator.Error!void {
-            const raw_iterable_loc = try self.emitValueLocal(for_stmt.iterable);
-            const iterable_layout = self.valueLayout(for_stmt.iterable);
-            const resolved_iterable_layout = switch (self.layout_store.getLayout(iterable_layout).tag) {
-                .box => self.layout_store.getLayout(iterable_layout).data.box,
-                else => iterable_layout,
-            };
-            const iterable_loc = try self.normalizeValueLocationToLayout(raw_iterable_loc, iterable_layout, resolved_iterable_layout);
-            const iterable_snapshot_offset = self.codegen.allocStackSlot(roc_list_size);
-            try self.copyBytesToStackOffset(iterable_snapshot_offset, iterable_loc, roc_list_size);
-
-            const actual_elem_layout = for_stmt.iterable_elem_layout;
-
-            const index_slot = self.codegen.allocStackSlot(8);
-            const zero_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(zero_reg, 0);
-            try self.codegen.emitStoreStack(.w64, index_slot, zero_reg);
-            self.codegen.freeGeneral(zero_reg);
-
-            const loop_header = self.codegen.currentOffset();
-
-            const index_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, index_reg, index_slot);
-
-            const len_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, len_reg, iterable_snapshot_offset + @as(i32, @intCast(target_ptr_size)));
-            try self.emitCmpReg(index_reg, len_reg);
-            self.codegen.freeGeneral(len_reg);
-            const exit_patch = try self.emitJumpIfEqual();
-
-            try self.bindForListElement(for_stmt.elem, actual_elem_layout, iterable_snapshot_offset, index_reg);
-
-            try self.emitAddImm(index_reg, index_reg, 1);
-            try self.codegen.emitStoreStack(.w64, index_slot, index_reg);
-            self.codegen.freeGeneral(index_reg);
-
-            const saved_loop_continue_depth = self.loop_continue_targets.items.len;
-            try self.loop_continue_targets.append(self.allocator, loop_header);
-            defer self.loop_continue_targets.shrinkRetainingCapacity(saved_loop_continue_depth);
-            const break_patch_start = self.loop_break_patches.items.len;
-            const saved_break_depth = self.loop_break_patch_starts.items.len;
-            try self.loop_break_patch_starts.append(self.allocator, break_patch_start);
-            defer self.loop_break_patch_starts.shrinkRetainingCapacity(saved_break_depth);
-            defer self.loop_break_patches.shrinkRetainingCapacity(break_patch_start);
-
-            try self.generateStmt(for_stmt.body);
-
-            const exit_offset = self.codegen.currentOffset();
-            self.codegen.patchJump(exit_patch, exit_offset);
-            for (self.loop_break_patches.items[break_patch_start..]) |patch| {
-                self.codegen.patchJump(patch, exit_offset);
-            }
-            self.loop_continue_targets.shrinkRetainingCapacity(saved_loop_continue_depth);
-            self.loop_break_patch_starts.shrinkRetainingCapacity(saved_break_depth);
-            self.loop_break_patches.shrinkRetainingCapacity(break_patch_start);
-            try self.generateStmt(for_stmt.next);
-        }
-
-        fn bindForListElement(
-            self: *Self,
-            elem_local: LocalId,
-            actual_elem_layout: layout.Idx,
-            iterable_snapshot_offset: i32,
-            index_reg: GeneralReg,
-        ) Allocator.Error!void {
-            const target_layout = self.localLayout(elem_local);
-            const elem_size = self.getLayoutSize(actual_elem_layout);
-            if (elem_size == 0) {
-                const elem_loc = self.requireExactValueLocationToLayout(.{ .immediate_i64 = 0 }, actual_elem_layout, target_layout, "for_list.zst_elem");
-                try self.bindAssignedLocal(elem_local, elem_loc);
-                return;
-            }
-
-            const ptr_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, ptr_reg, iterable_snapshot_offset);
-
-            const addr_reg = try self.allocTempGeneral();
-            try self.emitMovRegReg(addr_reg, index_reg);
-
-            if (elem_size != 1) {
-                const size_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(size_reg, elem_size);
-                try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
-                self.codegen.freeGeneral(size_reg);
-            }
-
-            try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
-            self.codegen.freeGeneral(ptr_reg);
-
-            const elem_slot = self.codegen.allocStackSlot(@max(elem_size, @as(u32, 1)));
-            const temp_reg = try self.allocTempGeneral();
-            if (elem_size <= 8) {
-                const value_size = ValueSize.fromByteCount(@intCast(elem_size));
-                try self.emitSizedLoadMem(temp_reg, addr_reg, 0, value_size);
-                try self.emitSizedStoreMem(frame_ptr, elem_slot, temp_reg, value_size);
-            } else {
-                try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
-            }
-            self.codegen.freeGeneral(temp_reg);
-            self.codegen.freeGeneral(addr_reg);
-
-            const raw_elem_loc = self.stackLocationForLayout(actual_elem_layout, elem_slot);
-            const elem_loc = self.requireExactValueLocationToLayout(raw_elem_loc, actual_elem_layout, target_layout, "for_list.elem");
-            try self.bindAssignedLocal(elem_local, elem_loc);
         }
 
         /// Set up storage locations for join point parameters
@@ -14055,15 +13933,6 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) !lir.L
     });
 }
 
-fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
-    return try store.addProcSpec(.{
-        .name = store.freshSyntheticSymbol(),
-        .args = try store.addLocalSpan(args),
-        .body = body,
-        .ret_layout = ret_layout,
-    });
-}
-
 fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
     const result = try addLocal(store, ret_layout);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
@@ -14271,109 +14140,6 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
-}
-
-test "two-arg proc list loop returns full length" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirStore.init(allocator);
-    defer store.deinit();
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-
-    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(.i64));
-
-    const list_arg = try addLocal(&store, list_layout);
-    const ignored_arg = try addLocal(&store, .i64);
-    const acc = try addLocal(&store, .i64);
-    const elem = try addLocal(&store, .i64);
-    const one = try addLocal(&store, .i64);
-    const next_acc = try addLocal(&store, .i64);
-
-    const loop_continue = try store.addCFStmt(.loop_continue);
-    const set_acc = try store.addCFStmt(.{ .set_local = .{
-        .target = acc,
-        .value = next_acc,
-        .mode = .replace_existing,
-        .next = loop_continue,
-    } });
-    const add_args = try store.addLocalSpan(&.{ acc, one });
-    const add_acc = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = next_acc,
-        .op = .num_plus,
-        .rc_effect = lir.LowLevel.num_plus.rcEffect(),
-        .args = add_args,
-        .next = set_acc,
-    } });
-    const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
-        .target = one,
-        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
-        .next = add_acc,
-    } });
-    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } });
-    const for_stmt = try store.addCFStmt(.{ .for_list = .{
-        .elem = elem,
-        .elem_source = .aliases_iterable_element,
-        .iterable = list_arg,
-        .iterable_elem_layout = .i64,
-        .body = one_stmt,
-        .next = ret_acc,
-    } });
-    const init_acc = try store.addCFStmt(.{ .assign_literal = .{
-        .target = acc,
-        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
-        .next = for_stmt,
-    } });
-    const len_proc = try addProc(&store, &.{ list_arg, ignored_arg }, init_acc, .i64);
-
-    const root_elems = [_]i64{ 10, 20, 30, 40, 50 };
-    var elem_locals: [root_elems.len]LocalId = undefined;
-    for (&elem_locals) |*local| local.* = try addLocal(&store, .i64);
-
-    const root_list = try addLocal(&store, list_layout);
-    const ignored = try addLocal(&store, .i64);
-    const result = try addLocal(&store, .i64);
-
-    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
-    const drop_list = try store.addCFStmt(.{ .decref = .{
-        .value = root_list,
-        .next = ret_result,
-    } });
-    const call_args = try store.addLocalSpan(&.{ root_list, ignored });
-    const call_len = try store.addCFStmt(.{ .assign_call = .{
-        .target = result,
-        .proc = len_proc,
-        .args = call_args,
-        .next = drop_list,
-    } });
-    const ignored_stmt = try store.addCFStmt(.{ .assign_literal = .{
-        .target = ignored,
-        .value = .{ .i64_literal = .{ .value = 123, .layout_idx = .i64 } },
-        .next = call_len,
-    } });
-    const list_elems = try store.addLocalSpan(&elem_locals);
-    const list_stmt = try store.addCFStmt(.{ .assign_list = .{
-        .target = root_list,
-        .elems = list_elems,
-        .next = ignored_stmt,
-    } });
-
-    var current = list_stmt;
-    var i: usize = root_elems.len;
-    while (i > 0) {
-        i -= 1;
-        current = try store.addCFStmt(.{ .assign_literal = .{
-            .target = elem_locals[i],
-            .value = .{ .i64_literal = .{ .value = root_elems[i], .layout_idx = .i64 } },
-            .next = current,
-        } });
-    }
-    const root_proc = try addNoArgProc(&store, current, .i64);
-
-    try std.testing.expectEqual(@as(i64, root_elems.len), try runRootI64(&store, &test_state.layout_store, root_proc));
 }
 
 test "generate i64 literal" {

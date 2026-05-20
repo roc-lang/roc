@@ -446,23 +446,8 @@ const Lowerer = struct {
             .runtime_error => try self.store.addCFStmt(.{ .runtime_error = {} }),
             .switch_ => |switch_| try self.lowerSwitch(switch_, next),
             .break_ => self.currentBreakTarget(),
-            .for_list => |for_list| try self.lowerForList(for_list, next),
             .while_ => |while_| try self.lowerWhile(while_, next),
         };
-    }
-
-    fn lowerForList(self: *Lowerer, for_list: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {
-        const loop_continue = try self.store.addCFStmt(.loop_continue);
-        const break_start = try self.pushBreakTarget(try self.store.addCFStmt(.loop_break));
-        defer self.restoreBreakTargets(break_start);
-        return try self.store.addCFStmt(.{ .for_list = .{
-            .elem = try self.localForVar(for_list.elem),
-            .elem_source = .aliases_iterable_element,
-            .iterable = try self.lowerVar(for_list.iterable),
-            .iterable_elem_layout = try self.lowerLayoutRef(for_list.elem.layout),
-            .body = try self.lowerBlockWithContinuation(for_list.body, null, loop_continue),
-            .next = next,
-        } });
     }
 
     fn lowerWhile(self: *Lowerer, while_: anytype, next: LIR.CFStmtId) LowerResourceError!LIR.CFStmtId {

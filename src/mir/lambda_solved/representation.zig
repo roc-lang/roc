@@ -196,6 +196,198 @@ pub const RepresentationEdge = struct {
     kind: RepresentationEdgeKind,
 };
 
+/// Public `RepresentationEdgeAppendResult` declaration.
+pub const RepresentationEdgeAppendResult = struct {
+    id: RepresentationEdgeId,
+    inserted: bool,
+};
+
+const RepresentationEdgeMap = std.HashMap(RepresentationEdge, RepresentationEdgeId, RepresentationEdgeContext, std.hash_map.default_max_load_percentage);
+
+const RepresentationEdgeContext = struct {
+    pub fn hash(_: RepresentationEdgeContext, edge: RepresentationEdge) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hashRepresentationEndpoint(&hasher, edge.from);
+        hashRepresentationEndpoint(&hasher, edge.to);
+        hashRepresentationEdgeKind(&hasher, edge.kind);
+        return hasher.final();
+    }
+
+    pub fn eql(_: RepresentationEdgeContext, left: RepresentationEdge, right: RepresentationEdge) bool {
+        return representationEdgeEql(left, right);
+    }
+};
+
+fn hashRepresentationEndpoint(hasher: *std.hash.Wyhash, endpoint: RepresentationEndpoint) void {
+    std.hash.autoHash(hasher, std.meta.activeTag(endpoint));
+    switch (endpoint) {
+        .local => |root| std.hash.autoHash(hasher, root),
+        .procedure_public => |public| {
+            std.hash.autoHash(hasher, public.instance);
+            std.hash.autoHash(hasher, public.value);
+            std.hash.autoHash(hasher, public.rep_root);
+        },
+        .procedure_function_root => |function_root| {
+            std.hash.autoHash(hasher, function_root.instance);
+            std.hash.autoHash(hasher, function_root.rep_root);
+        },
+    }
+}
+
+fn hashRepresentationEdgeKind(hasher: *std.hash.Wyhash, kind: RepresentationEdgeKind) void {
+    std.hash.autoHash(hasher, std.meta.activeTag(kind));
+    switch (kind) {
+        .value_alias,
+        .value_move,
+        .branch_join,
+        .loop_phi,
+        .mutable_version,
+        .call_result,
+        .capture_value,
+        => {},
+        .call_arg => |index| std.hash.autoHash(hasher, index),
+        .child => |child| hashRepresentationChildKind(hasher, child),
+    }
+}
+
+fn hashRepresentationChildKind(hasher: *std.hash.Wyhash, kind: RepresentationChildKind) void {
+    std.hash.autoHash(hasher, std.meta.activeTag(kind));
+    switch (kind) {
+        .function_arg => |index| std.hash.autoHash(hasher, index),
+        .function_return,
+        .function_callable,
+        .list_elem,
+        .box_payload,
+        => {},
+        .record_field => |field| std.hash.autoHash(hasher, field),
+        .tuple_elem => |index| std.hash.autoHash(hasher, index),
+        .tag_payload => |payload| std.hash.autoHash(hasher, payload),
+        .nominal_backing => |nominal| {
+            std.hash.autoHash(hasher, nominal.module_name);
+            std.hash.autoHash(hasher, nominal.type_name);
+        },
+    }
+}
+
+/// Public `representationEdgeEql` function.
+pub fn representationEdgeEql(
+    left: RepresentationEdge,
+    right: RepresentationEdge,
+) bool {
+    return representationEndpointEql(left.from, right.from) and
+        representationEndpointEql(left.to, right.to) and
+        representationEdgeKindEql(left.kind, right.kind);
+}
+
+fn representationEndpointEql(
+    left: RepresentationEndpoint,
+    right: RepresentationEndpoint,
+) bool {
+    return switch (left) {
+        .local => |a| switch (right) {
+            .local => |b| a == b,
+            else => false,
+        },
+        .procedure_public => |a| switch (right) {
+            .procedure_public => |b| a.instance == b.instance and a.value == b.value and a.rep_root == b.rep_root,
+            else => false,
+        },
+        .procedure_function_root => |a| switch (right) {
+            .procedure_function_root => |b| a.instance == b.instance and a.rep_root == b.rep_root,
+            else => false,
+        },
+    };
+}
+
+fn representationEdgeKindEql(
+    left: RepresentationEdgeKind,
+    right: RepresentationEdgeKind,
+) bool {
+    return switch (left) {
+        .value_alias => switch (right) {
+            .value_alias => true,
+            else => false,
+        },
+        .value_move => switch (right) {
+            .value_move => true,
+            else => false,
+        },
+        .branch_join => switch (right) {
+            .branch_join => true,
+            else => false,
+        },
+        .loop_phi => switch (right) {
+            .loop_phi => true,
+            else => false,
+        },
+        .mutable_version => switch (right) {
+            .mutable_version => true,
+            else => false,
+        },
+        .call_arg => |a| switch (right) {
+            .call_arg => |b| a == b,
+            else => false,
+        },
+        .call_result => switch (right) {
+            .call_result => true,
+            else => false,
+        },
+        .capture_value => switch (right) {
+            .capture_value => true,
+            else => false,
+        },
+        .child => |a| switch (right) {
+            .child => |b| representationChildKindMatches(a, b),
+            else => false,
+        },
+    };
+}
+
+/// Public `representationChildKindMatches` function.
+pub fn representationChildKindMatches(
+    left: RepresentationChildKind,
+    right: RepresentationChildKind,
+) bool {
+    return switch (left) {
+        .function_arg => |a| switch (right) {
+            .function_arg => |b| a == b,
+            else => false,
+        },
+        .function_return => switch (right) {
+            .function_return => true,
+            else => false,
+        },
+        .function_callable => switch (right) {
+            .function_callable => true,
+            else => false,
+        },
+        .record_field => |a| switch (right) {
+            .record_field => |b| a == b,
+            else => false,
+        },
+        .tuple_elem => |a| switch (right) {
+            .tuple_elem => |b| a == b,
+            else => false,
+        },
+        .tag_payload => |a| switch (right) {
+            .tag_payload => |b| a == b,
+            else => false,
+        },
+        .list_elem => switch (right) {
+            .list_elem => true,
+            else => false,
+        },
+        .box_payload => switch (right) {
+            .box_payload => true,
+            else => false,
+        },
+        .nominal_backing => |a| switch (right) {
+            .nominal_backing => |b| a.module_name == b.module_name and a.type_name == b.type_name,
+            else => false,
+        },
+    };
+}
+
 const StructuralChildKind = struct {
     tag: enum {
         function_arg,
@@ -1847,6 +2039,7 @@ pub const RepresentationStore = struct {
     solved_structural_child_roots: std.AutoHashMap(SolvedStructuralChildKey, RepRootId),
     solved_structural_child_roots_published: bool = false,
     representation_edges: std.ArrayList(RepresentationEdge) = .empty,
+    representation_edge_ids: RepresentationEdgeMap,
     representation_requirements: std.ArrayList(RepresentationRequirement) = .empty,
     callable_group_worksets: std.ArrayList(CallableGroupWorkSet) = .empty,
     callable_emission_plans: []CallableValueEmissionPlan = &.{},
@@ -1871,6 +2064,7 @@ pub const RepresentationStore = struct {
             .root_kinds = std.AutoHashMap(RepRootId, RepresentationRootKind).init(allocator),
             .root_type_infos = std.AutoHashMap(RepRootId, RepresentationRootTypeInfo).init(allocator),
             .solved_structural_child_roots = std.AutoHashMap(SolvedStructuralChildKey, RepRootId).init(allocator),
+            .representation_edge_ids = RepresentationEdgeMap.init(allocator),
             .session_executable_type_payloads = SessionExecutableTypePayloadStore.init(allocator),
         };
     }
@@ -1947,6 +2141,7 @@ pub const RepresentationStore = struct {
         self.clearCallableGroupWorksets();
         self.callable_group_worksets.deinit(self.allocator);
         self.representation_requirements.deinit(self.allocator);
+        self.representation_edge_ids.deinit();
         self.representation_edges.deinit(self.allocator);
         self.solved_structural_child_roots.deinit();
         self.root_type_infos.deinit();
@@ -2042,11 +2237,23 @@ pub const RepresentationStore = struct {
         self: *RepresentationStore,
         edge: RepresentationEdge,
     ) std.mem.Allocator.Error!RepresentationEdgeId {
+        return (try self.ensureRepresentationEdge(edge)).id;
+    }
+
+    /// Public `ensureRepresentationEdge` function.
+    pub fn ensureRepresentationEdge(
+        self: *RepresentationStore,
+        edge: RepresentationEdge,
+    ) std.mem.Allocator.Error!RepresentationEdgeAppendResult {
         self.verifyRepresentationEndpoint(edge.from, "representation edge source");
         self.verifyRepresentationEndpoint(edge.to, "representation edge target");
+        try self.representation_edges.ensureUnusedCapacity(self.allocator, 1);
+        const entry = try self.representation_edge_ids.getOrPut(edge);
+        if (entry.found_existing) return .{ .id = entry.value_ptr.*, .inserted = false };
         const id: RepresentationEdgeId = @enumFromInt(@as(u32, @intCast(self.representation_edges.items.len)));
-        try self.representation_edges.append(self.allocator, edge);
-        return id;
+        self.representation_edges.appendAssumeCapacity(edge);
+        entry.value_ptr.* = id;
+        return .{ .id = id, .inserted = true };
     }
 
     pub fn appendRepresentationRequirement(

@@ -340,7 +340,6 @@ const IrBuilder = struct {
             .source_match => |source_match| try self.lowerSourceMatch(expr, source_match, stmts),
             .value_transform_tag_union => |tag_transform| try self.lowerValueTransformTagUnion(expr, tag_transform, stmts),
             .value_transform_list => |list_transform| try self.lowerValueTransformList(expr, list_transform, stmts),
-            .for_ => |for_| try self.lowerForExpr(expr, for_, stmts),
             .bridge => |bridge_expr| blk: {
                 const value = self.value_env.get(bridge_expr.value) orelse irInvariant("IR lowering bridge source value was not bound");
                 const bridge_plan = try self.lowerBridgePlan(bridge_expr.bridge);
@@ -818,33 +817,42 @@ const IrBuilder = struct {
         const source_elem_layout = try self.layoutForType(list_transform.source_elem_ty);
         const result_layout = try self.layoutForType(expr.ty);
 
-        const len = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
-            .op = .list_len,
-            .rc_effect = base.LowLevel.list_len.rcEffect(),
-            .args = try self.output.store.addVarSpan(&[_]Ast.Var{source}),
-        } }, stmts);
+        const len = try self.listLength(source, stmts);
         const result = try self.bindExpr(expr.value, result_layout, .{ .call_low_level = .{
             .op = .list_with_capacity,
             .rc_effect = base.LowLevel.list_with_capacity.rcEffect(),
             .args = try self.output.store.addVarSpan(&[_]Ast.Var{len}),
         } }, stmts);
-
-        const elem = try self.freshVar(source_elem_layout);
-        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .for_list = .{
-            .elem = elem,
-            .iterable = source,
-            .body = try self.lowerValueTransformListBodyBlock(list_transform, elem, result, result_layout),
-            .elem_bridge_plan = try self.output.store.addBridgePlan(.direct),
+        const index = try self.u64Literal(0, stmts);
+        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .while_ = .{
+            .cond = try self.lowerValueTransformListCondBlock(index, len),
+            .body = try self.lowerValueTransformListBodyBlock(list_transform, source, source_elem_layout, index, result, result_layout),
         } }));
 
         try self.value_env.put(expr.value, result);
         return result;
     }
 
+    fn lowerValueTransformListCondBlock(
+        self: *IrBuilder,
+        index: Ast.Var,
+        len: Ast.Var,
+    ) LowerResourceError!Ast.BlockId {
+        var cond_stmts = std.ArrayList(Ast.StmtId).empty;
+        defer cond_stmts.deinit(self.allocator);
+        const cond = try self.boolLowLevel(.num_is_lt, index, len, &cond_stmts);
+        return try self.output.store.addBlock(.{
+            .stmts = try self.output.store.addStmtSpan(cond_stmts.items),
+            .term = .{ .value = cond },
+        });
+    }
+
     fn lowerValueTransformListBodyBlock(
         self: *IrBuilder,
         list_transform: Exec.Ast.ValueTransformList,
-        elem: Ast.Var,
+        source: Ast.Var,
+        source_elem_layout: Ast.LayoutRef,
+        index: Ast.Var,
         result: Ast.Var,
         result_layout: Ast.LayoutRef,
     ) LowerResourceError!Ast.BlockId {
@@ -857,6 +865,11 @@ const IrBuilder = struct {
         var body_stmts = std.ArrayList(Ast.StmtId).empty;
         defer body_stmts.deinit(self.allocator);
 
+        const elem = try self.bindAnonymous(source_elem_layout, .{ .call_low_level = .{
+            .op = .list_get_unsafe,
+            .rc_effect = base.LowLevel.list_get_unsafe.rcEffect(),
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{ source, index }),
+        } }, &body_stmts);
         try self.pushValueBinding(list_transform.source_elem, elem, &saved);
         const transformed = try self.lowerExpr(list_transform.body, &body_stmts);
         const append_args = [_]Ast.Var{ result, transformed };
@@ -869,26 +882,21 @@ const IrBuilder = struct {
             .target = result,
             .value = appended,
         } }));
+        const one = try self.u64Literal(1, &body_stmts);
+        const incremented = try self.bindAnonymous(.{ .canonical = .u64 }, .{ .call_low_level = .{
+            .op = .num_plus,
+            .rc_effect = base.LowLevel.num_plus.rcEffect(),
+            .args = try self.output.store.addVarSpan(&[_]Ast.Var{ index, one }),
+        } }, &body_stmts);
+        try body_stmts.append(self.allocator, try self.output.store.addStmt(.{ .set = .{
+            .target = index,
+            .value = incremented,
+        } }));
 
         return try self.output.store.addBlock(.{
             .stmts = try self.output.store.addStmtSpan(body_stmts.items),
             .term = .{ .value = result },
         });
-    }
-
-    fn lowerForExpr(
-        self: *IrBuilder,
-        expr: Exec.Ast.Expr,
-        for_: anytype,
-        stmts: *std.ArrayList(Ast.StmtId),
-    ) LowerResourceError!Ast.Var {
-        try self.appendForList(for_, stmts);
-        return try self.bindExpr(
-            expr.value,
-            .{ .canonical = .zst },
-            try self.makeDirectStructExpr(&.{}),
-            stmts,
-        );
     }
 
     fn appendWhile(
@@ -900,46 +908,6 @@ const IrBuilder = struct {
             .cond = try self.lowerPredicateToBlock(while_.cond),
             .body = try self.lowerExprToBlock(while_.body),
         } }));
-    }
-
-    fn appendForList(
-        self: *IrBuilder,
-        for_: anytype,
-        stmts: *std.ArrayList(Ast.StmtId),
-    ) LowerResourceError!void {
-        const iterable = try self.lowerExpr(for_.iterable, stmts);
-        const elem_ty = self.listElementType(self.input.ast.getExpr(for_.iterable).ty);
-        const elem = try self.freshVar(try self.layoutForType(elem_ty));
-        const direct = try self.output.store.addBridgePlan(.direct);
-        try stmts.append(self.allocator, try self.output.store.addStmt(.{ .for_list = .{
-            .elem = elem,
-            .iterable = iterable,
-            .body = try self.lowerForBodyBlock(for_.patt, elem, for_.body),
-            .elem_bridge_plan = direct,
-        } }));
-    }
-
-    fn lowerForBodyBlock(
-        self: *IrBuilder,
-        pat_id: Exec.Ast.PatId,
-        elem: Ast.Var,
-        body: Exec.Ast.ExprId,
-    ) LowerResourceError!Ast.BlockId {
-        var saved = std.ArrayList(SavedValueBinding).empty;
-        defer {
-            self.restoreValueBindings(saved.items);
-            saved.deinit(self.allocator);
-        }
-
-        var body_stmts = std.ArrayList(Ast.StmtId).empty;
-        defer body_stmts.deinit(self.allocator);
-        const pat = self.input.ast.pats.items[@intFromEnum(pat_id)];
-        try self.bindForPatternValues(pat, elem, &body_stmts, &saved);
-        const result = try self.lowerExpr(body, &body_stmts);
-        return try self.output.store.addBlock(.{
-            .stmts = try self.output.store.addStmtSpan(body_stmts.items),
-            .term = .{ .value = result },
-        });
     }
 
     const SavedValueBinding = struct {
@@ -1765,7 +1733,6 @@ const IrBuilder = struct {
                 const value = try self.lowerExpr(expr, stmts);
                 try stmts.append(self.allocator, try self.output.store.addStmt(.{ .return_ = value }));
             },
-            .for_ => |for_| try self.appendForList(for_, stmts),
             .while_ => |while_| try self.appendWhile(while_, stmts),
             .break_ => try stmts.append(self.allocator, try self.output.store.addStmt(.break_)),
             .crash => |literal| try stmts.append(self.allocator, try self.output.store.addStmt(.{ .crash = literal })),
@@ -2391,7 +2358,7 @@ const IrBuilder = struct {
         return switch (self.input.types.getType(ty)) {
             .link => |next| self.listElementType(next),
             .list => |elem| elem,
-            else => irInvariant("IR lowering for_list expected iterable expression to have List(T) type"),
+            else => irInvariant("IR lowering expected a List(T) type"),
         };
     }
 

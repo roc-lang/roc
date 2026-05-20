@@ -268,10 +268,25 @@ pub const StaticDispatchPlanId = enum(u32) { _ };
 /// Public `IteratorForPlanId` declaration.
 pub const IteratorForPlanId = enum(u32) { _ };
 
+/// Public `IteratorDispatchOperand` declaration.
+pub const IteratorDispatchOperand = union(enum) {
+    checked_expr: CheckedExprId,
+    loop_iterator_state,
+};
+
+/// Public `IteratorDispatchObligation` declaration.
+pub const IteratorDispatchObligation = struct {
+    method: canonical.MethodNameId,
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: CheckedTypeId,
+    dispatcher_arg_index: u32,
+    args: []const IteratorDispatchOperand,
+};
+
 /// Public `IteratorForPlan` declaration.
 pub const IteratorForPlan = struct {
-    iter: StaticDispatchPlanId,
-    next: StaticDispatchPlanId,
+    iter: IteratorDispatchObligation,
+    next: IteratorDispatchObligation,
     iterable: CheckedExprId,
     item_ty: CheckedTypeId,
     iterator_ty: CheckedTypeId,
@@ -301,7 +316,13 @@ pub const StaticDispatchPlanTable = struct {
         var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{};
         errdefer by_expr.deinit(allocator);
         var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
-        errdefer iterator_for_plans.deinit(allocator);
+        errdefer {
+            for (iterator_for_plans.items) |plan| {
+                allocator.free(plan.iter.args);
+                allocator.free(plan.next.args);
+            }
+            iterator_for_plans.deinit(allocator);
+        }
         var iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{};
         errdefer iterator_for_by_node.deinit(allocator);
 
@@ -399,35 +420,37 @@ pub const StaticDispatchPlanTable = struct {
             const iterator_ty = checkedFunctionReturnTypeId(checked_types, iter_callable_ty);
             const step_ty = checkedFunctionReturnTypeId(checked_types, next_callable_ty);
 
-            const iter_plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
-            try plans.append(allocator, .{
-                .expr = iterable_expr,
-                .method = try names.internMethodName("iter"),
-                .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
-                .callable_ty = iter_callable_ty,
-                .args = try checkedExprIdsForSlice(allocator, checked_bodies, &.{iterable_idx}),
-                .result_mode = .value,
-            });
-
-            const next_plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
-            try plans.append(allocator, .{
-                .expr = iterable_expr,
-                .method = try names.internMethodName("next"),
-                .dispatcher_ty = iterator_ty,
-                .callable_ty = next_callable_ty,
-                .args = try allocator.alloc(CheckedExprId, 0),
-                .result_mode = .value,
-            });
-
             const iterator_for_id: IteratorForPlanId = @enumFromInt(@as(u32, @intCast(iterator_for_plans.items.len)));
-            try iterator_for_plans.append(allocator, .{
-                .iter = iter_plan_id,
-                .next = next_plan_id,
-                .iterable = iterable_expr,
-                .item_ty = item_ty,
-                .iterator_ty = iterator_ty,
-                .step_ty = step_ty,
-            });
+            {
+                const iter_args = try allocator.alloc(IteratorDispatchOperand, 1);
+                errdefer allocator.free(iter_args);
+                iter_args[0] = .{ .checked_expr = iterable_expr };
+
+                const next_args = try allocator.alloc(IteratorDispatchOperand, 1);
+                errdefer allocator.free(next_args);
+                next_args[0] = .loop_iterator_state;
+
+                try iterator_for_plans.append(allocator, .{
+                    .iter = .{
+                        .method = try names.internMethodName("iter"),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
+                        .callable_ty = iter_callable_ty,
+                        .dispatcher_arg_index = 0,
+                        .args = iter_args,
+                    },
+                    .next = .{
+                        .method = try names.internMethodName("next"),
+                        .dispatcher_ty = iterator_ty,
+                        .callable_ty = next_callable_ty,
+                        .dispatcher_arg_index = 0,
+                        .args = next_args,
+                    },
+                    .iterable = iterable_expr,
+                    .item_ty = item_ty,
+                    .iterator_ty = iterator_ty,
+                    .step_ty = step_ty,
+                });
+            }
             try iterator_for_by_node.put(allocator, for_node_idx, iterator_for_id);
         }
 
@@ -469,6 +492,10 @@ pub const StaticDispatchPlanTable = struct {
         self.iterator_for_by_node.deinit(allocator);
         for (self.plans) |plan| allocator.free(plan.args);
         allocator.free(self.plans);
+        for (self.iterator_for_plans) |plan| {
+            allocator.free(plan.iter.args);
+            allocator.free(plan.next.args);
+        }
         allocator.free(self.iterator_for_plans);
         self.* = .{};
     }

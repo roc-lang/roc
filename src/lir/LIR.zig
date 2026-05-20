@@ -167,11 +167,6 @@ pub const SetLocalWriteMode = enum {
     initialize_join_param,
 };
 
-/// Explicit ARC source of the hidden element binding inside a `for_list`.
-pub const ForListElementSource = enum {
-    aliases_iterable_element,
-};
-
 /// Explicit final-drop callback plan for a packed boxed erased callable.
 ///
 /// This is selected before backend lowering. Backends materialize exactly this
@@ -282,14 +277,6 @@ pub const CFStmt = union(enum) {
         /// the branch bodies flow back to a shared suffix. ARC insertion uses
         /// this to release branch-local owned values before the shared suffix.
         continuation: ?CFStmtId = null,
-    },
-    for_list: struct {
-        elem: LocalId,
-        elem_source: ForListElementSource,
-        iterable: LocalId,
-        iterable_elem_layout: layout.Idx,
-        body: CFStmtId,
-        next: CFStmtId,
     },
     loop_continue: void,
     loop_break: void,

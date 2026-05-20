@@ -1112,7 +1112,6 @@ pub const Interpreter = struct {
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
                 .runtime_error,
-                .for_list,
                 .jump,
                 .ret,
                 .crash,
@@ -1378,10 +1377,6 @@ pub const Interpreter = struct {
                 }
                 try self.collectJoinPoints(join_points, switch_stmt.default_branch);
             },
-            .for_list => |for_stmt| {
-                try self.collectJoinPoints(join_points, for_stmt.body);
-                try self.collectJoinPoints(join_points, for_stmt.next);
-            },
             .join => |join_stmt| {
                 try join_points.put(self.evalAllocator(), @intFromEnum(join_stmt.id), .{
                     .params = join_stmt.params,
@@ -1633,38 +1628,6 @@ pub const Interpreter = struct {
                         }
                     }
                     return try self.execStmtChain(frame, target);
-                },
-                .for_list => |for_stmt| {
-                    const iterable = try self.getLocalChecked(frame, for_stmt.iterable);
-                    const list_layout = self.store.getLocal(for_stmt.iterable).layout_idx;
-                    const resolved_iterable = self.resolveListBaseValue(iterable, list_layout);
-                    const actual_elem_layout = for_stmt.iterable_elem_layout;
-                    const elem_layout = self.store.getLocal(for_stmt.elem).layout_idx;
-                    const info = self.listElemInfo(list_layout);
-                    const rl = valueToRocList(resolved_iterable.value);
-
-                    var i: usize = 0;
-                    loop: while (i < rl.len()) : (i += 1) {
-                        const normalized_elem = if (info.width == 0 or rl.bytes == null)
-                            try self.coerceExplicitRefValueToLayout(Value.zst, actual_elem_layout, elem_layout)
-                        else
-                            try self.coerceExplicitRefValueToLayout(
-                                .{ .ptr = rl.bytes.? + i * info.width },
-                                actual_elem_layout,
-                                elem_layout,
-                            );
-                        const elem_value = try self.materializeLocalValue(normalized_elem, elem_layout);
-
-                        self.setLocalChecked(frame, current, for_stmt.elem, elem_value);
-                        const outcome = try self.execStmtChain(frame, for_stmt.body);
-                        switch (outcome) {
-                            .returned => |ret_local| return .{ .returned = ret_local },
-                            .loop_continue => {},
-                            .loop_break => break :loop,
-                        }
-                    }
-
-                    current = for_stmt.next;
                 },
                 .loop_continue => return .loop_continue,
                 .loop_break => return .loop_break,
@@ -1945,17 +1908,6 @@ pub const Interpreter = struct {
                         });
                         stack.append(self.evalAllocator(), branch.body) catch return;
                     }
-                },
-                .for_list => |for_list| {
-                    debugPrint("    {d}: for_list elem={d} iterable={d} body={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(for_list.elem),
-                        @intFromEnum(for_list.iterable),
-                        @intFromEnum(for_list.body),
-                        @intFromEnum(for_list.next),
-                    });
-                    stack.append(self.evalAllocator(), for_list.body) catch return;
-                    stack.append(self.evalAllocator(), for_list.next) catch return;
                 },
                 .loop_continue => {
                     debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});

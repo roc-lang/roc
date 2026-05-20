@@ -7685,10 +7685,18 @@ const CheckedTemplateRefCollector = struct {
             checkedArtifactInvariant("checked template iterator-for plan id was outside the plan table", .{});
         }
         const plan = self.static_dispatch_plans.iterator_for_plans[raw];
-        try self.dispatch_refs.append(self.allocator, plan.iter);
-        try self.dispatch_refs.append(self.allocator, plan.next);
-        try self.collectStaticDispatchPlanArgs(plan.iter);
-        try self.collectStaticDispatchPlanArgs(plan.next);
+        try self.collectIteratorDispatchObligation(plan.iter);
+        try self.collectIteratorDispatchObligation(plan.next);
+    }
+
+    fn collectIteratorDispatchObligation(
+        self: *CheckedTemplateRefCollector,
+        obligation: static_dispatch.IteratorDispatchObligation,
+    ) Allocator.Error!void {
+        for (obligation.args) |arg| switch (arg) {
+            .checked_expr => |expr| try self.collectExpr(expr),
+            .loop_iterator_state => {},
+        };
     }
 
     fn collectPattern(self: *CheckedTemplateRefCollector, pattern_id: CheckedPatternId) Allocator.Error!void {

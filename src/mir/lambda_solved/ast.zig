@@ -266,11 +266,6 @@ pub const Expr = struct {
         },
         crash: ProgramLiteralId,
         runtime_error,
-        for_: struct {
-            patt: PatId,
-            iterable: ExprId,
-            body: ExprId,
-        },
     };
 };
 
@@ -298,11 +293,6 @@ pub const Stmt = union(enum) {
         return_info: repr.ReturnInfoId,
     },
     break_,
-    for_: struct {
-        patt: PatId,
-        iterable: ExprId,
-        body: ExprId,
-    },
     while_: struct {
         cond: ExprId,
         body: ExprId,
