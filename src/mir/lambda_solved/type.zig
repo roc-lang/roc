@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const check = @import("check");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 const lifted_type = @import("../lifted/mod.zig").Type;
 
 const canonical = check.CanonicalNames;
@@ -38,6 +39,7 @@ pub fn Span(comptime _: type) type {
 pub const Nominal = struct {
     nominal: canonical.NominalTypeKey,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     is_opaque: bool,
     args: Span(TypeVarId),
     backing: TypeVarId,

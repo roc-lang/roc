@@ -389,14 +389,10 @@ pub const LoweredProgram = struct {
     compile_time_payloads: []checked_artifact.CompileTimeEvaluationPayload = &.{},
     callable_set_descriptors: []const repr.CanonicalCallableSetDescriptor = &.{},
     callable_set_runtime_encodings: []const CallableSetRuntimeEncoding = &.{},
-    callable_set_member_payloads: []const LoweredCallableSetMemberPayload = &.{},
     erased_callable_code_map: []LoweredErasedCallableCodeEntry = &.{},
 
     pub fn deinit(self: *LoweredProgram) void {
         deinitRuntimeCallableSetDescriptors(self.lir_result.store.allocator, self.callable_set_descriptors);
-        if (self.callable_set_member_payloads.len > 0) {
-            self.lir_result.store.allocator.free(self.callable_set_member_payloads);
-        }
         for (self.erased_callable_code_map) |entry| {
             if (entry.exec_arg_tys.len > 0) {
                 self.lir_result.store.allocator.free(entry.exec_arg_tys);
@@ -533,14 +529,6 @@ pub fn callableSetRuntimeMemberForDiscriminant(
     return null;
 }
 
-/// Public `LoweredCallableSetMemberPayload` declaration.
-pub const LoweredCallableSetMemberPayload = struct {
-    callable_set_key: canonical.CanonicalCallableSetKey,
-    member: canonical.CallableSetMemberId,
-    member_proc_source_fn_ty_payload: checked_artifact.CheckedTypeId,
-    member_lifted_owner_source_fn_ty_payload: ?checked_artifact.CheckedTypeId = null,
-};
-
 /// Public `CompileTimeDependencySummaryResult` declaration.
 pub const CompileTimeDependencySummaryResult = struct {
     allocator: Allocator,
@@ -628,17 +616,6 @@ pub fn lowerArtifactsToLir(
         callable_set_descriptors.descriptors,
     );
     errdefer deinitRuntimeCallableSetDescriptors(allocator, runtime_callable_set_descriptors);
-    const runtime_callable_set_member_payloads = try callableSetMemberPayloadsForFinalization(
-        allocator,
-        artifacts.root.artifact,
-        artifacts.imports,
-        artifacts.root.relation_artifacts,
-        &solved,
-        callable_set_descriptors.descriptors,
-        roots,
-        target.artifact_state,
-    );
-    errdefer if (runtime_callable_set_member_payloads.len > 0) allocator.free(runtime_callable_set_member_payloads);
     try publishErasedFnAbisForLowering(
         allocator,
         artifacts.root.artifact,
@@ -739,7 +716,6 @@ pub fn lowerArtifactsToLir(
         .compile_time_payloads = compile_time_payloads,
         .callable_set_descriptors = runtime_callable_set_descriptors,
         .callable_set_runtime_encodings = lowered_lir.callable_set_runtime_encodings.items,
-        .callable_set_member_payloads = runtime_callable_set_member_payloads,
         .erased_callable_code_map = erased_callable_code_map,
     };
 }
@@ -1151,111 +1127,6 @@ fn deinitRuntimeCallableSetDescriptorContents(
         }
         if (descriptor.members.len > 0) allocator.free(descriptor.members);
     }
-}
-
-fn callableSetMemberPayloadsForFinalization(
-    allocator: Allocator,
-    artifact: *const checked_artifact.CheckedModuleArtifact,
-    imports: []const checked_artifact.ImportedModuleView,
-    relation_artifacts: []const checked_artifact.ImportedModuleView,
-    solved: *const mir.LambdaSolved.Solve.Program,
-    descriptors: []const repr.CanonicalCallableSetDescriptor,
-    roots: RootRequestSet,
-    artifact_state: ArtifactState,
-) Allocator.Error![]const LoweredCallableSetMemberPayload {
-    switch (artifact_state) {
-        .published => return &.{},
-        .checking_finalization => {},
-    }
-
-    const artifact_sink = roots.compile_time_artifact_sink orelse checkedPipelineInvariant("checking-finalization callable-set member payload publication requires mutable checked artifact sink");
-    if (@intFromPtr(artifact_sink) != @intFromPtr(artifact)) {
-        checkedPipelineInvariant("checking-finalization callable-set member payload artifact sink does not match root artifact");
-    }
-
-    var member_count: usize = 0;
-    for (descriptors) |descriptor| member_count += descriptor.members.len;
-    if (member_count == 0) return &.{};
-
-    var projector = checked_artifact.CheckedTypeProjector.init(allocator, artifact_sink, imports);
-    defer projector.deinit();
-
-    const payloads = try allocator.alloc(LoweredCallableSetMemberPayload, member_count);
-    var initialized: usize = 0;
-    errdefer allocator.free(payloads);
-
-    for (descriptors) |descriptor| {
-        for (descriptor.members) |member| {
-            payloads[initialized] = try callableSetMemberPayloadForFinalization(
-                artifact_sink,
-                imports,
-                relation_artifacts,
-                &projector,
-                solved,
-                descriptor.key,
-                member,
-            );
-            initialized += 1;
-        }
-    }
-
-    return payloads;
-}
-
-fn callableSetMemberPayloadForFinalization(
-    artifact: *checked_artifact.CheckedModuleArtifact,
-    imports: []const checked_artifact.ImportedModuleView,
-    relation_artifacts: []const checked_artifact.ImportedModuleView,
-    projector: *checked_artifact.CheckedTypeProjector,
-    solved: *const mir.LambdaSolved.Solve.Program,
-    callable_set_key: canonical.CanonicalCallableSetKey,
-    member: repr.CanonicalCallableSetMember,
-) Allocator.Error!LoweredCallableSetMemberPayload {
-    const member_proc = member.published_proc_value orelse member.proc_value;
-    const member_source_payload = try projectCheckedPayloadForConcreteSourcePayload(
-        artifact,
-        imports,
-        relation_artifacts,
-        projector,
-        &solved.concrete_source_types,
-        &solved.canonical_names,
-        member.source_fn_ty_payload,
-        member.proc_value.source_fn_ty,
-        "callable-set member source function type payload key disagrees with descriptor member procedure type",
-        "callable-set member source function type payload artifact was not available",
-    );
-    const lifted_owner_payload: ?checked_artifact.CheckedTypeId = switch (member_proc.template) {
-        .lifted => |lifted| blk: {
-            const payload = member.lifted_owner_source_fn_ty_payload orelse {
-                checkedPipelineInvariant("lifted callable-set member did not publish owner source function type payload");
-            };
-            break :blk try projectCheckedPayloadForConcreteSourcePayload(
-                artifact,
-                imports,
-                relation_artifacts,
-                projector,
-                &solved.concrete_source_types,
-                &solved.canonical_names,
-                payload,
-                lifted.owner_mono_specialization.requested_mono_fn_ty,
-                "callable-set lifted member owner source function type payload key disagrees with owner specialization",
-                "callable-set lifted member owner source function type payload artifact was not available",
-            );
-        },
-        .checked, .synthetic => blk: {
-            if (member.lifted_owner_source_fn_ty_payload != null) {
-                checkedPipelineInvariant("non-lifted callable-set member published lifted owner source function type payload");
-            }
-            break :blk null;
-        },
-    };
-
-    return .{
-        .callable_set_key = callable_set_key,
-        .member = member.member,
-        .member_proc_source_fn_ty_payload = member_source_payload,
-        .member_lifted_owner_source_fn_ty_payload = lifted_owner_payload,
-    };
 }
 
 fn publishedCallableSetDescriptorMatchesSolved(
@@ -2657,8 +2528,11 @@ const CompileTimeDependencySummaryBuilder = struct {
             .erased => |erased| {
                 switch (erased.code_plan) {
                     .materialized_by_lowering => |code| switch (code) {
-                        .direct_proc_value => |direct| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = direct.proc_value } }),
-                        .finite_set_adapter => {},
+                        .direct_proc_value => |direct| try self.appendConcreteValue(concrete, .{ .procedure_callable_with_payloads = .{
+                            .proc_value = direct.proc_value,
+                            .source_fn_ty_payload = erased.source_fn_ty_payload,
+                        } }),
+                        .finite_set_adapter => |finite_code| try self.collectCallableResultPlan(finite_code.finite_result_plan, availability, concrete),
                     },
                     .read_from_interpreted_erased_value => {},
                 }
@@ -2674,7 +2548,13 @@ const CompileTimeDependencySummaryBuilder = struct {
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
         switch (leaf) {
-            .resolved_finite => |finite| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = finite.proc_value } }),
+            .resolved_finite => |finite| try self.appendConcreteValue(concrete, .{ .procedure_callable_with_payloads = .{
+                .proc_value = finite.proc_value,
+                .source_fn_ty_payload = finite.source_fn_ty_payload,
+                .lifted_owner_source_fn_ty_payload = finite.lifted_owner_source_fn_ty_payload,
+                .proc_template_closure = finite.proc_template_closure,
+                .lifted_owner_template_closure = finite.lifted_owner_template_closure,
+            } }),
             .promoted_callable => |plan| try self.collectCallableResultPlan(plan, availability, concrete),
             .erased_boxed_callable => |erased| try self.collectErasedCallableDependency(erased, availability, concrete),
         }
@@ -2716,11 +2596,24 @@ const CompileTimeDependencySummaryBuilder = struct {
         concrete: *std.ArrayList(checked_artifact.ComptimeConcreteValueUse),
     ) Allocator.Error!void {
         switch (leaf) {
-            .finite => |finite| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = finite.proc_value } }),
+            .finite => |finite| try self.appendConcreteValue(concrete, .{ .procedure_callable_with_payloads = .{
+                .proc_value = finite.proc_value,
+                .source_fn_ty_payload = finite.source_fn_ty_payload,
+                .lifted_owner_source_fn_ty_payload = finite.lifted_owner_source_fn_ty_payload,
+                .proc_template_closure = finite.proc_template_closure,
+                .lifted_owner_template_closure = finite.lifted_owner_template_closure,
+            } }),
             .erased_boxed => |erased| switch (erased.sealed.code) {
-                .direct_proc => |direct| try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = direct.code.proc_value } }),
+                .direct_proc => |direct| try self.appendConcreteValue(concrete, .{ .procedure_callable_with_payloads = .{
+                    .proc_value = direct.code.proc_value,
+                    .source_fn_ty_payload = erased.sealed.boundary.checked_fn_root,
+                } }),
                 .finite_adapter => |finite| for (finite.members) |member| {
-                    try self.appendConcreteValue(concrete, .{ .procedure_callable = .{ .proc_value = member.proc_value } });
+                    try self.appendConcreteValue(concrete, .{ .procedure_callable_with_payloads = .{
+                        .proc_value = member.proc_value,
+                        .source_fn_ty_payload = member.member_proc_source_fn_ty_payload,
+                        .lifted_owner_source_fn_ty_payload = member.member_lifted_owner_source_fn_ty_payload,
+                    } });
                 },
             },
         }
@@ -3168,6 +3061,8 @@ const ExecutableTypePayloadBuilder = struct {
                 break :blk .{ .nominal = .{
                     .nominal = try self.artifactNominalTypeKey(nominal.nominal),
                     .source_ty = nominal.source_ty,
+                    .source_ty_payload = self.artifactCheckedTypeRefForSessionNominal(nominal),
+                    .is_opaque = nominal.is_opaque,
                     .backing = backing.ref,
                     .backing_key = backing.key,
                 } };
@@ -3366,6 +3261,25 @@ const ExecutableTypePayloadBuilder = struct {
             .type_name = try self.artifact.canonical_names.internTypeName(
                 self.solved.canonical_names.typeNameText(lowering_nominal.type_name),
             ),
+        };
+    }
+
+    fn artifactCheckedTypeRefForSessionNominal(
+        self: *ExecutableTypePayloadBuilder,
+        nominal: repr.SessionExecutableNominalPayload,
+    ) checked_artifact.ArtifactCheckedTypeRef {
+        const source_root = nominal.source_root orelse {
+            checkedPipelineInvariant("artifact executable nominal payload has no published source type authority");
+        };
+        if (!std.meta.eql(source_root.key.bytes, nominal.source_ty.bytes)) {
+            checkedPipelineInvariant("artifact executable nominal source authority key differs from nominal source type");
+        }
+        return switch (source_root.source) {
+            .artifact => |artifact_ref| artifact_ref,
+            .local => |checked_ty| .{
+                .artifact = self.artifact.key,
+                .ty = checked_ty,
+            },
         };
     }
 
@@ -4026,29 +3940,33 @@ fn erasedFiniteSetResultPlan(
 ) Allocator.Error!checked_artifact.CallableResultPlanId {
     const boundary_source_fn_ty = checkedRootKeyForCallableBoundary(artifact_sink, source_fn_ty_payload);
     const boundary_sig_key = erasedFnSigKeyWithSource(erase.adapter.erased_fn_sig_key, boundary_source_fn_ty);
+    const finite_result_plan = try finiteCallableResultPlan(
+        allocator,
+        artifact_sink,
+        imports,
+        relation_artifacts,
+        plans,
+        value_context,
+        callable_set_descriptors,
+        source_fn_ty_payload,
+        callable_value,
+        callable,
+        erase.adapter.callable_set_key,
+    );
     return try plans.appendCallableResult(allocator, .{ .erased = .{
         .source_fn_ty = boundary_source_fn_ty,
         .source_fn_ty_payload = source_fn_ty_payload,
         .sig_key = boundary_sig_key,
         .provenance = try cloneBoxBoundarySpan(allocator, erase.provenance),
-        .code_plan = .{ .materialized_by_lowering = .{ .finite_set_adapter = erase.adapter } },
+        .code_plan = .{ .materialized_by_lowering = .{ .finite_set_adapter = .{
+            .adapter = erase.adapter,
+            .finite_result_plan = finite_result_plan,
+        } } },
         .result_ty = erase.result_ty,
         .capture = if (erase.adapter.erased_fn_sig_key.capture_ty == null)
             .none
         else
-            .{ .finite_callable_set_value = try finiteCallableResultPlan(
-                allocator,
-                artifact_sink,
-                imports,
-                relation_artifacts,
-                plans,
-                value_context,
-                callable_set_descriptors,
-                source_fn_ty_payload,
-                callable_value,
-                callable,
-                erase.adapter.callable_set_key,
-            ) },
+            .{ .finite_callable_set_value = finite_result_plan },
         .executable_signature_payloads = erasedSignaturePayloadsForBoundary(
             try erasedPromotedSignaturePayloadsForFiniteSetAdapter(
                 allocator,
@@ -5404,7 +5322,7 @@ const CaptureSlotPlanBuilder = struct {
             };
         }
 
-        const backing = try self.type_projector.publishedNominalBacking(nominal) orelse {
+        const backing = self.type_projector.publishedNominalBackingForType(checked_ty, nominal) orelse {
             checkedPipelineInvariant("capture slot nominal plan has no published nominal backing");
         };
 
@@ -5447,6 +5365,8 @@ const CaptureSlotPlanBuilder = struct {
         value_info_id: ?repr.ValueInfoId,
         exec_ty: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.CaptureRecordFieldPlan {
+        if (try self.recordFieldsFromAggregateValue(value_info_id)) |plans| return plans;
+
         if (fields.len == 0) return &.{};
         const plans_out = try self.allocator.alloc(checked_artifact.CaptureRecordFieldPlan, fields.len);
         errdefer self.allocator.free(plans_out);
@@ -5460,6 +5380,33 @@ const CaptureSlotPlanBuilder = struct {
                     child,
                     child_exec,
                 ),
+            };
+        }
+        return plans_out;
+    }
+
+    fn recordFieldsFromAggregateValue(
+        self: *CaptureSlotPlanBuilder,
+        value_info_id: ?repr.ValueInfoId,
+    ) Allocator.Error!?[]const checked_artifact.CaptureRecordFieldPlan {
+        const info_id = value_info_id orelse return null;
+        const info = self.valueInfo(info_id);
+        const aggregate = info.aggregate orelse return null;
+        const record = switch (aggregate) {
+            .record => |record| record,
+            else => return null,
+        };
+
+        if (record.fields.len == 0) return &.{};
+        const plans_out = try self.allocator.alloc(checked_artifact.CaptureRecordFieldPlan, record.fields.len);
+        errdefer self.allocator.free(plans_out);
+        for (record.fields, 0..) |field, i| {
+            const solved_label = self.value_context.row_shapes.recordField(field.field).label;
+            const artifact_label = try self.artifactRecordFieldLabel(solved_label);
+            const child_info = self.valueInfo(field.value);
+            plans_out[i] = .{
+                .field = artifact_label,
+                .value = try self.planFor(child_info.source_ty, field.value),
             };
         }
         return plans_out;
@@ -5655,11 +5602,8 @@ const CaptureSlotPlanBuilder = struct {
             .record => |record| record,
             else => checkedPipelineInvariant("record capture value had non-record aggregate metadata"),
         };
-        const field_id = recordFieldIdForLabel(self.value_context.row_shapes, record.shape, label) orelse {
-            checkedPipelineInvariant("record capture plan referenced missing finalized field label");
-        };
         for (record.fields) |field| {
-            if (field.field == field_id) return field.value;
+            if (self.value_context.row_shapes.recordField(field.field).label == label) return field.value;
         }
         checkedPipelineInvariant("record capture aggregate metadata omitted a finalized field");
     }
@@ -5906,6 +5850,14 @@ const CaptureSlotPlanBuilder = struct {
 
     fn valueInfo(self: *const CaptureSlotPlanBuilder, value_info_id: repr.ValueInfoId) repr.ValueInfo {
         return self.value_context.value_store.values.items[@intFromEnum(self.resolveValueInfoId(value_info_id))];
+    }
+
+    fn artifactRecordFieldLabel(
+        self: *CaptureSlotPlanBuilder,
+        solved_label: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        var publisher = checked_artifact.ArtifactNamePublisher.init(self.artifact);
+        return try publisher.recordFieldFromLowering(self.value_context.canonical_names, solved_label);
     }
 
     fn resolveValueInfoId(self: *const CaptureSlotPlanBuilder, value_info_id: repr.ValueInfoId) repr.ValueInfoId {
@@ -6318,7 +6270,7 @@ const ConstGraphPlanBuilder = struct {
             };
         }
 
-        const backing = try self.type_projector.publishedNominalBacking(nominal) orelse {
+        const backing = self.type_projector.publishedNominalBackingForType(checked_ty, nominal) orelse {
             checkedPipelineInvariant("compile-time constant nominal plan has no published nominal backing");
         };
 
@@ -6343,6 +6295,10 @@ const ConstGraphPlanBuilder = struct {
         value_info: ?repr.ValueInfoId,
         expected_exec_key: ?canonical.CanonicalExecValueTypeKey,
     ) Allocator.Error![]const checked_artifact.ConstRecordFieldPlan {
+        if (try self.recordFieldsFromAggregateValue(value_context, value_info)) |aggregate_plans| {
+            return aggregate_plans;
+        }
+
         var plans = std.ArrayList(checked_artifact.ConstRecordFieldPlan).empty;
         errdefer plans.deinit(self.allocator);
         const expected_record = self.recordExecutablePayload(value_context, value_info, expected_exec_key);
@@ -6359,39 +6315,46 @@ const ConstGraphPlanBuilder = struct {
             });
         }
 
-        if (value_context) |context| {
-            if (self.valueInfo(value_context, value_info)) |info| {
-                if (info.aggregate) |aggregate| {
-                    const record = switch (aggregate) {
-                        .record => |record| record,
-                        else => checkedPipelineInvariant("record constant value had non-record aggregate metadata"),
-                    };
-                    for (record.fields) |field| {
-                        const label = try self.artifactRecordFieldLabel(context, context.row_shapes.recordField(field.field).label);
-                        if (constRecordPlanContainsField(plans.items, label)) continue;
-                        const child_info = self.valueInfo(value_context, field.value) orelse {
-                            checkedPipelineInvariant("record constant aggregate extra field had no value metadata");
-                        };
-                        const child_payload = child_info.source_ty_payload orelse {
-                            checkedPipelineInvariant("record constant aggregate extra field source type payload was not published");
-                        };
-                        const child_ty = try self.checkedPayloadForConcreteSourcePayload(context, child_payload, child_info.source_ty);
-                        try plans.append(self.allocator, .{
-                            .field = label,
-                            .value = try self.planForExpected(
-                                child_ty,
-                                value_context,
-                                field.value,
-                                self.recordFieldExecutableKey(value_context, expected_record, label),
-                            ),
-                        });
-                    }
-                }
-            }
-        }
-
         if (plans.items.len == 0) return &.{};
         return try plans.toOwnedSlice(self.allocator);
+    }
+
+    fn recordFieldsFromAggregateValue(
+        self: *ConstGraphPlanBuilder,
+        value_context: ?ConstValueContext,
+        value_info: ?repr.ValueInfoId,
+    ) Allocator.Error!?[]const checked_artifact.ConstRecordFieldPlan {
+        const context = value_context orelse return null;
+        const info = self.valueInfo(value_context, value_info) orelse return null;
+        const aggregate = info.aggregate orelse return null;
+        const record = switch (aggregate) {
+            .record => |record| record,
+            else => return null,
+        };
+
+        if (record.fields.len == 0) return &.{};
+        const plans = try self.allocator.alloc(checked_artifact.ConstRecordFieldPlan, record.fields.len);
+        errdefer self.allocator.free(plans);
+        for (record.fields, 0..) |field, i| {
+            const label = try self.artifactRecordFieldLabel(context, context.row_shapes.recordField(field.field).label);
+            const child_info = self.valueInfo(value_context, field.value) orelse {
+                checkedPipelineInvariant("record constant aggregate field had no value metadata");
+            };
+            const child_payload = child_info.source_ty_payload orelse {
+                checkedPipelineInvariant("record constant aggregate field source type payload was not published");
+            };
+            const child_ty = try self.checkedPayloadForConcreteSourcePayload(context, child_payload, child_info.source_ty);
+            plans[i] = .{
+                .field = label,
+                .value = try self.planForExpected(
+                    child_ty,
+                    value_context,
+                    field.value,
+                    null,
+                ),
+            };
+        }
+        return plans;
     }
 
     fn tupleItems(
@@ -7006,16 +6969,6 @@ const ConstGraphPlanBuilder = struct {
         checkedPipelineInvariant("record constant aggregate metadata omitted a finalized field");
     }
 
-    fn constRecordPlanContainsField(
-        fields: []const checked_artifact.ConstRecordFieldPlan,
-        label: canonical.RecordFieldLabelId,
-    ) bool {
-        for (fields) |field| {
-            if (field.field == label) return true;
-        }
-        return false;
-    }
-
     fn tupleElemValue(
         self: *const ConstGraphPlanBuilder,
         value_context: ?ConstValueContext,
@@ -7148,17 +7101,6 @@ const ConstPlanKey = struct {
         };
     }
 };
-
-fn recordFieldIdForLabel(
-    shapes: *const mir.MonoRow.Store,
-    shape: mir.MonoRow.RecordShapeId,
-    label: canonical.RecordFieldLabelId,
-) ?mir.MonoRow.RecordFieldId {
-    for (shapes.recordShapeFields(shape)) |field_id| {
-        if (shapes.recordField(field_id).label == label) return field_id;
-    }
-    return null;
-}
 
 fn nominalArg(
     nominal: checked_artifact.CheckedNominalType,

@@ -477,8 +477,8 @@ x != y
 becomes an `is_eq` dispatch plan with `args = [x, y]`. `!=` is represented by
 `negated = true`; mono emits equality and then `bool_not`.
 
-Mono lowers each `StaticDispatchCallPlan` while lowering one concrete
-specialization:
+Mono graph finalization resolves each `StaticDispatchCallPlan` for one concrete
+specialization before body emission begins:
 
 1. Instantiate `dispatcher_ty` and `callable_ty` into the specialization-local
    source type graph.
@@ -492,10 +492,51 @@ specialization:
    dispatch-site callable type.
 7. Register the unified fixed-arity function type in the concrete source type
    store.
-8. Lower arguments exactly once using the final unified argument types.
-9. Request the target mono specialization and emit `call_proc`.
-10. For allowed ownerless equality, emit `structural_eq`.
-11. For negated equality, emit `bool_not`.
+8. Publish a finalized dispatch record that names the concrete dispatcher,
+   concrete callable, argument endpoints, result endpoint, resolution, and
+   target.
+
+```zig
+const FinalizedStaticDispatch = struct {
+    obligation: StaticDispatchObligationRef,
+    dispatcher_ref: ConcreteSourceTypeRef,
+    method: MethodNameId,
+    callable_ref: ConcreteSourceTypeRef,
+    arg_refs: Span(ConcreteSourceTypeRef),
+    result_ref: ConcreteSourceTypeRef,
+    resolution: StaticDispatchResolution,
+};
+
+const StaticDispatchResolution = union(enum) {
+    method_target: struct {
+        owner: MethodOwner,
+        target: MethodTarget,
+    },
+    structural_equality,
+};
+
+const StaticDispatchObligationRef = union(enum) {
+    source_call: StaticDispatchPlanId,
+    iterator_for: IteratorDispatchKey,
+};
+
+const IteratorDispatchKey = struct {
+    plan: IteratorForPlanId,
+    obligation: enum { iter, next },
+};
+
+const FinalizedIteratorDispatch = struct {
+    key: IteratorDispatchKey,
+    dispatch: FinalizedStaticDispatch,
+};
+```
+
+Mono body emission consumes the finalized record. It lowers arguments exactly
+once using the finalized argument endpoints, requests the finalized target mono
+specialization and emits `call_proc`, emits `structural_eq` for finalized
+structural equality, and emits `bool_not` for negated equality. Body emission
+does not resolve method owners, instantiate target callable types, or consult
+method registries.
 
 If lookup is missing for value dispatch, or missing for equality without
 `structural_allowed`, this is a compiler bug. Checking must reject ambiguous or
@@ -506,6 +547,12 @@ If the checked callable type, receiver, arguments, expected return, annotation,
 or `where`-only type root does not determine one dispatcher, artifact
 publication rejects the expression. Mono does not break ties by source spelling,
 module prefix, argument order, literal type, method name, or target availability.
+Generic static-dispatch constraint rows never carry a preselected owner. If a
+concrete specialization still has a method-constrained variable at finalization
+time and that variable is not resolved by concrete dispatcher evidence, the
+specialization graph is malformed. Mono must not choose an owner by intersecting
+visible method registries or by asking which owners happen to implement the
+constraint methods.
 
 Delayed numeric variables bind during final argument/result lowering for the
 dispatch site. A numeric receiver such as `12.34.foo()` or an argument such as
@@ -521,11 +568,11 @@ x.foo().bar()
 ```
 
 `foo` and `bar` each have their own checked `StaticDispatchCallPlan`,
-dispatcher root, callable root, method identifier region, and method-registry
-target. The `bar` dispatcher consumes the checked result type of `foo`; it does
-not inherit `foo`'s dispatcher or target. A dotted expression with no call
-arguments is field access, not method invocation, unless checking published a
-static-dispatch call plan for that expression.
+dispatcher root, callable root, method identifier region, and finalized
+dispatch record. The `bar` dispatcher consumes the checked result type of `foo`;
+it does not inherit `foo`'s dispatcher or target. A dotted expression with no
+call arguments is field access, not method invocation, unless checking published
+a static-dispatch call plan for that expression.
 
 ### Value-Level Method Symbols
 
@@ -617,9 +664,9 @@ MIR calls, mutable state, `while`, and `match`:
 
 This is a mono lowering choice, not a source rewrite. The `iter` and `next`
 calls in that MIR are created from the checked plan's method names, dispatcher
-types, callable types, and method targets. Mono does not infer these facts from
-source syntax, from `List(item)`, from `Iter(item)` shape, from field names, or
-from backend layouts.
+types, callable types, operands, and finalized dispatch records. Mono does not
+infer these facts from source syntax, from `List(item)`, from `Iter(item)`
+shape, from field names, or from backend layouts.
 
 Later stages consume the MIR produced by mono. They do not contain source
 `for` semantics and do not infer iteration from lists, numeric ranges, or
@@ -2348,15 +2395,14 @@ nodes are semantic identities, not parser-local source ids.
 Open variables keep any canonical source type-variable name separately from
 their artifact-local variable id. Static-dispatch constraints attached to open
 variables are checked semantic rows: `fn_name` is a canonical `MethodNameId`,
-`fn_ty` names a checked function type root or template payload, and
-`resolved_owner` is the checked-publication owner resolution when the constraint
-group functionally determines one runtime method owner. A constraint row does
-not contain raw identifiers, source text, or a method target. Canonical-name
-remapping includes static-dispatch constraint function names and published
-owners. Publication verifies that an owner is assigned only when the visible
-checked method registries contain every required `(MethodOwner, MethodNameId)`
-target. Debug verification rejects foreign canonical-name ids or constraints
-whose checked function payload is missing.
+and `fn_ty` names a checked function type root or template payload. A constraint
+row does not contain raw identifiers, source text, a method target, or a runtime
+method owner. Method-owner selection is not a property of a generic constraint
+row; it belongs only to finalized dispatch obligations or value-level method
+symbols whose owner was explicitly resolved during checking. Canonical-name
+remapping includes static-dispatch constraint function names. Debug verification
+rejects foreign canonical-name ids, constraints whose checked function payload is
+missing, and any attempt to publish an owner on a constraint row.
 
 The exact Zig field names may differ, but the store must preserve:
 
@@ -2420,10 +2466,11 @@ checking has already accepted or rejected the program before publication.
 Nominal keys are identity keys, not representation keys. They hash the nominal
 type name, nominal origin module, opacity, and instantiated argument keys. They
 do not hash the nominal backing graph. The backing checked type root remains
-explicit checked payload data, and later stages use that payload when they need
-the representation. Recursive nominal occurrences therefore share one source
-type identity for the same origin/name/arguments even when each occurrence
-reaches the backing graph through a different recursive edge.
+explicit checked payload data, but later stages may inspect it only through the
+nominal occurrence's published representation authority. Recursive nominal
+occurrences therefore share one source type identity for the same
+origin/name/arguments even when each occurrence reaches the backing graph
+through a different recursive edge.
 
 Checked bodies are also artifact-owned:
 
@@ -4277,12 +4324,48 @@ const FinalizedNominalDeclarations = struct {
 };
 ```
 
+Every checked nominal occurrence carries exact representation authority:
+
+```zig
+const ImportedNominalDeclarationRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    declaration: CheckedNominalDeclarationId,
+};
+
+const LocalBoxPayloadCapabilityRef = struct {
+    capability: BoxPayloadCapabilityId,
+    opaque_atomic_proof: ?OpaqueAtomicProofId,
+};
+
+const ImportedBoxPayloadCapabilityRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    capability: BoxPayloadCapabilityId,
+    opaque_atomic_proof: ?OpaqueAtomicProofId,
+};
+
+const CheckedNominalRepresentation = union(enum) {
+    builtin: BuiltinNominalIdentity,
+    local_declaration: CheckedNominalDeclarationId,
+    imported_declaration: ImportedNominalDeclarationRef,
+    local_box_payload_capability: LocalBoxPayloadCapabilityRef,
+    imported_box_payload_capability: ImportedBoxPayloadCapabilityRef,
+    opaque_without_backing,
+};
+```
+
 Checking finalization resolves nominal placeholders before artifact
-publication. Imported nominal declaration templates instantiate through the
-imported closure that authorizes them. Builtin nominals use canonical identity,
-such as `Builtin.Try`, rather than display-name matching. Later stages consume
-the published declaration or instantiated declaration template; they do not
-select a nominal backing from an occurrence-local type.
+publication and writes the representation authority ref onto each nominal
+payload. `ImportedNominalDeclarationRef` names the owning checked artifact and
+artifact-local nominal declaration id. Box-payload capability refs name the
+owning checked artifact when imported, the artifact-local capability id, and
+the exact optional opaque proof id that justified treating an opaque payload as
+atomic. Imported nominal declaration templates instantiate through the imported
+closure that authorizes them. Builtin nominals use canonical identity, such as
+`Builtin.Try`, rather than display-name matching. Later stages consume the exact
+declaration, imported declaration ref, capability/proof ref, builtin identity,
+or opaque marker named by the nominal occurrence. They do not select a nominal
+backing from an occurrence-local type, canonical type key, display name,
+remapped module/type name, or scan of visible capability rows.
 
 ### Platform/App Relation Typing
 
@@ -4994,15 +5077,7 @@ pub const LoweredProgram = struct {
     compile_time_payloads: CompileTimePayloadStore,
     callable_set_descriptors: []const CanonicalCallableSetDescriptor,
     callable_set_runtime_encodings: []const CallableSetRuntimeEncoding,
-    callable_set_member_payloads: []const LoweredCallableSetMemberPayload,
     erased_callable_code_map: []const LoweredErasedCallableCodeEntry,
-};
-
-pub const LoweredCallableSetMemberPayload = struct {
-    callable_set_key: CanonicalCallableSetKey,
-    member: CallableSetMemberId,
-    member_proc_source_fn_ty_payload: CheckedTypeId,
-    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId,
 };
 
 pub const CallableSetRuntimeEncoding = struct {
@@ -5023,11 +5098,11 @@ pub const CallableSetRuntimeEncodingMember = struct {
 The exported `LoweredProgram` is the concrete post-check lowering product for
 the current target. It owns the ARC-inserted LIR result, runtime schema store,
 compile-time payloads needed by checked finalization, runtime callable-set
-descriptor copies, callable-set runtime encodings, callable-set member payload
-refs, and the lowered erased callable code entries for this LIR program. Debug
-stage references are optional tooling data and are not part of the semantic
-public API unless an implementation publishes them explicitly. The exact
-exported helper names may differ, but the error type is resource-only.
+descriptor copies, callable-set runtime encodings, and the lowered erased
+callable code entries for this LIR program. Debug stage references are optional
+tooling data and are not part of the semantic public API unless an
+implementation publishes them explicitly. The exact exported helper names may
+differ, but the error type is resource-only.
 
 `CanonicalCallableSetDescriptor` is semantic lowering data: which callable
 members exist, which procedure/callable refs they target, and which capture
@@ -5067,19 +5142,16 @@ captures from the current LIR result. A checked-artifact persisted descriptor is
 not a substitute for the runtime descriptor table while interpreting the current
 lowered program.
 
-During checking finalization, `LoweredProgram.callable_set_member_payloads`
-is the finalization-ready companion to the runtime descriptor table. It maps
-each current-run descriptor member to the checked payload roots that were
-projected while the lambda-solved `ConcreteSourceType` store was still alive:
-the member procedure source function payload, and for lifted member procedures
-the owner specialization source function payload. Compile-time finalization
-must consume these payload ids when it publishes callable result plans from a
-runtime descriptor. It must not recover them by searching
-`CheckedTypeStore.rootForKey`, by inspecting procedure templates, by reading
-source syntax, or by rebuilding concrete source payloads after lowering has
-dropped the solved MIR program. If a runtime descriptor member lacks its
-finalization payload record, the producer is incomplete and finalization must
-report a compiler invariant violation.
+During checking finalization, callable result plans carry the checked payload
+roots needed by later reification directly on the member/result plan that needs
+them: member procedure source function payloads, lifted owner source function
+payloads, and erased finite adapter source payloads. Compile-time finalization
+must consume those checked result plans. It must not recover payload ids by
+searching `CheckedTypeStore.rootForKey`, by inspecting procedure templates, by
+reading source syntax, or by rebuilding concrete source payloads after lowering
+has dropped the solved MIR program. If a result plan lacks a payload root, the
+producer is incomplete and finalization must report a compiler invariant
+violation.
 
 When compile-time sinks are present, lowering records prepared plans and fills
 the checked artifact under exact keys. A sink records or fills only the
@@ -5508,7 +5580,8 @@ const MonoGraphFinalization = struct {
     equality_only_closures: Span<MonoVarId>,
     unconstrained_closures: Span<MonoVarId>,
     extension_tail_closures: Span<RowOrTagTailClosure>,
-    method_constraint_owner_uses: Span<PublishedMethodConstraintOwnerUse>,
+    finalized_static_dispatches: Span(FinalizedStaticDispatch),
+    finalized_iterator_dispatches: Span(FinalizedIteratorDispatch),
     callback_return_endpoints: Span<CallbackReturnEndpoint>,
 };
 ```
@@ -5516,19 +5589,95 @@ const MonoGraphFinalization = struct {
 Delayed numerics default only after every argument, return, binder,
 static-dispatch, equality, callback, and expected-type edge has been connected.
 Variables that appear only in ownerless equality constraints close to `{}` only
-after checking has published that no owner-specific method is required. Truly
-unconstrained flex variables close to `{}` at finalization. Row and tag tails
-close only at extension edges that checking marked as sealed endpoints; an open
-row variable elsewhere remains an explicit open variable in the checked source
-type payload. Runtime variables constrained by methods consume the
-`resolved_owner` published on their constraint rows. Mono may look up the
-published `(MethodOwner, MethodNameId)` target to instantiate the callable, but
+after the finalized dispatch record proves no owner-specific method is required.
+Truly unconstrained flex variables close to `{}` at finalization. Row and tag
+tails close only at extension edges that checking marked as sealed endpoints; an
+open row variable elsewhere remains an explicit open variable in the checked
+source type payload. Runtime variables constrained by methods are resolved only
+through finalized dispatch obligations whose dispatcher endpoint has concrete
+source type evidence. Constraint rows never publish owners. Mono may look up the
+finalized `(MethodOwner, MethodNameId)` target to instantiate the callable, but
 it must not discover the owner by intersecting method registries, by name
 lookup, or by syntactic receiver shape.
 Callback-local return endpoints are connected before any callback body emits
 MIR. Body emission begins only after `FinalizedMonoSpecializationGraph` verifies
 that no pending graph links, unresolved numeric defaults, unchecked callback
-returns, or method constraints remain.
+returns, unresolved dispatch obligations, or method constraints that require a
+runtime owner remain.
+
+The finalized graph is the only type source available to body emission. Facts
+inside the graph are keyed by body instance, not by checked expression id alone.
+A top-level procedure specialization has one body instance. A local function or
+closure used at two concrete function types has two local body instances, even
+though both instances point at the same checked lambda body.
+
+```zig
+const MonoBodyInstanceId = enum(u32) { _ };
+
+const MonoBodyInstance = struct {
+    id: MonoBodyInstanceId,
+    owner: union(enum) {
+        procedure: MonoSpecializationKey,
+        local_proc: struct {
+            owner: MonoBodyInstanceId,
+            binder: PatternBinderId,
+            requested_fn_ty: ConcreteSourceTypeRef,
+        },
+        closure_value: struct {
+            owner: MonoBodyInstanceId,
+            site: NestedProcSiteId,
+            source_fn_ty: ConcreteSourceTypeRef,
+        },
+    },
+    fn_ty: FinalizedTypeInfo,
+    params: Span(FinalizedParamInfo),
+    ret: FinalizedTypeInfo,
+};
+
+const ScopedExpr = struct {
+    body: MonoBodyInstanceId,
+    expr: CheckedExprId,
+};
+
+const ScopedPattern = struct {
+    body: MonoBodyInstanceId,
+    pattern: CheckedPatternId,
+};
+
+const ScopedBinder = struct {
+    body: MonoBodyInstanceId,
+    binder: PatternBinderId,
+};
+
+const FinalizedMonoSpecializationGraph = struct {
+    body_instances: Map(MonoBodyInstanceId, MonoBodyInstance),
+    root_body: MonoBodyInstanceId,
+    exprs: Map(ScopedExpr, FinalizedExprInfo),
+    patterns: Map(ScopedPattern, FinalizedPatternInfo),
+    binders: Map(ScopedBinder, FinalizedBinderInfo),
+    calls: Map(ScopedExpr, FinalizedCallInfo),
+    local_proc_instances: Map(LocalProcInstanceKey, MonoBodyInstanceId),
+    static_dispatches: Map(ScopedStaticDispatch, FinalizedStaticDispatch),
+    iterator_dispatches: Map(IteratorDispatchKey, FinalizedStaticDispatch),
+    nominal_backings: Map(NominalBackingUseId, InstantiatedNominalBacking),
+    callback_returns: Map(CallbackReturnEndpointId, ConcreteSourceTypeRef),
+};
+
+const MonoBodyEmitter = struct {
+    graph: *const FinalizedMonoSpecializationGraph,
+};
+```
+
+`MonoBodyEmitter` receives no mutable type-instantiation state. It emits value
+MIR from finalized graph lookups. It must not unify types, materialize checked
+payloads, apply numeric defaults, close rows, choose method owners, instantiate
+target callable types, or run type-only queries that mutate graph state.
+
+When body emission enters a local function, closure body, callback body, or any
+other nested checked body, it switches to the already-finalized
+`MonoBodyInstanceId` for that concrete use. It does not clone a type
+instantiator, re-solve the nested body, or write nested body facts into the
+owner body's maps.
 
 Mono type instantiation has two distinct operations:
 
@@ -5593,34 +5742,47 @@ const InstantiatedNominalBacking = struct {
 };
 
 const NominalBackingInstantiationKey = struct {
-    defining_artifact: CheckedModuleArtifactKey,
-    nominal: NominalTypeKey,
-    instantiated_arg_keys: Span(CanonicalTypeKey),
+    authority: CheckedNominalRepresentationRef,
+    actual_payloads: Span(ConcreteSourceTypeRef),
 };
 ```
 
 Parametric wrappers substitute formal variables through the same
 specialization-local graph used for procedure args and returns. Mono starts
-from published formal roots for the wrapper declaration; it does not collect
-wrapper params from occurrence-local use sites. A nominal value may unify with
+from the exact representation authority carried by the nominal occurrence; it
+does not collect wrapper params from occurrence-local use sites, canonical type
+keys, display names, or visible capability scans. A nominal value may unify with
 its backing only through an explicit wrapper/backing relation published by
 checking. The backing can constrain payload variables, but the nominal wrapper
 identity remains part of the value when the source type is nominal. For example,
 a `Result(ok, err)` transparent alias can expose its backing tags for relation
-typing, while a nominal `Try(a)` pattern still lowers through the published
-nominal declaration and representation. Nominal pattern lowering uses the
-instantiated declaration/backing pair; it must not rebuild a backing from tag
-syntax or select a wrapper by display name.
+typing, while a nominal `Try(a)` pattern still lowers through the exact
+published nominal declaration and representation ref. Nominal pattern lowering
+uses the instantiated declaration/backing pair; it must not rebuild a backing
+from tag syntax or select a wrapper by display name.
 
 Nominal backing instantiation runs in an isolated nominal-declaration context.
 It substitutes the declaration's published formal roots with the requested
 concrete argument roots and does not apply the current procedure body's active
-expression substitutions. If the defining checked type view publishes the
-nominal declaration, that declaration template is the authority. Imported
-nominal representation capabilities are boundary views used only when the
-declaration template is unavailable or when they publish an exact instantiated
-backing that can be copied into the isolated context. A capability must not take
-precedence over an available declaration template.
+expression substitutions. The nominal occurrence's
+`CheckedNominalRepresentationRef` is the authority:
+
+- `local_declaration` instantiates that declaration's published formal roots
+  and backing template.
+- `imported_declaration` instantiates through the imported template closure that
+  authorized the declaration.
+- `local_box_payload_capability` consumes that exact local capability row and
+  optional opaque proof by id.
+- `imported_box_payload_capability` consumes that exact imported artifact,
+  capability row, and optional opaque proof by id.
+- `builtin` consumes the builtin nominal declaration or builtin representation
+  selected by canonical builtin identity.
+- `opaque_without_backing` rejects backing inspection as an invariant violation.
+
+Nominal backing instantiation never searches visible declarations or
+capabilities by remapped nominal names, occurrence-local source type keys, or
+argument keys. The instantiation cache is keyed by representation authority and
+concrete arguments only after authority has already been selected.
 
 Open record and tag rows are solved by row-equation rules in the
 specialization-local graph. Tag-row unification matches explicit tags by
@@ -5634,16 +5796,17 @@ from missing labels later.
 Residual clones preserve open-variable identity and delayed numeric-default
 metadata. They do not clone static-dispatch constraint function graphs into new
 callable targets. If a residual still contains a constrained static-dispatch
-variable, mono must connect it through the original checked method-registry
-target or report an invariant failure during graph finalization.
+variable, mono must connect it through concrete dispatcher evidence in a
+finalized dispatch obligation or report an invariant failure during graph
+finalization.
 
-Imported generic nominal backings instantiate through a run-local mono cache
-keyed by `NominalBackingInstantiationKey`. The cache value is the local checked
-type root for the instantiated backing in the current `ConcreteSourceTypeStore`.
-Mono reserves that local root before filling it, stores the reservation in the
-cache, and then materializes the substituted backing payload. Recursive and
-mutually recursive nominals reuse the pending cache root instead of starting a
-second instantiation.
+Generic nominal backings instantiate through a run-local mono cache keyed by
+`NominalBackingInstantiationKey`. The cache value is the local checked type root
+for the instantiated backing in the current `ConcreteSourceTypeStore`. Mono
+reserves that local root before filling it, stores the reservation in the cache,
+and then materializes the substituted backing payload. Recursive and mutually
+recursive nominals reuse the pending cache root instead of starting a second
+instantiation.
 
 Instantiated backing roots use the ordinary canonical checked-type-key
 algorithm after declaration formals have been substituted with concrete
@@ -5745,15 +5908,18 @@ The instantiator starts from the owning checked artifact and imported type view
 for that dispatch site. It does not copy enclosing mono substitutions, reuse a
 previously materialized template root, or inherit accidental bindings from
 another dispatch expression. The dispatch-site graph is then connected to the
-receiver, arguments, expected result, and method-registry target for this
-specialization.
+receiver, arguments, expected result, and finalized method-registry target for
+this specialization.
 
 ### Method Registry And Equality Dispatch
 
 The checked method registry maps `(MethodOwner, MethodNameId)` to procedure
 targets with checked callable types. The registry chooses the target for a
 resolved owner and method; it does not decide which type controls a particular
-call. `StaticDispatchCallPlan.dispatcher_ty` chooses that.
+call. `StaticDispatchCallPlan.dispatcher_ty` chooses that. Registry iteration
+or candidate-owner enumeration is not part of static-dispatch resolution; any
+API that lists owners for a method is diagnostic-only and must not be consumed
+by mono finalization or body emission.
 
 Conceptually:
 
@@ -5801,8 +5967,10 @@ const MethodTarget = struct {
 text. Nominal owners use the canonical nominal type key from the defining
 artifact. Primitive, `List`, `Box`, `Bool`, `Str`, and numeric owners are
 explicit `BuiltinOwner` cases. Transparent aliases and type-variable aliases
-resolve to a `MethodOwner` before lookup. `MethodKey.method` is a canonical
-`MethodNameId`, not a raw identifier id.
+resolve to a `MethodOwner` only after mono graph finalization has concrete
+dispatcher source type evidence. A generic constrained variable is not itself a
+method owner. `MethodKey.method` is a canonical `MethodNameId`, not a raw
+identifier id.
 
 `MethodTarget` is a mono MIR input contract only. It names the resolved checked
 procedure value, optional procedure template, and checked callable type selected
@@ -6414,6 +6582,8 @@ const RepresentationStore = struct {
     root_type_infos: HashMap(RepRootId, RepresentationRootTypeInfo),
     solved_structural_child_roots: HashMap(SolvedStructuralChildKey, RepRootId),
     solved_structural_child_roots_published: bool,
+    structural_child_source_maps: HashMap(StructuralChildSourceKey, ConcreteSourceTypeRef),
+    structural_child_source_maps_published: bool,
     representation_edges: ArrayList(RepresentationEdge),
     representation_requirements: ArrayList(RepresentationRequirement),
     callable_emission_plans: []CallableValueEmissionPlan,
@@ -6502,6 +6672,11 @@ const SolvedChildKey = struct {
     kind: RepresentationChildKind,
 };
 
+const StructuralChildSourceKey = struct {
+    parent: ConcreteSourceTypeRef,
+    kind: RepresentationChildKind,
+};
+
 const RepresentationRequirement = union(enum) {
     require_box_erased: BoxErasureRequirement,
     require_shape: RepresentationShape,
@@ -6529,6 +6704,31 @@ list elements, boxed payloads, and nominal backings. Branch joins, loop phis,
 mutable versions, aliases, moves, call args/results, and capture operands are
 value-flow edges, not child edges. Box erasure is a representation requirement
 on a payload root, not an executable conversion and not layout data.
+
+Row finalization owns the conversion from symbolic rows to row identities:
+record labels become `RecordFieldId`, tag labels become `TagId`, and tag
+payload positions become `TagPayloadId`. At the same time, it publishes source
+child maps for every row-finalized source type whose children later stages need:
+
+```zig
+const StructuralChildSourceMap = struct {
+    parent: ConcreteSourceTypeRef,
+    children: Span(StructuralChildSource),
+};
+
+const StructuralChildSource = struct {
+    kind: RepresentationChildKind,
+    child: ConcreteSourceTypeRef,
+};
+```
+
+Lambda-solved, executable MIR, erased-boundary metadata builders, and value
+transform builders consume `(parent, RepresentationChildKind) -> child`
+mappings. They must not recover a child by looking up a record field label in a
+source type, matching a tag label, matching a tag payload logical index, or
+rescanning an aggregate payload. Label/index matching is allowed only in the
+producer that creates the row-id child map, and that producer seals the map
+before export.
 
 `CallableEmissionAssigner` walks explicit `require_box_erased` requirements and
 propagates their non-empty `BoxErasureProvenance` through solved representation
@@ -7355,12 +7555,26 @@ A `const_instance` expression publishes `ConstBackedValueInfo` when lambda-solve
 lowers it. The metadata names the sealed compile-time schema/value node inside
 the owning artifact's `CompileTimeValueStore`. Projection lowering first follows
 explicit `value_alias_source` chains, then consults `const_backing` before
-using ordinary runtime projection metadata. Record fields are selected
-by canonical field label after remapping through the owning artifact's name
-resolver; tuple elements by index; tag payloads by tag label and payload logical
-index; transparent aliases and nominal wrappers unwrap through the sealed
-schema/value store with a bounded loop. If the selected child is a callable
-leaf, lambda-solved publishes callable metadata for that value immediately.
+using ordinary runtime projection metadata. Const-backed materialization
+publishes an explicit child map when the schema/value pair is rehydrated:
+
+```zig
+const ConstBackedChildMap = struct {
+    record_fields: Map(RecordFieldId, ConstBackedValueInfo),
+    tuple_elems: Map(u32, ConstBackedValueInfo),
+    tag_payloads: Map(TagPayloadId, ConstBackedValueInfo),
+    list_elems: Map(u32, ConstBackedValueInfo),
+    box_payload: ?ConstBackedValueInfo,
+    nominal_backing: ?ConstBackedValueInfo,
+};
+```
+
+Projection lowering consumes that child map. It must not rescan record schema
+labels, tag labels, tag payload logical indexes, or aggregate value arrays to
+select a child. Transparent aliases and nominal wrappers unwrap through the
+sealed schema/value store with a bounded loop while preserving the published
+child map. If the selected child is a callable leaf, lambda-solved publishes
+callable metadata for that value immediately.
 
 Const-backed `Box(T)` values publish ordinary boxed-child metadata. The child
 payload receives its own `ValueInfo`, `ConstBackedValueInfo`, and `.box_payload`
@@ -11013,13 +11227,14 @@ target ABI payloads, or interpreter allocation addresses.
 
 `ComptimeFieldSchema.name`, `ComptimeVariantSchema.name`, and
 `ComptimeWrappedSchema.type_name` are artifact-local canonical-name ids. Before
-executable MIR compares compile-time schemas with row-shape labels, tag labels,
-constructor labels, nominal keys, bridge endpoints, executable schemas, or glue
-schemas, it remaps those ids through `ConstMaterializationContext.canonical_names`.
-This remap is mandatory materialization work, not a verifier-only check.
-Expected-field lookup reads the field-label bytes from the owner artifact,
-interns those bytes into the executable lowering-run store, and compares the
-remapped id with the row-finalized executable field label.
+const materialization publishes executable child maps, it remaps those ids
+through `ConstMaterializationContext.canonical_names`. This remap is mandatory
+materialization work, not a verifier-only check. Expected-field map construction
+reads the field-label bytes from the owner artifact, interns those bytes into
+the executable lowering-run store, validates the remapped id against the
+row-finalized executable field label, and then stores the resulting
+`RecordFieldId` in the materialized child map. Later consumers use the child
+map; they do not repeat the label comparison.
 
 `CallableResultMemberTargetPlan.artifact_owned` is used when the executable
 procedure base is already persistable in the artifact that owns the result
@@ -11220,11 +11435,12 @@ Stable record, tag, list, box, and nominal materialization records store
 canonical field labels, canonical tag labels, canonical payload logical indexes,
 and child materialization plans. They do not store lowering-run-local
 `RecordShapeId`, `RecordFieldId`, `TagUnionShapeId`, `TagId`, or
-`TagPayloadId`. Executable MIR first lowers the expected executable payload for
-the materialized capture, creating local row ids for this lowering run, and then
-maps stable labels/indexes onto those local ids by checking the explicit
-expected payload. Missing fields, payload arity mismatches, or canonical-order
-disagreements are compiler bugs.
+`TagPayloadId`. Stable materialization import first lowers the expected
+executable payload for the materialized capture, creating local row ids for this
+lowering run, and then builds an explicit child map from the stable
+labels/indexes to those local ids by checking the explicit expected payload.
+That map is sealed before static data emission consumes it. Missing fields,
+payload arity mismatches, or canonical-order disagreements are compiler bugs.
 
 `MaterializedFiniteCallableSetValue.selected_member` is semantic. It selects
 the descriptor member whose captures are being materialized. Static data

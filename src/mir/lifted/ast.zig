@@ -12,6 +12,7 @@ const type_mod = @import("type.zig");
 const row = @import("../mono_row/mod.zig");
 const mir_ids = @import("../ids.zig");
 const hosted_mod = @import("../hosted.zig");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 
 const canonical = check.CanonicalNames;
 
@@ -46,6 +47,7 @@ pub fn Span(comptime _: type) type {
 pub const TypedSymbol = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     symbol: Symbol,
 };
 
@@ -55,6 +57,7 @@ pub const CaptureSlot = struct {
     source_symbol: Symbol,
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
 };
 
 /// Public `CaptureArg` declaration.
@@ -74,6 +77,7 @@ pub const TagPayloadPattern = struct {
 pub const Pat = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     data: Data,
 
     pub const Data = union(enum) {
@@ -155,6 +159,7 @@ pub const TagPayloadAssembly = struct {
 pub const Expr = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     data: Data,
 
     pub const Data = union(enum) {
@@ -202,12 +207,14 @@ pub const Expr = struct {
             args: Span(ExprId),
             requested_fn_ty: TypeId,
             requested_source_fn_ty: canonical.CanonicalTypeKey,
+            requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
         },
         call_proc: struct {
             proc: canonical.MirProcedureRef,
             args: Span(ExprId),
             requested_fn_ty: TypeId,
             requested_source_fn_ty: canonical.CanonicalTypeKey,
+            requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
         },
         proc_value: struct {
             proc: canonical.MirProcedureRef,
@@ -388,12 +395,18 @@ pub const Store = struct {
         self: *Store,
         ty: TypeId,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
         data: Expr.Data,
     ) std.mem.Allocator.Error!ExprId {
         var owned_data = data;
         errdefer deinitExprData(self.allocator, &owned_data);
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .data = owned_data });
+        try self.exprs.append(self.allocator, .{
+            .ty = ty,
+            .source_ty = source_ty,
+            .source_ty_payload = source_ty_payload,
+            .data = owned_data,
+        });
         return @enumFromInt(idx);
     }
 

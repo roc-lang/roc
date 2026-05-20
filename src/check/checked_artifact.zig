@@ -1204,7 +1204,6 @@ pub const CheckedStaticDispatchConstraint = struct {
     origin: types.StaticDispatchConstraint.Origin,
     binop_negated: bool = false,
     num_literal: ?types.NumeralInfo = null,
-    resolved_owner: ?static_dispatch.MethodOwner = null,
 };
 
 /// Public `NumericDefaultPhase` declaration.
@@ -1296,6 +1295,38 @@ pub const CheckedAliasType = struct {
     args: []const CheckedTypeId = &.{},
 };
 
+/// Public `CheckedNominalDeclarationId` declaration.
+pub const CheckedNominalDeclarationId = enum(u32) { _ };
+
+/// Public `ImportedNominalDeclarationRef` declaration.
+pub const ImportedNominalDeclarationRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    declaration: CheckedNominalDeclarationId,
+};
+
+/// Public `LocalBoxPayloadCapabilityRef` declaration.
+pub const LocalBoxPayloadCapabilityRef = struct {
+    capability: BoxPayloadCapabilityId,
+    opaque_atomic_proof: ?OpaqueAtomicProofId = null,
+};
+
+/// Public `ImportedBoxPayloadCapabilityRef` declaration.
+pub const ImportedBoxPayloadCapabilityRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    capability: BoxPayloadCapabilityId,
+    opaque_atomic_proof: ?OpaqueAtomicProofId = null,
+};
+
+/// Public `CheckedNominalRepresentationRef` declaration.
+pub const CheckedNominalRepresentationRef = union(enum) {
+    builtin: CheckedBuiltinNominal,
+    local_declaration: CheckedNominalDeclarationId,
+    imported_declaration: ImportedNominalDeclarationRef,
+    local_box_payload_capability: LocalBoxPayloadCapabilityRef,
+    imported_box_payload_capability: ImportedBoxPayloadCapabilityRef,
+    opaque_without_backing,
+};
+
 /// Public `CheckedNominalType` declaration.
 pub const CheckedNominalType = struct {
     name: canonical.TypeNameId,
@@ -1303,6 +1334,7 @@ pub const CheckedNominalType = struct {
     builtin: ?CheckedBuiltinNominal = null,
     is_opaque: bool,
     backing: CheckedTypeId,
+    representation: CheckedNominalRepresentationRef,
     args: []const CheckedTypeId = &.{},
 };
 
@@ -1375,6 +1407,21 @@ pub const CheckedTypeStoreView = struct {
             if (canonicalNominalTypeKeyEql(declaration.nominal, nominal)) return declaration;
         }
         return null;
+    }
+
+    pub fn nominalDeclarationById(
+        self: CheckedTypeStoreView,
+        id: CheckedNominalDeclarationId,
+    ) CheckedNominalDeclaration {
+        const index: usize = @intFromEnum(id);
+        if (index >= self.nominal_declarations.len) {
+            checkedArtifactInvariant("checked nominal declaration id is out of range", .{});
+        }
+        const declaration = self.nominal_declarations[index];
+        if (declaration.id != id) {
+            checkedArtifactInvariant("checked nominal declaration id disagrees with declaration slot", .{});
+        }
+        return declaration;
     }
 };
 
@@ -1570,6 +1617,7 @@ fn checkedTypeViewTagsAreConcreteConstProducerScheme(
 
 /// Public `CheckedNominalDeclaration` declaration.
 pub const CheckedNominalDeclaration = struct {
+    id: CheckedNominalDeclarationId,
     nominal: canonical.NominalTypeKey,
     declaration_root: CheckedTypeId,
     backing: CheckedTypeId,
@@ -1626,6 +1674,7 @@ pub const CheckedTypeStore = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        imports: []const PublishImportArtifact,
     ) Allocator.Error!CheckedTypePublication {
         var roots = std.ArrayList(CheckedTypeRoot).empty;
         errdefer roots.deinit(allocator);
@@ -1654,10 +1703,10 @@ pub const CheckedTypeStore = struct {
             const tag = module.nodeTag(node);
             if (isExprNodeTag(tag)) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-                _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, module.exprType(expr_idx));
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, module.exprType(expr_idx));
                 switch (module.expr(expr_idx).data) {
                     .e_call => |call| if (call.constraint_fn_var) |constraint_fn_var| {
-                        _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, constraint_fn_var);
+                        _ = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, constraint_fn_var);
                     },
                     else => {},
                 }
@@ -1667,6 +1716,7 @@ pub const CheckedTypeStore = struct {
                     allocator,
                     module,
                     names,
+                    imports,
                     &roots,
                     &payloads,
                     &active,
@@ -1675,11 +1725,12 @@ pub const CheckedTypeStore = struct {
             } else if (isStatementNodeTag(tag)) {
                 const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
                 switch (module.getStatement(statement_idx)) {
-                    .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
+                    .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
                     .s_nominal_decl => |nominal| try appendCheckedNominalDeclarationFromStatement(
                         allocator,
                         module,
                         names,
+                        imports,
                         &nominal_declarations,
                         &roots,
                         &payloads,
@@ -1697,7 +1748,7 @@ pub const CheckedTypeStore = struct {
 
         for (module.requiresTypes()) |required_type| {
             const required_var = ModuleEnv.varFrom(required_type.type_anno);
-            const root = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, required_var);
+            const root = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, required_var);
             const scheme_key = try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
@@ -1715,10 +1766,10 @@ pub const CheckedTypeStore = struct {
             }
         }
 
-        try appendStaticDispatchTypeRoots(allocator, module, names, &roots, &payloads, &active);
+        try appendStaticDispatchTypeRoots(allocator, module, names, imports, &roots, &payloads, &active);
 
         for (module.allDefs()) |def_idx| {
-            const root = try appendCheckedTypeRoot(allocator, module, names, &roots, &payloads, &active, module.defType(def_idx));
+            const root = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, module.defType(def_idx));
             const scheme_key = try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
@@ -1923,6 +1974,13 @@ pub const CheckedTypeStore = struct {
         return null;
     }
 
+    pub fn nominalDeclarationById(
+        self: *const CheckedTypeStore,
+        id: CheckedNominalDeclarationId,
+    ) CheckedNominalDeclaration {
+        return self.view().nominalDeclarationById(id);
+    }
+
     pub fn ensureInstantiatedNominalBackingRoot(
         self: *CheckedTypeStore,
         allocator: Allocator,
@@ -2088,6 +2146,7 @@ pub const CheckedTypeStore = struct {
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, nominal.backing, formals, actuals, active),
+                .representation = nominal.representation,
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.args, formals, actuals, active),
             } },
             .function => |function| try self.cloneCheckedFunctionTypeSubstituting(allocator, names, function, formals, actuals, active),
@@ -2181,7 +2240,6 @@ pub const CheckedTypeStore = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
-                .resolved_owner = constraint.resolved_owner,
             };
         }
         return out;
@@ -2362,6 +2420,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     declarations: *std.ArrayList(CheckedNominalDeclaration),
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
@@ -2378,6 +2437,7 @@ fn appendCheckedNominalDeclarationFromStatement(
         allocator,
         module,
         names,
+        imports,
         roots,
         payloads,
         active,
@@ -2405,6 +2465,7 @@ fn appendCheckedNominalDeclarationFromStatement(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2420,6 +2481,7 @@ fn appendCheckedNominalDeclarationFromStatement(
         allocator,
         module,
         names,
+        imports,
         roots,
         payloads,
         active,
@@ -2433,6 +2495,10 @@ fn appendCheckedNominalDeclarationFromStatement(
         .builtin = statement_nominal.builtin,
         .is_opaque = statement_nominal.is_opaque,
         .backing = backing,
+        .representation = if (statement_nominal.builtin) |builtin_id|
+            .{ .builtin = builtin_id }
+        else
+            .{ .local_declaration = localNominalDeclarationIdForStatement(module, statement_idx) },
         .args = formal_args,
     } };
     formal_args_owned = false;
@@ -2451,6 +2517,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -2465,6 +2532,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2473,7 +2541,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             );
             errdefer deinitCheckedTags(allocator, tags);
             const ext = if (tag_union.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, roots, payloads, active, local_type_declarations, ext_anno)
+                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, ext_anno)
             else
                 try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .empty_tag_union);
             break :blk try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .{ .tag_union = .{
@@ -2486,6 +2554,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2494,7 +2563,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             );
             errdefer allocator.free(fields);
             const ext = if (record.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, roots, payloads, active, local_type_declarations, ext_anno)
+                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, ext_anno)
             else
                 try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .empty_record);
             break :blk try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .{ .record = .{
@@ -2507,6 +2576,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2521,6 +2591,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2532,6 +2603,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2554,6 +2626,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             allocator,
             module,
             names,
+            imports,
             roots,
             payloads,
             active,
@@ -2567,6 +2640,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                     allocator,
                     module,
                     names,
+                    imports,
                     roots,
                     payloads,
                     active,
@@ -2576,7 +2650,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             },
             .builtin,
             .external,
-            => try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, ModuleEnv.varFrom(anno_idx)),
+            => try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(anno_idx)),
             .pending => checkedArtifactInvariant("checked declaration template still contained pending lookup", .{}),
         },
         .apply => |apply| blk: {
@@ -2584,6 +2658,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2600,6 +2675,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                             allocator,
                             module,
                             names,
+                            imports,
                             roots,
                             payloads,
                             active,
@@ -2619,12 +2695,12 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 allocator.free(actual_args);
                 actual_args_owned = false;
             }
-            break :blk try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, ModuleEnv.varFrom(anno_idx));
+            break :blk try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(anno_idx));
         },
         .rigid_var,
         .rigid_var_lookup,
         .underscore,
-        => try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, ModuleEnv.varFrom(anno_idx)),
+        => try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(anno_idx)),
         .tag,
         .malformed,
         => checkedArtifactInvariant("nominal declaration annotation was not a valid checked template", .{}),
@@ -2635,6 +2711,7 @@ fn checkedTypeIdsFromDeclarationAnnoSpan(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -2646,7 +2723,7 @@ fn checkedTypeIdsFromDeclarationAnnoSpan(
     const out = try allocator.alloc(CheckedTypeId, annos.len);
     errdefer allocator.free(out);
     for (annos, 0..) |anno, i| {
-        out[i] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, roots, payloads, active, local_type_declarations, anno);
+        out[i] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, anno);
     }
     return out;
 }
@@ -2655,6 +2732,7 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -2669,7 +2747,7 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
         const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
         out[i] = .{
             .name = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
-            .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, roots, payloads, active, local_type_declarations, field.ty),
+            .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, field.ty),
         };
     }
     return out;
@@ -2679,6 +2757,7 @@ fn checkedTagsFromDeclarationAnnoSpan(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -2703,6 +2782,7 @@ fn checkedTagsFromDeclarationAnnoSpan(
                 allocator,
                 module,
                 names,
+                imports,
                 roots,
                 payloads,
                 active,
@@ -2933,6 +3013,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     }
 
     try declarations.append(allocator, .{
+        .id = @enumFromInt(@as(u32, @intCast(declarations.items.len))),
         .nominal = nominal_key,
         .declaration_root = root,
         .backing = nominal.backing,
@@ -3367,24 +3448,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeBool(num_literal.is_negative);
                 self.writeBool(num_literal.is_fractional);
             }
-            try self.writeMethodOwner(constraint.resolved_owner);
-        }
-    }
-
-    fn writeMethodOwner(self: *SubstitutedCheckedTypeKeyBuilder, owner: ?static_dispatch.MethodOwner) Allocator.Error!void {
-        self.writeBool(owner != null);
-        if (owner) |resolved| {
-            switch (resolved) {
-                .builtin => |builtin_owner| {
-                    self.writeTag("builtin_owner");
-                    self.writeTag(@tagName(builtin_owner));
-                },
-                .nominal => |nominal| {
-                    self.writeTag("nominal_owner");
-                    self.writeBytes(self.names.moduleNameText(nominal.module_name));
-                    self.writeBytes(self.names.typeNameText(nominal.type_name));
-                },
-            }
         }
     }
 
@@ -3418,6 +3481,7 @@ fn appendStaticDispatchTypeRoots(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3436,25 +3500,25 @@ fn appendStaticDispatchTypeRoots(
         const expr = module.expr(@enumFromInt(node_idx));
         switch (expr.data) {
             .e_dispatch_call => |dispatch_call| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, module.exprType(dispatch_call.receiver));
-                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, dispatch_call.constraint_fn_var);
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(dispatch_call.receiver));
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, dispatch_call.constraint_fn_var);
             },
             .e_type_dispatch_call => |dispatch_call| {
                 const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
-                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno));
-                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, dispatch_call.constraint_fn_var);
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno));
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, dispatch_call.constraint_fn_var);
             },
             .e_method_eq => |eq| {
-                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, module.exprType(eq.lhs));
-                _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, eq.constraint_fn_var);
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(eq.lhs));
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, eq.constraint_fn_var);
             },
             else => unreachable,
         }
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
-        _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, @enumFromInt(plan.iter_fn_var));
-        _ = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, @enumFromInt(plan.next_fn_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.iter_fn_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.next_fn_var));
     }
 }
 
@@ -3487,6 +3551,7 @@ fn appendCheckedTypeRoot(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3521,6 +3586,7 @@ fn appendCheckedTypeRoot(
         allocator,
         module,
         names,
+        imports,
         roots,
         payloads,
         active,
@@ -3558,6 +3624,7 @@ fn copyCheckedTypePayload(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3572,21 +3639,21 @@ fn copyCheckedTypePayload(
         },
         .flex => |flex| .{ .flex = .{
             .name = try copyOptionalIdentText(allocator, module, flex.name),
-            .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, roots, payloads, active, flex.constraints),
+            .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, imports, roots, payloads, active, flex.constraints),
             .numeric_default_phase = numericDefaultPhaseForFlex(module, flex),
         } },
         .rigid => |rigid| .{ .rigid = .{
             .name = try copyIdentText(allocator, module, rigid.name),
-            .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, roots, payloads, active, rigid.constraints),
+            .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, imports, roots, payloads, active, rigid.constraints),
             .numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints),
         } },
         .alias => |alias| .{ .alias = .{
             .name = try names.internTypeIdent(module.identStoreConst(), alias.ident.ident_idx),
             .origin_module = try names.internModuleIdent(module.identStoreConst(), alias.origin_module),
-            .backing = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, module.typeStoreConst().getAliasBackingVar(alias)),
-            .args = try copyCheckedTypeRange(allocator, module, names, roots, payloads, active, module.typeStoreConst().sliceAliasArgs(alias)),
+            .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getAliasBackingVar(alias)),
+            .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceAliasArgs(alias)),
         } },
-        .structure => |flat| try copyCheckedFlatType(allocator, module, names, roots, payloads, active, flat),
+        .structure => |flat| try copyCheckedFlatType(allocator, module, names, imports, roots, payloads, active, flat),
     };
 }
 
@@ -3630,6 +3697,7 @@ fn copyCheckedFlatType(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3639,29 +3707,33 @@ fn copyCheckedFlatType(
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
         .record_unbound => |fields| .{
-            .record_unbound = try copyCheckedRecordFields(allocator, module, names, roots, payloads, active, fields),
+            .record_unbound = try copyCheckedRecordFields(allocator, module, names, imports, roots, payloads, active, fields),
         },
         .record => |record| .{ .record = .{
-            .fields = try copyCheckedRecordFields(allocator, module, names, roots, payloads, active, record.fields),
-            .ext = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, record.ext),
+            .fields = try copyCheckedRecordFields(allocator, module, names, imports, roots, payloads, active, record.fields),
+            .ext = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, record.ext),
         } },
         .tuple => |tuple| .{
-            .tuple = try copyCheckedTypeRange(allocator, module, names, roots, payloads, active, module.typeStoreConst().sliceVars(tuple.elems)),
+            .tuple = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceVars(tuple.elems)),
         },
-        .nominal_type => |nominal| .{ .nominal = .{
-            .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
-            .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
-            .builtin = categorizeBuiltinNominal(module, nominal),
-            .is_opaque = nominal.is_opaque,
-            .backing = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, module.typeStoreConst().getNominalBackingVar(nominal)),
-            .args = try copyCheckedTypeRange(allocator, module, names, roots, payloads, active, module.typeStoreConst().sliceNominalArgs(nominal)),
-        } },
-        .fn_pure => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, roots, payloads, active, .pure, func) },
-        .fn_effectful => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, roots, payloads, active, .effectful, func) },
-        .fn_unbound => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, roots, payloads, active, .pure, func) },
+        .nominal_type => |nominal| blk: {
+            const builtin_nominal = categorizeBuiltinNominal(module, nominal);
+            break :blk .{ .nominal = .{
+                .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
+                .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
+                .builtin = builtin_nominal,
+                .is_opaque = nominal.is_opaque,
+                .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getNominalBackingVar(nominal)),
+                .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, nominal, builtin_nominal),
+                .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceNominalArgs(nominal)),
+            } };
+        },
+        .fn_pure => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, roots, payloads, active, .pure, func) },
+        .fn_effectful => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, roots, payloads, active, .effectful, func) },
+        .fn_unbound => |func| .{ .function = try copyCheckedFunctionType(allocator, module, names, imports, roots, payloads, active, .pure, func) },
         .tag_union => |tag_union| .{ .tag_union = .{
-            .tags = try copyCheckedTags(allocator, module, names, roots, payloads, active, tag_union.tags),
-            .ext = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, tag_union.ext),
+            .tags = try copyCheckedTags(allocator, module, names, imports, roots, payloads, active, tag_union.tags),
+            .ext = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, tag_union.ext),
         } },
     };
 }
@@ -3670,6 +3742,7 @@ fn copyCheckedFunctionType(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3678,8 +3751,8 @@ fn copyCheckedFunctionType(
 ) Allocator.Error!CheckedFunctionType {
     return .{
         .kind = finalizedFunctionKind(kind),
-        .args = try copyCheckedTypeRange(allocator, module, names, roots, payloads, active, module.typeStoreConst().sliceVars(func.args)),
-        .ret = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, func.ret),
+        .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceVars(func.args)),
+        .ret = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, func.ret),
         .needs_instantiation = func.needs_instantiation,
     };
 }
@@ -3688,6 +3761,7 @@ fn copyCheckedTypeRange(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3697,7 +3771,7 @@ fn copyCheckedTypeRange(
     const out = try allocator.alloc(CheckedTypeId, vars.len);
     errdefer allocator.free(out);
     for (vars, 0..) |var_, i| {
-        out[i] = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, var_);
+        out[i] = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, var_);
     }
     return out;
 }
@@ -3706,6 +3780,7 @@ fn copyCheckedRecordFields(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3721,7 +3796,7 @@ fn copyCheckedRecordFields(
     for (field_names, field_vars, 0..) |field_name, field_var, i| {
         out[i] = .{
             .name = try names.internRecordFieldIdent(module.identStoreConst(), field_name),
-            .ty = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, field_var),
+            .ty = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, field_var),
         };
     }
     return out;
@@ -3731,6 +3806,7 @@ fn copyCheckedTags(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3750,7 +3826,7 @@ fn copyCheckedTags(
     for (tag_names, tag_args, 0..) |tag_name, arg_range, i| {
         out[i] = .{
             .name = try names.internTagIdent(module.identStoreConst(), tag_name),
-            .args = try copyCheckedTypeRange(allocator, module, names, roots, payloads, active, module.typeStoreConst().sliceVars(arg_range)),
+            .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceVars(arg_range)),
         };
     }
     return out;
@@ -3760,6 +3836,7 @@ fn copyCheckedStaticDispatchConstraints(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3773,279 +3850,13 @@ fn copyCheckedStaticDispatchConstraints(
     for (constraints, 0..) |constraint, i| {
         out[i] = .{
             .fn_name = try names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
-            .fn_ty = try appendCheckedTypeRoot(allocator, module, names, roots, payloads, active, constraint.fn_var),
+            .fn_ty = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, constraint.fn_var),
             .origin = constraint.origin,
             .binop_negated = constraint.binop_negated,
             .num_literal = constraint.num_literal,
-            .resolved_owner = null,
         };
     }
     return out;
-}
-
-fn publishStaticDispatchConstraintOwnerResolutions(
-    allocator: Allocator,
-    checked_types: *CheckedTypeStore,
-    names: *canonical.CanonicalNameStore,
-    method_registry: *const static_dispatch.MethodRegistry,
-    imports: []const PublishImportArtifact,
-    relation_artifacts: []const ImportedModuleView,
-) Allocator.Error!void {
-    const is_eq = try names.internMethodName("is_eq");
-
-    for (checked_types.payloads) |*payload| {
-        switch (payload.*) {
-            .flex => |flex| {
-                const resolved_owner = try uniquePublishedStaticDispatchOwner(
-                    allocator,
-                    names,
-                    method_registry,
-                    imports,
-                    relation_artifacts,
-                    flex.constraints,
-                    flex.numeric_default_phase,
-                    is_eq,
-                );
-                const constraints = try copyStaticDispatchConstraintsWithOwner(allocator, flex.constraints, resolved_owner);
-                allocator.free(flex.constraints);
-                payload.* = .{ .flex = .{
-                    .name = flex.name,
-                    .constraints = constraints,
-                    .numeric_default_phase = flex.numeric_default_phase,
-                } };
-            },
-            .rigid => |rigid| {
-                const resolved_owner = try uniquePublishedStaticDispatchOwner(
-                    allocator,
-                    names,
-                    method_registry,
-                    imports,
-                    relation_artifacts,
-                    rigid.constraints,
-                    rigid.numeric_default_phase,
-                    is_eq,
-                );
-                const constraints = try copyStaticDispatchConstraintsWithOwner(allocator, rigid.constraints, resolved_owner);
-                allocator.free(rigid.constraints);
-                payload.* = .{ .rigid = .{
-                    .name = rigid.name,
-                    .constraints = constraints,
-                    .numeric_default_phase = rigid.numeric_default_phase,
-                } };
-            },
-            else => {},
-        }
-    }
-}
-
-fn copyStaticDispatchConstraintsWithOwner(
-    allocator: Allocator,
-    constraints: []const CheckedStaticDispatchConstraint,
-    owner: ?static_dispatch.MethodOwner,
-) Allocator.Error![]const CheckedStaticDispatchConstraint {
-    if (constraints.len == 0) return &.{};
-    const out = try allocator.alloc(CheckedStaticDispatchConstraint, constraints.len);
-    for (constraints, 0..) |constraint, i| {
-        out[i] = constraint;
-        out[i].resolved_owner = owner;
-    }
-    return out;
-}
-
-fn uniquePublishedStaticDispatchOwner(
-    allocator: Allocator,
-    names: *canonical.CanonicalNameStore,
-    method_registry: *const static_dispatch.MethodRegistry,
-    imports: []const PublishImportArtifact,
-    relation_artifacts: []const ImportedModuleView,
-    constraints: []const CheckedStaticDispatchConstraint,
-    numeric_default_phase: ?NumericDefaultPhase,
-    is_eq: canonical.MethodNameId,
-) Allocator.Error!?static_dispatch.MethodOwner {
-    if (constraints.len == 0) return null;
-    if (numeric_default_phase == .mono_specialization) return null;
-    if (staticDispatchConstraintsAreOnlyMethod(constraints, is_eq)) return null;
-
-    const first_method = constraints[0].fn_name;
-    var candidates = std.ArrayList(static_dispatch.MethodOwner).empty;
-    defer candidates.deinit(allocator);
-
-    try appendStaticDispatchOwnerCandidates(allocator, names, null, method_registry, first_method, &candidates);
-    for (imports) |imported| {
-        try appendStaticDispatchOwnerCandidates(
-            allocator,
-            names,
-            imported.view.canonical_names,
-            imported.view.method_registry,
-            first_method,
-            &candidates,
-        );
-    }
-    for (relation_artifacts) |related| {
-        try appendStaticDispatchOwnerCandidates(
-            allocator,
-            names,
-            related.canonical_names,
-            related.method_registry,
-            first_method,
-            &candidates,
-        );
-    }
-
-    var selected: ?static_dispatch.MethodOwner = null;
-    for (candidates.items) |candidate| {
-        if (!try staticDispatchOwnerSatisfiesAllConstraints(
-            names,
-            method_registry,
-            imports,
-            relation_artifacts,
-            candidate,
-            constraints,
-        )) continue;
-
-        if (selected) |existing| {
-            if (!staticDispatchMethodOwnerEql(existing, candidate)) return null;
-            continue;
-        }
-        selected = candidate;
-    }
-    return selected;
-}
-
-fn staticDispatchConstraintsAreOnlyMethod(
-    constraints: []const CheckedStaticDispatchConstraint,
-    method: canonical.MethodNameId,
-) bool {
-    if (constraints.len == 0) return false;
-    for (constraints) |constraint| {
-        if (constraint.fn_name != method) return false;
-    }
-    return true;
-}
-
-fn appendStaticDispatchOwnerCandidates(
-    allocator: Allocator,
-    names: *canonical.CanonicalNameStore,
-    registry_names: ?*const canonical.CanonicalNameStore,
-    registry: *const static_dispatch.MethodRegistry,
-    method: canonical.MethodNameId,
-    candidates: *std.ArrayList(static_dispatch.MethodOwner),
-) Allocator.Error!void {
-    for (registry.entries) |entry| {
-        const entry_method = try remapStaticDispatchMethodName(names, registry_names, entry.key.method);
-        if (entry_method != method) continue;
-        const owner = try remapStaticDispatchMethodOwner(names, registry_names, entry.key.owner);
-        for (candidates.items) |existing| {
-            if (staticDispatchMethodOwnerEql(existing, owner)) break;
-        } else {
-            try candidates.append(allocator, owner);
-        }
-    }
-}
-
-fn staticDispatchOwnerSatisfiesAllConstraints(
-    names: *canonical.CanonicalNameStore,
-    method_registry: *const static_dispatch.MethodRegistry,
-    imports: []const PublishImportArtifact,
-    relation_artifacts: []const ImportedModuleView,
-    owner: static_dispatch.MethodOwner,
-    constraints: []const CheckedStaticDispatchConstraint,
-) Allocator.Error!bool {
-    for (constraints) |constraint| {
-        if (!try staticDispatchMethodTargetExists(
-            names,
-            method_registry,
-            imports,
-            relation_artifacts,
-            owner,
-            constraint.fn_name,
-        )) return false;
-    }
-    return true;
-}
-
-fn staticDispatchMethodTargetExists(
-    names: *canonical.CanonicalNameStore,
-    method_registry: *const static_dispatch.MethodRegistry,
-    imports: []const PublishImportArtifact,
-    relation_artifacts: []const ImportedModuleView,
-    owner: static_dispatch.MethodOwner,
-    method: canonical.MethodNameId,
-) Allocator.Error!bool {
-    if (try staticDispatchRegistryContainsTarget(names, null, method_registry, owner, method)) return true;
-    for (imports) |imported| {
-        if (try staticDispatchRegistryContainsTarget(
-            names,
-            imported.view.canonical_names,
-            imported.view.method_registry,
-            owner,
-            method,
-        )) return true;
-    }
-    for (relation_artifacts) |related| {
-        if (try staticDispatchRegistryContainsTarget(
-            names,
-            related.canonical_names,
-            related.method_registry,
-            owner,
-            method,
-        )) return true;
-    }
-    return false;
-}
-
-fn staticDispatchRegistryContainsTarget(
-    names: *canonical.CanonicalNameStore,
-    registry_names: ?*const canonical.CanonicalNameStore,
-    registry: *const static_dispatch.MethodRegistry,
-    owner: static_dispatch.MethodOwner,
-    method: canonical.MethodNameId,
-) Allocator.Error!bool {
-    for (registry.entries) |entry| {
-        const entry_method = try remapStaticDispatchMethodName(names, registry_names, entry.key.method);
-        if (entry_method != method) continue;
-        const entry_owner = try remapStaticDispatchMethodOwner(names, registry_names, entry.key.owner);
-        if (staticDispatchMethodOwnerEql(entry_owner, owner)) return true;
-    }
-    return false;
-}
-
-fn remapStaticDispatchMethodName(
-    names: *canonical.CanonicalNameStore,
-    source_names: ?*const canonical.CanonicalNameStore,
-    method: canonical.MethodNameId,
-) Allocator.Error!canonical.MethodNameId {
-    const source = source_names orelse return method;
-    return try names.internMethodName(source.methodNameText(method));
-}
-
-fn remapStaticDispatchMethodOwner(
-    names: *canonical.CanonicalNameStore,
-    source_names: ?*const canonical.CanonicalNameStore,
-    owner: static_dispatch.MethodOwner,
-) Allocator.Error!static_dispatch.MethodOwner {
-    const source = source_names orelse return owner;
-    return switch (owner) {
-        .builtin => |builtin_owner| .{ .builtin = builtin_owner },
-        .nominal => |nominal| .{ .nominal = .{
-            .module_name = try names.internModuleName(source.moduleNameText(nominal.module_name)),
-            .type_name = try names.internTypeName(source.typeNameText(nominal.type_name)),
-        } },
-    };
-}
-
-fn staticDispatchMethodOwnerEql(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwner) bool {
-    return switch (a) {
-        .builtin => |a_builtin| switch (b) {
-            .builtin => |b_builtin| a_builtin == b_builtin,
-            .nominal => false,
-        },
-        .nominal => |a_nominal| switch (b) {
-            .builtin => false,
-            .nominal => |b_nominal| a_nominal.module_name == b_nominal.module_name and
-                a_nominal.type_name == b_nominal.type_name,
-        },
-    };
 }
 
 fn categorizeBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
@@ -4073,6 +3884,106 @@ fn categorizeBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType)
     if (ident.eql(common.list)) return .list;
     if (ident.eql(common.box)) return .box;
     return null;
+}
+
+fn checkedNominalRepresentationForSourceNominal(
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
+    nominal: types.NominalType,
+    builtin_nominal: ?CheckedBuiltinNominal,
+) Allocator.Error!CheckedNominalRepresentationRef {
+    if (builtin_nominal) |builtin_id| return .{ .builtin = builtin_id };
+
+    const origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module);
+    const type_name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
+    const current_module = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+    if (origin_module == current_module) {
+        return .{ .local_declaration = localNominalDeclarationIdForIdent(module, nominal.ident.ident_idx) };
+    }
+
+    return .{ .imported_declaration = importedNominalDeclarationRefForSourceNominal(
+        names,
+        imports,
+        origin_module,
+        type_name,
+    ) };
+}
+
+fn importedNominalDeclarationRefForSourceNominal(
+    names: *const canonical.CanonicalNameStore,
+    imports: []const PublishImportArtifact,
+    origin_module: canonical.ModuleNameId,
+    type_name: canonical.TypeNameId,
+) ImportedNominalDeclarationRef {
+    const origin_text = names.moduleNameText(origin_module);
+    const type_text = names.typeNameText(type_name);
+    var found: ?ImportedNominalDeclarationRef = null;
+
+    for (imports) |import| {
+        if (!importedViewModuleNameMatches(import.view, origin_text)) continue;
+        for (import.view.checked_types.nominal_declarations) |declaration| {
+            if (!Ident.textEql(import.view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            const next = ImportedNominalDeclarationRef{
+                .artifact = import.key,
+                .declaration = declaration.id,
+            };
+            if (found) |existing| {
+                if (!checkedArtifactKeyEql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
+                    checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
+                }
+            } else {
+                found = next;
+            }
+        }
+    }
+
+    return found orelse checkedArtifactInvariant("checked nominal representation referenced a missing imported nominal declaration", .{});
+}
+
+fn localNominalDeclarationIdForIdent(
+    module: TypedCIR.Module,
+    ident: Ident.Idx,
+) CheckedNominalDeclarationId {
+    var next_id: u32 = 0;
+    var node_idx: u32 = 0;
+    while (node_idx < module.nodeCount()) : (node_idx += 1) {
+        const node: CIR.Node.Idx = @enumFromInt(node_idx);
+        if (!isStatementNodeTag(module.nodeTag(node))) continue;
+        const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
+        const nominal = switch (module.getStatement(statement_idx)) {
+            .s_nominal_decl => |nominal| nominal,
+            else => continue,
+        };
+        if (nominal.anno == .placeholder) continue;
+        const header = module.moduleEnvConst().store.getTypeHeader(nominal.header);
+        const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
+        next_id += 1;
+        if (header.relative_name.eql(ident) or module.identStoreConst().idxTextEql(header.relative_name, ident)) return id;
+    }
+    checkedArtifactInvariant("checked nominal representation referenced a missing local nominal declaration", .{});
+}
+
+fn localNominalDeclarationIdForStatement(
+    module: TypedCIR.Module,
+    statement_idx: CIR.Statement.Idx,
+) CheckedNominalDeclarationId {
+    var next_id: u32 = 0;
+    var node_idx: u32 = 0;
+    while (node_idx < module.nodeCount()) : (node_idx += 1) {
+        const node: CIR.Node.Idx = @enumFromInt(node_idx);
+        if (!isStatementNodeTag(module.nodeTag(node))) continue;
+        const candidate: CIR.Statement.Idx = @enumFromInt(node_idx);
+        const nominal = switch (module.getStatement(candidate)) {
+            .s_nominal_decl => |nominal| nominal,
+            else => continue,
+        };
+        if (nominal.anno == .placeholder) continue;
+        const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
+        next_id += 1;
+        if (candidate == statement_idx) return id;
+    }
+    checkedArtifactInvariant("checked nominal declaration statement had no declaration id", .{});
 }
 
 fn copyOptionalIdentText(
@@ -6010,6 +5921,8 @@ pub const ExecutableTagVariantPayload = struct {
 pub const ExecutableNominalPayload = struct {
     nominal: canonical.NominalTypeKey,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ArtifactCheckedTypeRef,
+    is_opaque: bool,
     backing: ExecutableTypePayloadRef,
     backing_key: canonical.CanonicalExecValueTypeKey,
 };
@@ -6470,6 +6383,12 @@ pub const MaterializedFiniteCallableSetValue = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
     callable_set_key: canonical.CanonicalCallableSetKey,
     selected_member: canonical.CallableSetMemberId,
+    selected_proc: canonical.ProcedureCallableRef,
+    selected_source_proc: canonical.MirProcedureRef,
+    member_proc_source_fn_ty_payload: CheckedTypeId,
+    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
+    member_proc_template_closure: ?ImportedTemplateClosureView = null,
+    member_lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
     captures: []const ErasedCaptureExecutableMaterializationPlan = &.{},
 };
 
@@ -10336,6 +10255,7 @@ const PlatformAppRelationTypeResolver = struct {
                     .builtin = nominal.builtin,
                     .is_opaque = nominal.is_opaque,
                     .backing = backing,
+                    .representation = nominal.representation,
                     .args = args,
                 } });
             },
@@ -10396,6 +10316,7 @@ const PlatformAppRelationTypeResolver = struct {
             .builtin = platform_nominal.builtin,
             .is_opaque = platform_nominal.is_opaque,
             .backing = backing,
+            .representation = platform_nominal.representation,
             .args = args,
         } });
     }
@@ -11072,6 +10993,7 @@ pub const ExportedNominalRepresentationId = enum(u32) { _ };
 pub const BoxPayloadCapabilityEntry = struct {
     id: BoxPayloadCapabilityId,
     nominal: canonical.NominalTypeKey,
+    source_ty_payload: CheckedTypeId,
     source_ty: canonical.CanonicalTypeKey,
     backing_ty: CheckedTypeId,
     backing_ty_key: canonical.CanonicalTypeKey,
@@ -11083,6 +11005,7 @@ pub const BoxPayloadCapabilityEntry = struct {
 pub const OpaqueAtomicProofEntry = struct {
     id: OpaqueAtomicProofId,
     nominal: canonical.NominalTypeKey,
+    source_ty_payload: CheckedTypeId,
     source_ty: canonical.CanonicalTypeKey,
     instantiated_args: []const canonical.CanonicalTypeKey = &.{},
     proof: NoReachableCallableSlotsProof,
@@ -11192,6 +11115,7 @@ pub const ModuleInterfaceCapabilities = struct {
             try boxed_payload_templates.append(allocator, .{
                 .id = capability_id,
                 .nominal = nominal_key,
+                .source_ty_payload = checked_types.roots[i].id,
                 .source_ty = source_key,
                 .backing_ty = backing_ty,
                 .backing_ty_key = checkedTypeKeyForId(checked_types, backing_ty),
@@ -11211,6 +11135,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 try opaque_atomic_proofs.append(allocator, .{
                     .id = id,
                     .nominal = nominal_key,
+                    .source_ty_payload = checked_types.roots[i].id,
                     .source_ty = source_key,
                     .instantiated_args = owned_args,
                     .proof = .checked_artifact_verified,
@@ -11218,6 +11143,17 @@ pub const ModuleInterfaceCapabilities = struct {
                 owned_args = &.{};
                 break :blk id;
             };
+
+            const payload = &checked_types.payloads[i];
+            switch (payload.*) {
+                .nominal => |*published_nominal| {
+                    published_nominal.representation = .{ .local_box_payload_capability = .{
+                        .capability = capability_id,
+                        .opaque_atomic_proof = proof_id,
+                    } };
+                },
+                else => checkedArtifactInvariant("nominal representation publication source payload stopped being nominal", .{}),
+            }
 
             const exported_id: ExportedNominalRepresentationId = @enumFromInt(@as(u32, @intCast(exported_nominal_representations.items.len)));
             try exported_nominal_representations.append(allocator, .{
@@ -11271,31 +11207,6 @@ pub const ModuleInterfaceCapabilities = struct {
         self.* = .{};
     }
 
-    pub fn boxPayloadCapabilityForSource(
-        self: *const ModuleInterfaceCapabilities,
-        source_ty: canonical.CanonicalTypeKey,
-    ) ?BoxPayloadCapabilityEntry {
-        for (self.boxed_payload_templates) |entry| {
-            if (canonicalTypeKeyEql(entry.source_ty, source_ty)) return entry;
-        }
-        return null;
-    }
-
-    pub fn boxPayloadCapabilityForNominal(
-        self: *const ModuleInterfaceCapabilities,
-        nominal: canonical.NominalTypeKey,
-        instantiated_args: []const canonical.CanonicalTypeKey,
-    ) ?BoxPayloadCapabilityEntry {
-        for (self.boxed_payload_templates) |entry| {
-            if (canonicalNominalTypeKeyEql(entry.nominal, nominal) and
-                canonicalTypeKeySliceEql(entry.instantiated_args, instantiated_args))
-            {
-                return entry;
-            }
-        }
-        return null;
-    }
-
     pub fn boxPayloadCapability(
         self: *const ModuleInterfaceCapabilities,
         id: BoxPayloadCapabilityId,
@@ -11307,31 +11218,6 @@ pub const ModuleInterfaceCapabilities = struct {
         return self.boxed_payload_templates[index];
     }
 
-    pub fn opaqueAtomicProofForSource(
-        self: *const ModuleInterfaceCapabilities,
-        source_ty: canonical.CanonicalTypeKey,
-    ) ?OpaqueAtomicProofEntry {
-        for (self.opaque_atomic_proofs) |entry| {
-            if (canonicalTypeKeyEql(entry.source_ty, source_ty)) return entry;
-        }
-        return null;
-    }
-
-    pub fn opaqueAtomicProofForNominal(
-        self: *const ModuleInterfaceCapabilities,
-        nominal: canonical.NominalTypeKey,
-        instantiated_args: []const canonical.CanonicalTypeKey,
-    ) ?OpaqueAtomicProofEntry {
-        for (self.opaque_atomic_proofs) |entry| {
-            if (canonicalNominalTypeKeyEql(entry.nominal, nominal) and
-                canonicalTypeKeySliceEql(entry.instantiated_args, instantiated_args))
-            {
-                return entry;
-            }
-        }
-        return null;
-    }
-
     pub fn opaqueAtomicProof(
         self: *const ModuleInterfaceCapabilities,
         id: OpaqueAtomicProofId,
@@ -11341,32 +11227,6 @@ pub const ModuleInterfaceCapabilities = struct {
             checkedArtifactInvariant("interface capability lookup referenced missing opaque atomic proof", .{});
         }
         return self.opaque_atomic_proofs[index];
-    }
-
-    pub fn nominalRepresentationForSource(
-        self: *const ModuleInterfaceCapabilities,
-        source_ty: canonical.CanonicalTypeKey,
-    ) ?ExportedNominalRepresentation {
-        for (self.exported_nominal_representations) |entry| {
-            if (canonicalTypeKeyEql(entry.source_ty, source_ty)) return entry;
-        }
-        return null;
-    }
-
-    pub fn nominalRepresentationForNominal(
-        self: *const ModuleInterfaceCapabilities,
-        nominal: canonical.NominalTypeKey,
-        instantiated_args: []const canonical.CanonicalTypeKey,
-    ) ?ExportedNominalRepresentation {
-        for (self.exported_nominal_representations) |entry| {
-            const capability = self.boxPayloadCapability(entry.box_payload_capability);
-            if (canonicalNominalTypeKeyEql(entry.nominal, nominal) and
-                canonicalTypeKeySliceEql(capability.instantiated_args, instantiated_args))
-            {
-                return entry;
-            }
-        }
-        return null;
     }
 
     pub fn verifyPublished(self: *const ModuleInterfaceCapabilities) void {
@@ -11430,17 +11290,6 @@ fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalType
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
     return a.module_name == b.module_name and a.type_name == b.type_name;
-}
-
-fn canonicalTypeKeySliceEql(
-    a: []const canonical.CanonicalTypeKey,
-    b: []const canonical.CanonicalTypeKey,
-) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |left, right| {
-        if (!canonicalTypeKeyEql(left, right)) return false;
-    }
-    return true;
 }
 
 fn checkedTypeKeyForId(
@@ -11763,6 +11612,10 @@ fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: C
 /// Public `FiniteCallableLeafInstance` declaration.
 pub const FiniteCallableLeafInstance = struct {
     proc_value: canonical.ProcedureCallableRef,
+    source_fn_ty_payload: CheckedTypeId,
+    lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
+    proc_template_closure: ?ImportedTemplateClosureView = null,
+    lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
 };
 
 /// Public `ErasedCallableLeafInstance` declaration.
@@ -11966,9 +11819,21 @@ pub const ErasedCaptureSlotReificationRef = struct {
     plan: CaptureSlotReificationPlanId,
 };
 
+/// Public `MaterializedErasedCallableCodePlan` declaration.
+pub const MaterializedErasedCallableCodePlan = union(enum) {
+    direct_proc_value: canonical.ErasedDirectProcCodeRef,
+    finite_set_adapter: ErasedFiniteAdapterResultCodePlan,
+};
+
+/// Public `ErasedFiniteAdapterResultCodePlan` declaration.
+pub const ErasedFiniteAdapterResultCodePlan = struct {
+    adapter: canonical.ErasedAdapterKey,
+    finite_result_plan: CallableResultPlanId,
+};
+
 /// Public `ErasedCallableResultCodePlan` declaration.
 pub const ErasedCallableResultCodePlan = union(enum) {
-    materialized_by_lowering: canonical.ErasedCallableCodeRef,
+    materialized_by_lowering: MaterializedErasedCallableCodePlan,
     read_from_interpreted_erased_value,
 };
 
@@ -12373,7 +12238,10 @@ fn deinitCallableLeafReificationPlan(allocator: Allocator, leaf: *CallableLeafRe
 
 fn deinitCallableLeafInstance(allocator: Allocator, leaf: *CallableLeafInstance) void {
     switch (leaf.*) {
-        .finite => {},
+        .finite => |finite| {
+            deinitOptionalImportedTemplateClosure(allocator, finite.proc_template_closure);
+            deinitOptionalImportedTemplateClosure(allocator, finite.lifted_owner_template_closure);
+        },
         .erased_boxed => |*erased| deinitSealedErasedCallableValue(allocator, &erased.sealed),
     }
 }
@@ -12407,6 +12275,8 @@ fn deinitErasedHiddenCaptureArgPlan(allocator: Allocator, hidden: ErasedHiddenCa
 }
 
 fn deinitMaterializedFiniteCallableSetValue(allocator: Allocator, finite: *MaterializedFiniteCallableSetValue) void {
+    deinitOptionalImportedTemplateClosure(allocator, finite.member_proc_template_closure);
+    deinitOptionalImportedTemplateClosure(allocator, finite.member_lifted_owner_template_closure);
     allocator.free(finite.captures);
 }
 
@@ -12783,14 +12653,24 @@ fn verifyCallableResultPlan(
             switch (erased.code_plan) {
                 .materialized_by_lowering => |code| switch (code) {
                     .direct_proc_value => {},
-                    .finite_set_adapter => |adapter| {
-                        if (!std.meta.eql(adapter.erased_fn_sig_key.abi.bytes, erased.sig_key.abi.bytes)) {
+                    .finite_set_adapter => |finite_code| {
+                        verifyCallableResultRef(store, finite_code.finite_result_plan);
+                        const finite_result = switch (store.callableResult(finite_code.finite_result_plan)) {
+                            .finite => |finite| finite,
+                            .erased => {
+                                std.debug.panic("checked artifact invariant violated: finite adapter erased result code points at an erased callable result plan", .{});
+                            },
+                        };
+                        if (!std.meta.eql(finite_result.callable_set_key.bytes, finite_code.adapter.callable_set_key.bytes)) {
+                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code result plan uses a different callable-set key", .{});
+                        }
+                        if (!std.meta.eql(finite_code.adapter.erased_fn_sig_key.abi.bytes, erased.sig_key.abi.bytes)) {
                             std.debug.panic("checked artifact invariant violated: finite adapter erased result code ABI differs from result signature", .{});
                         }
-                        if ((adapter.erased_fn_sig_key.capture_ty == null) != (erased.sig_key.capture_ty == null)) {
+                        if ((finite_code.adapter.erased_fn_sig_key.capture_ty == null) != (erased.sig_key.capture_ty == null)) {
                             std.debug.panic("checked artifact invariant violated: finite adapter erased result capture presence differs from result signature", .{});
                         }
-                        if (adapter.erased_fn_sig_key.capture_ty) |adapter_capture| {
+                        if (finite_code.adapter.erased_fn_sig_key.capture_ty) |adapter_capture| {
                             if (!std.meta.eql(adapter_capture.bytes, erased.sig_key.capture_ty.?.bytes)) {
                                 std.debug.panic("checked artifact invariant violated: finite adapter erased result capture key differs from result signature", .{});
                             }
@@ -12912,7 +12792,21 @@ fn verifyCallableLeafInstance(
     leaf: CallableLeafInstance,
 ) void {
     switch (leaf) {
-        .finite => {},
+        .finite => |finite| switch (finite.proc_value.template) {
+            .lifted => {
+                if (finite.lifted_owner_source_fn_ty_payload == null) {
+                    std.debug.panic("checked artifact invariant violated: finite callable leaf lifted proc has no owner source type payload", .{});
+                }
+            },
+            .checked, .synthetic => {
+                if (finite.lifted_owner_source_fn_ty_payload != null) {
+                    std.debug.panic("checked artifact invariant violated: non-lifted finite callable leaf carried lifted owner source type payload", .{});
+                }
+                if (finite.lifted_owner_template_closure != null) {
+                    std.debug.panic("checked artifact invariant violated: non-lifted finite callable leaf carried lifted owner template closure", .{});
+                }
+            },
+        },
         .erased_boxed => |erased| verifySealedErasedCallableValue(store, erased.sealed),
     }
 }
@@ -12937,6 +12831,27 @@ fn verifyMaterializedFiniteCallableSetValue(
     };
     if (!std.meta.eql(member.proc_value.source_fn_ty.bytes, finite.source_fn_ty.bytes)) {
         std.debug.panic("checked artifact invariant violated: materialized finite erased capture member source type differs from capture source type", .{});
+    }
+    if (!canonical.procedureCallableRefEql(member.proc_value, finite.selected_proc)) {
+        std.debug.panic("checked artifact invariant violated: materialized finite erased capture selected proc differs from descriptor member", .{});
+    }
+    if (!canonical.mirProcedureRefEql(member.source_proc, finite.selected_source_proc)) {
+        std.debug.panic("checked artifact invariant violated: materialized finite erased capture selected source proc differs from descriptor member", .{});
+    }
+    switch (finite.selected_proc.template) {
+        .lifted => {
+            if (finite.member_lifted_owner_source_fn_ty_payload == null) {
+                std.debug.panic("checked artifact invariant violated: materialized finite lifted member has no owner source type payload", .{});
+            }
+        },
+        .checked, .synthetic => {
+            if (finite.member_lifted_owner_source_fn_ty_payload != null) {
+                std.debug.panic("checked artifact invariant violated: non-lifted materialized finite member carried lifted owner payload", .{});
+            }
+            if (finite.member_lifted_owner_template_closure != null) {
+                std.debug.panic("checked artifact invariant violated: non-lifted materialized finite member carried lifted owner closure", .{});
+            }
+        },
     }
     if (member.capture_slots.len != finite.captures.len) {
         std.debug.panic("checked artifact invariant violated: materialized finite erased capture capture count differs from member schema", .{});
@@ -14001,13 +13916,6 @@ pub const ComptimeAvailabilityUse = union(enum) {
     procedure_binding: ProcedureBindingRef,
 };
 
-/// Public `ProcedureCallableRefDependency` declaration.
-pub const ProcedureCallableRefDependency = struct {
-    proc_value: canonical.ProcedureCallableRef,
-    proc_template_closure: ?ImportedTemplateClosureView = null,
-    lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
-};
-
 /// Public `ProcedureCallableDependency` declaration.
 pub const ProcedureCallableDependency = struct {
     proc_value: canonical.ProcedureCallableRef,
@@ -14021,7 +13929,6 @@ pub const ProcedureCallableDependency = struct {
 pub const ComptimeConcreteValueUse = union(enum) {
     const_instance: ConstInstantiationRequest,
     callable_binding_instance: CallableBindingInstantiationRequest,
-    procedure_callable: ProcedureCallableRefDependency,
     procedure_callable_with_payloads: ProcedureCallableDependency,
 };
 
@@ -15875,10 +15782,6 @@ pub fn deinitComptimeConcreteValueUse(
         .const_instance,
         .callable_binding_instance,
         => {},
-        .procedure_callable => |dependency| {
-            deinitOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
-            deinitOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
-        },
         .procedure_callable_with_payloads => |dependency| {
             deinitOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
             deinitOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
@@ -15911,16 +15814,6 @@ pub fn cloneComptimeConcreteValueUse(
     return switch (value) {
         .const_instance => |request| .{ .const_instance = request },
         .callable_binding_instance => |request| .{ .callable_binding_instance = request },
-        .procedure_callable => |dependency| blk: {
-            const proc_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
-            errdefer deinitOptionalImportedTemplateClosure(allocator, proc_template_closure);
-            const lifted_owner_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
-            break :blk .{ .procedure_callable = .{
-                .proc_value = dependency.proc_value,
-                .proc_template_closure = proc_template_closure,
-                .lifted_owner_template_closure = lifted_owner_template_closure,
-            } };
-        },
         .procedure_callable_with_payloads => |dependency| blk: {
             const proc_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
             errdefer deinitOptionalImportedTemplateClosure(allocator, proc_template_closure);
@@ -17138,16 +17031,19 @@ pub const SemanticInstantiationProcedureKey = union(enum) {
         instance: ConstInstantiationKey,
         value_path: ComptimeValuePathKey,
         source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: CheckedTypeId,
     },
     callable_binding_promoted_leaf: struct {
         instance: CallableBindingInstantiationKey,
         callable_path: PromotedCallablePathKey,
         source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: CheckedTypeId,
     },
     private_capture_callable_leaf: struct {
         promoted_proc: PromotedProcedureRef,
         capture_path: PrivateCapturePathKey,
         source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: CheckedTypeId,
     },
 };
 
@@ -17260,6 +17156,7 @@ pub const SemanticInstantiationProcedureTable = struct {
 
     pub fn verifySealed(
         self: *const SemanticInstantiationProcedureTable,
+        checked_types: *const CheckedTypeStore,
         promoted_procedures: *const PromotedProcedureTable,
     ) void {
         if (builtin.mode != .Debug) return;
@@ -17277,6 +17174,7 @@ pub const SemanticInstantiationProcedureTable = struct {
                     i,
                     record.key,
                     procedure,
+                    checked_types,
                     promoted_procedures,
                 ),
                 .reserved => std.debug.panic(
@@ -17306,8 +17204,16 @@ fn verifySemanticInstantiationProcedure(
     index: usize,
     key: SemanticInstantiationProcedureKey,
     procedure: SemanticInstantiationProcedure,
+    checked_types: *const CheckedTypeStore,
     promoted_procedures: *const PromotedProcedureTable,
 ) void {
+    verifyCheckedTypePayloadKey(
+        checked_types,
+        semanticInstantiationProcedureKeySourceTyPayload(key),
+        semanticInstantiationProcedureKeySourceTy(key),
+        "semantic instantiation procedure source type payload differs from key source type",
+    );
+
     if (procedure.promoted) |promoted| {
         const promoted_record = promoted_procedures.get(promoted) orelse {
             std.debug.panic(
@@ -17365,6 +17271,14 @@ fn semanticInstantiationProcedureKeySourceTy(key: SemanticInstantiationProcedure
         .const_instance_callable_leaf => |leaf| leaf.source_fn_ty,
         .callable_binding_promoted_leaf => |leaf| leaf.source_fn_ty,
         .private_capture_callable_leaf => |leaf| leaf.source_fn_ty,
+    };
+}
+
+fn semanticInstantiationProcedureKeySourceTyPayload(key: SemanticInstantiationProcedureKey) CheckedTypeId {
+    return switch (key) {
+        .const_instance_callable_leaf => |leaf| leaf.source_fn_ty_payload,
+        .callable_binding_promoted_leaf => |leaf| leaf.source_fn_ty_payload,
+        .private_capture_callable_leaf => |leaf| leaf.source_fn_ty_payload,
     };
 }
 
@@ -17525,6 +17439,7 @@ fn hashSemanticInstantiationProcedureKey(key: SemanticInstantiationProcedureKey)
             hasher.update(&instance_key);
             hasher.update(&leaf.value_path.bytes);
             hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
+            hashEnumValue(&hasher, leaf.source_fn_ty_payload);
         },
         .callable_binding_promoted_leaf => |leaf| {
             hasher.update(&[_]u8{1});
@@ -17532,12 +17447,14 @@ fn hashSemanticInstantiationProcedureKey(key: SemanticInstantiationProcedureKey)
             hasher.update(&instance_key);
             hasher.update(&leaf.callable_path.bytes);
             hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
+            hashEnumValue(&hasher, leaf.source_fn_ty_payload);
         },
         .private_capture_callable_leaf => |leaf| {
             hasher.update(&[_]u8{2});
             hashPromotedProcedureRef(&hasher, leaf.promoted_proc);
             hasher.update(&leaf.capture_path.bytes);
             hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
+            hashEnumValue(&hasher, leaf.source_fn_ty_payload);
         },
     }
     return hasher.finalResult();
@@ -17678,19 +17595,22 @@ fn semanticInstantiationProcedureKeyEql(a: SemanticInstantiationProcedureKey, b:
             const right = b.const_instance_callable_leaf;
             break :blk constInstantiationKeyEql(left.instance, right.instance) and
                 std.meta.eql(left.value_path.bytes, right.value_path.bytes) and
-                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes);
+                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes) and
+                left.source_fn_ty_payload == right.source_fn_ty_payload;
         },
         .callable_binding_promoted_leaf => |left| blk: {
             const right = b.callable_binding_promoted_leaf;
             break :blk callableBindingInstantiationKeyEql(left.instance, right.instance) and
                 std.meta.eql(left.callable_path.bytes, right.callable_path.bytes) and
-                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes);
+                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes) and
+                left.source_fn_ty_payload == right.source_fn_ty_payload;
         },
         .private_capture_callable_leaf => |left| blk: {
             const right = b.private_capture_callable_leaf;
             break :blk promotedProcedureRefEql(left.promoted_proc, right.promoted_proc) and
                 std.meta.eql(left.capture_path.bytes, right.capture_path.bytes) and
-                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes);
+                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes) and
+                left.source_fn_ty_payload == right.source_fn_ty_payload;
         },
     };
 }
@@ -18523,7 +18443,7 @@ pub const CheckedModuleArtifact = struct {
             &self.promoted_procedures,
             &self.semantic_instantiation_procedures,
         );
-        self.semantic_instantiation_procedures.verifySealed(&self.promoted_procedures);
+        self.semantic_instantiation_procedures.verifySealed(&self.checked_types, &self.promoted_procedures);
 
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);
@@ -18760,44 +18680,21 @@ pub const CheckedTypeProjector = struct {
         self.active.deinit();
     }
 
-    pub fn publishedNominalBacking(
-        self: *CheckedTypeProjector,
+    pub fn publishedNominalBackingForType(
+        self: *const CheckedTypeProjector,
+        _: CheckedTypeId,
         nominal: CheckedNominalType,
-    ) Allocator.Error!?CheckedTypeId {
-        const nominal_key = canonical.NominalTypeKey{
-            .module_name = nominal.origin_module,
-            .type_name = nominal.name,
+    ) ?CheckedTypeId {
+        return switch (nominal.representation) {
+            .builtin,
+            .local_declaration,
+            .imported_declaration,
+            => nominal.backing,
+            .local_box_payload_capability => |capability| self.target.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty,
+            .imported_box_payload_capability,
+            .opaque_without_backing,
+            => null,
         };
-
-        for (self.target.interface_capabilities.exported_nominal_representations) |representation| {
-            if (!canonicalNominalTypeKeyEql(representation.nominal, nominal_key)) continue;
-            const capability = self.target.interface_capabilities.boxPayloadCapability(representation.box_payload_capability);
-            if (!self.nominalArgsMatchTarget(capability.instantiated_args, nominal.args)) continue;
-            return capability.backing_ty;
-        }
-
-        if (self.target.checked_types.nominalDeclaration(nominal_key)) |declaration| {
-            return try self.target.checked_types.ensureInstantiatedNominalBackingRoot(
-                self.allocator,
-                &self.target.canonical_names,
-                declaration,
-                nominal.args,
-            );
-        }
-
-        for (self.imports) |imported| {
-            for (imported.interface_capabilities.exported_nominal_representations) |representation| {
-                if (!self.importedNominalMatches(imported, nominal_key, representation.nominal)) continue;
-                const capability = imported.interface_capabilities.boxPayloadCapability(representation.box_payload_capability);
-                if (!self.nominalArgsMatchTarget(capability.instantiated_args, nominal.args)) continue;
-                return try self.projectImportedCheckedType(imported, capability.backing_ty);
-            }
-            if (try self.instantiateImportedNominalDeclaration(imported, nominal_key, nominal.args)) |backing| {
-                return backing;
-            }
-        }
-
-        return null;
     }
 
     pub fn projectCheckedTypeViewRoot(
@@ -18890,6 +18787,7 @@ pub const CheckedTypeProjector = struct {
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, nominal.backing, active),
+                .representation = try self.remapViewNominalRepresentation(source_names, nominal.representation),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, nominal.args, active),
             } },
             .function => |function| .{ .function = .{
@@ -18945,10 +18843,6 @@ pub const CheckedTypeProjector = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
-                .resolved_owner = if (constraint.resolved_owner) |owner|
-                    try self.remapViewMethodOwner(source_names, owner)
-                else
-                    null,
             };
         }
         return out;
@@ -19054,6 +18948,23 @@ pub const CheckedTypeProjector = struct {
         };
     }
 
+    fn remapViewNominalRepresentation(
+        self: *CheckedTypeProjector,
+        source_names: ?*const canonical.CanonicalNameStore,
+        representation: CheckedNominalRepresentationRef,
+    ) Allocator.Error!CheckedNominalRepresentationRef {
+        _ = self;
+        _ = source_names;
+        return switch (representation) {
+            .builtin => |builtin_id| .{ .builtin = builtin_id },
+            .local_declaration => |declaration| .{ .local_declaration = declaration },
+            .imported_declaration => |imported| .{ .imported_declaration = imported },
+            .local_box_payload_capability => |capability| .{ .local_box_payload_capability = capability },
+            .imported_box_payload_capability => |capability| .{ .imported_box_payload_capability = capability },
+            .opaque_without_backing => .opaque_without_backing,
+        };
+    }
+
     fn remapViewRecordField(
         self: *CheckedTypeProjector,
         source_names: ?*const canonical.CanonicalNameStore,
@@ -19070,80 +18981,6 @@ pub const CheckedTypeProjector = struct {
     ) Allocator.Error!canonical.TagLabelId {
         const names = source_names orelse return id;
         return try self.target.canonical_names.internTagLabel(names.tagLabelText(id));
-    }
-
-    fn instantiateImportedNominalDeclaration(
-        self: *CheckedTypeProjector,
-        imported: ImportedModuleView,
-        target_nominal: canonical.NominalTypeKey,
-        actual_args: []const CheckedTypeId,
-    ) Allocator.Error!?CheckedTypeId {
-        const declaration = self.importedNominalDeclaration(imported, target_nominal) orelse return null;
-        if (declaration.formal_args.len != actual_args.len) {
-            checkedArtifactInvariant("imported nominal declaration arity did not match target nominal args", .{});
-        }
-
-        const projected_declaration_root = try self.projectImportedCheckedType(imported, declaration.declaration_root);
-        const projected_backing = try self.projectImportedCheckedType(imported, declaration.backing);
-        const projected_formals = try self.allocator.alloc(CheckedTypeId, declaration.formal_args.len);
-        defer self.allocator.free(projected_formals);
-        for (declaration.formal_args, 0..) |formal, i| {
-            projected_formals[i] = try self.projectImportedCheckedType(imported, formal);
-        }
-
-        return try self.target.checked_types.ensureInstantiatedNominalBackingRoot(
-            self.allocator,
-            &self.target.canonical_names,
-            .{
-                .nominal = target_nominal,
-                .declaration_root = projected_declaration_root,
-                .backing = projected_backing,
-                .formal_args = projected_formals,
-            },
-            actual_args,
-        );
-    }
-
-    fn importedNominalDeclaration(
-        self: *const CheckedTypeProjector,
-        imported: ImportedModuleView,
-        target_nominal: canonical.NominalTypeKey,
-    ) ?CheckedNominalDeclaration {
-        for (imported.checked_types.nominal_declarations) |declaration| {
-            if (self.importedNominalMatches(imported, target_nominal, declaration.nominal)) return declaration;
-        }
-        return null;
-    }
-
-    fn nominalArgsMatchTarget(
-        self: *const CheckedTypeProjector,
-        expected: []const canonical.CanonicalTypeKey,
-        args: []const CheckedTypeId,
-    ) bool {
-        if (expected.len != args.len) return false;
-        for (expected, args) |expected_key, arg| {
-            const index: usize = @intFromEnum(arg);
-            if (index >= self.target.checked_types.roots.len) {
-                checkedArtifactInvariant("nominal argument referenced a missing checked type root", .{});
-            }
-            if (!canonicalTypeKeyEql(expected_key, self.target.checked_types.roots[index].key)) return false;
-        }
-        return true;
-    }
-
-    fn importedNominalMatches(
-        self: *const CheckedTypeProjector,
-        imported: ImportedModuleView,
-        target_nominal: canonical.NominalTypeKey,
-        imported_nominal: canonical.NominalTypeKey,
-    ) bool {
-        return Ident.textEql(
-            self.target.canonical_names.moduleNameText(target_nominal.module_name),
-            imported.canonical_names.moduleNameText(imported_nominal.module_name),
-        ) and Ident.textEql(
-            self.target.canonical_names.typeNameText(target_nominal.type_name),
-            imported.canonical_names.typeNameText(imported_nominal.type_name),
-        );
     }
 
     pub fn projectImportedCheckedType(
@@ -19276,10 +19113,6 @@ pub const CheckedTypeProjector = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
-                .resolved_owner = if (constraint.resolved_owner) |owner|
-                    try self.remapMethodOwner(imported, owner)
-                else
-                    null,
             };
         }
         return out;
@@ -19313,8 +19146,31 @@ pub const CheckedTypeProjector = struct {
             .builtin = nominal.builtin,
             .is_opaque = nominal.is_opaque,
             .backing = try self.projectImportedCheckedType(imported, nominal.backing),
+            .representation = try self.remapImportedNominalRepresentation(imported, nominal),
             .args = args,
         } };
+    }
+
+    fn remapImportedNominalRepresentation(
+        self: *CheckedTypeProjector,
+        imported: ImportedModuleView,
+        nominal: CheckedNominalType,
+    ) Allocator.Error!CheckedNominalRepresentationRef {
+        return switch (nominal.representation) {
+            .builtin => |builtin_id| .{ .builtin = builtin_id },
+            .local_declaration => |declaration| .{ .imported_declaration = .{
+                .artifact = imported.key,
+                .declaration = declaration,
+            } },
+            .imported_declaration => |imported_decl| .{ .imported_declaration = imported_decl },
+            .local_box_payload_capability => |capability| .{ .imported_box_payload_capability = .{
+                .artifact = imported.key,
+                .capability = capability.capability,
+                .opaque_atomic_proof = capability.opaque_atomic_proof,
+            } },
+            .imported_box_payload_capability => |capability| .{ .imported_box_payload_capability = capability },
+            .opaque_without_backing => .opaque_without_backing,
+        };
     }
 
     fn projectImportedTypeIds(
@@ -19501,6 +19357,7 @@ const CheckedTypeStoreImportProjector = struct {
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.project(nominal.backing),
+                .representation = try self.remapNominalRepresentation(nominal),
                 .args = try self.projectIds(nominal.args),
             } },
             .function => |function| .{ .function = .{
@@ -19547,10 +19404,6 @@ const CheckedTypeStoreImportProjector = struct {
                 .origin = constraint.origin,
                 .binop_negated = constraint.binop_negated,
                 .num_literal = constraint.num_literal,
-                .resolved_owner = if (constraint.resolved_owner) |owner|
-                    try self.remapMethodOwner(owner)
-                else
-                    null,
             };
         }
         return out;
@@ -19636,6 +19489,27 @@ const CheckedTypeStoreImportProjector = struct {
                 .module_name = try self.remapModuleName(nominal.module_name),
                 .type_name = try self.remapTypeName(nominal.type_name),
             } },
+        };
+    }
+
+    fn remapNominalRepresentation(
+        self: *CheckedTypeStoreImportProjector,
+        nominal: CheckedNominalType,
+    ) Allocator.Error!CheckedNominalRepresentationRef {
+        return switch (nominal.representation) {
+            .builtin => |builtin_id| .{ .builtin = builtin_id },
+            .local_declaration => |declaration| .{ .imported_declaration = .{
+                .artifact = self.imported.key,
+                .declaration = declaration,
+            } },
+            .imported_declaration => |imported_decl| .{ .imported_declaration = imported_decl },
+            .local_box_payload_capability => |capability| .{ .imported_box_payload_capability = .{
+                .artifact = self.imported.key,
+                .capability = capability.capability,
+                .opaque_atomic_proof = capability.opaque_atomic_proof,
+            } },
+            .imported_box_payload_capability => |capability| .{ .imported_box_payload_capability = capability },
+            .opaque_without_backing => .opaque_without_backing,
         };
     }
 
@@ -19949,7 +19823,7 @@ pub fn publishFromTypedModule(
 
     const owner_artifact = artifactRef(artifact_key);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names);
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     try applyPlatformForClauseSubstitutions(
@@ -19982,15 +19856,6 @@ pub fn publishFromTypedModule(
 
     var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication);
     errdefer method_registry.deinit(allocator);
-
-    try publishStaticDispatchConstraintOwnerResolutions(
-        allocator,
-        &checked_type_publication.store,
-        &canonical_names,
-        &method_registry,
-        inputs.imports,
-        inputs.relation_artifacts,
-    );
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_type_publication, &checked_bodies);
     errdefer static_dispatch_plans.deinit(allocator);
@@ -20332,7 +20197,7 @@ fn expectProvidedExportKind(
     var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
     defer platform_required_declarations.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names);
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &.{});
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 

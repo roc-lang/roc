@@ -978,6 +978,7 @@ const ProcedureInstanceRegistry = struct {
             .value_store = &self.program.value_stores.items[value_store_index],
             .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(self.allocator),
             .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(self.allocator),
+            .const_backed_children = std.AutoHashMap(ConstBackedChildKey, repr.ConstBackedValueInfo).init(self.allocator),
             .instance = instance,
             .registry = self,
         };
@@ -1031,6 +1032,7 @@ const ProcedureInstanceRegistry = struct {
             .value_store = &self.program.value_stores.items[value_store_index],
             .env = std.AutoHashMap(Ast.Symbol, repr.BindingInfoId).init(self.allocator),
             .expr_map = std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId).init(self.allocator),
+            .const_backed_children = std.AutoHashMap(ConstBackedChildKey, repr.ConstBackedValueInfo).init(self.allocator),
             .instance = instance,
             .registry = self,
         };
@@ -2654,7 +2656,11 @@ const ArtifactExecutablePayloadImporter = struct {
         return .{
             .nominal = try self.nominalTypeKey(nominal.nominal),
             .source_ty = nominal.source_ty,
-            .is_opaque = false,
+            .source_root = .{
+                .key = nominal.source_ty,
+                .source = .{ .artifact = nominal.source_ty_payload },
+            },
+            .is_opaque = nominal.is_opaque,
             .backing = backing.ty,
             .backing_key = backing.key,
         };
@@ -3209,8 +3215,7 @@ const FiniteErasedAdapterDemandPublisher = struct {
     ) Allocator.Error!bool {
         var changed = false;
         for (target.fields) |target_field| {
-            const label = self.program.row_shapes.recordField(target_field.field).label;
-            const source_field = self.recordFieldPayloadByLabel(source, label) orelse continue;
+            const source_field = recordFieldPayloadById(source, target_field.field) orelse continue;
             changed = (try self.publishForPayloadPair(source_field.ty, source_field.key, target_field.ty, target_field.key, provenance, visited)) or changed;
         }
         return changed;
@@ -3242,11 +3247,9 @@ const FiniteErasedAdapterDemandPublisher = struct {
     ) Allocator.Error!bool {
         var changed = false;
         for (source.variants) |source_variant| {
-            const label = self.program.row_shapes.tag(source_variant.tag).label;
-            const target_variant = self.tagVariantPayloadByLabel(target, label) orelse continue;
+            const target_variant = tagVariantPayloadById(target, source_variant.tag) orelse continue;
             for (target_variant.payloads) |target_payload| {
-                const target_index = self.program.row_shapes.tagPayload(target_payload.payload).logical_index;
-                const source_payload = self.tagPayloadByLogicalIndex(source_variant, target_index) orelse continue;
+                const source_payload = tagPayloadById(source_variant, target_payload.payload) orelse continue;
                 changed = (try self.publishForPayloadPair(source_payload.ty, source_payload.key, target_payload.ty, target_payload.key, provenance, visited)) or changed;
             }
         }
@@ -3297,35 +3300,32 @@ const FiniteErasedAdapterDemandPublisher = struct {
         );
     }
 
-    fn recordFieldPayloadByLabel(
-        self: *FiniteErasedAdapterDemandPublisher,
+    fn recordFieldPayloadById(
         record: repr.SessionExecutableRecordPayload,
-        label: canonical.RecordFieldLabelId,
+        field_id: MonoRow.RecordFieldId,
     ) ?repr.SessionExecutableRecordFieldPayload {
         for (record.fields) |field| {
-            if (self.program.row_shapes.recordField(field.field).label == label) return field;
+            if (field.field == field_id) return field;
         }
         return null;
     }
 
-    fn tagVariantPayloadByLabel(
-        self: *FiniteErasedAdapterDemandPublisher,
+    fn tagVariantPayloadById(
         tag_union: repr.SessionExecutableTagUnionPayload,
-        label: canonical.TagLabelId,
+        tag_id: MonoRow.TagId,
     ) ?repr.SessionExecutableTagVariantPayload {
         for (tag_union.variants) |variant| {
-            if (self.program.row_shapes.tag(variant.tag).label == label) return variant;
+            if (variant.tag == tag_id) return variant;
         }
         return null;
     }
 
-    fn tagPayloadByLogicalIndex(
-        self: *FiniteErasedAdapterDemandPublisher,
+    fn tagPayloadById(
         variant: repr.SessionExecutableTagVariantPayload,
-        logical_index: u32,
+        payload_id: MonoRow.TagPayloadId,
     ) ?repr.SessionExecutableTagPayload {
         for (variant.payloads) |payload| {
-            if (self.program.row_shapes.tagPayload(payload.payload).logical_index == logical_index) return payload;
+            if (payload.payload == payload_id) return payload;
         }
         return null;
     }
@@ -6739,10 +6739,9 @@ const CallableEmissionAssigner = struct {
             .published_proc_value = if (source.published_proc) |published| published.callable else null,
             .published_source_proc = source.published_proc,
             .lifted_owner_source_fn_ty_payload = switch (source.proc.callable.template) {
-                .lifted => |lifted| self.concreteSourcePayloadForKey(
-                    lifted.owner_mono_specialization.requested_mono_fn_ty,
-                    "lambda-solved lifted callable owner source function type has no concrete payload",
-                ),
+                .lifted => self.registry.inputProc(source.proc).lifted_owner_source_fn_ty_payload orelse {
+                    lambdaInvariant("lambda-solved lifted callable did not publish its owner source function payload");
+                },
                 .checked,
                 .synthetic,
                 => null,
@@ -6790,15 +6789,6 @@ const CallableEmissionAssigner = struct {
         };
     }
 
-    fn concreteSourcePayloadForKey(
-        self: *CallableEmissionAssigner,
-        key: canonical.CanonicalTypeKey,
-        comptime missing_message: []const u8,
-    ) ConcreteSourceType.ConcreteSourceTypeRef {
-        if (self.program.concrete_source_types.refForKey(key)) |payload| return payload;
-        lambdaInvariant(missing_message);
-    }
-
     fn appendFiniteSetErasePlan(
         self: *CallableEmissionAssigner,
         group_set: *const CallableGroupSet,
@@ -6822,6 +6812,7 @@ const CallableEmissionAssigner = struct {
         const capture_shape_key = repr.captureShapeKeyForExecKeys(&hidden_capture_keys);
         const sig_key = try self.erasedSignatureForTargetProc(
             first_member.proc_value.source_fn_ty,
+            first_member.source_fn_ty_payload,
             self.recordForInstance(first_member.target_instance),
             hidden_capture_key,
         );
@@ -6846,12 +6837,13 @@ const CallableEmissionAssigner = struct {
     fn erasedSignatureForTargetProc(
         self: *CallableEmissionAssigner,
         source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
         target_record: *const ProcBuildRecord,
         capture_ty: ?repr.CanonicalExecValueTypeKey,
     ) Allocator.Error!repr.ErasedFnSigKey {
         const target_value_store = self.valueStoreFor(target_record);
         const params = target_value_store.sliceValueSpan(target_record.public_roots.params);
-        const source_function = checkedFunctionSourceForKey(&self.program.concrete_source_types, self.artifact_views, &self.program.canonical_names, source_fn_ty);
+        const source_function = checkedFunctionSourceForPayload(&self.program.concrete_source_types, self.artifact_views, &self.program.canonical_names, source_fn_ty_payload);
         if (source_function.function.args.len != params.len) {
             lambdaInvariant("lambda-solved erased adapter source function arity differs from target params");
         }
@@ -7394,35 +7386,52 @@ const BoxPayloadPlanFinalizer = struct {
         self: *BoxPayloadPlanFinalizer,
         nominal: repr.SessionExecutableNominalPayload,
     ) ?NominalCapabilityResolution {
-        if (self.capabilityInArtifact(
-            self.artifact_views.root.artifact.key,
-            true,
-            &self.artifact_views.root.artifact.interface_capabilities,
-            nominal.source_ty,
-        )) |capability| return capability;
-
-        for (self.artifact_views.root.relation_artifacts) |related| {
-            if (self.capabilityInArtifact(related.key, false, related.interface_capabilities, nominal.source_ty)) |capability| return capability;
+        if (isEmptyCanonicalTypeKey(nominal.source_ty)) return null;
+        const source_root = nominal.source_root orelse {
+            lambdaInvariant("lambda-solved nominal payload has no published source payload authority");
+        };
+        if (!repr.canonicalTypeKeyEql(source_root.key, nominal.source_ty)) {
+            lambdaInvariant("lambda-solved nominal payload source authority key differs from nominal source type");
         }
-        for (self.artifact_views.imports) |imported| {
-            if (self.capabilityInArtifact(imported.key, false, imported.interface_capabilities, nominal.source_ty)) |capability| return capability;
-        }
-        return null;
+        return switch (source_root.source) {
+            .local => null,
+            .artifact => |artifact_ref| self.capabilityInArtifact(artifact_ref),
+        };
     }
 
     fn capabilityInArtifact(
-        _: *BoxPayloadPlanFinalizer,
-        artifact: checked_artifact.CheckedModuleArtifactKey,
-        is_root: bool,
-        capabilities: *const checked_artifact.ModuleInterfaceCapabilities,
-        source_ty: canonical.CanonicalTypeKey,
+        self: *BoxPayloadPlanFinalizer,
+        artifact_ref: checked_artifact.ArtifactCheckedTypeRef,
     ) ?NominalCapabilityResolution {
-        const capability = capabilities.boxPayloadCapabilityForSource(source_ty) orelse return null;
+        const checked_types = checkedTypesForArtifactViews(self.artifact_views, artifact_ref.artifact) orelse {
+            lambdaInvariant("lambda-solved nominal payload referenced unavailable checked types");
+        };
+        const payload_index: usize = @intFromEnum(artifact_ref.ty);
+        if (payload_index >= checked_types.payloads.len) {
+            lambdaInvariant("lambda-solved nominal payload artifact ref was out of range");
+        }
+        const nominal = switch (checked_types.payloads[payload_index]) {
+            .nominal => |payload| payload,
+            else => lambdaInvariant("lambda-solved nominal payload artifact ref was not nominal"),
+        };
+        const capability_artifact, const capability_id, const proof_id = switch (nominal.representation) {
+            .local_box_payload_capability => |capability| .{ artifact_ref.artifact, capability.capability, capability.opaque_atomic_proof },
+            .imported_box_payload_capability => |capability| .{ capability.artifact, capability.capability, capability.opaque_atomic_proof },
+            .builtin,
+            .local_declaration,
+            .imported_declaration,
+            .opaque_without_backing,
+            => return null,
+        };
+        const capabilities = interfaceCapabilitiesForArtifactViews(self.artifact_views, capability_artifact) orelse {
+            lambdaInvariant("lambda-solved nominal payload referenced unavailable interface capabilities");
+        };
+        const capability = capabilities.boxPayloadCapability(capability_id);
         return .{
-            .artifact = artifact,
-            .is_root = is_root,
+            .artifact = capability_artifact,
+            .is_root = artifactKeyEql(self.artifact_views.root.artifact.key, capability_artifact),
             .capability = capability,
-            .opaque_proof = capabilities.opaqueAtomicProofForSource(source_ty),
+            .opaque_proof = if (proof_id) |id| capabilities.opaqueAtomicProof(id) else null,
         };
     }
 
@@ -9064,8 +9073,7 @@ const ValueTransformFinalizer = struct {
             },
             else => lambdaInvariant("lambda-solved consumer-use record field expected record endpoint"),
         };
-        const label = self.program.row_shapes.recordField(source_field).label;
-        const target_field = self.recordFieldPayloadByLabel(record, label) orelse {
+        const target_field = recordFieldPayloadById(record, source_field) orelse {
             lambdaInvariant("lambda-solved consumer-use record field missing from expected endpoint");
         };
         return .{ .endpoint = .{
@@ -9153,19 +9161,13 @@ const ValueTransformFinalizer = struct {
                 .{ self.program.canonical_names.tagLabelText(self.program.row_shapes.tag(source_tag).label), @tagName(actual_payload) },
             ),
         };
-        const tag_label = self.program.row_shapes.tag(source_tag).label;
-        const target_tag = self.tagVariantPayloadByLabel(tag_union, tag_label) orelse {
+        const target_tag = tagVariantPayloadById(tag_union, source_tag) orelse {
             lambdaInvariant("lambda-solved consumer-use tag missing from expected endpoint");
         };
+        const target_payload = tagPayloadById(target_tag, source_payload) orelse {
+            lambdaInvariant("lambda-solved consumer-use tag payload missing from expected endpoint");
+        };
         const payload_index = self.program.row_shapes.tagPayload(source_payload).logical_index;
-        const raw_payload_index: usize = @intCast(payload_index);
-        if (raw_payload_index >= target_tag.payloads.len) {
-            lambdaInvariant("lambda-solved consumer-use tag payload index missing from expected endpoint");
-        }
-        const target_payload = target_tag.payloads[raw_payload_index];
-        if (self.program.row_shapes.tagPayload(target_payload.payload).logical_index != payload_index) {
-            lambdaInvariant("lambda-solved consumer-use tag payload endpoint is not in logical order");
-        }
         const child_logical_ty = try self.tagPayloadLogicalType(logical_tag_union_ty, target_tag.tag, payload_index);
         return .{ .endpoint = .{
             .owner = .{ .consumer_use = owner },
@@ -10218,13 +10220,9 @@ const ValueTransformFinalizer = struct {
         defer self.allocator.free(fields);
 
         for (target.fields, 0..) |target_field, i| {
-            const label = self.program.row_shapes.recordField(target_field.field).label;
-            const source_field = self.recordFieldPayloadByLabel(source, label) orelse {
+            const source_field = recordFieldPayloadById(source, target_field.field) orelse {
                 lambdaInvariant("lambda-solved record transform target field has no source field");
             };
-            if (source_field.field != target_field.field) {
-                lambdaInvariant("lambda-solved record transform reached distinct source/target field ids");
-            }
 
             const from_child = try self.transformChildEndpoint(
                 scope,
@@ -10327,8 +10325,7 @@ const ValueTransformFinalizer = struct {
         }
 
         for (source.variants, 0..) |source_variant, i| {
-            const source_label = self.program.row_shapes.tag(source_variant.tag).label;
-            const target_variant = self.tagVariantPayloadByLabel(target, source_label) orelse {
+            const target_variant = tagVariantPayloadById(target, source_variant.tag) orelse {
                 lambdaInvariant("lambda-solved tag transform source tag has no target tag");
             };
             if (source_variant.payloads.len != target_variant.payloads.len) {
@@ -10338,7 +10335,9 @@ const ValueTransformFinalizer = struct {
             const payloads = try self.allocator.alloc(repr.SessionValueTransformTagPayloadEdge, target_variant.payloads.len);
             errdefer self.allocator.free(payloads);
             for (target_variant.payloads, 0..) |target_payload, payload_i| {
-                const source_payload = source_variant.payloads[payload_i];
+                const source_payload = tagPayloadById(source_variant, target_payload.payload) orelse {
+                    lambdaInvariant("lambda-solved tag transform target payload has no source payload");
+                };
                 const source_index = self.program.row_shapes.tagPayload(source_payload.payload).logical_index;
                 const target_index = self.program.row_shapes.tagPayload(target_payload.payload).logical_index;
                 if (source_index != target_index) {
@@ -10872,24 +10871,32 @@ const ValueTransformFinalizer = struct {
         return try self.representationStore().appendTransformEndpointPath(steps);
     }
 
-    fn recordFieldPayloadByLabel(
-        self: *ValueTransformFinalizer,
+    fn recordFieldPayloadById(
         record: repr.SessionExecutableRecordPayload,
-        label: canonical.RecordFieldLabelId,
+        field_id: MonoRow.RecordFieldId,
     ) ?repr.SessionExecutableRecordFieldPayload {
         for (record.fields) |field| {
-            if (self.program.row_shapes.recordField(field.field).label == label) return field;
+            if (field.field == field_id) return field;
         }
         return null;
     }
 
-    fn tagVariantPayloadByLabel(
-        self: *ValueTransformFinalizer,
+    fn tagVariantPayloadById(
         tag_union: repr.SessionExecutableTagUnionPayload,
-        label: canonical.TagLabelId,
+        tag_id: MonoRow.TagId,
     ) ?repr.SessionExecutableTagVariantPayload {
         for (tag_union.variants) |variant| {
-            if (self.program.row_shapes.tag(variant.tag).label == label) return variant;
+            if (variant.tag == tag_id) return variant;
+        }
+        return null;
+    }
+
+    fn tagPayloadById(
+        variant: repr.SessionExecutableTagVariantPayload,
+        payload_id: MonoRow.TagPayloadId,
+    ) ?repr.SessionExecutableTagPayload {
+        for (variant.payloads) |payload| {
+            if (payload.payload == payload_id) return payload;
         }
         return null;
     }
@@ -11560,6 +11567,7 @@ const TypeImporter = struct {
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
+                    .source_ty_payload = nominal.source_ty_payload,
                     .is_opaque = nominal.is_opaque,
                     .args = try self.output.addTypeVarSpan(args),
                     .backing = if (use_concrete_source_payloads)
@@ -11619,9 +11627,12 @@ const TypeImporter = struct {
         if (isEmptyCanonicalTypeKey(nominal.source_ty)) {
             return try self.importTypeWithConcretePayloadMode(nominal.backing, true);
         }
-        const concrete = self.concrete_source_types.refForKey(nominal.source_ty) orelse {
-            lambdaInvariant("lambda-solved nominal source type key has no concrete source type payload");
+        const concrete = nominal.source_ty_payload orelse {
+            lambdaInvariant("lambda-solved nominal source type has no published concrete source payload");
         };
+        if (!repr.canonicalTypeKeyEql(self.concrete_source_types.key(concrete), nominal.source_ty)) {
+            lambdaInvariant("lambda-solved nominal source payload key differs from nominal source type");
+        }
         const imported = try self.importConcreteRef(concrete);
         const imported_root = self.output.unlinkConst(imported);
         return switch (self.output.getNode(imported_root)) {
@@ -11722,6 +11733,20 @@ fn executablePayloadsForArtifactViews(
     }
     for (views.root.relation_artifacts) |related| {
         if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.executable_type_payloads;
+    }
+    return null;
+}
+
+fn interfaceCapabilitiesForArtifactViews(
+    views: ArtifactViews,
+    key: checked_artifact.CheckedModuleArtifactKey,
+) ?*const checked_artifact.ModuleInterfaceCapabilities {
+    if (std.mem.eql(u8, &views.root.artifact.key.bytes, &key.bytes)) return &views.root.artifact.interface_capabilities;
+    for (views.imports) |imported| {
+        if (std.mem.eql(u8, &imported.key.bytes, &key.bytes)) return imported.interface_capabilities;
+    }
+    for (views.root.relation_artifacts) |related| {
+        if (std.mem.eql(u8, &related.key.bytes, &key.bytes)) return related.interface_capabilities;
     }
     return null;
 }
@@ -11892,19 +11917,13 @@ fn resolvedCheckedFunctionSource(
     }
 }
 
-fn checkedFunctionSourceForKey(
+fn checkedFunctionSourceForPayload(
     concrete_source_types: *const ConcreteSourceType.Store,
     views: ArtifactViews,
     local_names: *const canonical.CanonicalNameStore,
-    source_fn_ty: canonical.CanonicalTypeKey,
+    source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
 ) CheckedFunctionSource {
-    if (isEmptyCanonicalTypeKey(source_fn_ty)) {
-        lambdaInvariant("lambda-solved erased adapter source function key is empty");
-    }
-    const ref = concrete_source_types.refForKey(source_fn_ty) orelse {
-        lambdaInvariant("lambda-solved erased adapter source function key has no checked payload");
-    };
-    const concrete = concreteSourceTypeViewForRef(concrete_source_types, views, local_names, ref);
+    const concrete = concreteSourceTypeViewForRef(concrete_source_types, views, local_names, source_fn_ty_payload);
     return resolvedCheckedFunctionSource(concrete.names, concrete.view, concrete.root);
 }
 
@@ -12055,6 +12074,20 @@ const ConstBackedProjectionResult = struct {
     projection: repr.ProjectionInfoId,
 };
 
+const ConstBackedChildKindKey = union(enum) {
+    record_field: u32,
+    tuple_elem: u32,
+    tag_payload: u32,
+};
+
+const ConstBackedChildKey = struct {
+    owner: [32]u8,
+    instance: u32,
+    schema: u32,
+    value: u32,
+    kind: ConstBackedChildKindKey,
+};
+
 const BodySolver = struct {
     allocator: Allocator,
     input: *const Lifted.Ast.Store,
@@ -12069,6 +12102,7 @@ const BodySolver = struct {
     value_store: *repr.ValueInfoStore,
     env: std.AutoHashMap(Ast.Symbol, repr.BindingInfoId),
     expr_map: std.AutoHashMap(Lifted.Ast.ExprId, Ast.ExprId),
+    const_backed_children: std.AutoHashMap(ConstBackedChildKey, repr.ConstBackedValueInfo),
     instance: repr.ProcRepresentationInstanceId,
     registry: *ProcedureInstanceRegistry,
     public_roots: ?repr.ProcPublicValueRoots = null,
@@ -12080,6 +12114,7 @@ const BodySolver = struct {
     next_if_expr_id: u32 = 0,
 
     fn deinit(self: *BodySolver) void {
+        self.const_backed_children.deinit();
         self.expr_map.deinit();
         self.env.deinit();
     }
@@ -12100,7 +12135,7 @@ const BodySolver = struct {
                     else
                         try self.lowerCaptureSlotRoots(fn_.captures);
                     const expected_ret = try self.expectedReturnFromExpr(fn_.body);
-                    const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty);
+                    const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty, expected_ret.source_ty_payload);
                     try self.publishProcedureReturnRootKind(public_ret);
                     const previous_captures = self.active_captures;
                     self.active_captures = capture_values;
@@ -12130,7 +12165,7 @@ const BodySolver = struct {
                     else
                         try self.lowerParamSpan(hosted.args);
                     const ret_ty = try self.type_importer.importType(hosted.ret_ty);
-                    const ret = if (existing) |roots| roots.ret else try self.newValue(ret_ty, .{});
+                    const ret = if (existing) |roots| roots.ret else try self.newValue(ret_ty, .{}, null);
                     try self.publishProcedureReturnRootKind(ret);
                     self.public_roots = .{
                         .params = lowered_args.values,
@@ -12148,7 +12183,7 @@ const BodySolver = struct {
                 .val => |expr| blk: {
                     const existing = self.existing_public_roots;
                     const expected_ret = try self.expectedReturnFromExpr(expr);
-                    const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty);
+                    const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty, expected_ret.source_ty_payload);
                     try self.publishProcedureReturnRootKind(public_ret);
                     const previous_return = self.active_return_value;
                     self.active_return_value = public_ret;
@@ -12166,7 +12201,7 @@ const BodySolver = struct {
                 .run => |run_def| blk: {
                     const existing = self.existing_public_roots;
                     const expected_ret = try self.expectedReturnFromExpr(run_def.body);
-                    const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty);
+                    const public_ret = if (existing) |roots| roots.ret else try self.newValue(expected_ret.ty, expected_ret.source_ty, expected_ret.source_ty_payload);
                     try self.publishProcedureReturnRootKind(public_ret);
                     const previous_return = self.active_return_value;
                     self.active_return_value = public_ret;
@@ -12193,6 +12228,7 @@ const BodySolver = struct {
     const ExpectedReturn = struct {
         ty: Type.TypeVarId,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
     };
 
     fn lowerDefPublicRoots(self: *BodySolver, def_id: Lifted.Ast.DefId) Allocator.Error!repr.ProcPublicValueRoots {
@@ -12202,7 +12238,7 @@ const BodySolver = struct {
                 const lowered_args = try self.lowerParamSpan(fn_.args);
                 const captures = try self.lowerCaptureSlotRoots(fn_.captures);
                 const expected_ret = try self.expectedReturnFromExpr(fn_.body);
-                const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty);
+                const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty, expected_ret.source_ty_payload);
                 try self.publishProcedureReturnRootKind(ret);
                 break :blk .{
                     .params = lowered_args.values,
@@ -12214,7 +12250,7 @@ const BodySolver = struct {
             .hosted_fn => |hosted| blk: {
                 const lowered_args = try self.lowerParamSpan(hosted.args);
                 const ret_ty = try self.type_importer.importType(hosted.ret_ty);
-                const ret = try self.newValue(ret_ty, .{});
+                const ret = try self.newValue(ret_ty, .{}, null);
                 try self.publishProcedureReturnRootKind(ret);
                 break :blk .{
                     .params = lowered_args.values,
@@ -12225,7 +12261,7 @@ const BodySolver = struct {
             },
             .val => |expr| blk: {
                 const expected_ret = try self.expectedReturnFromExpr(expr);
-                const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty);
+                const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty, expected_ret.source_ty_payload);
                 try self.publishProcedureReturnRootKind(ret);
                 break :blk .{
                     .params = repr.Span(repr.ValueInfoId).empty(),
@@ -12236,7 +12272,7 @@ const BodySolver = struct {
             },
             .run => |run_def| blk: {
                 const expected_ret = try self.expectedReturnFromExpr(run_def.body);
-                const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty);
+                const ret = try self.newValue(expected_ret.ty, expected_ret.source_ty, expected_ret.source_ty_payload);
                 try self.publishProcedureReturnRootKind(ret);
                 break :blk .{
                     .params = repr.Span(repr.ValueInfoId).empty(),
@@ -12253,9 +12289,11 @@ const BodySolver = struct {
         synthetic: ids.ExecutableSyntheticProc,
     ) Allocator.Error!repr.ProcPublicValueRoots {
         const signature = synthetic.signature;
-        const concrete = self.concrete_source_types.refForKey(signature.source_fn_ty) orelse {
-            lambdaInvariant("lambda-solved executable synthetic signature source function type has no concrete payload");
-        };
+        const concrete = self.sourcePayloadForArtifactRoot(
+            synthetic.artifact,
+            signature.source_fn_ty_payload,
+            signature.source_fn_ty,
+        );
         const fn_ty = try self.type_importer.importConcreteRef(concrete);
         const fn_root = self.type_importer.output.unlinkConst(fn_ty);
         const func = switch (self.type_importer.output.getNode(fn_root)) {
@@ -12281,7 +12319,11 @@ const BodySolver = struct {
         const exec_signature = erased.executable_signature;
         const provenance = repr.BoxErasureProvenance{ .promoted_wrapper = synthetic.source_proc };
         for (arg_tys, signature.params, 0..) |arg_ty, param, i| {
-            param_values[i] = try self.newValue(arg_ty, param.source_ty);
+            param_values[i] = try self.newValue(
+                arg_ty,
+                param.source_ty,
+                self.sourcePayloadForArtifactRoot(synthetic.artifact, param.checked_ty, param.source_ty),
+            );
             try self.publishProcedureParamRootKind(param_values[i], @intCast(i));
             try self.attachExecutableSyntheticAlreadyErasedCallable(
                 synthetic,
@@ -12291,7 +12333,11 @@ const BodySolver = struct {
                 provenance,
             );
         }
-        const ret = try self.newValue(func.ret, signature.ret_source_ty);
+        const ret = try self.newValue(
+            func.ret,
+            signature.ret_source_ty,
+            self.sourcePayloadForArtifactRoot(synthetic.artifact, signature.ret_source_ty_payload, signature.ret_source_ty),
+        );
         try self.publishProcedureReturnRootKind(ret);
         try self.attachExecutableSyntheticAlreadyErasedCallable(
             synthetic,
@@ -12697,6 +12743,7 @@ const BodySolver = struct {
         return .{
             .ty = try self.type_importer.importType(expr.ty),
             .source_ty = expr.source_ty,
+            .source_ty_payload = expr.source_ty_payload,
         };
     }
 
@@ -12710,6 +12757,7 @@ const BodySolver = struct {
         return try self.output.addExpr(
             expected_ret.ty,
             expected_ret.source_ty,
+            expected_ret.source_ty_payload,
             public_ret,
             .{ .return_ = .{
                 .expr = body,
@@ -12748,7 +12796,7 @@ const BodySolver = struct {
         defer self.allocator.free(values);
         for (input_items, 0..) |param, i| {
             const ty = try self.type_importer.importType(param.ty);
-            const value = try self.newValue(ty, param.source_ty);
+            const value = try self.newValue(ty, param.source_ty, param.source_ty_payload);
             try self.publishProcedureParamRootKind(value, @intCast(i));
             const binding = try self.value_store.addBinding(.{
                 .symbol = param.symbol,
@@ -12759,6 +12807,7 @@ const BodySolver = struct {
             symbols[i] = .{
                 .ty = ty,
                 .source_ty = param.source_ty,
+                .source_ty_payload = param.source_ty_payload,
                 .symbol = param.symbol,
                 .binding_info = binding,
             };
@@ -12798,6 +12847,7 @@ const BodySolver = struct {
             symbols[i] = .{
                 .ty = ty,
                 .source_ty = param.source_ty,
+                .source_ty_payload = param.source_ty_payload,
                 .symbol = param.symbol,
                 .binding_info = binding,
             };
@@ -12815,7 +12865,7 @@ const BodySolver = struct {
         defer self.allocator.free(values);
         for (input_items, 0..) |slot, i| {
             const ty = try self.type_importer.importType(slot.ty);
-            const value = try self.newValue(ty, slot.source_ty);
+            const value = try self.newValue(ty, slot.source_ty, slot.source_ty_payload);
             try self.publishProcedureCaptureRootKind(value, @intCast(i));
             const binding = try self.value_store.addBinding(.{
                 .symbol = slot.source_symbol,
@@ -12899,10 +12949,10 @@ const BodySolver = struct {
                     );
                 };
                 const binding = self.value_store.bindings.items[@intFromEnum(binding_info)];
-                const value = try self.newValue(ty, expr.source_ty);
+                const value = try self.newValue(ty, expr.source_ty, expr.source_ty_payload);
                 try self.publishValueAlias(binding.value, value);
                 self.value_store.values.items[@intFromEnum(value)].value_alias_needs_executable_transform = true;
-                const lowered = try self.output.addExpr(ty, expr.source_ty, value, .{ .var_ = .{
+                const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, value, .{ .var_ = .{
                     .symbol = symbol,
                     .binding_info = binding_info,
                 } });
@@ -12917,9 +12967,9 @@ const BodySolver = struct {
                 const capture_index: usize = @intCast(slot);
                 if (capture_index >= captures.len) lambdaInvariant("lambda-solved capture_ref slot does not exist in procedure capture roots");
                 const source = captures[capture_index];
-                const value = try self.newValue(ty, expr.source_ty);
+                const value = try self.newValue(ty, expr.source_ty, expr.source_ty_payload);
                 try self.publishValueAlias(source, value);
-                const lowered = try self.output.addExpr(ty, expr.source_ty, value, .{ .capture_ref = slot });
+                const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, value, .{ .capture_ref = slot });
                 if (can_use_expr_map) {
                     try self.expr_map.put(expr_id, lowered);
                 }
@@ -12945,10 +12995,11 @@ const BodySolver = struct {
                     }
                 }
                 const rest = try self.lowerExpr(let_.rest);
-                const lowered = try self.output.addExpr(ty, expr.source_ty, self.exprValue(rest), .{ .let_ = .{
+                const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, self.exprValue(rest), .{ .let_ = .{
                     .bind = .{
                         .ty = bind_ty,
                         .source_ty = let_.bind.source_ty,
+                        .source_ty_payload = let_.bind.source_ty_payload,
                         .symbol = let_.bind.symbol,
                         .binding_info = binding,
                     },
@@ -12963,7 +13014,7 @@ const BodySolver = struct {
             .block => |block| {
                 const stmts = try self.lowerStmtSpan(block.stmts);
                 const final_expr = try self.lowerExpr(block.final_expr);
-                const lowered = try self.output.addExpr(ty, expr.source_ty, self.exprValue(final_expr), .{ .block = .{
+                const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, self.exprValue(final_expr), .{ .block = .{
                     .stmts = stmts,
                     .final_expr = final_expr,
                 } });
@@ -12989,7 +13040,7 @@ const BodySolver = struct {
                         .root = self.valueRoot(result),
                         .kind = .{ .record_field = access.field },
                     });
-                    const lowered = try self.output.addExpr(ty, expr.source_ty, result, .{ .access = .{
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, result, .{ .access = .{
                         .record = record,
                         .field = access.field,
                         .projection_info = projection,
@@ -12999,8 +13050,8 @@ const BodySolver = struct {
                     }
                     return lowered;
                 }
-                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, .{ .record_field = access.field })) |projected| {
-                    const lowered = try self.output.addExpr(ty, expr.source_ty, projected.value, .{ .access = .{
+                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, expr.source_ty_payload, .{ .record_field = access.field })) |projected| {
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, projected.value, .{ .access = .{
                         .record = record,
                         .field = access.field,
                         .projection_info = projected.projection,
@@ -13025,7 +13076,7 @@ const BodySolver = struct {
                         .root = self.valueRoot(result),
                         .kind = .{ .tuple_elem = access.elem_index },
                     });
-                    const lowered = try self.output.addExpr(ty, expr.source_ty, result, .{ .tuple_access = .{
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, result, .{ .tuple_access = .{
                         .tuple = tuple,
                         .elem_index = access.elem_index,
                         .projection_info = projection,
@@ -13035,8 +13086,8 @@ const BodySolver = struct {
                     }
                     return lowered;
                 }
-                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, .{ .tuple_elem = access.elem_index })) |projected| {
-                    const lowered = try self.output.addExpr(ty, expr.source_ty, projected.value, .{ .tuple_access = .{
+                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, expr.source_ty_payload, .{ .tuple_elem = access.elem_index })) |projected| {
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, projected.value, .{ .tuple_access = .{
                         .tuple = tuple,
                         .elem_index = access.elem_index,
                         .projection_info = projected.projection,
@@ -13061,7 +13112,7 @@ const BodySolver = struct {
                         .root = self.valueRoot(result),
                         .kind = .{ .tag_payload = payload.payload },
                     });
-                    const lowered = try self.output.addExpr(ty, expr.source_ty, result, .{ .tag_payload = .{
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, result, .{ .tag_payload = .{
                         .tag_union = tag_union,
                         .payload = payload.payload,
                         .projection_info = projection,
@@ -13071,8 +13122,8 @@ const BodySolver = struct {
                     }
                     return lowered;
                 }
-                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, .{ .tag_payload = payload.payload })) |projected| {
-                    const lowered = try self.output.addExpr(ty, expr.source_ty, projected.value, .{ .tag_payload = .{
+                if (try self.publishConstBackedProjectionValue(source, ty, expr.source_ty, expr.source_ty_payload, .{ .tag_payload = payload.payload })) |projected| {
+                    const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, projected.value, .{ .tag_payload = .{
                         .tag_union = tag_union,
                         .payload = payload.payload,
                         .projection_info = projected.projection,
@@ -13086,8 +13137,8 @@ const BodySolver = struct {
             else => {},
         }
 
-        const value = try self.newValue(ty, expr.source_ty);
-        const lowered = try self.output.addExpr(ty, expr.source_ty, value, switch (expr.data) {
+        const value = try self.newValue(ty, expr.source_ty, expr.source_ty_payload);
+        const lowered = try self.output.addExpr(ty, expr.source_ty, expr.source_ty_payload, value, switch (expr.data) {
             .var_,
             .capture_ref,
             => unreachable,
@@ -13182,6 +13233,7 @@ const BodySolver = struct {
                         requested_fn_root,
                         requested_fn_ty,
                         call.requested_source_fn_ty,
+                        call.requested_source_fn_ty_payload,
                     );
                 }
                 break :blk .{ .call_value = .{
@@ -13189,6 +13241,7 @@ const BodySolver = struct {
                     .args = lowered_args.exprs,
                     .requested_fn_ty = requested_fn_ty,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
+                    .requested_source_fn_ty_payload = call.requested_source_fn_ty_payload,
                     .call_site = call_site,
                 } };
             },
@@ -13215,12 +13268,14 @@ const BodySolver = struct {
                     requested_fn_root,
                     requested_fn_ty,
                     call.requested_source_fn_ty,
+                    call.requested_source_fn_ty_payload,
                 );
                 break :blk .{ .call_proc = .{
                     .proc = call.proc,
                     .args = lowered_args.exprs,
                     .requested_fn_ty = requested_fn_ty,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
+                    .requested_source_fn_ty_payload = call.requested_source_fn_ty_payload,
                     .call_site = call_site,
                 } };
             },
@@ -13234,7 +13289,7 @@ const BodySolver = struct {
                     .instance = self.instance,
                     .value = value,
                 } });
-                try self.publishFunctionRootShape(whole_function_root, fn_ty, proc_value.proc.callable.source_fn_ty);
+                try self.publishFunctionRootShape(whole_function_root, fn_ty, proc_value.proc.callable.source_fn_ty, expr.source_ty_payload);
                 _ = try self.representation_store.appendRepresentationEdge(.{
                     .from = .{ .local = self.valueRoot(value) },
                     .to = .{ .local = whole_function_root },
@@ -13247,7 +13302,7 @@ const BodySolver = struct {
                     proc_value.published_proc,
                     target_instance,
                     self.value_store.sliceValueSpan(captures.values),
-                    self.sourcePayloadForKey(proc_value.proc.callable.source_fn_ty) orelse {
+                    expr.source_ty_payload orelse {
                         lambdaInvariant("lambda-solved proc-value source function type has no concrete payload");
                     },
                 );
@@ -13380,7 +13435,7 @@ const BodySolver = struct {
     ) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
         const ty = try self.type_importer.importType(pat.ty);
-        const value = try self.newValue(ty, pat.source_ty);
+        const value = try self.newValue(ty, pat.source_ty, pat.source_ty_payload);
         return try self.lowerPatScopedWithValue(pat_id, ty, value, saved);
     }
 
@@ -13392,7 +13447,12 @@ const BodySolver = struct {
         saved: *std.ArrayList(SavedBinding),
     ) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
-        return try self.output.addPat(.{ .ty = ty, .source_ty = pat.source_ty, .value_info = value, .data = switch (pat.data) {
+        return try self.output.addPat(.{
+            .ty = ty,
+            .source_ty = pat.source_ty,
+            .source_ty_payload = pat.source_ty_payload,
+            .value_info = value,
+            .data = switch (pat.data) {
             .bool_lit => |literal| .{ .bool_lit = literal },
             .int_lit => |literal| .{ .int_lit = literal },
             .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
@@ -13434,7 +13494,8 @@ const BodySolver = struct {
                 .tag = tag.tag,
                 .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads, saved),
             } },
-        } });
+            },
+        });
     }
 
     fn bindPatternSymbol(
@@ -13544,6 +13605,7 @@ const BodySolver = struct {
                     .bind = .{
                         .ty = bind_ty,
                         .source_ty = decl.bind.source_ty,
+                        .source_ty_payload = decl.bind.source_ty_payload,
                         .symbol = decl.bind.symbol,
                         .binding_info = binding,
                     },
@@ -13563,6 +13625,7 @@ const BodySolver = struct {
                     .bind = .{
                         .ty = bind_ty,
                         .source_ty = decl.bind.source_ty,
+                        .source_ty_payload = decl.bind.source_ty_payload,
                         .symbol = decl.bind.symbol,
                         .binding_info = binding,
                     },
@@ -13617,12 +13680,13 @@ const BodySolver = struct {
         requested_fn_root: repr.RepRootId,
         requested_fn_ty: Type.TypeVarId,
         requested_source_fn_ty: canonical.CanonicalTypeKey,
+        requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
         try self.representation_store.publishRootKind(requested_fn_root, .{ .call_value_requested_fn = .{
             .instance = self.instance,
             .call_site = call_site,
         } });
-        try self.publishFunctionRootShape(requested_fn_root, requested_fn_ty, requested_source_fn_ty);
+        try self.publishFunctionRootShape(requested_fn_root, requested_fn_ty, requested_source_fn_ty, requested_source_fn_ty_payload);
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(callee_value) },
             .to = .{ .local = requested_fn_root },
@@ -13639,12 +13703,13 @@ const BodySolver = struct {
         requested_fn_root: repr.RepRootId,
         requested_fn_ty: Type.TypeVarId,
         requested_source_fn_ty: canonical.CanonicalTypeKey,
+        requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
         try self.representation_store.publishRootKind(requested_fn_root, .{ .call_proc_requested_fn = .{
             .instance = self.instance,
             .call_site = call_site,
         } });
-        try self.publishFunctionRootShape(requested_fn_root, requested_fn_ty, requested_source_fn_ty);
+        try self.publishFunctionRootShape(requested_fn_root, requested_fn_ty, requested_source_fn_ty, requested_source_fn_ty_payload);
         try self.publishRequestedFunctionArgAndReturnEdges(args, result, requested_fn_root);
     }
 
@@ -13718,10 +13783,10 @@ const BodySolver = struct {
                     }
 
                     const ty = try self.type_importer.importType(input_expr.ty);
-                    const value = try self.newValue(ty, input_expr.source_ty);
+                    const value = try self.newValue(ty, input_expr.source_ty, input_expr.source_ty_payload);
                     const lowered_args = try self.lowerLowLevelArgSpanWithValues(low_level.args, &lowered);
-                    const data = try self.lowerLowLevelWithArgs(value, input_expr.source_ty, low_level, lowered_args);
-                    const lowered_expr = try self.output.addExpr(ty, input_expr.source_ty, value, data);
+                    const data = try self.lowerLowLevelWithArgs(value, input_expr.source_ty, input_expr.source_ty_payload, low_level, lowered_args);
+                    const lowered_expr = try self.output.addExpr(ty, input_expr.source_ty, input_expr.source_ty_payload, value, data);
                     try lowered.put(frame.expr, lowered_expr);
                 },
                 else => {
@@ -13766,6 +13831,7 @@ const BodySolver = struct {
         self: *BodySolver,
         result_value: repr.ValueInfoId,
         result_source_ty: canonical.CanonicalTypeKey,
+        result_source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
         low_level: anytype,
         lowered_args: LoweredExprSpan,
     ) Allocator.Error!Ast.Expr.Data {
@@ -13783,7 +13849,7 @@ const BodySolver = struct {
                 const payload_root = self.valueRoot(payload_value);
                 const boundary = try self.representation_store.appendBoxBoundary(self.allocator, .{
                     .box_ty = result_source_ty,
-                    .box_ty_payload = self.sourcePayloadForKey(result_source_ty),
+                    .box_ty_payload = result_source_ty_payload,
                     .payload_source_ty = payload_info.source_ty,
                     .payload_source_ty_payload = payload_info.source_ty_payload,
                     .payload_boundary_ty = payload_info.source_ty,
@@ -13824,9 +13890,9 @@ const BodySolver = struct {
                     .box_ty = boxed_source_ty,
                     .box_ty_payload = boxed_info.source_ty_payload,
                     .payload_source_ty = result_source_ty,
-                    .payload_source_ty_payload = self.sourcePayloadForKey(result_source_ty),
+                    .payload_source_ty_payload = result_source_ty_payload,
                     .payload_boundary_ty = result_source_ty,
-                    .payload_boundary_ty_payload = self.sourcePayloadForKey(result_source_ty),
+                    .payload_boundary_ty_payload = result_source_ty_payload,
                     .direction = .unbox,
                     .source_root = self.valueRoot(boxed_value),
                     .boundary_root = self.valueRoot(result_value),
@@ -14208,7 +14274,7 @@ const BodySolver = struct {
         const pat = self.output.pats.items[@intFromEnum(pat_id)];
         switch (pat.data) {
             .tag => |tag| {
-                if (!self.constBackedTagMatches(backing, tag.tag)) return;
+                if (!try self.constBackedTagMatches(backing, tag.tag)) return;
             },
             .bool_lit,
             .int_lit,
@@ -14249,10 +14315,10 @@ const BodySolver = struct {
                 const fields = self.output.record_field_patterns.items[record.fields.start..][0..record.fields.len];
                 for (fields) |field| {
                     try self.publishConstBackedPatternValues(
-                        try self.constBackedRecordField(
+                        try self.constBackedPublishedChild(
                             self.unwrapConstBackedValue(self.resolveConstBackedValue(backing)),
-                            field.field,
                             backing.const_instance,
+                            .{ .record_field = field.field },
                         ),
                         field.pattern,
                     );
@@ -14265,10 +14331,10 @@ const BodySolver = struct {
                 const payloads = self.output.tag_payload_patterns.items[tag.payloads.start..][0..tag.payloads.len];
                 for (payloads) |payload| {
                     try self.publishConstBackedPatternValues(
-                        self.constBackedTagPayload(
+                        try self.constBackedPublishedChild(
                             self.unwrapConstBackedValue(self.resolveConstBackedValue(backing)),
-                            payload.payload,
                             backing.const_instance,
+                            .{ .tag_payload = payload.payload },
                         ),
                         payload.pattern,
                     );
@@ -14586,11 +14652,12 @@ const BodySolver = struct {
         source: repr.ValueInfoId,
         ty: Type.TypeVarId,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
         kind: repr.ProjectionKind,
     ) Allocator.Error!?ConstBackedProjectionResult {
         const source_backing = self.constBackedForProjection(source) orelse return null;
         const child_backing = try self.constBackedProjectionChild(source_backing, kind);
-        const result = try self.newValue(ty, source_ty);
+        const result = try self.newValue(ty, source_ty, source_ty_payload);
         const projection = try self.publishProjectionInfo(source, result, kind);
         try self.publishConstBackedValueMetadata(result, child_backing);
         return .{
@@ -14792,9 +14859,7 @@ const BodySolver = struct {
             );
         };
         const whole_function_root = self.representation_store.reserveRoot();
-        const source_fn_ty_payload = self.sourcePayloadForKey(proc.callable.source_fn_ty) orelse {
-            lambdaInvariant("lambda-solved const-backed callable source function type has no concrete payload");
-        };
+        const source_fn_ty_payload = self.registry.inputProc(proc).source_fn_ty_payload;
         const fn_ty = try self.type_importer.importConcreteRef(source_fn_ty_payload);
         const target_instance = try self.registry.reserveProcValue(self.instance, value, proc, null);
         self.refreshValueStore();
@@ -14802,7 +14867,7 @@ const BodySolver = struct {
             .instance = self.instance,
             .value = value,
         } });
-        try self.publishFunctionRootShape(whole_function_root, fn_ty, proc.callable.source_fn_ty);
+        try self.publishFunctionRootShape(whole_function_root, fn_ty, proc.callable.source_fn_ty, source_fn_ty_payload);
         _ = try self.representation_store.appendRepresentationEdge(.{
             .from = .{ .local = self.valueRoot(value) },
             .to = .{ .local = whole_function_root },
@@ -14839,10 +14904,14 @@ const BodySolver = struct {
 
         const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
         for (shape_fields, 0..) |field_id, i| {
-            const field_ty = self.logicalRecordFieldType(logical_fields, field_id);
-            const child_backing = try self.constBackedRecordField(resolved, field_id, backing.const_instance);
+            const field_ty = self.logicalRecordFieldTypeForShape(logical_fields, shape, field_id);
+            const child_backing = try self.constBackedPublishedChild(resolved, backing.const_instance, .{ .record_field = field_id });
             const child_source_root = try self.sourceChildRoot(source_root, .{ .record_field = field_id });
-            const child_value = try self.newValue(field_ty, if (child_source_root) |source| source.key else .{});
+            const child_value = try self.newValue(
+                field_ty,
+                if (child_source_root) |source| source.key else .{},
+                self.sourcePayloadForRoot(child_source_root),
+            );
             try self.publishConstBackedValueMetadata(child_value, child_backing);
             fields[i] = .{
                 .field = field_id,
@@ -14880,7 +14949,11 @@ const BodySolver = struct {
         const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
         for (logical_items, 0..) |item_ty, i| {
             const child_source_root = try self.sourceChildRoot(source_root, .{ .tuple_elem = @intCast(i) });
-            const child_value = try self.newValue(item_ty, if (child_source_root) |source| source.key else .{});
+            const child_value = try self.newValue(
+                item_ty,
+                if (child_source_root) |source| source.key else .{},
+                self.sourcePayloadForRoot(child_source_root),
+            );
             try self.publishConstBackedValueMetadata(child_value, .{
                 .const_instance = backing.const_instance,
                 .schema = schema[i],
@@ -14914,7 +14987,11 @@ const BodySolver = struct {
         const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
         const elem_source_root = try self.sourceChildRoot(source_root, .list_elem);
         for (values, 0..) |item, i| {
-            const child_value = try self.newValue(elem_ty, if (elem_source_root) |source| source.key else .{});
+            const child_value = try self.newValue(
+                elem_ty,
+                if (elem_source_root) |source| source.key else .{},
+                self.sourcePayloadForRoot(elem_source_root),
+            );
             try self.publishConstBackedValueMetadata(child_value, .{
                 .const_instance = backing.const_instance,
                 .schema = elem_schema,
@@ -14937,7 +15014,11 @@ const BodySolver = struct {
         const payload_ty = try self.logicalBoxPayloadType(value_info.logical_ty);
         const source_root = self.sourceRootForPayload(value_info.source_ty_payload);
         const payload_source_root = try self.sourceChildRoot(source_root, .box_payload);
-        const payload_value = try self.newValue(payload_ty, if (payload_source_root) |source| source.key else .{});
+        const payload_value = try self.newValue(
+            payload_ty,
+            if (payload_source_root) |source| source.key else .{},
+            self.sourcePayloadForRoot(payload_source_root),
+        );
         try self.publishConstBackedValueMetadata(payload_value, self.constBackedBoxPayload(resolved, backing.const_instance));
         try self.appendConstBackedBoxErasureRequirements(payload_value);
 
@@ -14989,9 +15070,9 @@ const BodySolver = struct {
     ) Allocator.Error!repr.ConstBackedValueInfo {
         const resolved = self.unwrapConstBackedValue(self.resolveConstBackedValue(backing));
         return switch (kind) {
-            .record_field => |field| try self.constBackedRecordField(resolved, field, backing.const_instance),
+            .record_field => |field| try self.constBackedPublishedChild(resolved, backing.const_instance, .{ .record_field = field }),
             .tuple_elem => |index| self.constBackedTupleElem(resolved, index, backing.const_instance),
-            .tag_payload => |payload| self.constBackedTagPayload(resolved, payload, backing.const_instance),
+            .tag_payload => |payload| try self.constBackedPublishedChild(resolved, backing.const_instance, .{ .tag_payload = payload }),
         };
     }
 
@@ -15015,6 +15096,41 @@ const BodySolver = struct {
         };
     }
 
+    fn constBackedChildKey(
+        const_instance: checked_artifact.ConstInstanceRef,
+        resolved: ResolvedConstBackedValue,
+        kind: repr.ProjectionKind,
+    ) ConstBackedChildKey {
+        return .{
+            .owner = const_instance.owner.bytes,
+            .instance = @intFromEnum(const_instance.instance),
+            .schema = @intFromEnum(resolved.schema),
+            .value = @intFromEnum(resolved.value),
+            .kind = switch (kind) {
+                .record_field => |field| .{ .record_field = @intFromEnum(field) },
+                .tuple_elem => |index| .{ .tuple_elem = index },
+                .tag_payload => |payload| .{ .tag_payload = @intFromEnum(payload) },
+            },
+        };
+    }
+
+    fn constBackedPublishedChild(
+        self: *BodySolver,
+        resolved: ResolvedConstBackedValue,
+        const_instance: checked_artifact.ConstInstanceRef,
+        kind: repr.ProjectionKind,
+    ) Allocator.Error!repr.ConstBackedValueInfo {
+        const key = constBackedChildKey(const_instance, resolved, kind);
+        if (self.const_backed_children.get(key)) |child| return child;
+        const child = switch (kind) {
+            .record_field => |field| try self.constBackedRecordField(resolved, field, const_instance),
+            .tag_payload => |payload| try self.constBackedTagPayload(resolved, payload, const_instance),
+            .tuple_elem => |index| self.constBackedTupleElem(resolved, index, const_instance),
+        };
+        try self.const_backed_children.put(key, child);
+        return child;
+    }
+
     fn constBackedRecordField(
         self: *BodySolver,
         resolved: ResolvedConstBackedValue,
@@ -15032,26 +15148,31 @@ const BodySolver = struct {
         if (schema.len != values.len) {
             lambdaInvariant("lambda-solved const-backed record projection reached schema/value arity mismatch");
         }
-        const logical_label = self.row_shapes.recordField(field).label;
+
+        const target_label = self.row_shapes.recordField(field).label;
         for (schema, values) |field_schema, field_value| {
-            if (!self.constRecordFieldMatches(resolved.materialization, field_schema.name, logical_label)) continue;
+            if (!self.constRecordFieldMatches(resolved.materialization, field_schema.name, target_label)) continue;
             return .{
                 .const_instance = const_instance,
                 .schema = field_schema.schema,
                 .value = field_value,
             };
         }
-        lambdaInvariant("lambda-solved const-backed record projection could not find requested field");
+        lambdaInvariant("lambda-solved const-backed record child map could not resolve finalized row field");
     }
 
-    fn logicalRecordFieldType(
+    fn logicalRecordFieldTypeForShape(
         self: *BodySolver,
         fields: []const Type.Field,
+        shape: MonoRow.RecordShapeId,
         field: MonoRow.RecordFieldId,
     ) Type.TypeVarId {
-        const label = self.row_shapes.recordField(field).label;
-        for (fields) |logical_field| {
-            if (logical_field.name == label) return logical_field.ty;
+        const shape_fields = self.row_shapes.recordShapeFields(shape);
+        if (shape_fields.len != fields.len) {
+            lambdaInvariant("lambda-solved const-backed record aggregate shape disagreed with logical type arity");
+        }
+        for (shape_fields, fields) |shape_field, logical_field| {
+            if (shape_field == field) return logical_field.ty;
         }
         lambdaInvariant("lambda-solved const-backed record aggregate field missing from logical type");
     }
@@ -15089,7 +15210,7 @@ const BodySolver = struct {
         resolved: ResolvedConstBackedValue,
         payload: MonoRow.TagPayloadId,
         const_instance: checked_artifact.ConstInstanceRef,
-    ) repr.ConstBackedValueInfo {
+    ) Allocator.Error!repr.ConstBackedValueInfo {
         const schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
             .tag_union => |variants| variants,
             else => lambdaInvariant("lambda-solved const-backed tag payload projection reached non-tag schema"),
@@ -15103,17 +15224,18 @@ const BodySolver = struct {
             lambdaInvariant("lambda-solved const-backed tag payload projection variant index out of range");
         }
         const variant = schema[variant_index];
-        const payload_info = self.row_shapes.tagPayload(payload);
-        const tag_info = self.row_shapes.tag(payload_info.tag);
-        if (!self.constTagMatches(resolved.materialization, variant.name, tag_info.label)) {
-            lambdaInvariant("lambda-solved const-backed tag payload projection selected the wrong tag");
-        }
         if (variant.payloads.len != tag_value.payloads.len) {
             lambdaInvariant("lambda-solved const-backed tag payload projection schema/value arity mismatch");
         }
+
+        const payload_info = self.row_shapes.tagPayload(payload);
+        const tag_info = self.row_shapes.tag(payload_info.tag);
+        if (!(try self.constTagMatches(resolved.materialization, variant.name, tag_info.label))) {
+            lambdaInvariant("lambda-solved const-backed tag payload child map active tag disagreed with requested finalized payload");
+        }
         const payload_index: usize = @intCast(payload_info.logical_index);
         if (payload_index >= variant.payloads.len) {
-            lambdaInvariant("lambda-solved const-backed tag payload projection payload index out of range");
+            lambdaInvariant("lambda-solved const-backed tag payload child map logical index exceeded schema payloads");
         }
         return .{
             .const_instance = const_instance,
@@ -15163,7 +15285,7 @@ const BodySolver = struct {
         self: *BodySolver,
         backing: repr.ConstBackedValueInfo,
         tag_id: MonoRow.TagId,
-    ) bool {
+    ) Allocator.Error!bool {
         const resolved = self.unwrapConstBackedValue(self.resolveConstBackedValue(backing));
         const schema = switch (self.constSchema(resolved.materialization, resolved.schema)) {
             .tag_union => |variants| variants,
@@ -15177,8 +15299,11 @@ const BodySolver = struct {
         if (variant_index >= schema.len) {
             lambdaInvariant("lambda-solved const-backed tag pattern variant index out of range");
         }
-        const tag_info = self.row_shapes.tag(tag_id);
-        return self.constTagMatches(resolved.materialization, schema[variant_index].name, tag_info.label);
+        return try self.constTagMatches(
+            resolved.materialization,
+            schema[variant_index].name,
+            self.row_shapes.tag(tag_id).label,
+        );
     }
 
     fn constBackedRoot(
@@ -15842,9 +15967,9 @@ const BodySolver = struct {
         self: *BodySolver,
         ty: Type.TypeVarId,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!repr.ValueInfoId {
         const root = self.representation_store.reserveRoot();
-        const source_ty_payload = self.sourcePayloadForKey(source_ty);
         const value = try self.value_store.addValue(.{
             .logical_ty = ty,
             .source_ty = source_ty,
@@ -15880,8 +16005,8 @@ const BodySolver = struct {
         root: repr.RepRootId,
         ty: Type.TypeVarId,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!void {
-        const source_ty_payload = self.sourcePayloadForKey(source_ty);
         try self.publishStructuralRootEdges(root, ty, source_ty, self.sourceRootForPayload(source_ty_payload));
     }
 
@@ -16186,13 +16311,28 @@ const BodySolver = struct {
         lambdaInvariant("lambda-solved tag structural root tag label missing from logical type");
     }
 
-    fn sourcePayloadForKey(
+    fn sourcePayloadForArtifactRoot(
         self: *const BodySolver,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        checked_ty: checked_artifact.CheckedTypeId,
         source_ty: canonical.CanonicalTypeKey,
+    ) ConcreteSourceType.ConcreteSourceTypeRef {
+        return self.sourcePayloadForRoot(.{
+            .key = source_ty,
+            .source = .{ .artifact = .{
+                .artifact = artifact,
+                .ty = checked_ty,
+            } },
+        }) orelse lambdaInvariant("lambda-solved artifact source root has no published concrete payload");
+    }
+
+    fn sourcePayloadForRoot(
+        self: *const BodySolver,
+        source_root: ?ConcreteSourceType.ConcreteSourceTypeRoot,
     ) ?ConcreteSourceType.ConcreteSourceTypeRef {
-        if (isEmptyCanonicalTypeKey(source_ty)) return null;
-        return self.concrete_source_types.refForKey(source_ty) orelse
-            lambdaInvariant("lambda-solved value source type key has no concrete source type payload");
+        const root = source_root orelse return null;
+        return self.concrete_source_types.refForRootSource(root) orelse
+            lambdaInvariant("lambda-solved source root has no published concrete source type payload");
     }
 
     fn sourceRootForPayload(
@@ -16215,11 +16355,11 @@ const BodySolver = struct {
             .list_elem => self.sourceListElem(source) orelse return null,
             .box_payload => self.sourceBoxPayload(source) orelse return null,
             .tuple_elem => |index| self.sourceTupleElem(source, index) orelse return null,
-            .record_field => |field| self.sourceRecordField(source, self.row_shapes.recordField(field).label) orelse return null,
+            .record_field => |field| self.rowMapProducerRecordFieldChild(source, self.row_shapes.recordField(field).label) orelse return null,
             .tag_payload => |payload_id| blk: {
                 const payload = self.row_shapes.tagPayload(payload_id);
                 const tag = self.row_shapes.tag(payload.tag);
-                break :blk self.sourceTagPayload(source, tag.label, payload.logical_index) orelse return null;
+                break :blk self.rowMapProducerTagPayloadChild(source, tag.label, payload.logical_index) orelse return null;
             },
             .function_arg => |index| self.sourceFunctionArg(source, index) orelse return null,
             .function_return => self.sourceFunctionReturn(source) orelse return null,
@@ -16317,7 +16457,7 @@ const BodySolver = struct {
         };
     }
 
-    fn sourceRecordField(
+    fn rowMapProducerRecordFieldChild(
         self: *const BodySolver,
         source: ConcreteSourceTypeView,
         logical_field: canonical.RecordFieldLabelId,
@@ -16330,7 +16470,7 @@ const BodySolver = struct {
         );
     }
 
-    fn sourceTagPayload(
+    fn rowMapProducerTagPayloadChild(
         self: *const BodySolver,
         source: ConcreteSourceTypeView,
         logical_tag: canonical.TagLabelId,

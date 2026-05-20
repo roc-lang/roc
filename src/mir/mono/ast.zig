@@ -8,6 +8,7 @@ const symbol_mod = @import("symbol");
 const type_mod = @import("type.zig");
 const mir_ids = @import("../ids.zig");
 const hosted_mod = @import("../hosted.zig");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 
 const canonical = check.CanonicalNames;
 const checked_artifact = check.CheckedArtifact;
@@ -43,6 +44,7 @@ pub fn Span(comptime _: type) type {
 pub const TypedSymbol = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     symbol: Symbol,
 };
 
@@ -50,6 +52,7 @@ pub const TypedSymbol = struct {
 pub const Pat = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     data: Data,
 
     pub const Data = union(enum) {
@@ -99,6 +102,7 @@ pub const ListRestPattern = struct {
 pub const LetFn = struct {
     site: ?canonical.NestedProcSiteId = null,
     source_fn_ty: canonical.CanonicalTypeKey = .{},
+    source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     recursive: bool,
     bind: TypedSymbol,
     args: Span(TypedSymbol),
@@ -142,6 +146,7 @@ pub const CaptureArg = struct {
 pub const Expr = struct {
     ty: TypeId,
     source_ty: canonical.CanonicalTypeKey = .{},
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     data: Data,
 
     pub const Data = union(enum) {
@@ -181,6 +186,7 @@ pub const Expr = struct {
         clos: struct {
             site: canonical.NestedProcSiteId,
             source_fn_ty: canonical.CanonicalTypeKey,
+            source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
             args: Span(TypedSymbol),
             body: ExprId,
         },
@@ -189,12 +195,14 @@ pub const Expr = struct {
             args: Span(ExprId),
             requested_fn_ty: TypeId,
             requested_source_fn_ty: canonical.CanonicalTypeKey,
+            requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
         },
         call_proc: struct {
             proc: canonical.MirProcedureRef,
             args: Span(ExprId),
             requested_fn_ty: TypeId,
             requested_source_fn_ty: canonical.CanonicalTypeKey,
+            requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
         },
         proc_value: struct {
             proc: canonical.MirProcedureRef,
@@ -367,15 +375,37 @@ pub const Store = struct {
         source_ty: canonical.CanonicalTypeKey,
         data: Expr.Data,
     ) std.mem.Allocator.Error!ExprId {
+        return try self.addExprWithSourcePayload(ty, source_ty, null, data);
+    }
+
+    pub fn addExprWithSourcePayload(
+        self: *Store,
+        ty: TypeId,
+        source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
+        data: Expr.Data,
+    ) std.mem.Allocator.Error!ExprId {
         var owned_data = data;
         errdefer deinitExprData(self.allocator, &owned_data);
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .data = owned_data });
+        try self.exprs.append(self.allocator, .{
+            .ty = ty,
+            .source_ty = source_ty,
+            .source_ty_payload = source_ty_payload,
+            .data = owned_data,
+        });
         return @enumFromInt(idx);
     }
 
-    pub fn setExprSourceTy(self: *Store, id: ExprId, source_ty: canonical.CanonicalTypeKey) void {
-        self.exprs.items[@intFromEnum(id)].source_ty = source_ty;
+    pub fn setExprSourceInfo(
+        self: *Store,
+        id: ExprId,
+        source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
+    ) void {
+        const expr = &self.exprs.items[@intFromEnum(id)];
+        expr.source_ty = source_ty;
+        expr.source_ty_payload = source_ty_payload;
     }
 
     pub fn getExpr(self: *const Store, id: ExprId) Expr {

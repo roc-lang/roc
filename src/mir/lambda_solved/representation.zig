@@ -615,6 +615,7 @@ pub const SessionExecutableTagUnionPayload = struct {
 pub const SessionExecutableNominalPayload = struct {
     nominal: canonical.NominalTypeKey,
     source_ty: canonical.CanonicalTypeKey,
+    source_root: ?ConcreteSourceType.ConcreteSourceTypeRoot = null,
     is_opaque: bool,
     backing: SessionExecutableTypePayloadRef,
     backing_key: CanonicalExecValueTypeKey,
@@ -4620,7 +4621,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 writeHashU32(hasher, @intCast(fields.len));
                 for (fields) |field| {
                     writeHashBytes(hasher, self.names.recordFieldLabelText(field.name));
-                    try self.writeErasedBoundaryTypeKey(hasher, field.ty, self.sourceRecordField(source, field.name), active);
+                    try self.writeErasedBoundaryTypeKey(hasher, field.ty, self.erasedBoundarySourceRecordFieldChild(source, field.name), active);
                 }
             },
             .tag_union => |tag_union| {
@@ -4632,7 +4633,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                     const args = self.types.sliceTypeVarSpan(tag.args);
                     writeHashU32(hasher, @intCast(args.len));
                     for (args, 0..) |arg, i| {
-                        try self.writeErasedBoundaryTypeKey(hasher, arg, self.sourceTagPayload(source, tag.name, i), active);
+                        try self.writeErasedBoundaryTypeKey(hasher, arg, self.erasedBoundarySourceTagPayloadChild(source, tag.name, i), active);
                     }
                 }
             },
@@ -4708,6 +4709,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
+                    .source_root = null,
                     .is_opaque = nominal.is_opaque,
                     .backing = backing.ty,
                     .backing_key = backing.key,
@@ -4858,7 +4860,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         };
     }
 
-    fn sourceRecordField(
+    fn erasedBoundarySourceRecordFieldChild(
         self: *const SessionExecutableTypePayloadBuilder,
         source: ErasedBoundarySourceCursor,
         field: canonical.RecordFieldLabelId,
@@ -4875,7 +4877,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         return self.sourceCursorForCheckedRoot(child);
     }
 
-    fn sourceTagPayload(
+    fn erasedBoundarySourceTagPayloadChild(
         self: *const SessionExecutableTypePayloadBuilder,
         source: ErasedBoundarySourceCursor,
         tag: canonical.TagLabelId,
@@ -5010,7 +5012,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         const out = try self.allocator.alloc(SessionExecutableRecordFieldPayload, fields.len);
         errdefer self.allocator.free(out);
         for (fields, 0..) |field, i| {
-            const child = try self.endpointForErasedBoundaryType(field.ty, self.sourceRecordField(source, field.name));
+            const child = try self.endpointForErasedBoundaryType(field.ty, self.erasedBoundarySourceRecordFieldChild(source, field.name));
             out[i] = .{
                 .field = self.recordFieldInShape(shape, field.name),
                 .ty = child.ty,
@@ -5099,7 +5101,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         const out = try self.allocator.alloc(SessionExecutableTagPayload, args.len);
         errdefer self.allocator.free(out);
         for (args, shape_payloads, 0..) |arg, payload, i| {
-            const source_child = self.sourceTagPayload(source, source_tag, i);
+            const source_child = self.erasedBoundarySourceTagPayloadChild(source, source_tag, i);
             const child = try self.endpointForErasedBoundaryType(arg, source_child);
             out[i] = .{
                 .payload = payload,
@@ -5368,6 +5370,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
+                    .source_root = self.rootSourceRoot(rep_root),
                     .is_opaque = nominal.is_opaque,
                     .backing = backing.ty,
                     .backing_key = backing.key,
@@ -5523,6 +5526,16 @@ const SessionExecutableTypePayloadBuilder = struct {
         representationInvariant("session executable root payload has no published structural child root");
     }
 
+    fn rootSourceRoot(
+        self: *SessionExecutableTypePayloadBuilder,
+        root: RepRootId,
+    ) ?ConcreteSourceType.ConcreteSourceTypeRoot {
+        const info = self.representation_store.rootTypeInfo(root) orelse {
+            representationInvariant("session executable nominal payload root has no published source type info");
+        };
+        return info.source_root;
+    }
+
     fn typePayload(self: *SessionExecutableTypePayloadBuilder, ty: type_mod.TypeVarId) std.mem.Allocator.Error!SessionExecutableTypePayload {
         const root = self.types.unlinkConst(ty);
         return switch (self.types.getNode(root)) {
@@ -5536,6 +5549,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
+                    .source_root = null,
                     .is_opaque = nominal.is_opaque,
                     .backing = backing.ty,
                     .backing_key = backing.key,
@@ -5999,6 +6013,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
+                    .source_root = self.rootSourceRoot(value_root),
                     .is_opaque = nominal.is_opaque,
                     .backing = backing.ty,
                     .backing_key = backing.key,
@@ -6024,7 +6039,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         const out = try self.allocator.alloc(SessionExecutableRecordFieldPayload, record.fields.len);
         errdefer self.allocator.free(out);
         for (record.fields, 0..) |field, i| {
-            const field_ty = try self.logicalRecordFieldType(source_fields, field.field);
+            const field_ty = try self.logicalRecordFieldTypeForShape(source_fields, record.shape, field.field);
             const child_root = self.structuralChildRoot(value_root, .{ .record_field = field.field });
             const child = try self.childForRootType(child_root, field_ty);
             out[i] = .{
@@ -6253,14 +6268,18 @@ const SessionExecutableTypePayloadBuilder = struct {
         };
     }
 
-    fn logicalRecordFieldType(
+    fn logicalRecordFieldTypeForShape(
         self: *SessionExecutableTypePayloadBuilder,
         fields: []const type_mod.Field,
+        shape: row.RecordShapeId,
         field_id: row.RecordFieldId,
     ) std.mem.Allocator.Error!type_mod.TypeVarId {
-        const expected_label = self.row_shapes.recordField(field_id).label;
-        for (fields) |field| {
-            if (field.name == expected_label) return field.ty;
+        const shape_fields = self.row_shapes.recordShapeFields(shape);
+        if (shape_fields.len != fields.len) {
+            representationInvariant("session executable record value shape disagreed with logical type arity");
+        }
+        for (shape_fields, fields) |shape_field, field| {
+            if (shape_field == field_id) return field.ty;
         }
         representationInvariant("session executable record value field was absent from logical type");
     }
@@ -6982,18 +7001,6 @@ const ExecValueTypeKeyBuilder = struct {
             },
             else => representationInvariant("executable value type key record payload attached to unresolved type"),
         };
-    }
-
-    fn logicalRecordFieldType(
-        self: *ExecValueTypeKeyBuilder,
-        fields: []const type_mod.Field,
-        field_id: row.RecordFieldId,
-    ) std.mem.Allocator.Error!TypeVarId {
-        const expected_label = self.rowShapes().recordField(field_id).label;
-        for (fields) |field| {
-            if (field.name == expected_label) return field.ty;
-        }
-        representationInvariant("executable value type key record field was absent from logical type");
     }
 
     fn logicalTagUnionTags(self: *ExecValueTypeKeyBuilder, logical_ty: TypeVarId) std.mem.Allocator.Error![]const type_mod.Tag {

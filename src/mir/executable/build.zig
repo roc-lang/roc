@@ -2992,23 +2992,20 @@ fn applyRecordValueTransform(
         .record => |record| record,
         else => executableInvariant("record value transform target endpoint is not a record"),
     };
-    if (fields.len != target.fields.len) {
+    if (fields.len != target.fields.len or source.fields.len != target.fields.len) {
         executableInvariant("record value transform field count differs from target record");
     }
 
     const source_expr = try program.ast.addValueRefExpr(from_ty, value);
-    const seen = try program.allocator.alloc(bool, fields.len);
-    defer program.allocator.free(seen);
-    @memset(seen, false);
-
     const output_fields = try program.allocator.alloc(Ast.RecordFieldExpr, target.fields.len);
     defer program.allocator.free(output_fields);
-    for (target.fields, 0..) |target_field, target_i| {
-        const label = program.row_shapes.recordField(target_field.field).label;
-        const field_plan = (try findValueTransformRecordField(program, materialization, fields, label, seen)) orelse {
-            executableInvariant("record value transform omitted a target field");
-        };
-        const source_field = recordFieldForLabel(program, source, label);
+    for (fields, 0..) |field_plan, target_i| {
+        const target_field_id = try published_types.recordField(plan.to, field_plan.field);
+        if (target.fields[target_i].field != target_field_id) {
+            executableInvariant("record value transform target field order differs from published transform plan");
+        }
+        const target_field = target.fields[target_i];
+        const source_field = recordFieldForId(program, source, try published_types.recordField(plan.from, field_plan.field));
         const access_value = program.ast.freshValueRef();
         const access_expr = try program.ast.addExpr(source_field.ty, access_value, .{ .access = .{
             .record = source_expr,
@@ -3035,7 +3032,6 @@ fn applyRecordValueTransform(
             .bridge = try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, target_field.ty, target_field.ty),
         };
     }
-    verifyAllSeen(seen, "record value transform had an extra source field transform");
 
     const record_value = program.ast.freshValueRef();
     const record_expr = try program.ast.addExpr(to_ty, record_value, .{ .record = .{
@@ -3047,23 +3043,6 @@ fn applyRecordValueTransform(
         .body = record_expr,
     } }));
     return record_value;
-}
-
-fn findValueTransformRecordField(
-    program: *Program,
-    materialization: MaterializationStores,
-    fields: []const checked_artifact.ValueTransformRecordField,
-    label: canonical.RecordFieldLabelId,
-    seen: []bool,
-) Allocator.Error!?checked_artifact.ValueTransformRecordField {
-    for (fields, 0..) |field, i| {
-        const field_label = try materializationRecordFieldLabel(program, materialization, field.field);
-        if (field_label != label) continue;
-        if (seen[i]) executableInvariant("record value transform duplicated a field");
-        seen[i] = true;
-        return field;
-    }
-    return null;
 }
 
 fn applyNominalValueTransform(
@@ -3289,19 +3268,15 @@ fn applyTagUnionValueTransform(
         executableInvariant("tag-union value transform case count differs from source tag-union arity");
     }
 
-    const seen_cases = try program.allocator.alloc(bool, cases.len);
-    defer program.allocator.free(seen_cases);
-    @memset(seen_cases, false);
-
     const branches = try program.allocator.alloc(Ast.ValueTransformTagBranch, source.tags.len);
     defer program.allocator.free(branches);
-    for (source.tags, 0..) |source_tag, source_i| {
-        const source_label = program.row_shapes.tag(source_tag.tag).label;
-        const case = (try findValueTransformTagCase(program, materialization, cases, source_label, seen_cases)) orelse {
-            executableInvariant("tag-union value transform omitted a source tag case");
-        };
-        const target_label = try materializationTagLabel(program, materialization, case.target_tag);
-        const target_tag = tagTypeForLabel(program, target, target_label);
+    for (cases, 0..) |case, source_i| {
+        const source_tag_id = try published_types.tag(plan.from, case.source_tag);
+        if (source.tags[source_i].tag != source_tag_id) {
+            executableInvariant("tag-union value transform source tag order differs from published transform plan");
+        }
+        const source_tag = source.tags[source_i];
+        const target_tag = tagTypeForId(program, target, try published_types.tag(plan.to, case.target_tag));
 
         var branch_stmts = std.ArrayList(Ast.StmtId).empty;
         defer branch_stmts.deinit(program.allocator);
@@ -3325,7 +3300,6 @@ fn applyTagUnionValueTransform(
             .body = branch_body,
         };
     }
-    verifyAllSeen(seen_cases, "tag-union value transform had an extra source tag case");
 
     const transformed_value = program.ast.freshValueRef();
     const transformed_expr = try program.ast.addExpr(to_ty, transformed_value, .{ .value_transform_tag_union = .{
@@ -3417,23 +3391,6 @@ fn tagUnionValueTransformBranchBody(
     } });
 }
 
-fn findValueTransformTagCase(
-    program: *Program,
-    materialization: MaterializationStores,
-    cases: []const checked_artifact.ValueTransformTagCase,
-    source_label: canonical.TagLabelId,
-    seen: []bool,
-) Allocator.Error!?checked_artifact.ValueTransformTagCase {
-    for (cases, 0..) |case, i| {
-        const case_label = try materializationTagLabel(program, materialization, case.source_tag);
-        if (case_label != source_label) continue;
-        if (seen[i]) executableInvariant("tag-union value transform duplicated a source tag case");
-        seen[i] = true;
-        return case;
-    }
-    return null;
-}
-
 fn findValueTransformPayloadEdge(
     payloads: []const checked_artifact.ValueTransformTagPayloadEdge,
     target_payload_index: u32,
@@ -3446,17 +3403,6 @@ fn findValueTransformPayloadEdge(
         return payload;
     }
     return null;
-}
-
-fn tagTypeForLabel(
-    program: *const Program,
-    tag_union: Type.TagUnionType,
-    label: canonical.TagLabelId,
-) Type.TagType {
-    for (tag_union.tags) |tag| {
-        if (program.row_shapes.tag(tag.tag).label == label) return tag;
-    }
-    executableInvariant("tag-union value transform target tag label is absent from target type");
 }
 
 fn recordFieldForId(
@@ -3829,7 +3775,7 @@ fn lowerPublishedExecutableValueTransformAsBridge(
     const plan = transforms.get(transform_id);
     const from_ty = try published_types.lower(plan.from.ty, plan.from.key);
     const to_ty = try published_types.lower(plan.to.ty, plan.to.key);
-    return try lowerExecutableStructuralBridgePlan(program, materialization, published_types, transforms, from_ty, to_ty, structural);
+    return try lowerExecutableStructuralBridgePlan(program, materialization, published_types, transforms, plan, from_ty, to_ty, structural);
 }
 
 fn lowerExecutableValueChildBridge(
@@ -3865,6 +3811,7 @@ fn lowerExecutableStructuralBridgePlan(
     materialization: MaterializationStores,
     published_types: *PublishedTypeLowerer,
     transforms: *const checked_artifact.ExecutableValueTransformPlanStore,
+    plan_endpoints: checked_artifact.ExecutableValueTransformPlan,
     from_ty: Type.TypeId,
     to_ty: Type.TypeId,
     op: checked_artifact.ExecutableStructuralBridgePlan,
@@ -3882,7 +3829,7 @@ fn lowerExecutableStructuralBridgePlan(
         .box_box => |child| .{ .box_box = try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, child) },
         .singleton_to_tag_union => |singleton| .{ .singleton_to_tag_union = .{
             .source_payload = from_ty,
-            .target_discriminant = try tagDiscriminantForLabel(program, to_ty, try materializationTagLabel(program, materialization, singleton.target_tag)),
+            .target_discriminant = try tagDiscriminantForId(program, to_ty, try published_types.tag(plan_endpoints.to, singleton.target_tag)),
             .payload_plan = if (singleton.value_transform) |payload|
                 try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload)
             else blk: {
@@ -3890,15 +3837,14 @@ fn lowerExecutableStructuralBridgePlan(
                     .tag_union => |tag_union| tag_union,
                     else => executableInvariant("executable singleton_to_tag_union bridge target was not a tag union"),
                 };
-                const target_label = try materializationTagLabel(program, materialization, singleton.target_tag);
-                const target_tag = tagTypeForLabel(program, target_union, target_label);
+                const target_tag = tagTypeForId(program, target_union, try published_types.tag(plan_endpoints.to, singleton.target_tag));
                 const target_payload_ty = (try tagPayloadEndpointType(program.allocator, program, target_tag)) orelse break :blk null;
                 break :blk try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, from_ty, target_payload_ty);
             },
         } },
         .tag_union_to_singleton => |singleton| .{ .tag_union_to_singleton = .{
             .target_payload = to_ty,
-            .source_discriminant = try tagDiscriminantForLabel(program, from_ty, try materializationTagLabel(program, materialization, singleton.source_tag)),
+            .source_discriminant = try tagDiscriminantForId(program, from_ty, try published_types.tag(plan_endpoints.from, singleton.source_tag)),
             .payload_plan = if (singleton.value_transform) |payload|
                 try lowerExecutableValueChildBridge(program, materialization, published_types, transforms, payload)
             else blk: {
@@ -3906,48 +3852,13 @@ fn lowerExecutableStructuralBridgePlan(
                     .tag_union => |tag_union| tag_union,
                     else => executableInvariant("executable tag_union_to_singleton bridge source was not a tag union"),
                 };
-                const source_label = try materializationTagLabel(program, materialization, singleton.source_tag);
-                const source_tag = tagTypeForLabel(program, source_union, source_label);
+                const source_tag = tagTypeForId(program, source_union, try published_types.tag(plan_endpoints.from, singleton.source_tag));
                 const source_payload_ty = (try tagPayloadEndpointType(program.allocator, program, source_tag)) orelse break :blk null;
                 break :blk try constructionSlotBridgeForProgram(program.allocator, program, &program.ast, source_payload_ty, to_ty);
             },
         } },
     };
     return try program.ast.addBridgePlan(plan);
-}
-
-fn recordFieldForLabel(
-    program: *const Program,
-    record: Type.RecordType,
-    label: canonical.RecordFieldLabelId,
-) Type.RecordFieldType {
-    for (record.fields) |field| {
-        if (program.row_shapes.recordField(field.field).label == label) return field;
-    }
-    executableInvariant("record value transform source field label is absent from source type");
-}
-
-fn tagDiscriminantForLabel(
-    program: *const Program,
-    ty: Type.TypeId,
-    label: canonical.TagLabelId,
-) Allocator.Error!u16 {
-    const tag_union = switch (program.types.getType(ty)) {
-        .tag_union => |tag_union| tag_union,
-        else => executableInvariant("executable structural bridge expected a tag union endpoint"),
-    };
-    return @intCast(try tagVariantIndexForLabel(program, tag_union, label));
-}
-
-fn tagVariantIndexForLabel(
-    program: *const Program,
-    tag_union: Type.TagUnionType,
-    label: canonical.TagLabelId,
-) Allocator.Error!usize {
-    for (tag_union.tags, 0..) |tag, i| {
-        if (program.row_shapes.tag(tag.tag).label == label) return i;
-    }
-    executableInvariant("executable structural bridge tag label is absent from target type");
 }
 
 const ErasedPromotedCaptureLowering = struct {
@@ -5491,7 +5402,7 @@ fn materializationRecordFieldLabel(
     materialization: MaterializationStores,
     label: canonical.RecordFieldLabelId,
 ) Allocator.Error!canonical.RecordFieldLabelId {
-    return try program.canonical_names.internRecordFieldLabel(sourceRecordFieldLabelText(materialization.canonical_names, label));
+    return try program.canonical_names.internRecordFieldLabel(materializationRecordFieldLabelText(materialization.canonical_names, label));
 }
 
 fn materializationTagLabel(
@@ -5569,7 +5480,7 @@ fn sourceTypeNameText(names: *const canonical.CanonicalNameStore, id: canonical.
     return names.type_names.items[index];
 }
 
-fn sourceRecordFieldLabelText(names: *const canonical.CanonicalNameStore, id: canonical.RecordFieldLabelId) []const u8 {
+fn materializationRecordFieldLabelText(names: *const canonical.CanonicalNameStore, id: canonical.RecordFieldLabelId) []const u8 {
     const index: usize = @intFromEnum(id);
     if (index >= names.record_field_labels.items.len) executableInvariant("executable materialization record field label id is outside owning artifact name table");
     return names.record_field_labels.items[index];
@@ -5823,6 +5734,25 @@ const PublishedTypeLowerer = struct {
     row_shapes: *MonoRow.Store,
     lowered_by_key: *std.AutoHashMap(repr.CanonicalExecValueTypeKey, Type.TypeId),
     active: std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId),
+    record_children: std.AutoHashMap(PublishedRecordFieldChildKey, MonoRow.RecordFieldId),
+    tag_children: std.AutoHashMap(PublishedTagChildKey, MonoRow.TagId),
+    tag_payload_children: std.AutoHashMap(PublishedTagPayloadChildKey, MonoRow.TagPayloadId),
+
+    const PublishedRecordFieldChildKey = struct {
+        payload: checked_artifact.ExecutableTypePayloadId,
+        field: canonical.RecordFieldLabelId,
+    };
+
+    const PublishedTagChildKey = struct {
+        payload: checked_artifact.ExecutableTypePayloadId,
+        tag: canonical.TagLabelId,
+    };
+
+    const PublishedTagPayloadChildKey = struct {
+        payload: checked_artifact.ExecutableTypePayloadId,
+        tag: canonical.TagLabelId,
+        index: u32,
+    };
 
     fn init(
         allocator: Allocator,
@@ -5842,10 +5772,16 @@ const PublishedTypeLowerer = struct {
             .row_shapes = row_shapes,
             .lowered_by_key = lowered_by_key,
             .active = std.AutoHashMap(checked_artifact.ExecutableTypePayloadId, Type.TypeId).init(allocator),
+            .record_children = std.AutoHashMap(PublishedRecordFieldChildKey, MonoRow.RecordFieldId).init(allocator),
+            .tag_children = std.AutoHashMap(PublishedTagChildKey, MonoRow.TagId).init(allocator),
+            .tag_payload_children = std.AutoHashMap(PublishedTagPayloadChildKey, MonoRow.TagPayloadId).init(allocator),
         };
     }
 
     fn deinit(self: *PublishedTypeLowerer) void {
+        self.tag_payload_children.deinit();
+        self.tag_children.deinit();
+        self.record_children.deinit();
         self.active.deinit();
     }
 
@@ -5886,7 +5822,7 @@ const PublishedTypeLowerer = struct {
         try self.lowered_by_key.put(key, ty);
         errdefer _ = self.lowered_by_key.remove(key);
 
-        const lowered = try self.lowerPayloadContent(self.payloads.get(id));
+        const lowered = try self.lowerPayloadContent(id, self.payloads.get(id));
         self.output.types.items[@intFromEnum(ty)] = lowered;
         _ = self.active.remove(id);
         return ty;
@@ -5894,14 +5830,15 @@ const PublishedTypeLowerer = struct {
 
     fn lowerPayloadContent(
         self: *PublishedTypeLowerer,
+        id: checked_artifact.ExecutableTypePayloadId,
         payload: checked_artifact.ExecutableTypePayload,
     ) Allocator.Error!Type.Content {
         return switch (payload) {
             .pending => executableInvariant("executable published type payload was pending"),
             .primitive => |prim| .{ .primitive = publishedPrimitive(prim) },
-            .record => |fields| try self.lowerRecordPayload(fields),
+            .record => |fields| try self.lowerRecordPayload(id, fields),
             .tuple => |items| .{ .tuple = try self.lowerTuplePayload(items) },
-            .tag_union => |variants| try self.lowerTagUnionPayload(variants),
+            .tag_union => |variants| try self.lowerTagUnionPayload(id, variants),
             .list => |child| .{ .list = try self.lower(child.ty, child.key) },
             .box => |child| .{ .box = try self.lower(child.ty, child.key) },
             .nominal => |nominal| .{ .nominal = .{
@@ -5925,6 +5862,7 @@ const PublishedTypeLowerer = struct {
 
     fn lowerRecordPayload(
         self: *PublishedTypeLowerer,
+        id: checked_artifact.ExecutableTypePayloadId,
         fields: []const checked_artifact.ExecutableRecordFieldPayload,
     ) Allocator.Error!Type.Content {
         const labels = try self.allocator.alloc(canonical.RecordFieldLabelId, fields.len);
@@ -5938,8 +5876,10 @@ const PublishedTypeLowerer = struct {
         const out = try self.allocator.alloc(Type.RecordFieldType, fields.len);
         errdefer self.allocator.free(out);
         for (fields, 0..) |field, i| {
+            const field_id = self.recordFieldInShape(shape, labels[i]);
+            try self.publishRecordChild(id, field.field, field_id);
             out[i] = .{
-                .field = self.recordFieldInShape(shape, labels[i]),
+                .field = field_id,
                 .ty = try self.lower(field.ty, field.key),
             };
         }
@@ -5974,6 +5914,7 @@ const PublishedTypeLowerer = struct {
 
     fn lowerTagUnionPayload(
         self: *PublishedTypeLowerer,
+        id: checked_artifact.ExecutableTypePayloadId,
         variants: []const checked_artifact.ExecutableTagVariantPayload,
     ) Allocator.Error!Type.Content {
         const descriptors = try self.allocator.alloc(MonoRow.Store.TagShapeDescriptor, variants.len);
@@ -5995,7 +5936,8 @@ const PublishedTypeLowerer = struct {
         }
         for (variants, 0..) |variant, i| {
             const shape_tag = self.tagInShape(shape, descriptors[i].name);
-            const payloads = try self.lowerTagPayloads(shape_tag, variant.payloads);
+            try self.publishTagChild(id, variant.tag, shape_tag);
+            const payloads = try self.lowerTagPayloads(id, variant.tag, shape_tag, variant.payloads);
             out[i] = .{
                 .tag = shape_tag,
                 .payloads = payloads,
@@ -6009,6 +5951,8 @@ const PublishedTypeLowerer = struct {
 
     fn lowerTagPayloads(
         self: *PublishedTypeLowerer,
+        parent: checked_artifact.ExecutableTypePayloadId,
+        tag_label: canonical.TagLabelId,
         tag: MonoRow.TagId,
         payloads: []const checked_artifact.ExecutableTagPayload,
     ) Allocator.Error![]const Type.TagPayloadType {
@@ -6019,6 +5963,7 @@ const PublishedTypeLowerer = struct {
         errdefer self.allocator.free(out);
         for (payloads, 0..) |payload, i| {
             if (payload.index != i) executableInvariant("executable published tag payload indexes are not canonical");
+            try self.publishTagPayloadChild(parent, tag_label, payload.index, shape_payloads[i]);
             out[i] = .{
                 .payload = shape_payloads[i],
                 .ty = try self.lower(payload.ty, payload.key),
@@ -6049,6 +5994,77 @@ const PublishedTypeLowerer = struct {
         executableInvariant("executable published tag payload label missing from interned shape");
     }
 
+    fn publishRecordChild(
+        self: *PublishedTypeLowerer,
+        payload: checked_artifact.ExecutableTypePayloadId,
+        field: canonical.RecordFieldLabelId,
+        lowered: MonoRow.RecordFieldId,
+    ) Allocator.Error!void {
+        const entry = try self.record_children.getOrPut(.{ .payload = payload, .field = field });
+        if (entry.found_existing and entry.value_ptr.* != lowered) {
+            executableInvariant("executable published record child map had conflicting field ids");
+        }
+        entry.value_ptr.* = lowered;
+    }
+
+    fn publishTagChild(
+        self: *PublishedTypeLowerer,
+        payload: checked_artifact.ExecutableTypePayloadId,
+        tag: canonical.TagLabelId,
+        lowered: MonoRow.TagId,
+    ) Allocator.Error!void {
+        const entry = try self.tag_children.getOrPut(.{ .payload = payload, .tag = tag });
+        if (entry.found_existing and entry.value_ptr.* != lowered) {
+            executableInvariant("executable published tag child map had conflicting tag ids");
+        }
+        entry.value_ptr.* = lowered;
+    }
+
+    fn publishTagPayloadChild(
+        self: *PublishedTypeLowerer,
+        payload: checked_artifact.ExecutableTypePayloadId,
+        tag: canonical.TagLabelId,
+        index: u32,
+        lowered: MonoRow.TagPayloadId,
+    ) Allocator.Error!void {
+        const entry = try self.tag_payload_children.getOrPut(.{ .payload = payload, .tag = tag, .index = index });
+        if (entry.found_existing and entry.value_ptr.* != lowered) {
+            executableInvariant("executable published tag-payload child map had conflicting payload ids");
+        }
+        entry.value_ptr.* = lowered;
+    }
+
+    fn recordField(
+        self: *PublishedTypeLowerer,
+        endpoint: checked_artifact.ExecutableValueEndpoint,
+        field: canonical.RecordFieldLabelId,
+    ) Allocator.Error!MonoRow.RecordFieldId {
+        _ = try self.lower(endpoint.ty, endpoint.key);
+        return self.record_children.get(.{ .payload = endpoint.ty.payload, .field = field }) orelse
+            executableInvariant("executable published record transform referenced an unpublished field child");
+    }
+
+    fn tag(
+        self: *PublishedTypeLowerer,
+        endpoint: checked_artifact.ExecutableValueEndpoint,
+        tag_label: canonical.TagLabelId,
+    ) Allocator.Error!MonoRow.TagId {
+        _ = try self.lower(endpoint.ty, endpoint.key);
+        return self.tag_children.get(.{ .payload = endpoint.ty.payload, .tag = tag_label }) orelse
+            executableInvariant("executable published tag transform referenced an unpublished tag child");
+    }
+
+    fn tagPayload(
+        self: *PublishedTypeLowerer,
+        endpoint: checked_artifact.ExecutableValueEndpoint,
+        tag_label: canonical.TagLabelId,
+        index: u32,
+    ) Allocator.Error!MonoRow.TagPayloadId {
+        _ = try self.lower(endpoint.ty, endpoint.key);
+        return self.tag_payload_children.get(.{ .payload = endpoint.ty.payload, .tag = tag_label, .index = index }) orelse
+            executableInvariant("executable published tag transform referenced an unpublished tag-payload child");
+    }
+
     fn lowerCallableSetPayload(
         self: *PublishedTypeLowerer,
         callable_set: checked_artifact.ExecutableCallableSetPayload,
@@ -6074,7 +6090,7 @@ const PublishedTypeLowerer = struct {
         self: *PublishedTypeLowerer,
         label: canonical.RecordFieldLabelId,
     ) Allocator.Error!canonical.RecordFieldLabelId {
-        return try self.lowering_names.internRecordFieldLabel(sourceRecordFieldLabelText(self.source_names, label));
+        return try self.lowering_names.internRecordFieldLabel(materializationRecordFieldLabelText(self.source_names, label));
     }
 
     fn remapTagLabel(
@@ -8899,6 +8915,9 @@ const BodyBuilder = struct {
         source: Type.RecordType,
         target: Type.RecordType,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
+        if (source.shape != target.shape) {
+            executableInvariant("executable value record bridge crossed finalized record shapes");
+        }
         if (source.fields.len != target.fields.len) {
             executableInvariant("executable value record bridge arity mismatch");
         }
@@ -8906,23 +8925,20 @@ const BodyBuilder = struct {
         const children = try self.allocator.alloc(Ast.BridgeId, source.fields.len);
         defer self.allocator.free(children);
         for (target.fields, 0..) |target_field, i| {
-            const source_field = self.recordFieldTypeByLabel(source, target_field.field);
+            const source_field = recordFieldTypeById(source, target_field.field);
             children[i] = try self.valueBridge(source_field.ty, target_field.ty);
         }
         return try self.output.addBridgePlanSpan(children);
     }
 
-    fn recordFieldTypeByLabel(
-        self: *BodyBuilder,
+    fn recordFieldTypeById(
         record: Type.RecordType,
-        target_field_id: MonoRow.RecordFieldId,
+        field_id: MonoRow.RecordFieldId,
     ) Type.RecordFieldType {
-        const target_label = self.program.row_shapes.recordField(target_field_id).label;
         for (record.fields) |field| {
-            const source_label = self.program.row_shapes.recordField(field.field).label;
-            if (source_label == target_label) return field;
+            if (field.field == field_id) return field;
         }
-        executableInvariant("executable value record bridge could not find field by finalized label");
+        executableInvariant("executable value record bridge could not find finalized field id");
     }
 
     fn valueTagUnionBridge(
@@ -8930,6 +8946,9 @@ const BodyBuilder = struct {
         source: Type.TagUnionType,
         target: Type.TagUnionType,
     ) Allocator.Error!Ast.Span(Ast.BridgeId) {
+        if (source.shape != target.shape) {
+            executableInvariant("executable value tag-union bridge crossed finalized tag-union shapes");
+        }
         if (source.tags.len != target.tags.len) {
             executableInvariant("executable value tag-union bridge arity mismatch");
         }
@@ -8937,23 +8956,20 @@ const BodyBuilder = struct {
         const children = try self.allocator.alloc(Ast.BridgeId, target.tags.len);
         defer self.allocator.free(children);
         for (target.tags, 0..) |target_tag, i| {
-            const source_tag = self.tagTypeByLabel(source, target_tag.tag);
+            const source_tag = tagTypeById(source, target_tag.tag);
             children[i] = try self.valueTagPayloadBridge(source_tag, target_tag);
         }
         return try self.output.addBridgePlanSpan(children);
     }
 
-    fn tagTypeByLabel(
-        self: *BodyBuilder,
+    fn tagTypeById(
         tag_union: Type.TagUnionType,
-        target_tag_id: MonoRow.TagId,
+        tag_id: MonoRow.TagId,
     ) Type.TagType {
-        const target_label = self.program.row_shapes.tag(target_tag_id).label;
         for (tag_union.tags) |tag| {
-            const source_label = self.program.row_shapes.tag(tag.tag).label;
-            if (source_label == target_label) return tag;
+            if (tag.tag == tag_id) return tag;
         }
-        executableInvariant("executable value tag-union bridge could not find tag by finalized label");
+        executableInvariant("executable value tag-union bridge could not find finalized tag id");
     }
 
     fn valueTagPayloadBridge(
@@ -8980,7 +8996,7 @@ const BodyBuilder = struct {
         @memset(seen_source, false);
         @memset(seen_target, false);
         for (source.payloads) |payload| {
-            const index: usize = @intCast(self.program.row_shapes.tagPayload(payload.payload).logical_index);
+            const index = payloadIndexInTag(source, payload.payload);
             if (index >= source_payloads.len or seen_source[index]) {
                 executableInvariant("executable value source payload bridge index mismatch");
             }
@@ -8988,7 +9004,7 @@ const BodyBuilder = struct {
             seen_source[index] = true;
         }
         for (target.payloads) |payload| {
-            const index: usize = @intCast(self.program.row_shapes.tagPayload(payload.payload).logical_index);
+            const index = payloadIndexInTag(target, payload.payload);
             if (index >= target_payloads.len or seen_target[index]) {
                 executableInvariant("executable value target payload bridge index mismatch");
             }
@@ -8998,6 +9014,13 @@ const BodyBuilder = struct {
         verifyAllSeen(seen_source, "executable value source payload bridge omitted payload");
         verifyAllSeen(seen_target, "executable value target payload bridge omitted payload");
         return try self.output.addBridgePlan(.{ .struct_ = try self.valueStructBridge(source_payloads, target_payloads) });
+    }
+
+    fn payloadIndexInTag(tag: Type.TagType, payload_id: MonoRow.TagPayloadId) usize {
+        for (tag.payloads, 0..) |payload, index| {
+            if (payload.payload == payload_id) return index;
+        }
+        executableInvariant("executable value tag bridge could not find finalized payload id");
     }
 
     const SavedBinding = struct {
@@ -9506,20 +9529,14 @@ const BodyBuilder = struct {
         tag_union: Type.TagUnionType,
         source_tag: MonoRow.TagId,
     ) TypeTagConstruction {
-        const source_info = self.program.row_shapes.tag(source_tag);
-        const source_payloads = self.program.row_shapes.tagPayloads(source_tag);
         for (tag_union.tags) |target_tag| {
-            const target_info = self.program.row_shapes.tag(target_tag.tag);
-            if (target_info.label != source_info.label) continue;
-            if (target_tag.payloads.len != source_payloads.len) {
-                executableInvariant("executable tag row re-keying found tag label with different payload arity");
-            }
+            if (target_tag.tag != source_tag) continue;
             return .{
                 .union_shape = tag_union.shape,
                 .tag_type = target_tag,
             };
         }
-        executableInvariant("executable tag row re-keying could not find tag label in expression type");
+        executableInvariant("executable tag construction could not find finalized tag id in expression type");
     }
 
     fn recordTypeForConstruction(
@@ -9538,12 +9555,11 @@ const BodyBuilder = struct {
         record: Type.RecordType,
         source_field: MonoRow.RecordFieldId,
     ) Type.RecordFieldType {
-        const source_label = self.program.row_shapes.recordField(source_field).label;
+        _ = self;
         for (record.fields) |target_field| {
-            const target_label = self.program.row_shapes.recordField(target_field.field).label;
-            if (target_label == source_label) return target_field;
+            if (target_field.field == source_field) return target_field;
         }
-        executableInvariant("executable record construction could not find field label in expected endpoint");
+        executableInvariant("executable record construction could not find finalized field id in expected endpoint");
     }
 
     fn tupleTypesForConstruction(
@@ -9574,17 +9590,10 @@ const BodyBuilder = struct {
         source_payload: MonoRow.TagPayloadId,
     ) MonoRow.TagPayloadId {
         const source_payload_info = self.program.row_shapes.tagPayload(source_payload);
-        const source_tag_info = self.program.row_shapes.tag(source_payload_info.tag);
-        const target_tag_info = self.program.row_shapes.tag(target_tag);
-        if (source_tag_info.label != target_tag_info.label) {
-            executableInvariant("executable tag payload row re-keying crossed tag labels");
+        if (source_payload_info.tag != target_tag) {
+            executableInvariant("executable tag payload construction crossed finalized tag ids");
         }
-        const target_payloads = self.program.row_shapes.tagPayloads(target_tag);
-        const payload_index: usize = @intCast(source_payload_info.logical_index);
-        if (payload_index >= target_payloads.len) {
-            executableInvariant("executable tag payload row re-keying source index exceeded target arity");
-        }
-        return target_payloads[payload_index];
+        return source_payload;
     }
 
     fn payloadTypeForTagType(
@@ -9624,9 +9633,9 @@ const BodyBuilder = struct {
         @memset(seen, false);
         for (input_items, 0..) |payload, i| {
             const target_payload = self.payloadForTag(target_tag, payload.payload);
-            const payload_index: usize = @intCast(self.program.row_shapes.tagPayload(target_payload).logical_index);
+            const payload_index = payloadIndexInPayloadIds(target_payloads, target_payload);
             if (seen[payload_index]) {
-                executableInvariant("executable tag pattern row re-keying duplicated payload");
+                executableInvariant("executable tag pattern construction duplicated finalized payload id");
             }
             seen[payload_index] = true;
             const child_ty = self.tagPayloadTypeForPattern(parent_ty, target_payload);
@@ -9637,6 +9646,13 @@ const BodyBuilder = struct {
         }
         verifyAllSeen(seen, "executable tag pattern row re-keying omitted payload");
         return try self.output.addTagPayloadPatternSpan(payloads);
+    }
+
+    fn payloadIndexInPayloadIds(payloads: []const MonoRow.TagPayloadId, payload_id: MonoRow.TagPayloadId) usize {
+        for (payloads, 0..) |payload, index| {
+            if (payload == payload_id) return index;
+        }
+        executableInvariant("executable tag pattern construction could not find finalized payload id");
     }
 
     fn lowerNominalBackingAtType(

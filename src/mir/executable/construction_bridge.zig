@@ -182,14 +182,14 @@ pub fn Planner(comptime Sink: type) type {
             source: Type.RecordType,
             target: Type.RecordType,
         ) Allocator.Error!BridgeSpan {
+            if (source.shape != target.shape) constructionBridgeInvariant("construction record bridge crossed finalized record shapes");
             if (source.fields.len != target.fields.len) constructionBridgeInvariant("construction record bridge arity mismatch");
             if (source.fields.len == 0) return BridgeSpan.empty();
 
             const children = try self.allocator.alloc(BridgeId, source.fields.len);
             defer self.allocator.free(children);
             for (target.fields, 0..) |target_field, i| {
-                const target_label = self.row_shapes.recordField(target_field.field).label;
-                const source_field = self.recordFieldForLabel(source, target_label);
+                const source_field = self.recordFieldForId(source, target_field.field);
                 children[i] = try self.constructionSlotBridge(source_field.ty, target_field.ty);
             }
             return try self.sink.addBridgePlanSpan(children);
@@ -200,14 +200,14 @@ pub fn Planner(comptime Sink: type) type {
             source: Type.TagUnionType,
             target: Type.TagUnionType,
         ) Allocator.Error!BridgeSpan {
+            if (source.shape != target.shape) constructionBridgeInvariant("construction tag-union bridge crossed finalized tag-union shapes");
             if (source.tags.len != target.tags.len) constructionBridgeInvariant("construction tag-union bridge arity mismatch");
             if (source.tags.len == 0) return BridgeSpan.empty();
 
             const children = try self.allocator.alloc(BridgeId, target.tags.len);
             defer self.allocator.free(children);
             for (target.tags, 0..) |target_tag, i| {
-                const target_label = self.row_shapes.tag(target_tag.tag).label;
-                const source_tag = self.tagTypeForLabel(source, target_label);
+                const source_tag = self.tagTypeForId(source, target_tag.tag);
                 children[i] = try self.tagPayloadBridge(source_tag, target_tag);
             }
             return try self.sink.addBridgePlanSpan(children);
@@ -236,14 +236,14 @@ pub fn Planner(comptime Sink: type) type {
             @memset(target_seen, false);
 
             for (source.payloads) |payload| {
-                const index: usize = @intCast(self.row_shapes.tagPayload(payload.payload).logical_index);
+                const index = payloadIndexInTag(source, payload.payload);
                 if (index >= source_payloads.len) constructionBridgeInvariant("construction tag payload source index exceeded payload arity");
                 if (source_seen[index]) constructionBridgeInvariant("construction tag payload bridge saw duplicate source payload");
                 source_payloads[index] = payload.ty;
                 source_seen[index] = true;
             }
             for (target.payloads) |payload| {
-                const index: usize = @intCast(self.row_shapes.tagPayload(payload.payload).logical_index);
+                const index = payloadIndexInTag(target, payload.payload);
                 if (index >= target_payloads.len) constructionBridgeInvariant("construction tag payload target index exceeded payload arity");
                 if (target_seen[index]) constructionBridgeInvariant("construction tag payload bridge saw duplicate target payload");
                 target_payloads[index] = payload.ty;
@@ -255,26 +255,33 @@ pub fn Planner(comptime Sink: type) type {
             return try self.sink.addBridgePlan(.{ .struct_ = try self.structBridge(source_payloads, target_payloads) });
         }
 
-        fn recordFieldForLabel(
-            self: *Self,
+        fn recordFieldForId(
+            _: *Self,
             record: Type.RecordType,
-            label: anytype,
+            field_id: MonoRow.RecordFieldId,
         ) Type.RecordFieldType {
             for (record.fields) |field| {
-                if (self.row_shapes.recordField(field.field).label == label) return field;
+                if (field.field == field_id) return field;
             }
-            constructionBridgeInvariant("construction record bridge source field label is absent from source type");
+            constructionBridgeInvariant("construction record bridge source field id is absent from source type");
         }
 
-        fn tagTypeForLabel(
-            self: *Self,
+        fn tagTypeForId(
+            _: *Self,
             tag_union: Type.TagUnionType,
-            label: anytype,
+            tag_id: MonoRow.TagId,
         ) Type.TagType {
             for (tag_union.tags) |tag| {
-                if (self.row_shapes.tag(tag.tag).label == label) return tag;
+                if (tag.tag == tag_id) return tag;
             }
-            constructionBridgeInvariant("construction tag-union bridge source tag label is absent from source type");
+            constructionBridgeInvariant("construction tag-union bridge source tag id is absent from source type");
+        }
+
+        fn payloadIndexInTag(tag: Type.TagType, payload_id: MonoRow.TagPayloadId) usize {
+            for (tag.payloads, 0..) |payload, index| {
+                if (payload.payload == payload_id) return index;
+            }
+            constructionBridgeInvariant("construction tag bridge payload id is absent from tag type");
         }
     };
 }

@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const check = @import("check");
 const symbol_mod = @import("symbol");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 
 const canonical = check.CanonicalNames;
 /// Public enum `TypeId`.
@@ -57,6 +58,7 @@ pub const Fields = []const Field;
 pub const Nominal = struct {
     nominal: canonical.NominalTypeKey,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     is_opaque: bool,
     args: TypeIds,
     backing: TypeId,
@@ -579,6 +581,7 @@ pub const Store = struct {
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
+                    .source_ty_payload = nominal.source_ty_payload,
                     .is_opaque = nominal.is_opaque,
                     .args = lowered_args,
                     .backing = try self.internTypeIdInner(nominal.backing, active),

@@ -13,6 +13,7 @@ const type_mod = @import("type.zig");
 const repr = @import("representation.zig");
 const mir_ids = @import("../ids.zig");
 const hosted_mod = @import("../hosted.zig");
+const ConcreteSourceType = @import("../concrete_source_type.zig");
 
 const canonical = check.CanonicalNames;
 
@@ -47,6 +48,7 @@ pub fn Span(comptime _: type) type {
 pub const TypedSymbol = struct {
     ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     symbol: Symbol,
     binding_info: repr.BindingInfoId,
 };
@@ -61,6 +63,7 @@ pub const TagPayloadPattern = struct {
 pub const Pat = struct {
     ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     value_info: repr.ValueInfoId,
     data: Data,
 
@@ -156,6 +159,7 @@ pub const TagPayloadAssembly = struct {
 pub const Expr = struct {
     ty: TypeVarId,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     value_info: repr.ValueInfoId,
     data: Data,
 
@@ -209,6 +213,7 @@ pub const Expr = struct {
             args: Span(ExprId),
             requested_fn_ty: TypeVarId,
             requested_source_fn_ty: canonical.CanonicalTypeKey,
+            requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
             call_site: repr.CallSiteInfoId,
         },
         call_proc: struct {
@@ -216,6 +221,7 @@ pub const Expr = struct {
             args: Span(ExprId),
             requested_fn_ty: TypeVarId,
             requested_source_fn_ty: canonical.CanonicalTypeKey,
+            requested_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
             call_site: repr.CallSiteInfoId,
         },
         proc_value: struct {
@@ -404,13 +410,20 @@ pub const Store = struct {
         self: *Store,
         ty: TypeVarId,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
         value_info: repr.ValueInfoId,
         data: Expr.Data,
     ) std.mem.Allocator.Error!ExprId {
         var owned_data = data;
         errdefer deinitExprData(self.allocator, &owned_data);
         const idx: u32 = @intCast(self.exprs.items.len);
-        try self.exprs.append(self.allocator, .{ .ty = ty, .source_ty = source_ty, .value_info = value_info, .data = owned_data });
+        try self.exprs.append(self.allocator, .{
+            .ty = ty,
+            .source_ty = source_ty,
+            .source_ty_payload = source_ty_payload,
+            .value_info = value_info,
+            .data = owned_data,
+        });
         return @enumFromInt(idx);
     }
 

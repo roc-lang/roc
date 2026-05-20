@@ -52,8 +52,10 @@ pub const ExecutableSyntheticProcBody = union(enum) {
 /// Public `ExecutableSyntheticProcSignaturePlan` declaration.
 pub const ExecutableSyntheticProcSignaturePlan = struct {
     source_fn_ty: canonical.CanonicalTypeKey,
+    source_fn_ty_payload: checked_artifact.CheckedTypeId,
     params: []const checked_artifact.PromotedWrapperParam = &.{},
     ret_source_ty: canonical.CanonicalTypeKey,
+    ret_source_ty_payload: checked_artifact.CheckedTypeId,
 };
 
 /// Public `ExecutableSyntheticProc` declaration.

@@ -327,6 +327,7 @@ pub const Proc = struct {
     proc: canonical.MirProcedureRef,
     local_handle: Mono.Specialize.MonoProcHandle,
     fn_ty: TypeId,
+    source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
     body: Ast.DefId,
     imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
 };
@@ -431,6 +432,7 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
             .proc = proc.proc,
             .local_handle = proc.local_handle,
             .fn_ty = proc.fn_ty,
+            .source_fn_ty_payload = proc.source_fn_ty_payload,
             .body = try finalizer.lowerDef(proc.body),
             .imported_closure = proc.imported_closure,
         });
@@ -446,7 +448,6 @@ pub fn run(allocator: Allocator, mono: Mono.Specialize.Program) Allocator.Error!
     owned_mono.root_procs.deinit(allocator);
     owned_mono.executable_synthetic_procs.deinit(allocator);
     owned_mono.procs.deinit(allocator);
-    owned_mono.deinitNominalBackingInstantiationCache();
     owned_mono.concrete_dependency_type_projections.deinit(allocator);
 
     const result = Result{
@@ -518,7 +519,7 @@ const BodyFinalizer = struct {
 
     fn lowerExpr(self: *BodyFinalizer, expr_id: Mono.Ast.ExprId) Allocator.Error!Ast.ExprId {
         const expr = self.input.getExpr(expr_id);
-        return try self.output.addExpr(expr.ty, expr.source_ty, switch (expr.data) {
+        return try self.output.addExpr(expr.ty, expr.source_ty, expr.source_ty_payload, switch (expr.data) {
             .var_ => |symbol| .{ .var_ = symbol },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -538,6 +539,7 @@ const BodyFinalizer = struct {
             .clos => |clos| .{ .clos = .{
                 .site = clos.site,
                 .source_fn_ty = clos.source_fn_ty,
+                .source_fn_ty_payload = clos.source_fn_ty_payload,
                 .args = try self.lowerTypedSymbolSpan(clos.args),
                 .body = try self.lowerExpr(clos.body),
             } },
@@ -546,12 +548,14 @@ const BodyFinalizer = struct {
                 .args = try self.lowerExprSpan(call.args),
                 .requested_fn_ty = call.requested_fn_ty,
                 .requested_source_fn_ty = call.requested_source_fn_ty,
+                .requested_source_fn_ty_payload = call.requested_source_fn_ty_payload,
             } },
             .call_proc => |call| .{ .call_proc = .{
                 .proc = call.proc,
                 .args = try self.lowerExprSpan(call.args),
                 .requested_fn_ty = call.requested_fn_ty,
                 .requested_source_fn_ty = call.requested_source_fn_ty,
+                .requested_source_fn_ty_payload = call.requested_source_fn_ty_payload,
             } },
             .proc_value => |proc_value| .{ .proc_value = .{
                 .proc = proc_value.proc,
@@ -605,6 +609,7 @@ const BodyFinalizer = struct {
                 .bind = .{
                     .ty = let_val.bind.ty,
                     .source_ty = let_val.bind.source_ty,
+                    .source_ty_payload = let_val.bind.source_ty_payload,
                     .symbol = let_val.bind.symbol,
                 },
                 .body = try self.lowerExpr(let_val.body),
@@ -625,6 +630,7 @@ const BodyFinalizer = struct {
         return .{
             .site = let_fn.site orelse rowInvariant("row finalization received local function without a nested procedure site"),
             .source_fn_ty = let_fn.source_fn_ty,
+            .source_fn_ty_payload = let_fn.source_fn_ty_payload,
             .recursive = let_fn.recursive,
             .bind = self.lowerTypedSymbol(let_fn.bind),
             .args = try self.lowerTypedSymbolSpan(let_fn.args),
@@ -713,7 +719,11 @@ const BodyFinalizer = struct {
 
     fn lowerPat(self: *BodyFinalizer, pat_id: Mono.Ast.PatId) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
-        return try self.output.addPat(.{ .ty = pat.ty, .source_ty = pat.source_ty, .data = switch (pat.data) {
+        return try self.output.addPat(.{
+            .ty = pat.ty,
+            .source_ty = pat.source_ty,
+            .source_ty_payload = pat.source_ty_payload,
+            .data = switch (pat.data) {
             .bool_lit => |value| .{ .bool_lit = value },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -763,7 +773,8 @@ const BodyFinalizer = struct {
                     .payloads = try self.output.addTagPayloadPatternSpan(payloads),
                 } };
             },
-        } });
+            },
+        });
     }
 
     fn lowerRecordFieldPatternSpan(
@@ -885,13 +896,23 @@ const BodyFinalizer = struct {
         const output_items = try self.allocator.alloc(Ast.TypedSymbol, input_items.len);
         defer self.allocator.free(output_items);
         for (input_items, 0..) |symbol, i| {
-            output_items[i] = .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
+            output_items[i] = .{
+                .ty = symbol.ty,
+                .source_ty = symbol.source_ty,
+                .source_ty_payload = symbol.source_ty_payload,
+                .symbol = symbol.symbol,
+            };
         }
         return try self.output.addTypedSymbolSpan(output_items);
     }
 
     fn lowerTypedSymbol(_: *BodyFinalizer, symbol: Mono.Ast.TypedSymbol) Ast.TypedSymbol {
-        return .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
+        return .{
+            .ty = symbol.ty,
+            .source_ty = symbol.source_ty,
+            .source_ty_payload = symbol.source_ty_payload,
+            .symbol = symbol.symbol,
+        };
     }
 
     fn lowerCaptureArgSpan(

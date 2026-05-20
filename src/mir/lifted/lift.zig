@@ -54,6 +54,8 @@ pub const LiftedCaptureGraph = struct {
 pub const Proc = struct {
     proc: canonical.MirProcedureRef,
     order_key: ProcOrderKey,
+    source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
+    lifted_owner_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
     body: Ast.DefId,
     direct_calls: ids.Span(canonical.MirProcedureRef),
     imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
@@ -147,10 +149,13 @@ pub fn run(allocator: Allocator, row_result: MonoRow.Result) Allocator.Error!Pro
     for (input.program.procs.items) |proc| {
         const order_key = lifter.nextProcOrder();
         lifter.current_imported_closure = proc.imported_closure;
+        lifter.owner_source_fn_ty_payload = proc.source_fn_ty_payload;
         const lowered = try lifter.lowerProcDef(proc.key, proc.body);
         try program.procs.append(allocator, .{
             .proc = proc.proc,
             .order_key = order_key,
+            .source_fn_ty_payload = proc.source_fn_ty_payload,
+            .lifted_owner_source_fn_ty_payload = null,
             .body = lowered.body,
             .direct_calls = lowered.direct_calls,
             .imported_closure = proc.imported_closure,
@@ -171,6 +176,7 @@ const LocalProcInfo = struct {
     source_symbol: Symbol,
     proc: canonical.MirProcedureRef,
     fn_ty: Type.TypeId,
+    source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
     args: Ast.Span(Ast.TypedSymbol),
     capture_slots: Ast.Span(Ast.CaptureSlot),
     imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
@@ -190,6 +196,7 @@ const CaptureCandidate = struct {
     symbol: Symbol,
     ty: Type.TypeId,
     source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
 };
 
 const BoundRestore = struct {
@@ -235,11 +242,17 @@ const CaptureSet = struct {
         symbol: Symbol,
         ty: Type.TypeId,
         source_ty: canonical.CanonicalTypeKey,
+        source_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef,
     ) Allocator.Error!bool {
         for (self.values.items) |existing| {
             if (existing.symbol == symbol) return false;
         }
-        try self.values.append(self.allocator, .{ .symbol = symbol, .ty = ty, .source_ty = source_ty });
+        try self.values.append(self.allocator, .{
+            .symbol = symbol,
+            .ty = ty,
+            .source_ty = source_ty,
+            .source_ty_payload = source_ty_payload,
+        });
         return true;
     }
 
@@ -264,6 +277,7 @@ const BodyLifter = struct {
     current_direct_calls: ?*std.ArrayList(canonical.MirProcedureRef) = null,
     current_imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
     owner_key: canonical.MonoSpecializationKey = undefined,
+    owner_source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef = undefined,
     next_order: u32 = 0,
 
     fn deinit(self: *BodyLifter) void {
@@ -402,7 +416,7 @@ const BodyLifter = struct {
 
     fn lowerExpr(self: *BodyLifter, expr_id: MonoRow.Ast.ExprId) Allocator.Error!Ast.ExprId {
         const expr = self.input.getExpr(expr_id);
-        return try self.output.addExpr(expr.ty, expr.source_ty, switch (expr.data) {
+        return try self.output.addExpr(expr.ty, expr.source_ty, expr.source_ty_payload, switch (expr.data) {
             .var_ => |symbol| try self.lowerVar(expr.ty, symbol),
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -442,6 +456,7 @@ const BodyLifter = struct {
                 .args = try self.lowerExprSpan(call.args),
                 .requested_fn_ty = call.requested_fn_ty,
                 .requested_source_fn_ty = call.requested_source_fn_ty,
+                .requested_source_fn_ty_payload = call.requested_source_fn_ty_payload,
             } },
             .call_proc => |call| blk: {
                 try self.recordDirectCallTarget(call.proc);
@@ -450,6 +465,7 @@ const BodyLifter = struct {
                     .args = try self.lowerExprSpan(call.args),
                     .requested_fn_ty = call.requested_fn_ty,
                     .requested_source_fn_ty = call.requested_source_fn_ty,
+                    .requested_source_fn_ty_payload = call.requested_source_fn_ty_payload,
                 } };
             },
             .proc_value => |proc_value| .{ .proc_value = .{
@@ -494,6 +510,7 @@ const BodyLifter = struct {
                 .bind = .{
                     .ty = let_.bind.ty,
                     .source_ty = let_.bind.source_ty,
+                    .source_ty_payload = let_.bind.source_ty_payload,
                     .symbol = let_.bind.symbol,
                 },
                 .body = try self.lowerExpr(let_.body),
@@ -531,9 +548,9 @@ const BodyLifter = struct {
         for (slots, 0..) |slot, i| {
             const source_symbol = self.activeEquivalentSymbol(slot.source_symbol) orelse slot.source_symbol;
             const expr = if (self.capture_slots.get(source_symbol)) |captured_slot|
-                try self.output.addExpr(slot.ty, slot.source_ty, .{ .capture_ref = captured_slot })
+                try self.output.addExpr(slot.ty, slot.source_ty, slot.source_ty_payload, .{ .capture_ref = captured_slot })
             else
-                try self.output.addExpr(slot.ty, slot.source_ty, .{ .var_ = source_symbol });
+                try self.output.addExpr(slot.ty, slot.source_ty, slot.source_ty_payload, .{ .var_ = source_symbol });
             capture_args[i] = .{
                 .slot = slot.index,
                 .symbol = source_symbol,
@@ -548,10 +565,14 @@ const BodyLifter = struct {
     }
 
     fn lowerClosure(self: *BodyLifter, ty: Type.TypeId, clos: anytype) Allocator.Error!Ast.Expr.Data {
+        const source_fn_ty_payload = clos.source_fn_ty_payload orelse {
+            liftInvariant("lifted MIR closure reached lifting without a published source function payload");
+        };
         const info = try self.createLiftedProc(
             Symbol.none,
             clos.site,
             clos.source_fn_ty,
+            source_fn_ty_payload,
             ty,
             clos.args,
             clos.body,
@@ -572,10 +593,14 @@ const BodyLifter = struct {
             const stmt = self.input.getStmt(stmt_id);
             switch (stmt) {
                 .local_fn => |local_fn| {
+                    const source_fn_ty_payload = local_fn.source_fn_ty_payload orelse {
+                        liftInvariant("lifted MIR local function reached lifting without a published source function payload");
+                    };
                     const info = try self.reserveLiftedProc(
                         local_fn.bind.symbol,
                         local_fn.site,
                         local_fn.source_fn_ty,
+                        source_fn_ty_payload,
                         local_fn.bind.ty,
                         try self.lowerTypedSymbolSpan(local_fn.args),
                         Ast.Span(Ast.CaptureSlot).empty(),
@@ -622,6 +647,7 @@ const BodyLifter = struct {
         source_symbol: Symbol,
         site: canonical.NestedProcSiteId,
         source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
         fn_ty: Type.TypeId,
         args: Ast.Span(Ast.TypedSymbol),
         capture_slots: Ast.Span(Ast.CaptureSlot),
@@ -654,6 +680,7 @@ const BodyLifter = struct {
                 },
             },
             .fn_ty = fn_ty,
+            .source_fn_ty_payload = source_fn_ty_payload,
             .args = args,
             .capture_slots = capture_slots,
             .imported_closure = self.current_imported_closure,
@@ -665,6 +692,7 @@ const BodyLifter = struct {
         source_symbol: Symbol,
         site: canonical.NestedProcSiteId,
         source_fn_ty: canonical.CanonicalTypeKey,
+        source_fn_ty_payload: ConcreteSourceType.ConcreteSourceTypeRef,
         fn_ty: Type.TypeId,
         args: MonoRow.Ast.Span(MonoRow.Ast.TypedSymbol),
         body: MonoRow.Ast.ExprId,
@@ -680,7 +708,7 @@ const BodyLifter = struct {
 
         const lowered_args = try self.lowerTypedSymbolSpan(args);
         const captures = try self.captureSlotsForBody(args, body);
-        const info = try self.reserveLiftedProc(source_symbol, site, source_fn_ty, fn_ty, lowered_args, captures);
+        const info = try self.reserveLiftedProc(source_symbol, site, source_fn_ty, source_fn_ty_payload, fn_ty, lowered_args, captures);
         try self.lowerLiftedProcBody(info, body);
         try self.lifted_closures.put(closure_key, info);
         return info;
@@ -777,6 +805,8 @@ const BodyLifter = struct {
         try self.program.procs.append(self.allocator, .{
             .proc = info.proc,
             .order_key = self.nextProcOrder(),
+            .source_fn_ty_payload = info.source_fn_ty_payload,
+            .lifted_owner_source_fn_ty_payload = self.owner_source_fn_ty_payload,
             .body = def,
             .direct_calls = try self.appendDirectCallSpan(direct_calls.items),
             .imported_closure = info.imported_closure,
@@ -815,6 +845,7 @@ const BodyLifter = struct {
                 .source_symbol = capture.symbol,
                 .ty = capture.ty,
                 .source_ty = capture.source_ty,
+                .source_ty_payload = capture.source_ty_payload,
             };
         }
         return try self.output.addCaptureSlotSpan(slots);
@@ -834,7 +865,7 @@ const BodyLifter = struct {
                     try captures.addProcEdge(symbol);
                     return;
                 }
-                _ = try captures.addValue(symbol, expr.ty, expr.source_ty);
+                _ = try captures.addValue(symbol, expr.ty, expr.source_ty, expr.source_ty_payload);
             },
             .tag => |tag| {
                 for (self.input.sliceTagPayloadEvalSpan(tag.eval_order)) |payload| {
@@ -1064,11 +1095,11 @@ const BodyLifter = struct {
                 for (set.proc_edges.items) |proc_symbol| {
                     if (findLocalFnIndex(self.input, stmt_ids, proc_symbol)) |target_index| {
                         for (sets[target_index].values.items) |capture| {
-                            if (try set.addValue(capture.symbol, capture.ty, capture.source_ty)) changed = true;
+                            if (try set.addValue(capture.symbol, capture.ty, capture.source_ty, capture.source_ty_payload)) changed = true;
                         }
                     } else if (self.local_procs.get(proc_symbol)) |proc| {
                         for (self.output.sliceCaptureSlotSpan(proc.capture_slots)) |slot| {
-                            if (try set.addValue(slot.source_symbol, slot.ty, slot.source_ty)) changed = true;
+                            if (try set.addValue(slot.source_symbol, slot.ty, slot.source_ty, slot.source_ty_payload)) changed = true;
                         }
                     }
                 }
@@ -1085,7 +1116,7 @@ const BodyLifter = struct {
         for (captures.proc_edges.items) |proc_symbol| {
             const target_index = findLocalFnIndex(self.input, stmt_ids, proc_symbol) orelse continue;
             for (sets[target_index].values.items) |capture| {
-                _ = try captures.addValue(capture.symbol, capture.ty, capture.source_ty);
+                _ = try captures.addValue(capture.symbol, capture.ty, capture.source_ty, capture.source_ty_payload);
             }
         }
     }
@@ -1162,7 +1193,7 @@ const BodyLifter = struct {
             for (captures.proc_edges.items) |proc_symbol| {
                 const proc = self.local_procs.get(proc_symbol) orelse continue;
                 for (self.output.sliceCaptureSlotSpan(proc.capture_slots)) |slot| {
-                    if (try captures.addValue(slot.source_symbol, slot.ty, slot.source_ty)) changed = true;
+                    if (try captures.addValue(slot.source_symbol, slot.ty, slot.source_ty, slot.source_ty_payload)) changed = true;
                 }
             }
         }
@@ -1170,7 +1201,11 @@ const BodyLifter = struct {
 
     fn lowerPat(self: *BodyLifter, pat_id: MonoRow.Ast.PatId) Allocator.Error!Ast.PatId {
         const pat = self.input.getPat(pat_id);
-        return try self.output.addPat(.{ .ty = pat.ty, .source_ty = pat.source_ty, .data = switch (pat.data) {
+        return try self.output.addPat(.{
+            .ty = pat.ty,
+            .source_ty = pat.source_ty,
+            .source_ty_payload = pat.source_ty_payload,
+            .data = switch (pat.data) {
             .bool_lit => |value| .{ .bool_lit = value },
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -1202,7 +1237,8 @@ const BodyLifter = struct {
                 .tag = tag.tag,
                 .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads),
             } },
-        } });
+            },
+        });
     }
 
     fn lowerBranch(self: *BodyLifter, branch_id: MonoRow.Ast.BranchId) Allocator.Error!Ast.BranchId {
@@ -1311,13 +1347,23 @@ const BodyLifter = struct {
         const output_items = try self.allocator.alloc(Ast.TypedSymbol, input_items.len);
         defer self.allocator.free(output_items);
         for (input_items, 0..) |symbol, i| {
-            output_items[i] = .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
+            output_items[i] = .{
+                .ty = symbol.ty,
+                .source_ty = symbol.source_ty,
+                .source_ty_payload = symbol.source_ty_payload,
+                .symbol = symbol.symbol,
+            };
         }
         return try self.output.addTypedSymbolSpan(output_items);
     }
 
     fn lowerTypedSymbol(_: *BodyLifter, symbol: MonoRow.Ast.TypedSymbol) Ast.TypedSymbol {
-        return .{ .ty = symbol.ty, .source_ty = symbol.source_ty, .symbol = symbol.symbol };
+        return .{
+            .ty = symbol.ty,
+            .source_ty = symbol.source_ty,
+            .source_ty_payload = symbol.source_ty_payload,
+            .symbol = symbol.symbol,
+        };
     }
 
     fn lowerCaptureArgSpan(self: *BodyLifter, span: MonoRow.Ast.Span(MonoRow.Ast.CaptureArg)) Allocator.Error!Ast.Span(Ast.CaptureArg) {

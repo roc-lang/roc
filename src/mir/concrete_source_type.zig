@@ -205,6 +205,17 @@ pub const Store = struct {
         return self.by_key.get(type_key.bytes[0..]);
     }
 
+    pub fn refForRootSource(
+        self: *const Store,
+        root: ConcreteSourceTypeRoot,
+    ) ?ConcreteSourceTypeRef {
+        const ref = self.by_source.get(sourceKey(root.source)) orelse return null;
+        if (!std.mem.eql(u8, self.key(ref).bytes[0..], root.key.bytes[0..])) {
+            invariantViolation("concrete source type store source lookup returned a root with a different key");
+        }
+        return ref;
+    }
+
     fn registerRoot(
         self: *Store,
         new_root: ConcreteSourceTypeRoot,
