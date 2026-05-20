@@ -164,11 +164,16 @@ pub const LayoutStoreImage = extern struct {
     }
 };
 
-/// Fill the reserved runtime-image header in the existing shared-memory mapping.
+/// Fill the reserved runtime-image header in a contiguous buffer.
 ///
-/// `lowered` must already have been allocated with the shared-memory allocator
-/// associated with `base_ptr`; this function only installs offset metadata.
-pub fn fillHeaderInSharedMemory(
+/// `lowered` must already have been allocated from an allocator that owns
+/// the buffer at `base_ptr` (the buffer must contain every pointer reachable
+/// from `lowered`). This function only installs offset metadata — it does not
+/// copy data.
+///
+/// This is the IPC-agnostic variant. Use it for in-process embedders that
+/// place the runtime image in a plain arena instead of shared memory.
+pub fn fillHeaderInBuffer(
     header: *Header,
     base_ptr: [*]align(1) const u8,
     image_size: usize,
@@ -188,8 +193,32 @@ pub fn fillHeaderInSharedMemory(
     };
 }
 
-/// View an ARC-inserted LIR program in place from mapped shared memory.
-pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_size: usize) ImageError!ProgramView {
+/// Fill the reserved runtime-image header in the existing shared-memory mapping.
+///
+/// `lowered` must already have been allocated with the shared-memory allocator
+/// associated with `base_ptr`; this function only installs offset metadata.
+///
+/// Thin wrapper over `fillHeaderInBuffer` — kept for naming clarity at IPC sites.
+pub fn fillHeaderInSharedMemory(
+    header: *Header,
+    base_ptr: [*]align(1) const u8,
+    image_size: usize,
+    lowered: *const LowerIr.Result,
+    target_usize: base.target.TargetUsize,
+    platform_entrypoints: []const PlatformEntrypoint,
+) ImageError!void {
+    return fillHeaderInBuffer(header, base_ptr, image_size, lowered, target_usize, platform_entrypoints);
+}
+
+/// View an ARC-inserted LIR program in place from a mapped buffer.
+///
+/// The buffer is treated as read-only by the view — `LirStore` and
+/// `layout_mod.Store` are constructed with slices that the interpreter
+/// reads but never mutates. Accepting `const` here lets embedders that
+/// hold the buffer behind a `const` pointer (e.g. a `FixedBufferAllocator`
+/// backed by `gpa.alignedAlloc` whose owning slice is `const`) pass it
+/// directly without a manual `@constCast`.
+pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, mapped_size: usize) ImageError!ProgramView {
     if (mapped_size < @sizeOf(Header)) return error.InvalidRuntimeImage;
 
     if (header.magic != MAGIC) return error.InvalidRuntimeImage;
@@ -202,11 +231,16 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_s
         else => return error.InvalidRuntimeImage,
     };
 
+    // The view path constructs mutable container types (LirStore, Store)
+    // whose slice fields are not const, even though the interpreter only
+    // reads them. Cast once at the boundary so callers don't have to.
+    const mutable_base: [*]align(1) u8 = @constCast(base_ptr);
+
     return .{
-        .store = try header.store.view(base_ptr, @intCast(header.image_size)),
-        .layouts = try header.layouts.view(base_ptr, @intCast(header.image_size), target_usize),
-        .root_procs = sliceFromRef(LIR.LirProcSpecId, base_ptr, @intCast(header.image_size), header.root_procs),
-        .platform_entrypoints = sliceFromRef(PlatformEntrypoint, base_ptr, @intCast(header.image_size), header.platform_entrypoints),
+        .store = try header.store.view(mutable_base, @intCast(header.image_size)),
+        .layouts = try header.layouts.view(mutable_base, @intCast(header.image_size), target_usize),
+        .root_procs = sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.root_procs),
+        .platform_entrypoints = sliceFromRef(PlatformEntrypoint, mutable_base, @intCast(header.image_size), header.platform_entrypoints),
         .target_usize = target_usize,
     };
 }

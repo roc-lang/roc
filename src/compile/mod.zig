@@ -17,6 +17,7 @@ pub const static_data_exports = @import("static_data_exports.zig");
 pub const messages = @import("messages.zig");
 pub const channel = @import("channel.zig");
 pub const coordinator = @import("coordinator.zig");
+pub const app_header = @import("app_header.zig");
 
 pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
@@ -91,10 +92,12 @@ test "compile tests" {
     std.testing.refAllDecls(@import("messages.zig"));
     std.testing.refAllDecls(@import("channel.zig"));
     std.testing.refAllDecls(@import("coordinator.zig"));
+    std.testing.refAllDecls(@import("app_header.zig"));
 
     std.testing.refAllDecls(@import("test/cache_test.zig"));
     std.testing.refAllDecls(@import("test/test_build_env.zig"));
     std.testing.refAllDecls(@import("test/test_package_env.zig"));
     std.testing.refAllDecls(@import("test/module_env_test.zig"));
     std.testing.refAllDecls(@import("test/type_printing_bug_test.zig"));
+    std.testing.refAllDecls(@import("test/embedding_smoke.zig"));
 }
