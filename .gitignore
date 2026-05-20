@@ -164,3 +164,6 @@ kcov-output/
 
 # Generated glue output files
 test/glue/*/roc_platform_abi.zig
+
+# Debug files written by builtin_doc_tests when a block fails
+test/echo/builtin_doc_*.roc
