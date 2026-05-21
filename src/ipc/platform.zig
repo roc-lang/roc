@@ -251,7 +251,7 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
 
             // Immediately unlink so it gets cleaned up when all references are closed
             if (posix.shm_unlink(shm_name_null_terminated) != 0) {
-                std.posix.close(fd);
+                _ = std.c.close(fd);
                 return error.ShmUnlinkFailed;
             }
 

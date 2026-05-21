@@ -15,9 +15,10 @@ pub fn io() std.Io {
     return switch (comptime builtin.os.tag) {
         .linux => .{ .userdata = null, .vtable = &linux_vtable },
         .windows => .{ .userdata = null, .vtable = &windows_vtable },
-        // TODO macOS vtable mirroring linux_vtable using std.c primitives
-        // (read/write/pread/close, _NSGetExecutablePath, os_unfair_lock for
-        // stderr, optionally __ulock_wait/__ulock_wake for futex).
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .{
+            .userdata = null,
+            .vtable = &macos_vtable,
+        },
         else => std.Io.failing,
     };
 }
@@ -570,5 +571,283 @@ fn windowsWrite(handle: std.posix.fd_t, buffer: []const u8) std.Io.Operation.Fil
 fn windowsFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
     for (files) |file| {
         _ = win.CloseHandle(file.handle);
+    }
+}
+
+const macos_vtable: std.Io.VTable = blk: {
+    var vtable = std.Io.failing.vtable.*;
+    vtable.futexWait = macosFutexWait;
+    vtable.futexWaitUncancelable = macosFutexWaitUncancelable;
+    vtable.futexWake = macosFutexWake;
+    vtable.operate = macosOperate;
+    vtable.processExecutablePath = macosProcessExecutablePath;
+    vtable.lockStderr = macosLockStderr;
+    vtable.tryLockStderr = macosTryLockStderr;
+    vtable.unlockStderr = macosUnlockStderr;
+    vtable.swapCancelProtection = macosSwapCancelProtection;
+    vtable.dirOpenFile = macosDirOpenFile;
+    vtable.fileReadPositional = macosFileReadPositional;
+    vtable.fileClose = macosFileClose;
+    break :blk vtable;
+};
+
+var macos_stderr_writer: std.Io.File.Writer = undefined;
+var macos_stderr_writer_initialized = false;
+var macos_stderr_lock: std.c.os_unfair_lock = .{};
+
+fn macosInitStderrWriter() void {
+    if (macos_stderr_writer_initialized) return;
+    macos_stderr_writer = std.Io.File.stderr().writerStreaming(io(), &.{});
+    macos_stderr_writer_initialized = true;
+}
+
+fn macosFutexWait(_: ?*anyopaque, ptr: *const u32, expected: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+    macosFutexWaitUncancelable(null, ptr, expected);
+}
+
+fn macosFutexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
+    if (builtin.single_threaded) unreachable;
+    const flags: std.c.UL = .{ .op = .COMPARE_AND_WAIT, .NO_ERRNO = true };
+    const status = std.c.__ulock_wait(flags, ptr, expected, 0);
+    if (status >= 0) return;
+    switch (@as(std.c.E, @enumFromInt(-status))) {
+        .INTR, .FAULT, .TIMEDOUT => {},
+        else => unreachable,
+    }
+}
+
+fn macosFutexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
+    if (max_waiters == 0 or builtin.single_threaded) return;
+    const flags: std.c.UL = .{
+        .op = .COMPARE_AND_WAIT,
+        .NO_ERRNO = true,
+        .WAKE_ALL = max_waiters > 1,
+    };
+    while (true) {
+        const status = std.c.__ulock_wake(flags, ptr, 0);
+        if (status >= 0) return;
+        switch (@as(std.c.E, @enumFromInt(-status))) {
+            .INTR => continue,
+            .NOENT => return,
+            else => unreachable,
+        }
+    }
+}
+
+fn macosOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+    return switch (operation) {
+        .file_read_streaming => |op| .{ .file_read_streaming = macosFileReadStreaming(op.file, op.data) },
+        .file_write_streaming => |op| .{ .file_write_streaming = macosFileWriteStreaming(op.file, op.header, op.data, op.splat) },
+        .device_io_control => std.Io.failing.vtable.operate(null, operation) catch unreachable,
+        .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
+    };
+}
+
+fn macosLockStderr(_: ?*anyopaque, terminal_mode: ?std.Io.Terminal.Mode) std.Io.Cancelable!std.Io.LockedStderr {
+    macosInitStderrWriter();
+    std.c.os_unfair_lock_lock(&macos_stderr_lock);
+    return .{
+        .file_writer = &macos_stderr_writer,
+        .terminal_mode = terminal_mode orelse .no_color,
+    };
+}
+
+fn macosTryLockStderr(_: ?*anyopaque, _: ?std.Io.Terminal.Mode) std.Io.Cancelable!?std.Io.LockedStderr {
+    macosInitStderrWriter();
+    if (!std.c.os_unfair_lock_trylock(&macos_stderr_lock)) return null;
+    return .{
+        .file_writer = &macos_stderr_writer,
+        .terminal_mode = .no_color,
+    };
+}
+
+fn macosUnlockStderr(_: ?*anyopaque) void {
+    if (macos_stderr_writer.err == null) macos_stderr_writer.interface.flush() catch {};
+    macos_stderr_writer.err = null;
+    macos_stderr_writer.interface.end = 0;
+    macos_stderr_writer.interface.buffer = &.{};
+    std.c.os_unfair_lock_unlock(&macos_stderr_lock);
+}
+
+fn macosSwapCancelProtection(_: ?*anyopaque, _: std.Io.CancelProtection) std.Io.CancelProtection {
+    return .unblocked;
+}
+
+fn macosProcessExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
+    var n: u32 = std.math.cast(u32, out_buffer.len) orelse std.math.maxInt(u32);
+    const rc = std.c._NSGetExecutablePath(out_buffer.ptr, &n);
+    if (rc != 0) return error.NameTooLong;
+    // _NSGetExecutablePath writes a NUL-terminated string; n is set to the
+    // required buffer size including NUL on overflow, but on success it does
+    // not update n. Determine the actual length from the NUL terminator.
+    return std.mem.findScalar(u8, out_buffer, 0) orelse out_buffer.len;
+}
+
+fn macosDirOpenFile(
+    _: ?*anyopaque,
+    dir: std.Io.Dir,
+    sub_path: []const u8,
+    options: std.Io.Dir.OpenFileOptions,
+) std.Io.File.OpenError!std.Io.File {
+    if (std.mem.findScalar(u8, sub_path, 0) != null) return error.BadPathName;
+    const sub_path_posix = std.posix.toPosixPath(sub_path) catch return error.NameTooLong;
+
+    var flags: std.c.O = .{
+        .ACCMODE = switch (options.mode) {
+            .read_only => .RDONLY,
+            .write_only => .WRONLY,
+            .read_write => .RDWR,
+        },
+        .CLOEXEC = true,
+        .NOCTTY = !options.allow_ctty,
+        .NOFOLLOW = !options.follow_symlinks,
+    };
+    _ = &flags;
+
+    const rc = std.c.openat(dir.handle, &sub_path_posix, flags, @as(std.c.mode_t, 0));
+    switch (std.c.errno(rc)) {
+        .SUCCESS => return .{
+            .handle = @intCast(rc),
+            .flags = .{ .nonblocking = false },
+        },
+        .ACCES => return error.AccessDenied,
+        .AGAIN => return error.WouldBlock,
+        .BADF => return error.Unexpected,
+        .BUSY => return error.DeviceBusy,
+        .EXIST => return error.PathAlreadyExists,
+        .FBIG, .OVERFLOW => return error.FileTooBig,
+        .FAULT => return error.Unexpected,
+        .INVAL => return error.BadPathName,
+        .IO => return error.Unexpected,
+        .ISDIR => return error.IsDir,
+        .LOOP => return error.SymLinkLoop,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NAMETOOLONG => return error.NameTooLong,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        .NODEV, .NXIO => return error.NoDevice,
+        .NOENT, .SRCH => return error.FileNotFound,
+        .NOMEM => return error.SystemResources,
+        .NOSPC => return error.NoSpaceLeft,
+        .NOTDIR => return error.NotDir,
+        .PERM => return error.PermissionDenied,
+        .ROFS => return error.ReadOnlyFileSystem,
+        .TXTBSY => return error.FileBusy,
+        else => return error.Unexpected,
+    }
+}
+
+fn macosFileReadPositional(
+    _: ?*anyopaque,
+    file: std.Io.File,
+    data: []const []u8,
+    offset: u64,
+) std.Io.File.ReadPositionalError!usize {
+    var total: usize = 0;
+    for (data) |buffer| {
+        if (buffer.len == 0) continue;
+        const n = try macosPread(file.handle, buffer, offset + total);
+        total += n;
+        if (n < buffer.len) break;
+    }
+    return total;
+}
+
+fn macosFileReadStreaming(
+    file: std.Io.File,
+    data: []const []u8,
+) std.Io.Operation.FileReadStreaming.Result {
+    for (data) |buffer| {
+        if (buffer.len == 0) continue;
+        return macosRead(file.handle, buffer);
+    }
+    return 0;
+}
+
+fn macosRead(fd: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
+    while (true) {
+        const rc = std.c.read(fd, buffer.ptr, buffer.len);
+        if (rc >= 0) return if (rc == 0) error.EndOfStream else @intCast(rc);
+        switch (std.c.errno(rc)) {
+            .INTR => continue,
+            .AGAIN => return error.WouldBlock,
+            .BADF => return error.NotOpenForReading,
+            .IO => return error.InputOutput,
+            .ISDIR => return error.IsDir,
+            .NOBUFS, .NOMEM => return error.SystemResources,
+            .NOTCONN => return error.SocketUnconnected,
+            .CONNRESET => return error.ConnectionResetByPeer,
+            .INVAL, .FAULT => return error.Unexpected,
+            else => return error.Unexpected,
+        }
+    }
+}
+
+fn macosFileWriteStreaming(
+    file: std.Io.File,
+    header: []const u8,
+    data: []const []const u8,
+    splat: usize,
+) std.Io.Operation.FileWriteStreaming.Result {
+    var total: usize = 0;
+    if (header.len > 0) {
+        const n = try macosWrite(file.handle, header);
+        total += n;
+        if (n < header.len) return total;
+    }
+    for (data, 0..) |buffer, index| {
+        const repeat_count = if (index == data.len - 1) splat else 1;
+        for (0..repeat_count) |_| {
+            if (buffer.len == 0) continue;
+            const n = try macosWrite(file.handle, buffer);
+            total += n;
+            if (n < buffer.len) return total;
+        }
+    }
+    return total;
+}
+
+fn macosWrite(fd: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
+    while (true) {
+        const rc = std.c.write(fd, buffer.ptr, buffer.len);
+        if (rc >= 0) return @intCast(rc);
+        switch (std.c.errno(rc)) {
+            .INTR => continue,
+            .AGAIN => return error.WouldBlock,
+            .BADF => return error.NotOpenForWriting,
+            .DQUOT => return error.DiskQuota,
+            .FBIG => return error.FileTooBig,
+            .IO => return error.InputOutput,
+            .NODEV, .NXIO => return error.NoDevice,
+            .NOSPC => return error.NoSpaceLeft,
+            .PERM => return error.PermissionDenied,
+            .PIPE => return error.BrokenPipe,
+            .INVAL, .FAULT, .DESTADDRREQ, .CONNRESET => return error.Unexpected,
+            else => return error.Unexpected,
+        }
+    }
+}
+
+fn macosPread(fd: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
+    const signed_offset = std.math.cast(i64, offset) orelse return error.Unseekable;
+    while (true) {
+        const rc = std.c.pread(fd, buffer.ptr, buffer.len, signed_offset);
+        if (rc >= 0) return @intCast(rc);
+        switch (std.c.errno(rc)) {
+            .INTR => continue,
+            .AGAIN => return error.WouldBlock,
+            .BADF => return error.NotOpenForReading,
+            .IO => return error.InputOutput,
+            .ISDIR => return error.IsDir,
+            .NOBUFS, .NOMEM => return error.SystemResources,
+            .NXIO, .SPIPE, .OVERFLOW => return error.Unseekable,
+            .INVAL, .FAULT => return error.Unexpected,
+            else => return error.Unexpected,
+        }
+    }
+}
+
+fn macosFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
+    for (files) |file| {
+        _ = std.c.close(file.handle);
     }
 }
