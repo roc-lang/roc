@@ -17,6 +17,19 @@ my @roots = qw(
     src/monotype_lifted
 );
 
+my @new_postcheck_roots = qw(
+    src/lambdamono
+    src/lambdasolved
+    src/monotype
+    src/monotype_lifted
+    src/postcheck
+);
+
+my @postcheck_design_docs = qw(
+    design.md
+    plan.md
+);
+
 sub ident {
     my (@parts) = @_;
     my $name = join('_', @parts);
@@ -56,11 +69,11 @@ my @forbidden = (
     [qr/\bmergedExecutable[A-Za-z0-9_]*\b/, "executable callable merge/reconstruction"],
     [qr/\bcommonErasedCaptureType[A-Za-z0-9_]*\b/, "erased capture scan/reconstruction"],
     [qr/\brefineSingletonTagSourceType[A-Za-z0-9_]*\b/, "source tag reconstruction from local syntax"],
-    [qr/\bsingletonTagUnionPayloadRef\b/, "bridge-time singleton payload recovery"],
-    [qr/\bsingletonZeroSizedTagUnionDiscriminant\b/, "bridge-time singleton discriminant recovery"],
-    [qr/\bresolvedListElemLayoutRef\b/, "bridge-time list layout recovery"],
-    [qr/\blayoutsStructurallyEqual\b/, "bridge-time structural layout recovery"],
-    [qr/\blayoutRuntimeEquivalent\b/, "bridge-time runtime-equivalence recovery"],
+    [qr/\bsingletonTagUnionPayloadRef\b/, "conversion-time singleton payload recovery"],
+    [qr/\bsingletonZeroSizedTagUnionDiscriminant\b/, "conversion-time singleton discriminant recovery"],
+    [qr/\bresolvedListElemLayoutRef\b/, "conversion-time list layout recovery"],
+    [qr/\blayoutsStructurallyEqual\b/, "conversion-time structural layout recovery"],
+    [qr/\blayoutRuntimeEquivalent\b/, "conversion-time runtime-equivalence recovery"],
 
     [qr/\be_lookup_pending\b/, "pending semantic lookup compatibility path"],
     [qr/\bexpr_pending_lookup\b/, "pending semantic lookup compatibility path"],
@@ -153,6 +166,41 @@ my @lowering_debug_print_forbidden = (
     [qr/\bstd\.debug\.print\b/, "semantic lowering stages must not contain committed debug prints"],
 );
 
+my @postcheck_jargon_forbidden = (
+    [qr/\b[A-Za-z0-9_]*[Bb]ridge[A-Za-z0-9_]*\b/, "banned vague post-check term; say the exact operation"],
+    [qr/\b[A-Za-z0-9_]*[Pp]rojection[A-Za-z0-9_]*\b/, "banned vague post-check term; say field read, tag payload read, capture slot, or another exact operation"],
+    [qr/\b[A-Za-z0-9_]*[Rr]eadback[A-Za-z0-9_]*\b/, "banned compile-time const term; use ConstStore wording"],
+    [qr/\bread_back\b/i, "banned compile-time const term; use ConstStore wording"],
+    [qr/\breification\b/i, "banned compile-time const term; use ConstStore wording"],
+    [qr/\breify\b/i, "banned compile-time const term; use ConstStore wording"],
+    [qr/\breified\b/i, "banned compile-time const term; use ConstStore wording"],
+    [qr/\breifying\b/i, "banned compile-time const term; use ConstStore wording"],
+    [qr/\bvalue[- ]graph\b/i, "banned compile-time const term; use ConstStore wording"],
+    [qr/\b[A-Za-z0-9_]*ValueGraph[A-Za-z0-9_]*\b/, "banned compile-time const term; use ConstStore wording"],
+    [qr/\bcompile[- ]time value store\b/i, "banned compile-time const term; use ConstStore wording"],
+    [qr/\bCompileTimeValueStore\b/, "banned compile-time const term; use ConstStore wording"],
+    [qr/\brepresentation[-_ ]repair\b/i, "banned mismatch-patching term; use explicit operations or invariant failure"],
+    [qr/\brepair[-_ ]representation\b/i, "banned mismatch-patching term; use explicit operations or invariant failure"],
+    [qr/\bRepresentationRepair\b/, "banned mismatch-patching term; use explicit operations or invariant failure"],
+    [qr/\bcanonical(?:_[A-Za-z0-9_]+)?\b/i, "banned post-check term outside Canonicalization; use the exact identity, ordering, or digest term"],
+    [qr/\bCanonical(?!ization\b)[A-Za-z0-9_]*\b/, "banned post-check term outside Canonicalization; use the exact identity, ordering, or digest term"],
+    [qr/\b[A-Z][A-Za-z0-9_]*(?:Key|Ref)(?:[A-Z0-9_][A-Za-z0-9_]*)?\b/, "banned type-name suffix; use Id, Digest, or a concrete domain noun"],
+    [qr/\bruntime[- ]image\b/i, "banned LIR image term; use LirImage"],
+    [qr/\bRuntimeImage\b/, "banned LIR image term; use LirImage"],
+    [qr/\bruntime_image\b/, "banned LIR image term; use LirImage"],
+    [qr/\bphysical\b/i, "banned runtime-encoding term; use layout for memory shape or runtime encoding for the broader category"],
+    [qr/\bartifacts?\b/i, "banned vague owner term; use CheckedModule, checked module cache, checked module data, or the exact producer/consumer"],
+    [qr/\b[A-Za-z0-9_]*artifacts?[A-Za-z0-9_]*\b/i, "banned vague owner term; use CheckedModule, checked module cache, checked module data, or the exact producer/consumer"],
+    [qr/\bsemantic(?:ally)?\b/i, "banned vague meaning term; use checked, source, meaning, or a precise stage-owned name"],
+    [qr/\b[A-Za-z0-9_]*semantic[A-Za-z0-9_]*\b/i, "banned vague meaning term; use checked, source, meaning, or a precise stage-owned name"],
+    [qr/\bexecutable\b(?!\s+(?:binary|program)\b)/i, "banned vague stage term; use the exact stage or data name"],
+    [qr/\b[A-Za-z0-9_]*Executable[A-Za-z0-9_]*\b/, "banned vague stage term; use the exact stage or data name"],
+    [qr/\b[A-Za-z0-9_]*executable_[A-Za-z0-9_]*\b/i, "banned vague stage term; use the exact stage or data name"],
+    [qr/\b[A-Za-z0-9_]*[Oo]bligation[A-Za-z0-9_]*\b/, "banned vague post-check work item term; use checked plan, erased requirement, specialization queue entry, debug assertion, or exact deletion target"],
+    [qr/\barena-backed typed tree\b/i, "implementation-detail phrase; use typed IR store"],
+    [qr/\btyped tree stored in an arena\b/i, "implementation-detail phrase; use typed IR store"],
+);
+
 my @comment_words = qw(fallback heuristic recover reconstruct rebuild best-effort best_available best-available);
 
 sub skip_file {
@@ -171,6 +219,28 @@ sub comment_word_allowed {
     return 1 if $path =~ m{^src/parse/};
     return 1 if $path =~ m{^src/.*/Diagnostic\.zig$};
     return 1 if $path =~ m{^src/compile/messages\.zig$};
+    return 0;
+}
+
+sub is_new_postcheck_path {
+    my ($path) = @_;
+    for my $root (@new_postcheck_roots) {
+        return 1 if $path =~ m{^\Q$root\E/};
+    }
+    return 0;
+}
+
+sub postcheck_jargon_allowed {
+    my ($path, $line) = @_;
+    if ($path eq 'design.md' || $path eq 'plan.md') {
+        return 1 if $line =~ /\bbanned\b/;
+        return 1 if $line =~ /The word `/;
+        return 1 if $line =~ /The words `/;
+        return 1 if $line =~ /The terms `/;
+        return 1 if $line =~ /The suffixes `/;
+        return 1 if $line =~ /pre-existing code that is scheduled for deletion/;
+        return 1 if $line =~ /pre-existing code scheduled for deletion/;
+    }
     return 0;
 }
 
@@ -241,6 +311,15 @@ for my $root (@roots) {
                     }
                 }
 
+                if (is_new_postcheck_path($path) && !postcheck_jargon_allowed($path, $line)) {
+                    for my $rule (@postcheck_jargon_forbidden) {
+                        my ($pattern, $reason) = @$rule;
+                        if ($line =~ /$pattern/) {
+                            push @violations, [$path, $line_no, $reason, $line];
+                        }
+                    }
+                }
+
                 if (!comment_word_allowed($path) && $line =~ /^\s*\/\//) {
                     for my $word (@comment_words) {
                         if ($line =~ /\b\Q$word\E\b/i) {
@@ -255,10 +334,30 @@ for my $root (@roots) {
     }, $root);
 }
 
+for my $path (@postcheck_design_docs) {
+    next unless -f $path;
+
+    open my $fh, '<', $path or die "failed to open $path: $!";
+    my $line_no = 0;
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+        next if postcheck_jargon_allowed($path, $line);
+
+        for my $rule (@postcheck_jargon_forbidden) {
+            my ($pattern, $reason) = @$rule;
+            if ($line =~ /$pattern/) {
+                push @violations, [$path, $line_no, $reason, $line];
+            }
+        }
+    }
+    close $fh;
+}
+
 if (@violations) {
     print "\nSEMANTIC AUDIT FAILED\n\n";
     print "Semantic compiler/eval/lowering code must consume explicit earlier facts.\n";
-    print "Fallbacks, heuristics, reconstruction, synthesis, strengthening, and bridge-time recovery are forbidden.\n\n";
+    print "Fallbacks, heuristics, reconstruction, synthesis, strengthening, and conversion-time recovery are forbidden.\n\n";
     for my $violation (@violations) {
         my ($path, $line_no, $reason, $line) = @$violation;
         $line =~ s/^\s+//;
