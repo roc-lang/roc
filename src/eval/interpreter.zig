@@ -539,6 +539,44 @@ pub const Interpreter = struct {
         return args_buf;
     }
 
+    /// Look up the platform entrypoint by ordinal, build its argument layout
+    /// list from the proc spec, and run it with the RocOps bound at init.
+    ///
+    /// Returns `error.EntrypointNotFound` if no entrypoint matches `ordinal`.
+    /// Other errors come from `eval`.
+    pub fn runEntrypoint(
+        self: *LirInterpreter,
+        view: *const lir.RuntimeImage.ProgramView,
+        ordinal: u32,
+        arg_ptr: ?*anyopaque,
+        ret_ptr: ?*anyopaque,
+    ) (Error || error{EntrypointNotFound})!EvalResult {
+        var entrypoint: ?lir.RuntimeImage.PlatformEntrypoint = null;
+        for (view.platform_entrypoints) |candidate| {
+            if (candidate.ordinal == ordinal) {
+                entrypoint = candidate;
+                break;
+            }
+        }
+        const selected = entrypoint orelse return error.EntrypointNotFound;
+
+        const proc = view.store.getProcSpec(selected.root_proc);
+        const arg_ids = view.store.getLocalSpan(proc.args);
+        const arg_layouts = try self.allocator.alloc(layout_mod.Idx, arg_ids.len);
+        defer self.allocator.free(arg_layouts);
+        for (arg_ids, 0..) |local_id, i| {
+            arg_layouts[i] = view.store.locals.items[@intFromEnum(local_id)].layout_idx;
+        }
+
+        return self.eval(.{
+            .proc_id = selected.root_proc,
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+            .arg_ptr = arg_ptr,
+            .ret_ptr = ret_ptr,
+        });
+    }
+
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
         self.roc_env.resetForEval();

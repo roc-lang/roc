@@ -1784,22 +1784,18 @@ const CoordinatorReportCounts = struct {
 fn renderCoordinatorReports(ctx: *CliContext, coord: *Coordinator, roc_file_path: []const u8) CoordinatorReportCounts {
     var counts = CoordinatorReportCounts{ .errors = 0, .warnings = 0 };
 
-    var pkg_it = coord.packages.iterator();
-    while (pkg_it.next()) |entry| {
-        const pkg = entry.value_ptr.*;
-        for (pkg.modules.items) |*mod| {
-            for (mod.reports.items) |*rep| {
-                if (rep.severity == .fatal or rep.severity == .runtime_error) {
-                    counts.errors += 1;
-                    if (!builtin.is_test) {
-                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
-                    }
-                } else if (rep.severity == .warning) {
-                    counts.warnings += 1;
-                    if (!builtin.is_test) {
-                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
-                    }
-                }
+    var it = coord.iterReports();
+    while (it.next()) |entry| {
+        const rep = entry.report;
+        if (rep.severity == .fatal or rep.severity == .runtime_error) {
+            counts.errors += 1;
+            if (!builtin.is_test) {
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+            }
+        } else if (rep.severity == .warning) {
+            counts.warnings += 1;
+            if (!builtin.is_test) {
+                reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
             }
         }
     }
@@ -1887,72 +1883,21 @@ fn evaluateRuntimeImageEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) !void {
-    var entrypoint: ?lir.RuntimeImage.PlatformEntrypoint = null;
-    for (view.platform_entrypoints) |candidate| {
-        if (candidate.ordinal == ordinal) {
-            entrypoint = candidate;
-            break;
-        }
-    }
-    const selected = entrypoint orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("CLI runtime image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
-        }
-        unreachable;
-    };
-
-    const arg_layouts = try argLayoutsForProc(allocator, &view.store, selected.root_proc);
-    defer allocator.free(arg_layouts);
-
-    var interpreter = try eval.LirInterpreter.init(
-        allocator,
-        &view.store,
-        &view.layouts,
-        ops,
-    );
+    var interpreter = try eval.LirInterpreter.init(allocator, &view.store, &view.layouts, ops);
     defer interpreter.deinit();
 
-    const proc = view.store.getProcSpec(selected.root_proc);
-    _ = interpreter.eval(.{
-        .proc_id = selected.root_proc,
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
-        .arg_ptr = arg_ptr,
-        .ret_ptr = ret_ptr,
-    }) catch |err| {
-        reportCliInterpreterError(ops, &interpreter, err);
-        return;
+    _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
+        error.EntrypointNotFound => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("CLI runtime image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
+            }
+            unreachable;
+        },
+        else => |e| {
+            reportCliInterpreterError(ops, &interpreter, e);
+            return;
+        },
     };
-}
-
-fn buildPlatformEntrypoints(
-    allocator: Allocator,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-) ![]lir.RuntimeImage.PlatformEntrypoint {
-    const root_procs = lowered.lir_result.root_procs.items;
-    const root_metadata = lowered.lir_result.root_metadata.items;
-    if (root_procs.len != root_metadata.len) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "checked pipeline invariant violated: root metadata mismatch roots={d} metadata={d}",
-                .{ root_procs.len, root_metadata.len },
-            );
-        }
-        unreachable;
-    }
-
-    var entrypoints = std.ArrayList(lir.RuntimeImage.PlatformEntrypoint).empty;
-    errdefer entrypoints.deinit(allocator);
-
-    for (root_procs, root_metadata) |root_proc, metadata| {
-        if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
-        try entrypoints.append(allocator, .{
-            .ordinal = @intCast(entrypoints.items.len),
-            .root_proc = root_proc,
-        });
-    }
-
-    return try entrypoints.toOwnedSlice(allocator);
 }
 
 /// Build shared memory containing a viewable ARC-inserted LIR runtime image.
@@ -1977,13 +1922,31 @@ pub fn buildLirRuntimeImageWithCoordinator(
     defer builtin_modules.deinit();
 
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    const platform_spec = try extractPlatformSpecFromApp(ctx, roc_file_path);
-    try validatePlatformSpec(ctx, platform_spec);
 
-    const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
-        try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, platform_spec })
-    else if (base.url.isSafeUrl(platform_spec)) blk: {
-        const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
+    // Parse the app header
+    const header_info = compile.app_header.parseAppHeader(
+        FsIo.default(),
+        ctx.gpa,
+        ctx.arena,
+        roc_file_path,
+    ) catch |err| switch (err) {
+        error.NotAnAppHeader => return ctx.fail(.{ .expected_app_header = .{
+            .path = roc_file_path,
+            .found = "non-app header",
+        } }),
+        error.FileNotFound => return ctx.fail(.{ .file_not_found = .{
+            .path = roc_file_path,
+            .context = .source_file,
+        } }),
+        else => |e| return e,
+    };
+    try validatePlatformSpec(ctx, header_info.platform_spec);
+
+    // Resolve the platform spec to a local main.roc path (handles URL fetch).
+    const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, header_info.platform_spec, "./") or std.mem.startsWith(u8, header_info.platform_spec, "../"))
+        try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, header_info.platform_spec })
+    else if (base.url.isSafeUrl(header_info.platform_spec)) blk: {
+        const platform_paths = resolveUrlPlatform(ctx, header_info.platform_spec) catch |err| switch (err) {
             error.CliError => break :blk null,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -2020,51 +1983,31 @@ pub fn buildLirRuntimeImageWithCoordinator(
     app_pkg.remaining_modules += 1;
     coord.total_remaining += 1;
 
-    const platform_qualifier = try extractPlatformQualifier(ctx, roc_file_path);
-
     if (platform_dir) |pf_dir| {
-        const pf_pkg = try coord.ensurePackage("pf", pf_dir);
-
-        if (platform_qualifier) |qual| {
+        if (platform_main_path) |pmp| {
+            try coord.registerPlatformPackage(app_pkg, pf_dir, pmp, header_info.platform_qualifier);
+        } else if (header_info.platform_qualifier) |qual| {
+            // URL platform that failed to resolve — keep the shorthand wired so
+            // downstream code reports a clean error rather than a missing-import.
             try app_pkg.shorthands.put(
                 try ctx.gpa.dupe(u8, qual),
                 try ctx.gpa.dupe(u8, "pf"),
             );
-        }
-
-        if (platform_main_path) |pmp| {
-            const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", pmp);
-            pf_pkg.root_module_id = pf_module_id;
-            pf_pkg.modules.items[pf_module_id].depth = 1;
-            pf_pkg.remaining_modules += 1;
-            coord.total_remaining += 1;
-            try coord.enqueueParseTask("pf", pf_module_id);
+            _ = try coord.ensurePackage("pf", pf_dir);
         }
     }
 
-    var non_platform_packages = try extractNonPlatformPackages(ctx, roc_file_path, platform_qualifier);
-    defer {
-        var iter = non_platform_packages.iterator();
-        while (iter.next()) |entry| {
-            ctx.gpa.free(entry.key_ptr.*);
-            ctx.gpa.free(entry.value_ptr.*);
-        }
-        non_platform_packages.deinit();
-    }
-
-    var pkg_iter = non_platform_packages.iterator();
-    while (pkg_iter.next()) |entry| {
-        const shorthand = entry.key_ptr.*;
-        const pkg_main_path = entry.value_ptr.*;
-        const pkg_dir = std.fs.path.dirname(pkg_main_path) orelse ".";
-        const pkg_name = try ctx.gpa.dupe(u8, shorthand);
-        defer ctx.gpa.free(pkg_name);
-
-        _ = try coord.ensurePackage(pkg_name, pkg_dir);
-        try app_pkg.shorthands.put(
-            try ctx.gpa.dupe(u8, shorthand),
-            try ctx.gpa.dupe(u8, pkg_name),
-        );
+    // Resolve and register non-platform packages (URL-aware path).
+    for (header_info.non_platform_packages) |entry| {
+        const pkg_abs_path = if (base.url.isSafeUrl(entry.spec)) blk: {
+            const cached = resolveUrlBundle(ctx, entry.spec) catch |err| switch (err) {
+                error.CliError => return error.CliError,
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            break :blk try ctx.arena.dupe(u8, cached);
+        } else try std.fs.path.join(ctx.arena, &.{ app_dir, entry.spec });
+        const pkg_dir = std.fs.path.dirname(pkg_abs_path) orelse ".";
+        _ = try coord.registerInlinePackage(entry.shorthand, pkg_dir, app_pkg, entry.shorthand);
     }
 
     try coord.enqueueParseTask("app", app_module_id);
@@ -2101,8 +2044,8 @@ pub fn buildLirRuntimeImageWithCoordinator(
         },
     );
 
-    const platform_entrypoints = try buildPlatformEntrypoints(shm_allocator, &lowered);
-    const entrypoint_names = try platformEntrypointNamesFromLowered(ctx, root_artifact, &lowered);
+    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
+    const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
 
     try lir.RuntimeImage.fillHeaderInSharedMemory(
         runtime_header,
@@ -2115,128 +2058,6 @@ pub fn buildLirRuntimeImageWithCoordinator(
 
     shm.updateHeader();
     return sharedMemoryResult(&shm, finalized_counts, entrypoint_names);
-}
-
-/// Extract the platform qualifier from an app header (e.g., "rr" from { rr: platform "..." })
-fn extractPlatformQualifier(ctx: *CliContext, roc_file_path: []const u8) !?[]const u8 {
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return null;
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    var env = ModuleEnv.init(ctx.gpa, source) catch return null;
-    defer env.deinit();
-    env.common.source = source;
-
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const parse_ast = parse.parse(&allocators, &env.common) catch return null;
-    defer parse_ast.deinit();
-
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    if (header == .app) {
-        const platform_field = parse_ast.store.getRecordField(header.app.platform_idx);
-        const key_region = parse_ast.tokens.resolve(platform_field.name);
-        const qualifier = source[key_region.start.offset..key_region.end.offset];
-        return try ctx.arena.dupe(u8, qualifier);
-    }
-
-    return null;
-}
-
-/// Extract non-platform package shorthands from app header.
-/// Returns a map of shorthand name -> absolute package path.
-/// e.g., for `{ fx: platform "./platform/main.roc", hlp: "./helper_pkg/main.roc" }`,
-/// this would return { "hlp" -> "/absolute/path/to/helper_pkg/main.roc" }.
-fn extractNonPlatformPackages(
-    ctx: *CliContext,
-    roc_file_path: []const u8,
-    platform_qualifier: ?[]const u8,
-) !std.StringHashMap([]const u8) {
-    var packages = std.StringHashMap([]const u8).init(ctx.gpa);
-    errdefer {
-        var iter = packages.iterator();
-        while (iter.next()) |entry| {
-            ctx.gpa.free(entry.key_ptr.*);
-            ctx.gpa.free(entry.value_ptr.*);
-        }
-        packages.deinit();
-    }
-
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return packages;
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    var env = ModuleEnv.init(ctx.gpa, source) catch return packages;
-    defer env.deinit();
-    env.common.source = source;
-
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(ctx.gpa);
-    defer allocators.deinit();
-
-    const parse_ast = parse.parse(&allocators, &env.common) catch return packages;
-    defer parse_ast.deinit();
-
-    const file_node = parse_ast.store.getFile();
-    const header = parse_ast.store.getHeader(file_node.header);
-
-    if (header == .app) {
-        const packages_coll = parse_ast.store.getCollection(header.app.packages);
-        const packages_fields = parse_ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-        for (packages_fields) |field_idx| {
-            const field = parse_ast.store.getRecordField(field_idx);
-            const key_region = parse_ast.tokens.resolve(field.name);
-            const shorthand = source[key_region.start.offset..key_region.end.offset];
-
-            // Skip if this is the platform field
-            if (platform_qualifier) |qual| {
-                if (std.mem.eql(u8, shorthand, qual)) continue;
-            }
-
-            // Get the package path from the field value
-            if (field.value) |value_idx| {
-                const value_node = parse_ast.store.getExpr(value_idx);
-                switch (value_node) {
-                    .string => |str| {
-                        // Use the region to get the full string
-                        const str_region = parse_ast.tokenizedRegionToRegion(str.region);
-                        const raw_path = source[str_region.start.offset..str_region.end.offset];
-                        if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
-                            const pkg_spec = raw_path[1 .. raw_path.len - 1];
-                            // If this is a URL, download and resolve to the cached main.roc.
-                            // Otherwise, treat it as a relative file path under app_dir.
-                            const pkg_abs_path = if (base.url.isSafeUrl(pkg_spec)) blk: {
-                                // Dupe into the arena since `source` is freed when this
-                                // function returns but error reports may reference the URL.
-                                const url_owned = try ctx.arena.dupe(u8, pkg_spec);
-                                const cached = resolveUrlBundle(ctx, url_owned) catch |err| switch (err) {
-                                    error.CliError => return error.CliError,
-                                    error.OutOfMemory => return error.OutOfMemory,
-                                };
-                                break :blk try ctx.gpa.dupe(u8, cached);
-                            } else try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_spec });
-                            try packages.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
-                        }
-                    },
-                    else => {},
-                }
-            }
-        }
-    }
-
-    return packages;
 }
 
 /// Platform resolution result containing the platform source path
@@ -3179,7 +3000,12 @@ fn nativeBuildEntrypoints(
 
     for (root_procs, root_metadata) |root_proc, metadata| {
         if (metadata.abi != .platform or metadata.exposure != .exported) continue;
-        const root = rootRequestByOrder(root_artifact, metadata.order);
+        const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("native build invariant violated: missing root request order {d}", .{metadata.order});
+            }
+            unreachable;
+        };
         if (root.kind != .provided_export) continue;
 
         const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
@@ -3200,133 +3026,20 @@ fn nativeBuildEntrypoints(
     return try entrypoints.toOwnedSlice(ctx.gpa);
 }
 
-fn rootRequestByOrder(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    order: u32,
-) check.CheckedArtifact.RootRequest {
-    for (root_artifact.root_requests.requests) |request| {
-        if (request.order == order) return request;
-    }
-    if (builtin.mode == .Debug) {
-        std.debug.panic("native build invariant violated: missing root request order {d}", .{order});
-    }
-    unreachable;
-}
-
-fn platformProvidedEntrypointName(
-    _: *CliContext,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    root: check.CheckedArtifact.RootRequest,
-) ![]const u8 {
-    const def_idx = switch (root.source) {
-        .def => |def| def,
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("native build invariant violated: exported platform root is not a definition", .{});
-            }
-            unreachable;
-        },
-    };
-    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("platform entrypoint invariant violated: exported platform root has no published top-level value", .{});
-        }
-        unreachable;
-    };
-
-    for (root_artifact.provides_requires.provides) |entry| {
-        if (entry.source_name == top_level.source_name) {
-            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
-        }
-    }
-
-    if (builtin.mode == .Debug) {
-        std.debug.panic(
-            "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
-            .{},
-        );
-    }
-    unreachable;
-}
-
-fn platformRequiredEntrypointName(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    root: check.CheckedArtifact.RootRequest,
-) []const u8 {
-    const binding_id = switch (root.source) {
-        .required_binding => |id| id,
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("platform entrypoint invariant violated: platform-required root is not a required binding", .{});
-            }
-            unreachable;
-        },
-    };
-    const binding = root_artifact.platform_required_bindings.lookupByBindingId(binding_id) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("platform entrypoint invariant violated: missing platform-required binding {d}", .{binding_id});
-        }
-        unreachable;
-    };
-    const declaration = root_artifact.platform_required_declarations.lookupByDeclarationId(binding.declaration) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("platform entrypoint invariant violated: missing platform-required declaration", .{});
-        }
-        unreachable;
-    };
-    return root_artifact.canonical_names.exportNameText(declaration.platform_name);
-}
-
-fn platformEntrypointNameForRoot(
-    ctx: *CliContext,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    root: check.CheckedArtifact.RootRequest,
-) ![]const u8 {
-    return switch (root.kind) {
-        .provided_export => try platformProvidedEntrypointName(ctx, root_artifact, root),
-        .platform_required_binding => platformRequiredEntrypointName(root_artifact, root),
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("platform entrypoint invariant violated: unexpected root kind {s}", .{@tagName(root.kind)});
-            }
-            unreachable;
-        },
-    };
-}
-
-fn platformEntrypointNamesFromLowered(
-    ctx: *CliContext,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-) ![]const []const u8 {
-    const root_procs = lowered.lir_result.root_procs.items;
-    const root_metadata = lowered.lir_result.root_metadata.items;
-    if (root_procs.len != root_metadata.len) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "embedded build invariant violated: root metadata mismatch roots={d} metadata={d}",
-                .{ root_procs.len, root_metadata.len },
-            );
-        }
-        unreachable;
-    }
-
-    var names = std.array_list.Managed([]const u8).initCapacity(ctx.arena, root_metadata.len) catch return error.OutOfMemory;
-    for (root_metadata) |metadata| {
-        if (metadata.abi != .platform and metadata.exposure != .platform_required) continue;
-        const root = rootRequestByOrder(root_artifact, metadata.order);
-        const artifact_name = try platformEntrypointNameForRoot(ctx, root_artifact, root);
-        try names.append(try ctx.arena.dupe(u8, artifact_name));
-    }
-    return names.items;
-}
-
 fn nativeEntrypointSymbolName(
     ctx: *CliContext,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
 ) ![]const u8 {
-    const entrypoint_name = try platformProvidedEntrypointName(ctx, root_artifact, root);
+    const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
+                .{},
+            );
+        }
+        unreachable;
+    };
     return try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entrypoint_name});
 }
 
@@ -3881,7 +3594,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         },
     );
 
-    const platform_entrypoints = try buildPlatformEntrypoints(shm_allocator, &lowered);
+    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     try lir.RuntimeImage.fillHeaderInSharedMemory(
         runtime_header,
         shm.base_ptr,
@@ -3893,7 +3606,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     shm.updateHeader();
 
     const runtime_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);
-    const entrypoint_names = try platformEntrypointNamesFromLowered(ctx, root_artifact, &lowered);
+    const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("embedded build invariant violated: no platform entrypoints", .{});

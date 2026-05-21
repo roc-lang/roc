@@ -36,6 +36,7 @@ SEH = "SEH" # Structured Exception Handling
 ser = "ser" # Part of the word "serializing"
 sigfault = "sigfault"
 typ = "typ" # Common internal abbreviation for type
+WRONLY = "WRONLY" # File open mode
 
 [default.extend-identifiers]
 CMOVcc = "CMOVcc"
