@@ -641,6 +641,67 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     if (!success) {
         return LinkError.LinkFailed;
     }
+
+    // On macOS, ld64.lld does not write LC_MAIN.stacksize from a `-stack_size`
+    // arg (zig's own MachO linker does, but we link via the LLVM ld64.lld C
+    // API). Patch it ourselves so the main thread gets 64 MiB instead of the
+    // 8 MiB default. The host's embedded interpreter shim recurses one Zig
+    // frame per Roc call (max_call_depth = 1024), and with Zig 0.16 frame
+    // sizes 1024 frames overflows 8 MiB before the interpreter's depth check
+    // can crash cleanly. Matches /stack:67108864 used for Windows above.
+    if (config.target_format == .macho) {
+        patchMachoStackSize(config.output_path, 64 * 1024 * 1024, ctx.io.std_io) catch |err| {
+            std.log.warn("Failed to patch LC_MAIN stacksize for {s}: {}", .{ config.output_path, err });
+        };
+        // Patching invalidated the ad-hoc code signature ld64.lld wrote; on
+        // macOS 14+ the kernel SIGKILLs (137) binaries with bad signatures,
+        // so re-sign ad-hoc via /usr/bin/codesign.
+        resignMachoAdHoc(ctx, config.output_path) catch |err| {
+            std.log.warn("Failed to re-sign {s} after stacksize patch: {}", .{ config.output_path, err });
+        };
+    }
+}
+
+const macho = std.macho;
+
+/// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
+/// callsite in `link` for why this is needed.
+fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) !void {
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
+    defer file.close(io);
+
+    var header: macho.mach_header_64 = undefined;
+    const header_n = try file.readPositionalAll(io, std.mem.asBytes(&header), 0);
+    if (header_n != @sizeOf(macho.mach_header_64)) return error.UnexpectedEof;
+    if (header.magic != macho.MH_MAGIC_64) return error.NotMacho64;
+
+    var offset: u64 = @sizeOf(macho.mach_header_64);
+    var i: u32 = 0;
+    while (i < header.ncmds) : (i += 1) {
+        var lc: macho.load_command = undefined;
+        const lc_n = try file.readPositionalAll(io, std.mem.asBytes(&lc), offset);
+        if (lc_n != @sizeOf(macho.load_command)) return error.UnexpectedEof;
+        if (lc.cmd == .MAIN) {
+            // entry_point_command layout: cmd (u32) + cmdsize (u32) + entryoff (u64) + stacksize (u64).
+            const stacksize_offset = offset + 16;
+            try file.writePositionalAll(io, std.mem.asBytes(&stacksize), stacksize_offset);
+            return;
+        }
+        offset += lc.cmdsize;
+    }
+    // No LC_MAIN — leave as-is (e.g. dylibs or unusual layouts).
+}
+
+fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) !void {
+    const result = try std.process.run(ctx.arena, ctx.io.std_io, .{
+        .argv = &.{ "/usr/bin/codesign", "--force", "--sign", "-", path },
+    });
+    defer ctx.arena.free(result.stdout);
+    defer ctx.arena.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.CodesignFailed,
+        else => return error.CodesignFailed,
+    }
 }
 
 /// Format link configuration as a shell command string for manual reproduction.
