@@ -7,7 +7,6 @@ const symbol_mod = @import("symbol");
 const ArtifactNames = @import("../artifact_names.zig");
 const ConcreteSourceType = @import("../concrete_source_type.zig");
 const Lifted = @import("../lifted/mod.zig");
-const MonoLowerType = @import("../mono/lower_type.zig");
 const MonoRow = @import("../mono_row/mod.zig");
 const ids = @import("../ids.zig");
 
@@ -48,6 +47,7 @@ const ProcBuildRecord = struct {
     materialized: bool = true,
     built: bool = false,
     imported_closure: ?checked_artifact.ImportedTemplateClosureView = null,
+    lifted_owner_source_fn_ty_payload: ?ConcreteSourceType.ConcreteSourceTypeRef = null,
 };
 
 const ProcBuildRecordKind = union(enum) {
@@ -678,12 +678,12 @@ const ProcedureInstanceRegistry = struct {
             .normal => if (self.procIsRecursive(proc)) instance else null,
             .executable_synthetic => null,
         };
-        const imported_closure = switch (kind) {
-            .normal => self.input.procs.items[
+        const input_proc = switch (kind) {
+            .normal => &self.input.procs.items[
                 self.proc_indices.get(proc) orelse {
                     lambdaInvariant("lambda-solved procedure instance registry could not find normal procedure input index");
                 }
-            ].imported_closure,
+            ],
             .executable_synthetic => null,
         };
         try self.records.append(self.allocator, .{
@@ -695,7 +695,8 @@ const ProcedureInstanceRegistry = struct {
             .value_store = value_store_id,
             .owner = owner,
             .materialized = materialized,
-            .imported_closure = imported_closure,
+            .imported_closure = if (input_proc) |input| input.imported_closure else null,
+            .lifted_owner_source_fn_ty_payload = if (input_proc) |input| input.lifted_owner_source_fn_ty_payload else null,
         });
         try self.reservations.append(self.allocator, .{
             .proc = proc,
@@ -6739,7 +6740,7 @@ const CallableEmissionAssigner = struct {
             .published_proc_value = if (source.published_proc) |published| published.callable else null,
             .published_source_proc = source.published_proc,
             .lifted_owner_source_fn_ty_payload = switch (source.proc.callable.template) {
-                .lifted => self.registry.inputProc(source.proc).lifted_owner_source_fn_ty_payload orelse {
+                .lifted => target_record.lifted_owner_source_fn_ty_payload orelse {
                     lambdaInvariant("lambda-solved lifted callable did not publish its owner source function payload");
                 },
                 .checked,
@@ -11477,7 +11478,7 @@ const TypeImporter = struct {
     allocator: Allocator,
     input: *const Lifted.Type.Store,
     output: *Type.Store,
-    concrete_source_types: *const ConcreteSourceType.Store,
+    concrete_source_types: *ConcreteSourceType.Store,
     name_resolver: *ArtifactNames.ArtifactNameResolver,
     artifact_views: ArtifactViews,
     use_concrete_source_payloads: bool,
@@ -11489,7 +11490,7 @@ const TypeImporter = struct {
         allocator: Allocator,
         input: *const Lifted.Type.Store,
         output: *Type.Store,
-        concrete_source_types: *const ConcreteSourceType.Store,
+        concrete_source_types: *ConcreteSourceType.Store,
         name_resolver: *ArtifactNames.ArtifactNameResolver,
         artifact_views: ArtifactViews,
         use_concrete_source_payloads: bool,
@@ -11516,10 +11517,6 @@ const TypeImporter = struct {
 
     fn importType(self: *TypeImporter, source: Lifted.Type.TypeId) Allocator.Error!Type.TypeVarId {
         return try self.importTypeWithConcretePayloadMode(source, self.use_concrete_source_payloads);
-    }
-
-    fn importTypeRaw(self: *TypeImporter, source: Lifted.Type.TypeId) Allocator.Error!Type.TypeVarId {
-        return try self.importTypeWithConcretePayloadMode(source, false);
     }
 
     fn importTypeWithConcretePayloadMode(
@@ -11659,55 +11656,373 @@ const TypeImporter = struct {
         try self.concrete_active.put(ref, target);
         errdefer _ = self.concrete_active.remove(ref);
 
-        var temp_store = Lifted.Type.Store.init(self.allocator);
-        defer temp_store.deinit();
-
-        const root = self.concrete_source_types.root(ref);
-        const temp_ty = switch (root.source) {
-            .artifact => |artifact_ref| blk: {
-                const checked_types = checkedTypesForArtifactViews(self.artifact_views, artifact_ref.artifact) orelse {
-                    lambdaInvariant("lambda-solved concrete source type artifact was not available");
-                };
-                var lowerer = MonoLowerType.Lowerer.initWithResolver(
-                    self.allocator,
-                    checked_types,
-                    &temp_store,
-                    self.name_resolver,
-                    artifact_ref.artifact,
-                );
-                defer lowerer.deinit();
-                break :blk try lowerer.lowerChecked(artifact_ref.ty);
-            },
-            .local => |local| blk: {
-                var lowerer = MonoLowerType.Lowerer.init(
-                    self.allocator,
-                    self.concrete_source_types.localView(),
-                    &temp_store,
-                    self.name_resolver.lowering_names,
-                );
-                defer lowerer.deinit();
-                break :blk try lowerer.lowerChecked(local);
-            },
-        };
-
-        var raw_importer = TypeImporter.init(
-            self.allocator,
-            &temp_store,
-            self.output,
-            self.concrete_source_types,
-            self.name_resolver,
-            self.artifact_views,
-            false,
-        );
-        defer raw_importer.deinit();
-
-        const imported = try raw_importer.importTypeRaw(temp_ty);
-        self.output.setNode(target, .{ .link = imported });
+        const lowered = try self.importConcretePayload(ref, self.concretePayload(ref));
+        self.output.setNode(target, lowered);
         _ = self.concrete_active.remove(ref);
         try self.concrete_imported.put(ref, target);
         return target;
     }
+
+    fn importConcretePayload(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        payload: checked_artifact.CheckedTypePayload,
+    ) Allocator.Error!Type.Node {
+        return switch (payload) {
+            .pending => lambdaInvariant("lambda-solved concrete source type import received an unpublished payload"),
+            .flex,
+            .rigid,
+            => lambdaInvariant("lambda-solved concrete source type import received an unresolved type variable"),
+            .alias => |alias| .{ .link = try self.importConcreteRef(try self.concreteAliasBackingRef(ref, alias)) },
+            .record,
+            .record_unbound,
+            .empty_record,
+            => .{ .content = .{ .record = .{ .fields = try self.importConcreteRecordFields(ref) } } },
+            .tuple => |elems| .{ .content = .{ .tuple = try self.importConcreteTypeIdSpan(ref, elems) } },
+            .nominal => |nominal| try self.importConcreteNominal(ref, nominal),
+            .function => |func| blk: {
+                if (func.needs_instantiation) {
+                    lambdaInvariant("lambda-solved concrete source type import received a function that still needs instantiation");
+                }
+                const args = try self.importConcreteTypeIdSpan(ref, func.args);
+                const ret = try self.importConcreteRef(try self.concreteChildRef(ref, func.ret));
+                break :blk .{ .content = .{ .func = .{
+                    .fixed_arity = @intCast(func.args.len),
+                    .args = args,
+                    .ret = ret,
+                    .callable = self.output.freshCallableVar(),
+                } } };
+            },
+            .tag_union,
+            .empty_tag_union,
+            => .{ .content = .{ .tag_union = .{ .tags = try self.importConcreteTags(ref) } } },
+        };
+    }
+
+    fn importConcreteNominal(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!Type.Node {
+        if (nominal.builtin) |builtin_nominal| {
+            switch (builtin_nominal) {
+                .bool => return .{ .link = try self.importConcreteRef(try self.concreteChildRef(ref, nominal.backing)) },
+                .str => return .{ .content = .{ .primitive = .str } },
+                .u8 => return .{ .content = .{ .primitive = .u8 } },
+                .i8 => return .{ .content = .{ .primitive = .i8 } },
+                .u16 => return .{ .content = .{ .primitive = .u16 } },
+                .i16 => return .{ .content = .{ .primitive = .i16 } },
+                .u32 => return .{ .content = .{ .primitive = .u32 } },
+                .i32 => return .{ .content = .{ .primitive = .i32 } },
+                .u64 => return .{ .content = .{ .primitive = .u64 } },
+                .i64 => return .{ .content = .{ .primitive = .i64 } },
+                .u128 => return .{ .content = .{ .primitive = .u128 } },
+                .i128 => return .{ .content = .{ .primitive = .i128 } },
+                .f32 => return .{ .content = .{ .primitive = .f32 } },
+                .f64 => return .{ .content = .{ .primitive = .f64 } },
+                .dec => return .{ .content = .{ .primitive = .dec } },
+                .list => {
+                    if (nominal.args.len != 1) lambdaInvariant("lambda-solved concrete List nominal did not have exactly one argument");
+                    return .{ .content = .{ .list = try self.importConcreteRef(try self.concreteChildRef(ref, nominal.args[0])) } };
+                },
+                .box => {
+                    if (nominal.args.len != 1) lambdaInvariant("lambda-solved concrete Box nominal did not have exactly one argument");
+                    return .{ .content = .{ .box = try self.importConcreteRef(try self.concreteChildRef(ref, nominal.args[0])) } };
+                },
+            }
+        }
+
+        return .{ .nominal = .{
+            .nominal = .{
+                .module_name = try self.moduleNameForConcreteRef(ref, nominal.origin_module),
+                .type_name = try self.typeNameForConcreteRef(ref, nominal.name),
+            },
+            .source_ty = self.concrete_source_types.key(ref),
+            .source_ty_payload = ref,
+            .is_opaque = nominal.is_opaque,
+            .args = try self.importConcreteTypeIdSpan(ref, nominal.args),
+            .backing = try self.importConcreteRef(try self.concreteNominalBackingRef(ref, nominal)),
+        } };
+    }
+
+    fn importConcreteRecordFields(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!Type.Span(Type.Field) {
+        var fields = std.ArrayList(Type.Field).empty;
+        defer fields.deinit(self.allocator);
+        try self.collectConcreteRecordFields(ref, &fields);
+        std.mem.sort(Type.Field, fields.items, LambdaTypeSortContext{ .names = self.name_resolver.lowering_names }, lambdaTypeFieldLessThan);
+        return try self.output.addFields(fields.items);
+    }
+
+    fn collectConcreteRecordFields(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        out: *std.ArrayList(Type.Field),
+    ) Allocator.Error!void {
+        switch (self.concretePayload(ref)) {
+            .alias => |alias| try self.collectConcreteRecordFields(try self.concreteAliasBackingRef(ref, alias), out),
+            .empty_record => {},
+            .flex,
+            .rigid,
+            => lambdaInvariant("lambda-solved concrete record import received an unresolved row tail"),
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    try out.append(self.allocator, .{
+                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
+                        .ty = try self.importConcreteRef(try self.concreteChildRef(ref, field.ty)),
+                    });
+                }
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    try out.append(self.allocator, .{
+                        .name = try self.recordFieldNameForConcreteRef(ref, field.name),
+                        .ty = try self.importConcreteRef(try self.concreteChildRef(ref, field.ty)),
+                    });
+                }
+                try self.collectConcreteRecordFields(try self.concreteChildRef(ref, record.ext), out);
+            },
+            else => lambdaInvariant("lambda-solved concrete record import reached a non-record type"),
+        }
+    }
+
+    fn importConcreteTags(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!Type.Span(Type.Tag) {
+        var tags = std.ArrayList(Type.Tag).empty;
+        defer tags.deinit(self.allocator);
+        try self.collectConcreteTags(ref, &tags);
+        std.mem.sort(Type.Tag, tags.items, LambdaTypeSortContext{ .names = self.name_resolver.lowering_names }, lambdaTypeTagLessThan);
+        return try self.output.addTags(tags.items);
+    }
+
+    fn collectConcreteTags(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        out: *std.ArrayList(Type.Tag),
+    ) Allocator.Error!void {
+        switch (self.concretePayload(ref)) {
+            .alias => |alias| try self.collectConcreteTags(try self.concreteAliasBackingRef(ref, alias), out),
+            .empty_tag_union => {},
+            .flex,
+            .rigid,
+            => lambdaInvariant("lambda-solved concrete tag-union import received an unresolved row tail"),
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    const name = try self.tagNameForConcreteRef(ref, tag.name);
+                    if (containsLambdaTypeTag(out.items, name)) continue;
+                    try out.append(self.allocator, .{
+                        .name = name,
+                        .args = try self.importConcreteTypeIdSpan(ref, tag.args),
+                    });
+                }
+                try self.collectConcreteTags(try self.concreteChildRef(ref, tag_union.ext), out);
+            },
+            .nominal => |nominal| try self.collectConcreteTags(try self.concreteNominalBackingRef(ref, nominal), out),
+            else => lambdaInvariant("lambda-solved concrete tag-union import reached a non-tag-union type"),
+        }
+    }
+
+    fn importConcreteTypeIdSpan(
+        self: *TypeImporter,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        type_ids: []const checked_artifact.CheckedTypeId,
+    ) Allocator.Error!Type.Span(Type.TypeVarId) {
+        if (type_ids.len == 0) return Type.Span(Type.TypeVarId).empty();
+        const imported = try self.allocator.alloc(Type.TypeVarId, type_ids.len);
+        defer self.allocator.free(imported);
+        for (type_ids, 0..) |id, i| {
+            imported[i] = try self.importConcreteRef(try self.concreteChildRef(parent, id));
+        }
+        return try self.output.addTypeVarSpan(imported);
+    }
+
+    fn concretePayload(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) checked_artifact.CheckedTypePayload {
+        const root = self.concrete_source_types.root(ref);
+        return switch (root.source) {
+            .artifact => |artifact_ref| blk: {
+                const checked_types = checkedTypesForArtifactViews(self.artifact_views, artifact_ref.artifact) orelse {
+                    lambdaInvariant("lambda-solved concrete source type artifact was not available");
+                };
+                const raw = @intFromEnum(artifact_ref.ty);
+                if (raw >= checked_types.payloads.len) {
+                    lambdaInvariant("lambda-solved concrete source type artifact payload id was out of range");
+                }
+                break :blk checked_types.payloads[raw];
+            },
+            .local => |local| blk: {
+                const local_view = self.concrete_source_types.localView();
+                const raw = @intFromEnum(local);
+                if (raw >= local_view.payloads.len) {
+                    lambdaInvariant("lambda-solved concrete source type local payload id was out of range");
+                }
+                break :blk local_view.payloads[raw];
+            },
+        };
+    }
+
+    fn concreteChildRef(
+        self: *TypeImporter,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        child: checked_artifact.CheckedTypeId,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const root = self.concrete_source_types.root(parent);
+        return switch (root.source) {
+            .artifact => |artifact_ref| blk: {
+                const checked_types = checkedTypesForArtifactViews(self.artifact_views, artifact_ref.artifact) orelse {
+                    lambdaInvariant("lambda-solved concrete source child artifact was not available");
+                };
+                break :blk try self.concrete_source_types.registerArtifactRoot(artifact_ref.artifact, checked_types, child);
+            },
+            .local => try self.concrete_source_types.registerLocalRoot(child),
+        };
+    }
+
+    fn concreteAliasBackingRef(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        alias: checked_artifact.CheckedAliasType,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        return try self.concreteChildRef(ref, alias.backing);
+    }
+
+    fn concreteNominalBackingRef(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        nominal: checked_artifact.CheckedNominalType,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const root = self.concrete_source_types.root(ref);
+        return switch (root.source) {
+            .local => switch (nominal.representation) {
+                .builtin,
+                .local_declaration,
+                .imported_declaration,
+                .local_box_payload_capability,
+                .imported_box_payload_capability,
+                => try self.concreteChildRef(ref, nominal.backing),
+                .opaque_without_backing => lambdaInvariant("lambda-solved concrete source type import attempted to inspect an opaque local nominal backing"),
+            },
+            .artifact => |artifact_ref| try self.artifactNominalBackingRef(artifact_ref),
+        };
+    }
+
+    fn artifactNominalBackingRef(
+        self: *TypeImporter,
+        artifact_ref: checked_artifact.ArtifactCheckedTypeRef,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        const checked_types = checkedTypesForArtifactViews(self.artifact_views, artifact_ref.artifact) orelse {
+            lambdaInvariant("lambda-solved concrete nominal backing artifact had no checked types");
+        };
+        const payload_index: usize = @intFromEnum(artifact_ref.ty);
+        if (payload_index >= checked_types.payloads.len) {
+            lambdaInvariant("lambda-solved concrete nominal backing artifact ref was out of range");
+        }
+        const nominal = switch (checked_types.payloads[payload_index]) {
+            .nominal => |payload| payload,
+            else => lambdaInvariant("lambda-solved concrete nominal backing artifact ref was not nominal"),
+        };
+        const backing_artifact, const backing_ty = switch (nominal.representation) {
+            .builtin,
+            .local_declaration,
+            .imported_declaration,
+            => .{ artifact_ref.artifact, nominal.backing },
+            .local_box_payload_capability => |capability_ref| blk: {
+                const capabilities = interfaceCapabilitiesForArtifactViews(self.artifact_views, artifact_ref.artifact) orelse {
+                    lambdaInvariant("lambda-solved concrete nominal capability artifact was not available");
+                };
+                const capability = capabilities.boxPayloadCapability(capability_ref.capability);
+                break :blk .{ artifact_ref.artifact, capability.backing_ty };
+            },
+            .imported_box_payload_capability => |capability_ref| blk: {
+                const capabilities = interfaceCapabilitiesForArtifactViews(self.artifact_views, capability_ref.artifact) orelse {
+                    lambdaInvariant("lambda-solved concrete imported nominal capability artifact was not available");
+                };
+                const capability = capabilities.boxPayloadCapability(capability_ref.capability);
+                break :blk .{ capability_ref.artifact, capability.backing_ty };
+            },
+            .opaque_without_backing => lambdaInvariant("lambda-solved concrete source type import attempted to inspect an opaque artifact nominal backing"),
+        };
+        const backing_checked_types = checkedTypesForArtifactViews(self.artifact_views, backing_artifact) orelse {
+            lambdaInvariant("lambda-solved concrete nominal backing owner artifact had no checked types");
+        };
+        return try self.concrete_source_types.registerArtifactRoot(backing_artifact, backing_checked_types, backing_ty);
+    }
+
+    fn moduleNameForConcreteRef(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        id: canonical.ModuleNameId,
+    ) Allocator.Error!canonical.ModuleNameId {
+        return switch (self.concrete_source_types.root(ref).source) {
+            .artifact => |artifact_ref| try self.name_resolver.moduleName(artifact_ref.artifact, id),
+            .local => id,
+        };
+    }
+
+    fn typeNameForConcreteRef(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        id: canonical.TypeNameId,
+    ) Allocator.Error!canonical.TypeNameId {
+        return switch (self.concrete_source_types.root(ref).source) {
+            .artifact => |artifact_ref| try self.name_resolver.typeName(artifact_ref.artifact, id),
+            .local => id,
+        };
+    }
+
+    fn recordFieldNameForConcreteRef(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        id: canonical.RecordFieldLabelId,
+    ) Allocator.Error!canonical.RecordFieldLabelId {
+        return switch (self.concrete_source_types.root(ref).source) {
+            .artifact => |artifact_ref| try self.name_resolver.recordFieldLabel(artifact_ref.artifact, id),
+            .local => id,
+        };
+    }
+
+    fn tagNameForConcreteRef(
+        self: *TypeImporter,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        id: canonical.TagLabelId,
+    ) Allocator.Error!canonical.TagLabelId {
+        return switch (self.concrete_source_types.root(ref).source) {
+            .artifact => |artifact_ref| try self.name_resolver.tagLabel(artifact_ref.artifact, id),
+            .local => id,
+        };
+    }
 };
+
+const LambdaTypeSortContext = struct {
+    names: *const canonical.CanonicalNameStore,
+};
+
+fn lambdaTypeFieldLessThan(ctx: LambdaTypeSortContext, a: Type.Field, b: Type.Field) bool {
+    const left = ctx.names.recordFieldLabelText(a.name);
+    const right = ctx.names.recordFieldLabelText(b.name);
+    if (!std.mem.eql(u8, left, right)) return std.mem.lessThan(u8, left, right);
+    return @intFromEnum(a.name) < @intFromEnum(b.name);
+}
+
+fn lambdaTypeTagLessThan(ctx: LambdaTypeSortContext, a: Type.Tag, b: Type.Tag) bool {
+    const left = ctx.names.tagLabelText(a.name);
+    const right = ctx.names.tagLabelText(b.name);
+    if (!std.mem.eql(u8, left, right)) return std.mem.lessThan(u8, left, right);
+    return @intFromEnum(a.name) < @intFromEnum(b.name);
+}
+
+fn containsLambdaTypeTag(tags: []const Type.Tag, name: canonical.TagLabelId) bool {
+    for (tags) |tag| {
+        if (tag.name == name) return true;
+    }
+    return false;
+}
 
 fn checkedTypesForArtifactViews(
     views: ArtifactViews,
@@ -13453,47 +13768,47 @@ const BodySolver = struct {
             .source_ty_payload = pat.source_ty_payload,
             .value_info = value,
             .data = switch (pat.data) {
-            .bool_lit => |literal| .{ .bool_lit = literal },
-            .int_lit => |literal| .{ .int_lit = literal },
-            .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
-            .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
-            .dec_lit => |literal| .{ .dec_lit = literal },
-            .str_lit => |literal| .{ .str_lit = literal },
-            .wildcard => .wildcard,
-            .nominal => |child| .{ .nominal = try self.lowerPatScoped(child, saved) },
-            .tuple => |items| .{ .tuple = try self.lowerPatSpanScoped(items, saved) },
-            .record => |record| .{ .record = .{
-                .shape = record.shape,
-                .fields = try self.lowerRecordFieldPatternSpanScoped(record.fields, saved),
-                .rest = if (record.rest) |rest| try self.lowerPatScoped(rest, saved) else null,
-            } },
-            .list => |list| .{ .list = .{
-                .items = try self.lowerPatSpanScoped(list.items, saved),
-                .rest = if (list.rest) |rest| .{
-                    .index = rest.index,
-                    .pattern = if (rest.pattern) |pattern| try self.lowerPatScoped(pattern, saved) else null,
-                } else null,
-            } },
-            .as => |as| blk: {
-                const binding = try self.bindPatternSymbol(as.symbol, value, saved);
-                break :blk .{ .as = .{
-                    .pattern = try self.lowerPatScopedWithValue(as.pattern, ty, value, saved),
-                    .symbol = as.symbol,
-                    .binding_info = binding,
-                } };
-            },
-            .var_ => |symbol| blk: {
-                const binding = try self.bindPatternSymbol(symbol, value, saved);
-                break :blk .{ .var_ = .{
-                    .symbol = symbol,
-                    .binding_info = binding,
-                } };
-            },
-            .tag => |tag| .{ .tag = .{
-                .union_shape = tag.union_shape,
-                .tag = tag.tag,
-                .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads, saved),
-            } },
+                .bool_lit => |literal| .{ .bool_lit = literal },
+                .int_lit => |literal| .{ .int_lit = literal },
+                .frac_f32_lit => |literal| .{ .frac_f32_lit = literal },
+                .frac_f64_lit => |literal| .{ .frac_f64_lit = literal },
+                .dec_lit => |literal| .{ .dec_lit = literal },
+                .str_lit => |literal| .{ .str_lit = literal },
+                .wildcard => .wildcard,
+                .nominal => |child| .{ .nominal = try self.lowerPatScoped(child, saved) },
+                .tuple => |items| .{ .tuple = try self.lowerPatSpanScoped(items, saved) },
+                .record => |record| .{ .record = .{
+                    .shape = record.shape,
+                    .fields = try self.lowerRecordFieldPatternSpanScoped(record.fields, saved),
+                    .rest = if (record.rest) |rest| try self.lowerPatScoped(rest, saved) else null,
+                } },
+                .list => |list| .{ .list = .{
+                    .items = try self.lowerPatSpanScoped(list.items, saved),
+                    .rest = if (list.rest) |rest| .{
+                        .index = rest.index,
+                        .pattern = if (rest.pattern) |pattern| try self.lowerPatScoped(pattern, saved) else null,
+                    } else null,
+                } },
+                .as => |as| blk: {
+                    const binding = try self.bindPatternSymbol(as.symbol, value, saved);
+                    break :blk .{ .as = .{
+                        .pattern = try self.lowerPatScopedWithValue(as.pattern, ty, value, saved),
+                        .symbol = as.symbol,
+                        .binding_info = binding,
+                    } };
+                },
+                .var_ => |symbol| blk: {
+                    const binding = try self.bindPatternSymbol(symbol, value, saved);
+                    break :blk .{ .var_ = .{
+                        .symbol = symbol,
+                        .binding_info = binding,
+                    } };
+                },
+                .tag => |tag| .{ .tag = .{
+                    .union_shape = tag.union_shape,
+                    .tag = tag.tag,
+                    .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads, saved),
+                } },
             },
         });
     }
@@ -15230,7 +15545,7 @@ const BodySolver = struct {
 
         const payload_info = self.row_shapes.tagPayload(payload);
         const tag_info = self.row_shapes.tag(payload_info.tag);
-        if (!(try self.constTagMatches(resolved.materialization, variant.name, tag_info.label))) {
+        if (!self.constTagMatches(resolved.materialization, variant.name, tag_info.label)) {
             lambdaInvariant("lambda-solved const-backed tag payload child map active tag disagreed with requested finalized payload");
         }
         const payload_index: usize = @intCast(payload_info.logical_index);
@@ -15299,7 +15614,7 @@ const BodySolver = struct {
         if (variant_index >= schema.len) {
             lambdaInvariant("lambda-solved const-backed tag pattern variant index out of range");
         }
-        return try self.constTagMatches(
+        return self.constTagMatches(
             resolved.materialization,
             schema[variant_index].name,
             self.row_shapes.tag(tag_id).label,

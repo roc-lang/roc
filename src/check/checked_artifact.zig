@@ -11144,8 +11144,8 @@ pub const ModuleInterfaceCapabilities = struct {
                 break :blk id;
             };
 
-            const payload = &checked_types.payloads[i];
-            switch (payload.*) {
+            const published_payload = &checked_types.payloads[i];
+            switch (published_payload.*) {
                 .nominal => |*published_nominal| {
                     published_nominal.representation = .{ .local_box_payload_capability = .{
                         .capability = capability_id,
@@ -18787,7 +18787,7 @@ pub const CheckedTypeProjector = struct {
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, nominal.backing, active),
-                .representation = try self.remapViewNominalRepresentation(source_names, nominal.representation),
+                .representation = remapViewNominalRepresentation(nominal.representation),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, nominal.args, active),
             } },
             .function => |function| .{ .function = .{
@@ -18933,28 +18933,9 @@ pub const CheckedTypeProjector = struct {
         return try self.target.canonical_names.internMethodName(names.methodNameText(id));
     }
 
-    fn remapViewMethodOwner(
-        self: *CheckedTypeProjector,
-        source_names: ?*const canonical.CanonicalNameStore,
-        owner: static_dispatch.MethodOwner,
-    ) Allocator.Error!static_dispatch.MethodOwner {
-        const names = source_names orelse return owner;
-        return switch (owner) {
-            .builtin => |builtin_owner| .{ .builtin = builtin_owner },
-            .nominal => |nominal| .{ .nominal = .{
-                .module_name = try self.target.canonical_names.internModuleName(names.moduleNameText(nominal.module_name)),
-                .type_name = try self.target.canonical_names.internTypeName(names.typeNameText(nominal.type_name)),
-            } },
-        };
-    }
-
     fn remapViewNominalRepresentation(
-        self: *CheckedTypeProjector,
-        source_names: ?*const canonical.CanonicalNameStore,
         representation: CheckedNominalRepresentationRef,
-    ) Allocator.Error!CheckedNominalRepresentationRef {
-        _ = self;
-        _ = source_names;
+    ) CheckedNominalRepresentationRef {
         return switch (representation) {
             .builtin => |builtin_id| .{ .builtin = builtin_id },
             .local_declaration => |declaration| .{ .local_declaration = declaration },
@@ -19152,7 +19133,7 @@ pub const CheckedTypeProjector = struct {
     }
 
     fn remapImportedNominalRepresentation(
-        self: *CheckedTypeProjector,
+        _: *CheckedTypeProjector,
         imported: ImportedModuleView,
         nominal: CheckedNominalType,
     ) Allocator.Error!CheckedNominalRepresentationRef {

@@ -105,5 +105,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
+    std.testing.refAllDecls(@import("test/builtin_doc_tests.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

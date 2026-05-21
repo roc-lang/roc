@@ -2119,9 +2119,9 @@ const ConcreteDependencyCollector = struct {
                 const descriptor = persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
                     compileTimeFinalizationInvariant("concrete dependency collection reached materialized finite callable set without descriptor");
                 };
-                const member = persistedCallableSetMember(descriptor, finite.selected_member) orelse {
+                if (persistedCallableSetMember(descriptor, finite.selected_member) == null) {
                     compileTimeFinalizationInvariant("concrete dependency collection reached materialized finite callable set with missing member");
-                };
+                }
                 try self.appendProcedureCallable(
                     finite.selected_proc,
                     finite.member_proc_source_fn_ty_payload,
@@ -2517,9 +2517,9 @@ const ComptimeGraphCloner = struct {
                 const descriptor = persistedCallableSetDescriptor(self.artifact.callable_set_descriptors.descriptors, finite.callable_set_key) orelse {
                     compileTimeFinalizationInvariant("constant value graph clone reached finite callable set without descriptor");
                 };
-                const member = persistedCallableSetMember(descriptor, finite.selected_member) orelse {
+                if (persistedCallableSetMember(descriptor, finite.selected_member) == null) {
                     compileTimeFinalizationInvariant("constant value graph clone reached finite callable set with missing member");
-                };
+                }
                 try self.dependencies.appendProcedureCallable(
                     finite.selected_proc,
                     finite.member_proc_source_fn_ty_payload,
@@ -4294,18 +4294,6 @@ fn finiteAdapterMemberTargetsForResolvedErasedCode(
         return try cloneExecutableSpecializationKeySlice(allocator, entry.finite_adapter_member_targets);
     }
     compileTimeFinalizationInvariant("finite erased callable code was not published in lowered code map");
-}
-
-fn validateLoweredFiniteAdapterMemberTarget(
-    member: repr.CanonicalCallableSetMember,
-    target: canonical.ExecutableSpecializationKey,
-) void {
-    if (member.source_proc.proc.proc_base != target.base) {
-        compileTimeFinalizationInvariant("lowered finite adapter member target base differs from descriptor member");
-    }
-    if (!repr.canonicalTypeKeyEql(member.proc_value.source_fn_ty, target.requested_fn_ty)) {
-        compileTimeFinalizationInvariant("lowered finite adapter member target source type differs from procedure value");
-    }
 }
 
 fn erasedCallableCodeRefEql(a: canonical.ErasedCallableCodeRef, b: canonical.ErasedCallableCodeRef) bool {

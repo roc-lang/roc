@@ -1206,37 +1206,37 @@ const BodyLifter = struct {
             .source_ty = pat.source_ty,
             .source_ty_payload = pat.source_ty_payload,
             .data = switch (pat.data) {
-            .bool_lit => |value| .{ .bool_lit = value },
-            .int_lit => |value| .{ .int_lit = value },
-            .frac_f32_lit => |value| .{ .frac_f32_lit = value },
-            .frac_f64_lit => |value| .{ .frac_f64_lit = value },
-            .dec_lit => |value| .{ .dec_lit = value },
-            .str_lit => |value| .{ .str_lit = value },
-            .nominal => |child| .{ .nominal = try self.lowerPat(child) },
-            .record => |record| .{ .record = .{
-                .shape = record.shape,
-                .fields = try self.lowerRecordFieldPatternSpan(record.fields),
-                .rest = if (record.rest) |rest| try self.lowerPat(rest) else null,
-            } },
-            .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
-            .list => |list| .{ .list = .{
-                .items = try self.lowerPatSpan(list.items),
-                .rest = if (list.rest) |rest| .{
-                    .index = rest.index,
-                    .pattern = if (rest.pattern) |pattern| try self.lowerPat(pattern) else null,
-                } else null,
-            } },
-            .as => |as| .{ .as = .{
-                .pattern = try self.lowerPat(as.pattern),
-                .symbol = as.symbol,
-            } },
-            .var_ => |symbol| .{ .var_ = symbol },
-            .wildcard => .wildcard,
-            .tag => |tag| .{ .tag = .{
-                .union_shape = tag.union_shape,
-                .tag = tag.tag,
-                .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads),
-            } },
+                .bool_lit => |value| .{ .bool_lit = value },
+                .int_lit => |value| .{ .int_lit = value },
+                .frac_f32_lit => |value| .{ .frac_f32_lit = value },
+                .frac_f64_lit => |value| .{ .frac_f64_lit = value },
+                .dec_lit => |value| .{ .dec_lit = value },
+                .str_lit => |value| .{ .str_lit = value },
+                .nominal => |child| .{ .nominal = try self.lowerPat(child) },
+                .record => |record| .{ .record = .{
+                    .shape = record.shape,
+                    .fields = try self.lowerRecordFieldPatternSpan(record.fields),
+                    .rest = if (record.rest) |rest| try self.lowerPat(rest) else null,
+                } },
+                .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
+                .list => |list| .{ .list = .{
+                    .items = try self.lowerPatSpan(list.items),
+                    .rest = if (list.rest) |rest| .{
+                        .index = rest.index,
+                        .pattern = if (rest.pattern) |pattern| try self.lowerPat(pattern) else null,
+                    } else null,
+                } },
+                .as => |as| .{ .as = .{
+                    .pattern = try self.lowerPat(as.pattern),
+                    .symbol = as.symbol,
+                } },
+                .var_ => |symbol| .{ .var_ = symbol },
+                .wildcard => .wildcard,
+                .tag => |tag| .{ .tag = .{
+                    .union_shape = tag.union_shape,
+                    .tag = tag.tag,
+                    .payloads = try self.lowerTagPayloadPatternSpan(tag.payloads),
+                } },
             },
         });
     }

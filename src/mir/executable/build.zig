@@ -5929,9 +5929,9 @@ const PublishedTypeLowerer = struct {
         if (self.row_shapes.tagUnionTags(shape).len != variants.len) executableInvariant("executable published tag payload shape arity mismatch");
 
         const out = try self.allocator.alloc(Type.TagType, variants.len);
-        for (out) |*tag| tag.* = .{ .tag = undefined, .payloads = &.{} };
+        for (out) |*tag_type| tag_type.* = .{ .tag = undefined, .payloads = &.{} };
         errdefer {
-            for (out) |tag| self.allocator.free(tag.payloads);
+            for (out) |tag_type| self.allocator.free(tag_type.payloads);
             self.allocator.free(out);
         }
         for (variants, 0..) |variant, i| {
@@ -5953,11 +5953,11 @@ const PublishedTypeLowerer = struct {
         self: *PublishedTypeLowerer,
         parent: checked_artifact.ExecutableTypePayloadId,
         tag_label: canonical.TagLabelId,
-        tag: MonoRow.TagId,
+        tag_id: MonoRow.TagId,
         payloads: []const checked_artifact.ExecutableTagPayload,
     ) Allocator.Error![]const Type.TagPayloadType {
         if (payloads.len == 0) return &.{};
-        const shape_payloads = self.row_shapes.tagPayloads(tag);
+        const shape_payloads = self.row_shapes.tagPayloads(tag_id);
         if (shape_payloads.len != payloads.len) executableInvariant("executable published tag payload arity mismatch");
         const out = try self.allocator.alloc(Type.TagPayloadType, payloads.len);
         errdefer self.allocator.free(out);
@@ -6010,10 +6010,10 @@ const PublishedTypeLowerer = struct {
     fn publishTagChild(
         self: *PublishedTypeLowerer,
         payload: checked_artifact.ExecutableTypePayloadId,
-        tag: canonical.TagLabelId,
+        tag_label: canonical.TagLabelId,
         lowered: MonoRow.TagId,
     ) Allocator.Error!void {
-        const entry = try self.tag_children.getOrPut(.{ .payload = payload, .tag = tag });
+        const entry = try self.tag_children.getOrPut(.{ .payload = payload, .tag = tag_label });
         if (entry.found_existing and entry.value_ptr.* != lowered) {
             executableInvariant("executable published tag child map had conflicting tag ids");
         }
@@ -6023,11 +6023,11 @@ const PublishedTypeLowerer = struct {
     fn publishTagPayloadChild(
         self: *PublishedTypeLowerer,
         payload: checked_artifact.ExecutableTypePayloadId,
-        tag: canonical.TagLabelId,
+        tag_label: canonical.TagLabelId,
         index: u32,
         lowered: MonoRow.TagPayloadId,
     ) Allocator.Error!void {
-        const entry = try self.tag_payload_children.getOrPut(.{ .payload = payload, .tag = tag, .index = index });
+        const entry = try self.tag_payload_children.getOrPut(.{ .payload = payload, .tag = tag_label, .index = index });
         if (entry.found_existing and entry.value_ptr.* != lowered) {
             executableInvariant("executable published tag-payload child map had conflicting payload ids");
         }
@@ -6095,9 +6095,9 @@ const PublishedTypeLowerer = struct {
 
     fn remapTagLabel(
         self: *PublishedTypeLowerer,
-        tag: canonical.TagLabelId,
+        tag_label: canonical.TagLabelId,
     ) Allocator.Error!canonical.TagLabelId {
-        return try self.lowering_names.internTagLabel(sourceTagLabelText(self.source_names, tag));
+        return try self.lowering_names.internTagLabel(sourceTagLabelText(self.source_names, tag_label));
     }
 
     fn remapNominalTypeKey(
@@ -9525,7 +9525,7 @@ const BodyBuilder = struct {
     }
 
     fn tagTypeForTagUnionType(
-        self: *BodyBuilder,
+        _: *BodyBuilder,
         tag_union: Type.TagUnionType,
         source_tag: MonoRow.TagId,
     ) TypeTagConstruction {
@@ -9551,11 +9551,9 @@ const BodyBuilder = struct {
     }
 
     fn recordFieldForConstruction(
-        self: *BodyBuilder,
         record: Type.RecordType,
         source_field: MonoRow.RecordFieldId,
     ) Type.RecordFieldType {
-        _ = self;
         for (record.fields) |target_field| {
             if (target_field.field == source_field) return target_field;
         }
@@ -9856,7 +9854,7 @@ const BodyBuilder = struct {
         defer self.allocator.free(seen);
         @memset(seen, false);
         for (input_items) |field| {
-            const target_field = self.recordFieldForConstruction(record_ty, field.field);
+            const target_field = recordFieldForConstruction(record_ty, field.field);
             const field_index: usize = @intCast(self.program.row_shapes.recordField(target_field.field).logical_index);
             if (field_index >= values.len) {
                 executableInvariant("executable record construction field index exceeded expected endpoint arity");
