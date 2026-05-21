@@ -4470,7 +4470,7 @@ fn buildSnapshotReplModuleSource(
 }
 
 fn compileSnapshotReplInspectedModule(allocator: Allocator, source: []const u8) !eval_mod.test_helpers.CompiledProgram {
-    return eval_mod.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
+    return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .module, source, &.{});
 }
 
 fn renderSnapshotReplTypeProblems(

@@ -204,6 +204,7 @@ fn tidyFile(
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
         tidyBannedStdIo(file, errors);
+        tidyBannedIndexOf(file, errors);
         tidyBannedCoreCtxCreation(file, errors);
 
         var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
@@ -286,6 +287,56 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
         while (std.mem.find(u8, remaining, banned)) |index| {
             const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
             errors.addBanned(file, offset, banned, replacement);
+            remaining = remaining[index + banned.len ..];
+        }
+    }
+}
+
+/// Zig 0.16 renamed `std.mem.indexOf*` / `lastIndexOf*` to `std.mem.find*`.
+/// The old names still exist as deprecated aliases, so the compiler accepts them,
+/// but new code must use the modern spellings to keep the rename sweep from drifting.
+fn tidyBannedIndexOf(file: SourceFile, errors: *Errors) void {
+    // Don't ban ourselves (this file documents the banned strings).
+    if (std.mem.endsWith(u8, file.path, "ci/tidy.zig")) return;
+
+    const banned_index_patterns: []const struct { []const u8, []const u8 } = &.{
+        // Longest patterns first so substrings don't shadow them.
+        .{ "std.mem.lastIndexOfScalar", "std.mem.findScalarLast" },
+        .{ "std.mem.lastIndexOfAny", "std.mem.findLastAny" },
+        .{ "std.mem.lastIndexOf", "std.mem.findLast" },
+        .{ "std.mem.indexOfScalarPos", "std.mem.findScalarPos" },
+        .{ "std.mem.indexOfScalar", "std.mem.findScalar" },
+        .{ "std.mem.indexOfAny", "std.mem.findAny" },
+        .{ "std.mem.indexOfPos", "std.mem.findPos" },
+        .{ "std.mem.indexOfNone", "std.mem.findNone" },
+        .{ "std.mem.indexOf", "std.mem.find" },
+    };
+
+    // Track offsets reported by longer patterns so we don't double-report
+    // a shorter pattern that appears as a prefix (e.g. `indexOf` inside `indexOfScalar`).
+    var reported_buf: [128]usize = undefined;
+    var reported_count: usize = 0;
+
+    for (banned_index_patterns) |ban_item| {
+        const banned, const replacement = ban_item;
+        var remaining: []const u8 = file.text;
+        while (std.mem.find(u8, remaining, banned)) |index| {
+            const offset = @intFromPtr(remaining.ptr) - @intFromPtr(file.text.ptr) + index;
+
+            var already_reported = false;
+            for (reported_buf[0..reported_count]) |prior| {
+                if (prior == offset) {
+                    already_reported = true;
+                    break;
+                }
+            }
+            if (!already_reported) {
+                if (reported_count < reported_buf.len) {
+                    reported_buf[reported_count] = offset;
+                    reported_count += 1;
+                }
+                errors.addBanned(file, offset, banned, replacement);
+            }
             remaining = remaining[index + banned.len ..];
         }
     }

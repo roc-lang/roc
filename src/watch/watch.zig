@@ -249,6 +249,7 @@ pub const WatchCallback = *const fn (event: WatchEvent) void;
 /// Monitors directories recursively and invokes callbacks on file changes
 pub const Watcher = struct {
     allocator: std.mem.Allocator,
+    std_io: std.Io,
     paths: [][]const u8,
     callback: WatchCallback,
     should_stop: std.atomic.Value(bool),
@@ -291,7 +292,7 @@ pub const Watcher = struct {
     };
 
     /// Initialize a new file watcher
-    pub fn init(allocator: std.mem.Allocator, paths: []const []const u8, callback: WatchCallback) !*Watcher {
+    pub fn init(allocator: std.mem.Allocator, std_io: std.Io, paths: []const []const u8, callback: WatchCallback) !*Watcher {
         const watcher = try allocator.create(Watcher);
         errdefer allocator.destroy(watcher);
 
@@ -304,6 +305,7 @@ pub const Watcher = struct {
 
         watcher.* = .{
             .allocator = allocator,
+            .std_io = std_io,
             .paths = paths_copy,
             .callback = callback,
             .should_stop = std.atomic.Value(bool).init(false),
@@ -697,11 +699,10 @@ pub const Watcher = struct {
 
                             // Check if there are already .roc files in the new directory
                             // This handles the case where files are created immediately after the directory
-                            const new_dir_io = std.Io.Threaded.global_single_threaded.io();
-                            var dir = std.Io.Dir.openDirAbsolute(new_dir_io, new_dir, .{ .iterate = true }) catch break;
-                            defer dir.close(new_dir_io);
+                            var dir = std.Io.Dir.openDirAbsolute(self.std_io, new_dir, .{ .iterate = true }) catch break;
+                            defer dir.close(self.std_io);
                             var it = dir.iterate();
-                            while (it.next(new_dir_io) catch null) |entry| {
+                            while (it.next(self.std_io) catch null) |entry| {
                                 if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
                                     const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch continue;
                                     defer self.allocator.free(full_path);
@@ -745,12 +746,11 @@ pub const Watcher = struct {
         const wd_key = try std.fmt.allocPrint(self.allocator, "{d}", .{wd});
         try self.impl.path_cache.put(wd_key, try self.allocator.dupe(u8, path));
 
-        const dir_io = std.Io.Threaded.global_single_threaded.io();
-        var dir = try std.Io.Dir.openDirAbsolute(dir_io, path, .{ .iterate = true });
-        defer dir.close(dir_io);
+        var dir = try std.Io.Dir.openDirAbsolute(self.std_io, path, .{ .iterate = true });
+        defer dir.close(self.std_io);
 
         var it = dir.iterate();
-        while (try it.next(dir_io)) |entry| {
+        while (try it.next(self.std_io)) |entry| {
             if (entry.kind == .directory) {
                 const subdir_path = try std.fs.path.join(self.allocator, &.{ path, entry.name });
                 defer self.allocator.free(subdir_path);
@@ -1104,7 +1104,7 @@ test "basic file watching" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1146,7 +1146,7 @@ test "recursive directory watching" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1183,7 +1183,7 @@ test "multiple directories watching" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{ temp_path1, temp_path2 }, callback);
+    const watcher = try Watcher.init(allocator, io, &.{ temp_path1, temp_path2 }, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1221,7 +1221,7 @@ test "file modification detection" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1254,7 +1254,7 @@ test "rapid file creation" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1300,7 +1300,7 @@ test "directory creation and file addition" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1341,7 +1341,7 @@ test "start stop restart" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1395,7 +1395,7 @@ test "thread safety" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1461,7 +1461,7 @@ test "file rename detection" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try temp_dir.dir.writeFile(io, .{ .sub_path = "original.roc", .data = "content" });
@@ -1507,7 +1507,7 @@ test "windows unicode filename handling" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1582,7 +1582,7 @@ test "windows long path handling" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();

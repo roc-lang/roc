@@ -516,18 +516,6 @@ pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) !void {
     return std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sub_path, .data = data });
 }
 
-/// Returns an Io suitable for single-threaded use (e.g. test helpers, subprocess workers).
-/// Not available on freestanding targets.
-pub const singleThreadedIo = if (@import("builtin").target.os.tag != .freestanding) struct {
-    pub fn call() std.Io {
-        return std.Io.Threaded.global_single_threaded.io();
-    }
-}.call else struct {
-    pub fn call() std.Io {
-        @panic("singleThreadedIo not available on freestanding");
-    }
-}.call;
-
 // --- OS implementations ---
 
 fn osReadFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {

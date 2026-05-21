@@ -77,6 +77,10 @@ const LoweredProgram = helpers.LoweredProgram;
 
 const posix = std.posix;
 
+/// Process-wide `std.Io` initialized from `main(init)` and consumed by helpers
+/// that don't get an `io` parameter (e.g. pool worker callbacks).
+var app_io: std.Io = undefined;
+
 // Test definition modules
 const eval_tests = @import("eval_tests.zig");
 
@@ -353,7 +357,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
     if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm) {
         const timings = switch (tc.expected) {
             .inspect_str => blk: {
-                var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var compiled = helpers.compileInspectedProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors",
@@ -369,7 +373,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
                 };
             },
             .crash, .problem_and_crash => blk: {
-                var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var compiled = helpers.compileInspectedProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors",
@@ -454,7 +458,7 @@ fn runInspectTest(
     expected: TestCase.Expected,
     skip: TestCase.Skip,
 ) !TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
+    var compiled = try helpers.compileInspectedProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -622,7 +626,7 @@ fn runCrashTest(
     skip: TestCase.Skip,
     require_problems: bool,
 ) !TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
+    var compiled = try helpers.compileInspectedProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const can_diags = try compiled.resources.module_env.getDiagnostics();
@@ -1404,6 +1408,7 @@ pub fn main(init: std.process.Init) !void {
     trace_worker.stamp("gpa init");
 
     const io = init.io;
+    app_io = io;
 
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
@@ -1427,8 +1432,8 @@ pub fn main(init: std.process.Init) !void {
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
             for (cli.filters) |pattern| {
-                if (std.mem.indexOf(u8, tc.name, pattern) != null or
-                    std.mem.indexOf(u8, tc.source, pattern) != null)
+                if (std.mem.find(u8, tc.name, pattern) != null or
+                    std.mem.find(u8, tc.source, pattern) != null)
                 {
                     try filtered_buf.append(gpa, tc);
                     break;

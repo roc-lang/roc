@@ -2033,7 +2033,7 @@ pub fn buildLirRuntimeImageWithCoordinator(
         &builtin_modules,
         build_options.compiler_version,
         null, // no cache for IPC
-        CoreCtx.default(ctx.gpa, ctx.arena, debug_threaded_io_instance.io()),
+        CoreCtx.default(ctx.gpa, ctx.arena, ctx.io.std_io),
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -4593,7 +4593,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
     var reader = ReplLine.init(ctx.gpa);
     defer reader.deinit();
 
-    var session = ReplSession.init(ctx.gpa, backend_kind);
+    var session = ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
     defer session.deinit();
 
     var should_exit = false;

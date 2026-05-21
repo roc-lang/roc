@@ -144,8 +144,8 @@ fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8)
 fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []const u8) bool {
     if (filters.len == 0) return true;
     for (filters) |f| {
-        if (std.mem.indexOf(u8, name, f) != null) return true;
-        if (std.mem.indexOf(u8, roc_file, f) != null) return true;
+        if (std.mem.find(u8, name, f) != null) return true;
+        if (std.mem.find(u8, roc_file, f) != null) return true;
     }
     return false;
 }

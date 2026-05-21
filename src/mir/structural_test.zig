@@ -41,18 +41,18 @@ fn structFieldType(comptime Struct: type, comptime name: []const u8) type {
 }
 
 fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []const u8 {
-    const start_index = std.mem.indexOf(u8, source, start) orelse @panic("missing source slice start marker");
+    const start_index = std.mem.find(u8, source, start) orelse @panic("missing source slice start marker");
     const after_start = source[start_index..];
-    const end_index = std.mem.indexOf(u8, after_start, end) orelse @panic("missing source slice end marker");
+    const end_index = std.mem.find(u8, after_start, end) orelse @panic("missing source slice end marker");
     return after_start[0..end_index];
 }
 
 fn expectContains(haystack: []const u8, needle: []const u8) !void {
-    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+    try std.testing.expect(std.mem.find(u8, haystack, needle) != null);
 }
 
 fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
-    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) == null);
+    try std.testing.expect(std.mem.find(u8, haystack, needle) == null);
 }
 
 test "mono MIR output has resolved call/equality nodes and no dispatch survival nodes" {
@@ -159,12 +159,12 @@ test "annotation-only checked expressions are not representable in post-check MI
     try std.testing.expect(!unionHasField(executable_expr_data, "anno_only"));
 
     const mono_specialize_source = @embedFile("mono/specialize.zig");
-    try std.testing.expect(std.mem.indexOf(
+    try std.testing.expect(std.mem.find(
         u8,
         mono_specialize_source,
         "mono body lowering reached annotation-only procedure body without checked backing expression",
     ) != null);
-    try std.testing.expect(std.mem.indexOf(
+    try std.testing.expect(std.mem.find(
         u8,
         mono_specialize_source,
         "mono body lowering received a non-runtime checked expression form",

@@ -25,6 +25,10 @@ const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const collections = @import("collections");
 
+/// Process-wide `std.Io` initialized from `main(init)` and consumed by helpers
+/// that don't get an `io` parameter (e.g. pool worker callbacks).
+var app_io: std.Io = undefined;
+
 /// Public struct `TestCase`.
 pub const TestCase = struct {
     name: []const u8,
@@ -409,7 +413,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
                 else => return false,
             },
             .dbg_contains => |fragment| switch (actual) {
-                .dbg => |actual_msg| if (std.mem.indexOf(u8, actual_msg, fragment) == null) return false,
+                .dbg => |actual_msg| if (std.mem.find(u8, actual_msg, fragment) == null) return false,
                 else => return false,
             },
             .dbg_any => switch (actual) {
@@ -430,7 +434,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
 }
 
 fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    var compiled = helpers.compileProgram(allocator, tc.source_kind, tc.source, tc.imports) catch |err| {
+    var compiled = helpers.compileProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch |err| {
         return .{
             .status = .fail,
             .message = allocator.dupe(u8, @errorName(err)) catch null,
@@ -845,6 +849,7 @@ pub fn main(init: std.process.Init) !void {
     const gpa = gpa_impl.allocator();
 
     const io = init.io;
+    app_io = io;
 
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
@@ -862,8 +867,8 @@ pub fn main(init: std.process.Init) !void {
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
             for (cli.filters) |pattern| {
-                if (std.mem.indexOf(u8, tc.name, pattern) != null or
-                    std.mem.indexOf(u8, tc.source, pattern) != null)
+                if (std.mem.find(u8, tc.name, pattern) != null or
+                    std.mem.find(u8, tc.source, pattern) != null)
                 {
                     try filtered_buf.append(gpa, tc);
                     break;

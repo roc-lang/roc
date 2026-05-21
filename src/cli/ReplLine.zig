@@ -536,7 +536,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     state.col_offset += paste_buffer.items.len;
                     state.history_index = null;
 
-                    const has_newline = std.mem.indexOfAny(u8, paste_buffer.items, "\n\r") != null;
+                    const has_newline = std.mem.findAny(u8, paste_buffer.items, "\n\r") != null;
                     paste_buffer.clearRetainingCapacity();
 
                     // Redraw so the user sees the pasted text. For a multi-line

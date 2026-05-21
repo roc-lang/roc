@@ -45,8 +45,9 @@ const ColorPalette = reporting.ColorPalette;
 const ReportingConfig = reporting.ReportingConfig;
 
 /// I/O interface for CLI operations.
-/// Wraps stdout/stderr with buffered writers. When Zig's std.Io interface
-/// becomes available, this struct will be replaced with std.Io.
+/// Owns the buffered writer state (per-stream byte buffers and File.Writer
+/// instances) layered on top of `std.Io`, so the CLI can flush and rebind
+/// stdout/stderr without each call site re-creating that state.
 pub const Io = struct {
     std_io: std.Io,
     stdout_writer: std.Io.File.Writer,

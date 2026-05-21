@@ -17,12 +17,14 @@ const ModuleEnv = can.ModuleEnv;
 const ReplSession = @This();
 
 allocator: Allocator,
+io: std.Io,
 backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
 
-pub fn init(allocator: Allocator, backend_kind: eval.EvalBackend) ReplSession {
+pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) ReplSession {
     return .{
         .allocator = allocator,
+        .io = io,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
     };
@@ -200,7 +202,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
         .interpreter, .dev, .llvm => .native,
         .wasm => .u32,
     };
-    var compiled = try eval.test_helpers.compileInspectedProgramForTarget(self.allocator, .module, source, &.{}, target_usize);
+    var compiled = try eval.test_helpers.compileInspectedProgramForTarget(self.allocator, self.io, .module, source, &.{}, target_usize);
     defer compiled.deinit(self.allocator);
 
     return switch (self.backend_kind) {
@@ -399,7 +401,7 @@ fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) !
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = ReplSession.init(testing.allocator, eval_backend);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, eval_backend);
     defer repl.deinit();
 
     const result = try repl.step(expr);
@@ -415,7 +417,7 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
 }
 
 fn expectAllNative(expr: []const u8, expected: []const u8) !void {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
 
     const line = std.mem.trim(u8, expr, " \t\r\n");
@@ -428,7 +430,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) !void {
     const source = try std.fmt.allocPrint(testing.allocator, "{s}\nmain = {s}\n", .{ definitions, line });
     defer testing.allocator.free(source);
 
-    var compiled = try eval.test_helpers.compileInspectedProgram(testing.allocator, .module, source, &.{});
+    var compiled = try eval.test_helpers.compileInspectedProgram(testing.allocator, std.testing.io, .module, source, &.{});
     defer compiled.deinit(testing.allocator);
 
     try expectCompiledBackend(.interpreter, expr, expected, &compiled.lowered);
@@ -462,7 +464,7 @@ fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) !void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = ReplSession.init(testing.allocator, eval_backend);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, eval_backend);
     defer repl.deinit();
 
     for (steps) |step_pair| {
@@ -479,7 +481,7 @@ fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: [
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = ReplSession.init(testing.allocator, eval_backend);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, eval_backend);
     defer repl.deinit();
 
     for (steps, 0..) |step_input, i| {
@@ -496,18 +498,18 @@ fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: [
 }
 
 test "Repl - initialization and cleanup" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
     try testing.expect(repl.definitions.count() == 0);
 }
 
 test "Repl - special commands" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
     defer testing.allocator.free(help_result);
-    try testing.expect(std.mem.indexOf(u8, help_result, "Enter an expression") != null);
+    try testing.expect(std.mem.find(u8, help_result, "Enter an expression") != null);
 
     const exit_result = try repl.step(":exit");
     defer testing.allocator.free(exit_result);
@@ -815,7 +817,7 @@ test "Repl - for loop snapshots" {
 }
 
 test "Repl - build full source with block syntax" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 5", "x", .value);
@@ -835,7 +837,7 @@ test "Repl - build full source with block syntax" {
 }
 
 test "Repl - definition replacement" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 1", "x", .value);
@@ -867,7 +869,7 @@ test "Repl - 4-arg lambda call (dev)" {
 }
 
 fn expectSplit(input: []const u8, expected: []const []const u8) !void {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements(input);
@@ -917,7 +919,7 @@ test "splitInputIntoStatements - annotation and decl stay separate" {
 }
 
 test "Repl - paste of annotation + decl produces single assigned message" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z : U64\nz = 5");
@@ -934,7 +936,7 @@ test "Repl - paste of annotation + decl produces single assigned message" {
 }
 
 test "Repl - paste of two assignments processes both" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = ReplSession.init(testing.allocator, std.testing.io, .interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z = 5\ny = 6");

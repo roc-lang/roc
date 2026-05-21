@@ -33,6 +33,15 @@ pub fn elfDebugInfoSearchPaths(_: []const u8) switch (builtin.object_format) {
     }
 }
 
+/// Shared `std.Options` value for shim and platform-host code that needs to disable
+/// std stack tracing. Zig 0.16's `std.debug.SelfInfo` on Windows references
+/// `ntdll.LdrRegisterDllNotification`, which isn't linked into roc-compiled
+/// programs that embed these static archives — leaving stack tracing on would
+/// trigger an unresolved-symbol link error. Hosts that need extra fields
+/// (e.g. `logFn`, `log_level`) should declare their own `std.Options` literal
+/// rather than alias this one.
+pub const std_options_no_stack_tracing: std.Options = .{ .allow_stack_tracing = false };
+
 const linux_vtable: std.Io.VTable = blk: {
     var vtable = std.Io.failing.vtable.*;
     vtable.futexWait = linuxFutexWait;
@@ -155,7 +164,7 @@ fn linuxDirOpenFile(
 ) std.Io.File.OpenError!std.Io.File {
     const linux = std.os.linux;
 
-    if (std.mem.indexOfScalar(u8, sub_path, 0) != null) return error.BadPathName;
+    if (std.mem.findScalar(u8, sub_path, 0) != null) return error.BadPathName;
     const sub_path_posix = std.posix.toPosixPath(sub_path) catch return error.NameTooLong;
 
     var flags: linux.O = .{

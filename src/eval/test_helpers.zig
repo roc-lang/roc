@@ -12,7 +12,6 @@ const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const lir = @import("lir");
-const CoreCtx = @import("ctx").CoreCtx;
 
 const builtin_loading = @import("builtin_loading.zig");
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
@@ -383,6 +382,7 @@ pub fn parseAndCheckProgramForProblems(
 /// Public `compileProgram` function.
 pub fn compileProgram(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -390,13 +390,13 @@ pub fn compileProgram(
     var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, .native);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, .native);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
     }
 
-    const wasm_lowered = try lowerParsedProgramToLir(allocator, &resources, .u32);
+    const wasm_lowered = try lowerParsedProgramToLir(allocator, io, &resources, .u32);
     errdefer {
         var owned = wasm_lowered;
         owned.deinit(allocator);
@@ -412,6 +412,7 @@ pub fn compileProgram(
 /// Public `compileProgramForTarget` function.
 pub fn compileProgramForTarget(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -420,7 +421,7 @@ pub fn compileProgramForTarget(
     var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, target_usize);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
@@ -435,6 +436,7 @@ pub fn compileProgramForTarget(
 /// Public `compileInspectedProgram` function.
 pub fn compileInspectedProgram(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -442,13 +444,13 @@ pub fn compileInspectedProgram(
     var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, .native);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, .native);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
     }
 
-    const wasm_lowered = try lowerParsedProgramToLir(allocator, &resources, .u32);
+    const wasm_lowered = try lowerParsedProgramToLir(allocator, io, &resources, .u32);
     errdefer {
         var owned = wasm_lowered;
         owned.deinit(allocator);
@@ -464,6 +466,7 @@ pub fn compileInspectedProgram(
 /// Public `compileInspectedProgramForTarget` function.
 pub fn compileInspectedProgramForTarget(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -472,7 +475,7 @@ pub fn compileInspectedProgramForTarget(
     var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, target_usize);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
@@ -485,8 +488,8 @@ pub fn compileInspectedProgramForTarget(
 }
 
 /// Public `compileInspectedExpr` function.
-pub fn compileInspectedExpr(allocator: Allocator, source: []const u8) !CompiledInspectedExpr {
-    return compileInspectedProgram(allocator, .expr, source, &.{});
+pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8) !CompiledInspectedExpr {
+    return compileInspectedProgram(allocator, io, .expr, source, &.{});
 }
 
 /// Public `cleanupParseAndCanonical` function.
@@ -838,6 +841,7 @@ pub fn parseCheckModule(
 
 fn lowerParsedProgramToLir(
     allocator: Allocator,
+    io: std.Io,
     resources: *ParsedResources,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
@@ -848,10 +852,13 @@ fn lowerParsedProgramToLir(
     }
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    // On freestanding targets `io` is unused (the wasm SharedMemoryAllocator
+    // takes anytype and ignores it). On hosted targets it threads through to
+    // shared-memory syscalls.
     var shm = if (comptime builtin.target.os.tag == .freestanding)
-        try SharedMemoryAllocator.create({}, EVAL_SHARED_MEMORY_SIZE, page_size)
+        try SharedMemoryAllocator.create(io, EVAL_SHARED_MEMORY_SIZE, page_size)
     else
-        try SharedMemoryAllocator.create(CoreCtx.singleThreadedIo(), EVAL_SHARED_MEMORY_SIZE, page_size);
+        try SharedMemoryAllocator.create(io, EVAL_SHARED_MEMORY_SIZE, page_size);
     errdefer shm.deinit(allocator);
 
     const shm_allocator = shm.allocator();

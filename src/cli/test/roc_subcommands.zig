@@ -1095,8 +1095,8 @@ fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
     try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // Output should contain line-numbered source lines with the gutter prefix.
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "\u{2502}") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "add(1, 1) == 3") != null);
 }
 
 test "roc test failure output contains source snippet (interpreter)" {
@@ -1117,9 +1117,9 @@ fn testFailureOutputContainsDocComment(opt: []const u8) !void {
 
     try testing.expect(result.term == .exited and result.term.exited == 1);
 
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "## This test should fail") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "## This test should fail") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "add(1, 1) == 3") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "\u{2502}") != null);
 }
 
 test "roc test failure output contains doc comment (interpreter)" {
@@ -1151,8 +1151,8 @@ fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
     try testing.expect(verbose.term == .exited and verbose.term.exited == 1);
 
     for ([_][]const u8{ "\u{2502}", "add(1, 1) == 3" }) |needle| {
-        try testing.expect(std.mem.indexOf(u8, non_verbose.stderr, needle) != null);
-        try testing.expect(std.mem.indexOf(u8, verbose.stderr, needle) != null);
+        try testing.expect(std.mem.find(u8, non_verbose.stderr, needle) != null);
+        try testing.expect(std.mem.find(u8, verbose.stderr, needle) != null);
     }
 }
 
@@ -1269,7 +1269,7 @@ test "roc run returns exit code 1 for old platform download" {
 
     try testing.expect(result.term == .exited and result.term.exited == 1);
 
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "platform was built with the old Roc") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "platform was built with the old Roc") != null);
 }
 
 test "roc run --opt=dev rejects non executable targets" {
@@ -1590,8 +1590,8 @@ test "roc test complex_package --verbose passes all tests" {
 
     try util.checkSuccess(result);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "tests passed") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "PASS") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "tests passed") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "PASS") != null);
 }
 
 test "roc bundle complex_package includes all transitively imported modules" {
@@ -1622,8 +1622,8 @@ test "roc bundle complex_package includes all transitively imported modules" {
     // Taxonomy.roc) and include them in the archive — instead of reporting
     // them as "missing from bundle".
     try util.checkSuccess(result);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Created:") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "missing from bundle") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Created:") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "missing from bundle") == null);
 }
 
 test "failed inline expect exits with code 1 and continues program (dev)" {
@@ -1635,8 +1635,8 @@ test "failed inline expect exits with code 1 and continues program (dev)" {
     defer gpa.free(result.stderr);
 
     try testing.expect(result.term == .exited and result.term.exited == 1);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "expect failed") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "expect failed") != null);
 }
 
 test "failed inline expect exits with code 1 and continues program (interpreter)" {
@@ -1648,6 +1648,6 @@ test "failed inline expect exits with code 1 and continues program (interpreter)
     defer gpa.free(result.stderr);
 
     try testing.expect(result.term == .exited and result.term.exited == 1);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Expect failed") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Expect failed") != null);
 }

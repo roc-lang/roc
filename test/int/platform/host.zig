@@ -9,9 +9,8 @@ const f32str = builtins.compiler_rt_128.f32_to_str;
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 pub const std_options_debug_io = shim_io.io();
 pub const std_options_debug_threaded_io = null;
-// Disable std stack tracing — Zig 0.16's SelfInfo (Windows) pulls in
-// ntdll.LdrRegisterDllNotification which isn't linked into roc programs.
-pub const std_options: std.Options = .{ .allow_stack_tracing = false };
+// See `shim_io.std_options_no_stack_tracing` for why stack tracing is disabled.
+pub const std_options = shim_io.std_options_no_stack_tracing;
 
 var app_std_io: std.Io = shim_io.io();
 

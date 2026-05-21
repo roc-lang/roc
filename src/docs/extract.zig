@@ -475,7 +475,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     var j: usize = 0;
     while (j < entries_list.items.len) {
         const entry = &entries_list.items[j];
-        if (std.mem.indexOfScalar(u8, entry.name, '.')) |dot_idx| {
+        if (std.mem.findScalar(u8, entry.name, '.')) |dot_idx| {
             const parent_name = entry.name[0..dot_idx];
             const method_short_name = entry.name[dot_idx + 1 ..];
 
@@ -491,7 +491,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
                 const parent_ptr = &entries_list.items[parent_idx];
                 const method_entry = try moveEntryForReparenting(gpa, entry, method_short_name);
 
-                if (std.mem.indexOfScalar(u8, method_short_name, '.')) |_| {
+                if (std.mem.findScalar(u8, method_short_name, '.')) |_| {
                     var children_list = std.ArrayList(DocModel.DocEntry).empty;
                     for (parent_ptr.children) |c| {
                         try children_list.append(gpa, c);
@@ -530,7 +530,7 @@ fn reparentDottedChild(
     entries_list: *std.ArrayList(DocModel.DocEntry),
     child: DocModel.DocEntry,
 ) !void {
-    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
+    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         try entries_list.append(gpa, child);
         return;
     };
@@ -569,7 +569,7 @@ fn reparentDottedChild(
     gpa.free(child.name);
     new_child.name = short_name;
 
-    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
+    if (std.mem.findScalar(u8, remainder, '.')) |_| {
         var children_list = std.ArrayList(DocModel.DocEntry).empty;
         for (p.children) |c| {
             try children_list.append(gpa, c);
@@ -588,7 +588,7 @@ fn reparentDottedChildInto(
     children_list: *std.ArrayList(DocModel.DocEntry),
     child: DocModel.DocEntry,
 ) !void {
-    const dot_idx = std.mem.indexOfScalar(u8, child.name, '.') orelse {
+    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         try children_list.append(gpa, child);
         return;
     };
@@ -627,7 +627,7 @@ fn reparentDottedChildInto(
     gpa.free(child.name);
     new_child.name = short_name;
 
-    if (std.mem.indexOfScalar(u8, remainder, '.')) |_| {
+    if (std.mem.findScalar(u8, remainder, '.')) |_| {
         var sub_children = std.ArrayList(DocModel.DocEntry).empty;
         for (p.children) |c| {
             try sub_children.append(gpa, c);

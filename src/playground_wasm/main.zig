@@ -995,7 +995,9 @@ fn buildReplModuleSource(
 }
 
 fn compileReplInspectedModule(source: []const u8) !eval.test_helpers.CompiledTargetProgram {
-    return eval.test_helpers.compileProgramForTarget(allocator, .module, source, &.{}, .u32);
+    // Wasm/freestanding target: io is unused by SharedMemoryAllocator on this
+    // target, so `undefined` is safe — see `lowerParsedProgramToLir`.
+    return eval.test_helpers.compileProgramForTarget(allocator, @as(std.Io, undefined), .module, source, &.{}, .u32);
 }
 
 fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {

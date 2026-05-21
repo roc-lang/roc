@@ -27,7 +27,6 @@ const max_builtin_bytes = 1024 * 1024;
 var stderr_buffer: [4096]u8 = undefined;
 var stderr_writer: std.Io.File.Writer = undefined;
 var stderr_initialized = false;
-var global_io: std.Io = undefined;
 
 fn flushStderr() void {
     if (stderr_initialized) {
@@ -53,9 +52,9 @@ fn numericFromStrLowLevel(num_type: []const u8) CIR.Expr.LowLevel {
     unreachable;
 }
 
-fn stderrWriter() *std.Io.Writer {
+fn stderrWriter(io: std.Io) *std.Io.Writer {
     if (!stderr_initialized) {
-        stderr_writer = std.Io.File.stderr().writer(global_io, &stderr_buffer);
+        stderr_writer = std.Io.File.stderr().writer(io, &stderr_buffer);
         stderr_initialized = true;
     }
     return &stderr_writer.interface;
@@ -1298,7 +1297,6 @@ fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
 pub fn main(process_init: std.process.Init) !void {
     const gpa = process_init.gpa;
     const io = process_init.io;
-    global_io = io;
 
     var args_list = std.ArrayList([:0]const u8).empty;
     defer args_list.deinit(gpa);
@@ -1322,6 +1320,7 @@ pub fn main(process_init: std.process.Init) !void {
     // Compile Builtin.roc (it's completely self-contained)
     const builtin_env = try compileModule(
         gpa,
+        io,
         "Builtin",
         builtin_roc_source,
         builtin_src_path,
@@ -1428,7 +1427,7 @@ pub fn main(process_init: std.process.Init) !void {
     }
 
     // Serialize the single Builtin module
-    try serializeModuleEnv(gpa, builtin_env, builtin_bin_path);
+    try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
@@ -1485,7 +1484,7 @@ pub fn main(process_init: std.process.Init) !void {
     // This ensures BuiltinIndices stays in sync with the actual Builtin module content
     try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
 
-    try serializeBuiltinIndices(builtin_indices, builtin_indices_path);
+    try serializeBuiltinIndices(io, builtin_indices, builtin_indices_path);
 }
 
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
@@ -1543,6 +1542,7 @@ const ModuleDep = struct {
 
 fn compileModule(
     gpa: Allocator,
+    io: std.Io,
     module_name: []const u8,
     source: []const u8,
     source_path: []const u8,
@@ -1587,7 +1587,7 @@ fn compileModule(
 
     // Check for parse errors
     if (parse_ast.hasErrors()) {
-        const stderr = stderrWriter();
+        const stderr = stderrWriter(io);
         const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
         const config = reporting.ReportingConfig.initColorTerminal();
 
@@ -1628,7 +1628,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    const roc_ctx = CoreCtx.os(gpa, gpa, global_io);
+    const roc_ctx = CoreCtx.os(gpa, gpa, io);
     can_result.* = try Can.initBuiltin(roc_ctx, module_env, parse_ast);
 
     try can_result.canonicalizeFile();
@@ -1638,7 +1638,7 @@ fn compileModule(
     const can_diagnostics = try module_env.getDiagnostics();
     defer gpa.free(can_diagnostics);
     if (can_diagnostics.len > 0) {
-        const stderr = stderrWriter();
+        const stderr = stderrWriter(io);
         const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
         const config = reporting.ReportingConfig.initColorTerminal();
 
@@ -1749,7 +1749,7 @@ fn compileModule(
 
     // Check for type errors
     if (checker.problems.problems.items.len > 0) {
-        const stderr = stderrWriter();
+        const stderr = stderrWriter(io);
         const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
         const config = reporting.ReportingConfig.initColorTerminal();
 
@@ -1789,6 +1789,7 @@ fn compileModule(
 
 fn serializeModuleEnv(
     gpa: Allocator,
+    io: std.Io,
     env: *const ModuleEnv,
     output_path: []const u8,
 ) !void {
@@ -1797,8 +1798,8 @@ fn serializeModuleEnv(
     const arena_alloc = arena.allocator();
 
     // Create output file
-    const file = try std.Io.Dir.cwd().createFile(global_io, output_path, .{ .read = true });
-    defer file.close(global_io);
+    const file = try std.Io.Dir.cwd().createFile(io, output_path, .{ .read = true });
+    defer file.close(io);
 
     // Serialize using CompactWriter
     var writer = collections.CompactWriter.init();
@@ -1808,7 +1809,7 @@ fn serializeModuleEnv(
     try serialized.serialize(env, arena_alloc, &writer);
 
     // Write to file
-    try writer.writeGather(file, global_io);
+    try writer.writeGather(file, io);
 }
 
 /// Find a type declaration by name in a compiled module
@@ -1871,14 +1872,15 @@ fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, typ
 
 /// Serialize BuiltinIndices to a binary file
 fn serializeBuiltinIndices(
+    io: std.Io,
     indices: BuiltinIndices,
     output_path: []const u8,
 ) !void {
     // Create output file
-    const file = try std.Io.Dir.cwd().createFile(global_io, output_path, .{});
-    defer file.close(global_io);
+    const file = try std.Io.Dir.cwd().createFile(io, output_path, .{});
+    defer file.close(io);
 
     // Write the struct directly as binary data
     // This is a simple struct with two u32 fields, so we can write it directly
-    try file.writePositionalAll(global_io, std.mem.asBytes(&indices), 0);
+    try file.writePositionalAll(io, std.mem.asBytes(&indices), 0);
 }
