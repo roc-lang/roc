@@ -4350,6 +4350,7 @@ pub fn sessionExecutableTypeEndpointForErasedBoundaryTypeIntoStore(
     source_ty_names: ?*const canonical.CanonicalNameStore,
     source_ty_view: ?checked_artifact.CheckedTypeStoreView,
     source_ty_root: ?checked_artifact.CheckedTypeId,
+    source_ty_concrete_root: ?ConcreteSourceType.ConcreteSourceTypeRoot,
 ) std.mem.Allocator.Error!SessionExecutableTypeEndpoint {
     var builder = SessionExecutableTypePayloadBuilder.initWithPayloadStore(
         allocator,
@@ -4367,12 +4368,14 @@ pub fn sessionExecutableTypeEndpointForErasedBoundaryTypeIntoStore(
     return try builder.endpointForErasedBoundaryType(logical_ty, .{
         .root = source_ty_root,
         .key_hint = source_ty_hint,
+        .source_root = source_ty_concrete_root,
     });
 }
 
 const ErasedBoundarySourceCursor = struct {
     root: ?checked_artifact.CheckedTypeId = null,
     key_hint: canonical.CanonicalTypeKey = .{},
+    source_root: ?ConcreteSourceType.ConcreteSourceTypeRoot = null,
 };
 
 const ResolvedSourcePayload = struct {
@@ -4709,7 +4712,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 break :blk .{ .nominal = .{
                     .nominal = nominal.nominal,
                     .source_ty = nominal.source_ty,
-                    .source_root = null,
+                    .source_root = source.source_root,
                     .is_opaque = nominal.is_opaque,
                     .backing = backing.ty,
                     .backing_key = backing.key,
@@ -4745,8 +4748,9 @@ const SessionExecutableTypePayloadBuilder = struct {
         return .{ .ty = child.ty, .key = child.key };
     }
 
-    fn sourceCursorForCheckedRoot(
+    fn sourceCursorForChildRoot(
         self: *const SessionExecutableTypePayloadBuilder,
+        parent: ErasedBoundarySourceCursor,
         root: checked_artifact.CheckedTypeId,
     ) ErasedBoundarySourceCursor {
         const view = self.erased_source_types orelse representationInvariant("erased boundary source child requested without a checked source type view");
@@ -4754,9 +4758,20 @@ const SessionExecutableTypePayloadBuilder = struct {
         if (index >= view.roots.len or index >= view.payloads.len) {
             representationInvariant("erased boundary checked source child is outside the checked type store");
         }
+        const key = view.roots[index].key;
         return .{
             .root = root,
-            .key_hint = view.roots[index].key,
+            .key_hint = key,
+            .source_root = if (parent.source_root) |source_root| .{
+                .key = key,
+                .source = switch (source_root.source) {
+                    .local => .{ .local = root },
+                    .artifact => |artifact| .{ .artifact = .{
+                        .artifact = artifact.artifact,
+                        .ty = root,
+                    } },
+                },
+            } else null,
         };
     }
 
@@ -4796,7 +4811,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         while (true) {
             const payload = self.sourcePayload(current) orelse return null;
             switch (payload) {
-                .alias => |alias| current = self.sourceCursorForCheckedRoot(alias.backing),
+                .alias => |alias| current = self.sourceCursorForChildRoot(current, alias.backing),
                 else => return .{ .cursor = current, .payload = payload },
             }
         }
@@ -4808,7 +4823,7 @@ const SessionExecutableTypePayloadBuilder = struct {
     ) ?ErasedBoundarySourceCursor {
         const resolved = self.resolvedSourcePayload(source) orelse return null;
         return switch (resolved.payload) {
-            .nominal => |nominal| self.sourceCursorForCheckedRoot(nominal.backing),
+            .nominal => |nominal| self.sourceCursorForChildRoot(resolved.cursor, nominal.backing),
             else => null,
         };
     }
@@ -4823,7 +4838,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 if (nominal.builtin != .list or nominal.args.len != 1) {
                     representationInvariant("erased boundary list source payload is not builtin List(T)");
                 }
-                break :blk self.sourceCursorForCheckedRoot(nominal.args[0]);
+                break :blk self.sourceCursorForChildRoot(resolved.cursor, nominal.args[0]);
             },
             else => representationInvariant("erased boundary list source payload is not builtin List(T)"),
         };
@@ -4839,7 +4854,7 @@ const SessionExecutableTypePayloadBuilder = struct {
                 if (nominal.builtin != .box or nominal.args.len != 1) {
                     representationInvariant("erased boundary Box source payload is not builtin Box(T)");
                 }
-                break :blk self.sourceCursorForCheckedRoot(nominal.args[0]);
+                break :blk self.sourceCursorForChildRoot(resolved.cursor, nominal.args[0]);
             },
             else => representationInvariant("erased boundary Box source payload is not builtin Box(T)"),
         };
@@ -4854,7 +4869,7 @@ const SessionExecutableTypePayloadBuilder = struct {
         return switch (resolved.payload) {
             .tuple => |items| blk: {
                 if (index >= items.len) representationInvariant("erased boundary tuple source payload arity mismatch");
-                break :blk self.sourceCursorForCheckedRoot(items[index]);
+                break :blk self.sourceCursorForChildRoot(resolved.cursor, items[index]);
             },
             else => representationInvariant("erased boundary tuple source payload is not a tuple"),
         };
@@ -4874,7 +4889,7 @@ const SessionExecutableTypePayloadBuilder = struct {
             self.names,
             field,
         ) orelse representationInvariant("erased boundary record source payload is missing a field");
-        return self.sourceCursorForCheckedRoot(child);
+        return self.sourceCursorForChildRoot(source, child);
     }
 
     fn erasedBoundarySourceTagPayloadChild(
@@ -4893,16 +4908,16 @@ const SessionExecutableTypePayloadBuilder = struct {
             tag,
             @intCast(index),
         ) orelse representationInvariant("erased boundary tag-union source payload is missing a tag payload");
-        return self.sourceCursorForCheckedRoot(child);
+        return self.sourceCursorForChildRoot(source, child);
     }
 
     fn resolvedFunctionSourcePayload(
         self: *const SessionExecutableTypePayloadBuilder,
         source: ErasedBoundarySourceCursor,
-    ) ?checked_artifact.CheckedFunctionType {
+    ) ?struct { cursor: ErasedBoundarySourceCursor, function: checked_artifact.CheckedFunctionType } {
         const resolved = self.resolvedSourcePayload(source) orelse return null;
         return switch (resolved.payload) {
-            .function => |function| function,
+            .function => |function| .{ .cursor = resolved.cursor, .function = function },
             else => representationInvariant("erased boundary function source payload is not a function"),
         };
     }
@@ -4912,17 +4927,17 @@ const SessionExecutableTypePayloadBuilder = struct {
         source: ErasedBoundarySourceCursor,
         index: usize,
     ) ErasedBoundarySourceCursor {
-        const function = self.resolvedFunctionSourcePayload(source) orelse return .{};
-        if (index >= function.args.len) representationInvariant("erased boundary function source payload arity mismatch");
-        return self.sourceCursorForCheckedRoot(function.args[index]);
+        const resolved = self.resolvedFunctionSourcePayload(source) orelse return .{};
+        if (index >= resolved.function.args.len) representationInvariant("erased boundary function source payload arity mismatch");
+        return self.sourceCursorForChildRoot(resolved.cursor, resolved.function.args[index]);
     }
 
     fn sourceFunctionReturn(
         self: *const SessionExecutableTypePayloadBuilder,
         source: ErasedBoundarySourceCursor,
     ) ErasedBoundarySourceCursor {
-        const function = self.resolvedFunctionSourcePayload(source) orelse return .{};
-        return self.sourceCursorForCheckedRoot(function.ret);
+        const resolved = self.resolvedFunctionSourcePayload(source) orelse return .{};
+        return self.sourceCursorForChildRoot(resolved.cursor, resolved.function.ret);
     }
 
     fn erasedFunctionSlotPayload(

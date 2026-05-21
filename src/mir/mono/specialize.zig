@@ -2121,10 +2121,6 @@ const TypeInstantiator = struct {
         return child;
     }
 
-    fn lowerTemplateType(self: *TypeInstantiator, id: checked_artifact.CheckedTypeId) Allocator.Error!Type.TypeId {
-        return try self.lowerConcreteRef(try self.concreteRefForTemplateType(id));
-    }
-
     fn concreteRefForTemplateType(
         self: *TypeInstantiator,
         id: checked_artifact.CheckedTypeId,
@@ -3320,7 +3316,14 @@ const TypeInstantiator = struct {
         switch (lhs_payload) {
             .flex,
             .rigid,
-            => {
+            => |lhs_var| {
+                const rhs_payload = self.concretePayload(rhs);
+                switch (rhs_payload) {
+                    .flex,
+                    .rigid,
+                    => |rhs_var| return try self.unifyConcreteVariables(lhs, lhs_payload, lhs_var, rhs, rhs_payload, rhs_var),
+                    else => {},
+                }
                 try self.bindConcreteVariable(lhs, rhs);
                 return;
             },
@@ -3347,6 +3350,268 @@ const TypeInstantiator = struct {
         }
 
         try self.unifyConcretePayloads(lhs, lhs_payload, rhs, rhs_payload);
+    }
+
+    fn unifyConcreteVariables(
+        self: *TypeInstantiator,
+        lhs: ConcreteSourceType.ConcreteSourceTypeRef,
+        lhs_payload: checked_artifact.CheckedTypePayload,
+        lhs_var: checked_artifact.CheckedTypeVariable,
+        rhs: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs_payload: checked_artifact.CheckedTypePayload,
+        rhs_var: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!void {
+        const lhs_has_metadata = concreteVariableHasSemanticMetadata(lhs_var);
+        const rhs_has_metadata = concreteVariableHasSemanticMetadata(rhs_var);
+
+        if (!lhs_has_metadata and !rhs_has_metadata) {
+            try self.putConcreteVariableSubstitution(lhs, rhs);
+            return;
+        }
+        if (lhs_has_metadata and !rhs_has_metadata) {
+            try self.putConcreteVariableSubstitution(rhs, lhs);
+            return;
+        }
+        if (!lhs_has_metadata and rhs_has_metadata) {
+            try self.putConcreteVariableSubstitution(lhs, rhs);
+            return;
+        }
+
+        const merged = try self.materializeMergedConcreteVariable(lhs, lhs_payload, lhs_var, rhs, rhs_payload, rhs_var);
+        try self.putConcreteVariableSubstitution(lhs, merged);
+        try self.putConcreteVariableSubstitution(rhs, merged);
+    }
+
+    fn concreteVariableHasSemanticMetadata(variable: checked_artifact.CheckedTypeVariable) bool {
+        return variable.constraints.len != 0 or variable.numeric_default_phase != null;
+    }
+
+    fn materializeMergedConcreteVariable(
+        self: *TypeInstantiator,
+        lhs: ConcreteSourceType.ConcreteSourceTypeRef,
+        lhs_payload: checked_artifact.CheckedTypePayload,
+        lhs_var: checked_artifact.CheckedTypeVariable,
+        rhs: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs_payload: checked_artifact.CheckedTypePayload,
+        rhs_var: checked_artifact.CheckedTypeVariable,
+    ) Allocator.Error!ConcreteSourceType.ConcreteSourceTypeRef {
+        var cloned = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId).init(self.allocator);
+        defer cloned.deinit();
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        const payload = try self.mergedConcreteVariablePayload(lhs, lhs_payload, lhs_var, rhs, rhs_payload, rhs_var, &cloned);
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        return try self.sealMaterializedLocalRootRef(local_root);
+    }
+
+    fn mergedConcreteVariablePayload(
+        self: *TypeInstantiator,
+        lhs: ConcreteSourceType.ConcreteSourceTypeRef,
+        lhs_payload: checked_artifact.CheckedTypePayload,
+        lhs_var: checked_artifact.CheckedTypeVariable,
+        rhs: ConcreteSourceType.ConcreteSourceTypeRef,
+        rhs_payload: checked_artifact.CheckedTypePayload,
+        rhs_var: checked_artifact.CheckedTypeVariable,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        var constraints = std.ArrayList(checked_artifact.CheckedStaticDispatchConstraint).empty;
+        errdefer constraints.deinit(self.allocator);
+        try self.appendConcreteConstraintsForVariableMerge(&constraints, lhs, lhs_var.constraints, cloned);
+        try self.appendConcreteConstraintsForVariableMerge(&constraints, rhs, rhs_var.constraints, cloned);
+
+        const merged_name = if (lhs_var.name) |name| name else rhs_var.name;
+        const merged_var = checked_artifact.CheckedTypeVariable{
+            .name = try self.copyOptionalText(merged_name),
+            .constraints = if (constraints.items.len == 0) &.{} else try constraints.toOwnedSlice(self.allocator),
+            .numeric_default_phase = mergeNumericDefaultPhase(lhs_var.numeric_default_phase, rhs_var.numeric_default_phase),
+        };
+
+        return switch (mergedConcreteVariableKind(lhs_payload, rhs_payload)) {
+            .flex => .{ .flex = merged_var },
+            .rigid => .{ .rigid = merged_var },
+        };
+    }
+
+    fn appendConcreteConstraintsForVariableMerge(
+        self: *TypeInstantiator,
+        out: *std.ArrayList(checked_artifact.CheckedStaticDispatchConstraint),
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        constraints: []const checked_artifact.CheckedStaticDispatchConstraint,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error!void {
+        for (constraints) |constraint| {
+            try out.append(self.allocator, .{
+                .fn_name = try self.methodNameForConcreteRef(ref, constraint.fn_name),
+                .fn_ty = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(ref, constraint.fn_ty), cloned),
+                .origin = constraint.origin,
+                .binop_negated = constraint.binop_negated,
+                .num_literal = constraint.num_literal,
+            });
+        }
+    }
+
+    const MergedConcreteVariableKind = enum { flex, rigid };
+
+    fn mergedConcreteVariableKind(
+        lhs: checked_artifact.CheckedTypePayload,
+        rhs: checked_artifact.CheckedTypePayload,
+    ) MergedConcreteVariableKind {
+        return switch (lhs) {
+            .rigid => .rigid,
+            .flex => switch (rhs) {
+                .rigid => .rigid,
+                .flex => .flex,
+                else => invariantViolation("mono specialization attempted to merge a non-variable concrete payload"),
+            },
+            else => invariantViolation("mono specialization attempted to merge a non-variable concrete payload"),
+        };
+    }
+
+    fn mergeNumericDefaultPhase(
+        lhs: ?checked_artifact.NumericDefaultPhase,
+        rhs: ?checked_artifact.NumericDefaultPhase,
+    ) ?checked_artifact.NumericDefaultPhase {
+        if (lhs) |phase| {
+            if (phase == .mono_specialization) return .mono_specialization;
+        }
+        if (rhs) |phase| {
+            if (phase == .mono_specialization) return .mono_specialization;
+        }
+        return lhs orelse rhs;
+    }
+
+    fn cloneConcreteTypeForVariableMerge(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error!checked_artifact.CheckedTypeId {
+        const resolved = self.resolveConcreteRef(ref);
+        if (cloned.get(resolved)) |existing| return existing;
+
+        const local_root = try self.program.concrete_source_types.reservePendingLocalRoot();
+        try cloned.put(resolved, local_root);
+        errdefer _ = cloned.remove(resolved);
+
+        const payload = try self.cloneConcretePayloadForVariableMerge(resolved, self.concretePayload(resolved), cloned);
+        self.program.concrete_source_types.fillLocalRoot(local_root, payload);
+        return local_root;
+    }
+
+    fn cloneConcretePayloadForVariableMerge(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        payload: checked_artifact.CheckedTypePayload,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error!checked_artifact.CheckedTypePayload {
+        return switch (payload) {
+            .pending => invariantViolation("mono specialization received an unpublished concrete checked type payload"),
+            .flex => |flex| .{ .flex = try self.cloneConcreteVariableForVariableMerge(ref, flex, cloned) },
+            .rigid => |rigid| .{ .rigid = try self.cloneConcreteVariableForVariableMerge(ref, rigid, cloned) },
+            .alias => |alias| .{ .alias = .{
+                .name = try self.typeNameForConcreteRef(ref, alias.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, alias.origin_module),
+                .backing = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(ref, alias.backing), cloned),
+                .args = try self.cloneConcreteTypeIdsForVariableMerge(ref, alias.args, cloned),
+            } },
+            .record_unbound => |fields| .{ .record_unbound = try self.cloneConcreteRecordFieldsForVariableMerge(ref, fields, cloned) },
+            .record => |record| .{ .record = .{
+                .fields = try self.cloneConcreteRecordFieldsForVariableMerge(ref, record.fields, cloned),
+                .ext = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(ref, record.ext), cloned),
+            } },
+            .tuple => |items| .{ .tuple = try self.cloneConcreteTypeIdsForVariableMerge(ref, items, cloned) },
+            .nominal => |nominal| .{ .nominal = .{
+                .name = try self.typeNameForConcreteRef(ref, nominal.name),
+                .origin_module = try self.moduleNameForConcreteRef(ref, nominal.origin_module),
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .backing = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(ref, nominal.backing), cloned),
+                .representation = nominal.representation,
+                .args = try self.cloneConcreteTypeIdsForVariableMerge(ref, nominal.args, cloned),
+            } },
+            .function => |func| .{ .function = .{
+                .kind = checked_artifact.finalizedFunctionKind(func.kind),
+                .args = try self.cloneConcreteTypeIdsForVariableMerge(ref, func.args, cloned),
+                .ret = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(ref, func.ret), cloned),
+                .needs_instantiation = false,
+            } },
+            .empty_record => .empty_record,
+            .tag_union => |tag_union| .{ .tag_union = .{
+                .tags = try self.cloneConcreteTagsForVariableMerge(ref, tag_union.tags, cloned),
+                .ext = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(ref, tag_union.ext), cloned),
+            } },
+            .empty_tag_union => .empty_tag_union,
+        };
+    }
+
+    fn cloneConcreteVariableForVariableMerge(
+        self: *TypeInstantiator,
+        ref: ConcreteSourceType.ConcreteSourceTypeRef,
+        variable: checked_artifact.CheckedTypeVariable,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error!checked_artifact.CheckedTypeVariable {
+        var constraints = std.ArrayList(checked_artifact.CheckedStaticDispatchConstraint).empty;
+        errdefer constraints.deinit(self.allocator);
+        try self.appendConcreteConstraintsForVariableMerge(&constraints, ref, variable.constraints, cloned);
+        return .{
+            .name = try self.copyOptionalText(variable.name),
+            .constraints = if (constraints.items.len == 0) &.{} else try constraints.toOwnedSlice(self.allocator),
+            .numeric_default_phase = variable.numeric_default_phase,
+        };
+    }
+
+    fn cloneConcreteTypeIdsForVariableMerge(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        ids: []const checked_artifact.CheckedTypeId,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error![]const checked_artifact.CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTypeId, ids.len);
+        errdefer self.allocator.free(out);
+        for (ids, 0..) |id, i| {
+            out[i] = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(parent, id), cloned);
+        }
+        return out;
+    }
+
+    fn cloneConcreteRecordFieldsForVariableMerge(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        fields: []const checked_artifact.CheckedRecordField,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error![]const checked_artifact.CheckedRecordField {
+        if (fields.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedRecordField, fields.len);
+        errdefer self.allocator.free(out);
+        for (fields, 0..) |field, i| {
+            out[i] = .{
+                .name = try self.recordFieldNameForConcreteRef(parent, field.name),
+                .ty = try self.cloneConcreteTypeForVariableMerge(try self.concreteChildRef(parent, field.ty), cloned),
+            };
+        }
+        return out;
+    }
+
+    fn cloneConcreteTagsForVariableMerge(
+        self: *TypeInstantiator,
+        parent: ConcreteSourceType.ConcreteSourceTypeRef,
+        tags: []const checked_artifact.CheckedTag,
+        cloned: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
+    ) Allocator.Error![]const checked_artifact.CheckedTag {
+        if (tags.len == 0) return &.{};
+        const out = try self.allocator.alloc(checked_artifact.CheckedTag, tags.len);
+        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
+        errdefer {
+            for (out) |tag| self.allocator.free(tag.args);
+            self.allocator.free(out);
+        }
+        for (tags, 0..) |tag, i| {
+            out[i] = .{
+                .name = try self.tagNameForConcreteRef(parent, tag.name),
+                .args = try self.cloneConcreteTypeIdsForVariableMerge(parent, tag.args, cloned),
+            };
+        }
+        return out;
     }
 
     fn transparentConcreteNominalBackingOrSelf(
@@ -3959,6 +4224,42 @@ const TypeInstantiator = struct {
             if (!std.mem.eql(u8, &existing_key.bytes, &concrete_key.bytes)) {
                 try self.unifyConcreteRefs(resolved_existing, resolved_concrete);
             }
+            return;
+        }
+        const variable_payload = self.concretePayload(variable);
+        switch (variable_payload) {
+            .flex,
+            .rigid,
+            => |variable_payload_var| {
+                const concrete_payload = self.concretePayload(resolved_concrete);
+                switch (concrete_payload) {
+                    .flex,
+                    .rigid,
+                    => |concrete_payload_var| return try self.unifyConcreteVariables(
+                        variable,
+                        variable_payload,
+                        variable_payload_var,
+                        resolved_concrete,
+                        concrete_payload,
+                        concrete_payload_var,
+                    ),
+                    else => {},
+                }
+            },
+            else => {},
+        }
+        try self.putConcreteVariableSubstitution(variable, resolved_concrete);
+    }
+
+    fn putConcreteVariableSubstitution(
+        self: *TypeInstantiator,
+        variable: ConcreteSourceType.ConcreteSourceTypeRef,
+        concrete: ConcreteSourceType.ConcreteSourceTypeRef,
+    ) Allocator.Error!void {
+        const resolved_concrete = self.resolveConcreteRef(concrete);
+        if (variable == resolved_concrete) return;
+        if (self.concrete_variable_substitutions.get(variable)) |existing| {
+            try self.unifyConcreteRefs(existing, resolved_concrete);
             return;
         }
         try self.concrete_variable_substitutions.put(variable, resolved_concrete);
@@ -5173,6 +5474,23 @@ const ScopedBinder = struct {
     binder: checked_artifact.PatternBinderId,
 };
 
+const PostDemandObligation = union(enum) {
+    str_inspect_call: checked_artifact.CheckedExprId,
+    const_summary_payload: struct {
+        expr: checked_artifact.CheckedExprId,
+        const_use: checked_artifact.ConstUseTemplate,
+    },
+    callable_summary_payload: struct {
+        expr: checked_artifact.CheckedExprId,
+        proc_use: checked_artifact.ProcedureUseTemplate,
+    },
+    match_pattern: struct {
+        cond: checked_artifact.CheckedExprId,
+        pattern: checked_artifact.CheckedPatternId,
+        binder_remaps: []const checked_artifact.CheckedAlternativeBinderRemap,
+    },
+};
+
 const FinalizedMonoSpecializationGraph = struct {
     allocator: Allocator,
     body_instances: std.AutoHashMap(MonoBodyInstanceId, MonoBodyInstance),
@@ -5191,6 +5509,7 @@ const FinalizedMonoSpecializationGraph = struct {
     finalized_iterator_dispatches: std.AutoHashMap(IteratorDispatchKey, FinalizedStaticDispatch),
     finalized_str_inspects: std.AutoHashMap(StrInspectFinalizationKey, FinalizedStrInspectDispatch),
     finalized_str_inspect_calls: std.AutoHashMap(StrInspectFinalizationKey, FinalizedStrInspectCallTarget),
+    post_demand_obligations: std.ArrayList(PostDemandObligation),
     finalized_promoted_wrappers: std.AutoHashMap(canonical.PromotedCallableWrapperId, FinalizedPromotedWrapper),
     finalized_summary_payloads: std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId),
 
@@ -5213,6 +5532,7 @@ const FinalizedMonoSpecializationGraph = struct {
             .finalized_iterator_dispatches = std.AutoHashMap(IteratorDispatchKey, FinalizedStaticDispatch).init(allocator),
             .finalized_str_inspects = std.AutoHashMap(StrInspectFinalizationKey, FinalizedStrInspectDispatch).init(allocator),
             .finalized_str_inspect_calls = std.AutoHashMap(StrInspectFinalizationKey, FinalizedStrInspectCallTarget).init(allocator),
+            .post_demand_obligations = .empty,
             .finalized_promoted_wrappers = std.AutoHashMap(canonical.PromotedCallableWrapperId, FinalizedPromotedWrapper).init(allocator),
             .finalized_summary_payloads = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, checked_artifact.CheckedTypeId).init(allocator),
         };
@@ -5229,6 +5549,7 @@ const FinalizedMonoSpecializationGraph = struct {
         self.finalized_summary_payloads.deinit();
         self.finalized_str_inspect_calls.deinit();
         self.finalized_str_inspects.deinit();
+        self.post_demand_obligations.deinit(self.allocator);
         var iterator_dispatches = self.finalized_iterator_dispatches.valueIterator();
         while (iterator_dispatches.next()) |dispatch| dispatch.deinit(self.allocator);
         self.finalized_iterator_dispatches.deinit();
@@ -5423,6 +5744,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             defer self.current_return_type = previous_return_type;
             defer self.current_return_source_ref = previous_return_source_ref;
 
+            const obligations_start = self.graph.post_demand_obligations.items.len;
             switch (self.template_lookup.template.body) {
                 .checked_body => |body_id| try self.finalizeCheckedBodyGraph(reserved, body_id, ret_ref),
                 .entry_wrapper => |wrapper_id| try self.finalizeEntryWrapperGraph(wrapper_id, ret_ref),
@@ -5436,6 +5758,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             }
             try self.publishLocalConcreteDemands();
             try self.publishExprConcreteDemands();
+            try self.finalizePostDemandObligations(obligations_start);
 
             const runtime_fn_ref = try self.graphInstantiator().runtimeConcreteRef(reserved.requested_fn_ty);
             const fn_ty = try self.graphInstantiator().lowerConcreteRef(runtime_fn_ref);
@@ -7863,7 +8186,197 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                 break :blk published;
             };
             try self.graph.concrete_type_infos.put(source_ref, info);
+            try self.publishConcreteSourceTypeGraph(info.source_ref);
             return info;
+        }
+
+        fn publishConcreteSourceTypeGraph(
+            self: *Self,
+            root: ConcreteSourceType.ConcreteSourceTypeRef,
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+
+            var visited = std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, void).init(self.allocator);
+            defer visited.deinit();
+
+            try self.publishConcreteSourceTypeGraphHelp(root, &visited);
+        }
+
+        fn publishConcreteSourceTypeGraphHelp(
+            self: *Self,
+            parent_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+            visited: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, void),
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+
+            const parent = self.graphInstantiator().resolveConcreteRef(parent_ref);
+            if (visited.contains(parent)) return;
+            try visited.put(parent, {});
+
+            if (!self.graph.concrete_type_infos.contains(parent)) {
+                try self.graph.concrete_type_infos.put(parent, .{
+                    .ty = try self.graphInstantiator().lowerConcreteRef(parent),
+                    .source_ty = self.program.concrete_source_types.key(parent),
+                    .source_ref = parent,
+                });
+            }
+
+            switch (self.graphInstantiator().concretePayload(parent)) {
+                .pending,
+                .flex,
+                .rigid,
+                .empty_record,
+                .empty_tag_union,
+                => {},
+                .alias => |alias| {
+                    try self.publishConcreteChildTypeGraph(
+                        try self.concreteAliasBackingChildRef(parent, alias),
+                        visited,
+                    );
+                },
+                .record_unbound => |fields| {
+                    for (fields) |field| {
+                        const label = try self.recordFieldNameForConcreteRef(parent, field.name);
+                        try self.publishConcreteChildTypeGraph(
+                            try self.concreteSourceChildRef(parent, .{ .tag = .record_field, .a = @intFromEnum(label) }, field.ty),
+                            visited,
+                        );
+                    }
+                },
+                .record => |record| {
+                    for (record.fields) |field| {
+                        const label = try self.recordFieldNameForConcreteRef(parent, field.name);
+                        try self.publishConcreteChildTypeGraph(
+                            try self.concreteSourceChildRef(parent, .{ .tag = .record_field, .a = @intFromEnum(label) }, field.ty),
+                            visited,
+                        );
+                    }
+                    try self.publishConcreteChildTypeGraph(
+                        try self.concreteSourceChildRef(parent, .{ .tag = .record_ext }, record.ext),
+                        visited,
+                    );
+                },
+                .tuple => |items| {
+                    for (items, 0..) |item, index| {
+                        try self.publishConcreteChildTypeGraph(
+                            try self.concreteSourceChildRef(parent, .{ .tag = .tuple_elem, .a = @intCast(index) }, item),
+                            visited,
+                        );
+                    }
+                },
+                .nominal => |nominal| {
+                    if (nominal.builtin == .list) {
+                        if (nominal.args.len != 1) invariantViolation("List nominal type did not have exactly one argument");
+                        try self.publishConcreteChildTypeGraph(
+                            try self.concreteSourceChildRef(parent, .{ .tag = .list_elem }, nominal.args[0]),
+                            visited,
+                        );
+                    } else if (nominal.builtin == .box) {
+                        if (nominal.args.len != 1) invariantViolation("Box nominal type did not have exactly one argument");
+                        try self.publishConcreteChildTypeGraph(
+                            try self.concreteSourceChildRef(parent, .{ .tag = .box_payload }, nominal.args[0]),
+                            visited,
+                        );
+                    }
+                    try self.publishConcreteChildTypeGraph(
+                        try self.concreteNominalBackingRef(parent),
+                        visited,
+                    );
+                },
+                .function => |function| {
+                    for (function.args, 0..) |arg, index| {
+                        try self.publishConcreteChildTypeGraph(
+                            try self.concreteSourceChildRef(parent, .{ .tag = .function_arg, .a = @intCast(index) }, arg),
+                            visited,
+                        );
+                    }
+                    try self.publishConcreteChildTypeGraph(
+                        try self.concreteSourceChildRef(parent, .{ .tag = .function_return }, function.ret),
+                        visited,
+                    );
+                },
+                .tag_union => |tag_union| {
+                    var visible_tags = std.AutoHashMap(canonical.TagLabelId, void).init(self.allocator);
+                    defer visible_tags.deinit();
+                    for (tag_union.tags) |tag| {
+                        const label = try self.tagNameForConcreteRef(parent, tag.name);
+                        try visible_tags.put(label, {});
+                        for (tag.args, 0..) |arg, index| {
+                            try self.publishConcreteChildTypeGraph(
+                                try self.concreteSourceChildRef(parent, .{
+                                    .tag = .tag_payload,
+                                    .a = @intFromEnum(label),
+                                    .b = @intCast(index),
+                                }, arg),
+                                visited,
+                            );
+                        }
+                    }
+                    const ext = try self.concreteSourceChildRef(parent, .{ .tag = .tag_union_ext }, tag_union.ext);
+                    try self.publishConcreteChildTypeGraph(ext, visited);
+                    try self.publishExtendedTagPayloadEdges(parent, ext, &visible_tags);
+                },
+            }
+        }
+
+        fn publishExtendedTagPayloadEdges(
+            self: *Self,
+            parent: ConcreteSourceType.ConcreteSourceTypeRef,
+            row: ConcreteSourceType.ConcreteSourceTypeRef,
+            visible_tags: *std.AutoHashMap(canonical.TagLabelId, void),
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+
+            switch (self.graphInstantiator().concretePayload(row)) {
+                .pending,
+                .flex,
+                .rigid,
+                .empty_tag_union,
+                => {},
+                .alias => |alias| try self.publishExtendedTagPayloadEdges(
+                    parent,
+                    try self.concreteAliasBackingChildRef(row, alias),
+                    visible_tags,
+                ),
+                .nominal => |nominal| try self.publishExtendedTagPayloadEdges(
+                    parent,
+                    try self.concreteNominalBackingChildRef(row, nominal),
+                    visible_tags,
+                ),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| {
+                        const label = try self.tagNameForConcreteRef(row, tag.name);
+                        if (visible_tags.contains(label)) continue;
+                        try visible_tags.put(label, {});
+                        for (tag.args, 0..) |arg, index| {
+                            const payload_ref = try self.concreteSourceChildRef(row, .{
+                                .tag = .tag_payload,
+                                .a = @intFromEnum(label),
+                                .b = @intCast(index),
+                            }, arg);
+                            try self.graph.concrete_source_children.put(.{ .parent = parent, .kind = .{
+                                .tag = .tag_payload,
+                                .a = @intFromEnum(label),
+                                .b = @intCast(index),
+                            } }, payload_ref);
+                        }
+                    }
+                    try self.publishExtendedTagPayloadEdges(
+                        parent,
+                        try self.concreteSourceChildRef(row, .{ .tag = .tag_union_ext }, tag_union.ext),
+                        visible_tags,
+                    );
+                },
+                else => invariantViolation("mono concrete source graph publication expected a tag-union row"),
+            }
+        }
+
+        fn publishConcreteChildTypeGraph(
+            self: *Self,
+            child: ConcreteSourceType.ConcreteSourceTypeRef,
+            visited: *std.AutoHashMap(ConcreteSourceType.ConcreteSourceTypeRef, void),
+        ) Allocator.Error!void {
+            try self.publishConcreteSourceTypeGraphHelp(child, visited);
         }
 
         fn finalizedExprTypeInfo(
@@ -7879,6 +8392,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             self: *const Self,
             pattern_id: checked_artifact.CheckedPatternId,
         ) ConcreteTypeInfo {
+            if (self.concreteTypeForPatternBinder(pattern_id)) |info| return info;
             return self.graph.pattern_types.get(self.scopedPattern(pattern_id)) orelse {
                 invariantViolation("mono body emission reached pattern before graph finalization published its concrete type");
             };
@@ -7935,9 +8449,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             pattern_id: checked_artifact.CheckedPatternId,
         ) Allocator.Error!Ast.TypedSymbol {
             const pattern = self.checkedPattern(pattern_id);
-            const concrete_ty = self.concreteTypeForPatternBinder(pattern_id) orelse self.graph.pattern_types.get(self.scopedPattern(pattern_id)) orelse {
-                invariantViolation("mono body emission reached parameter pattern before graph finalization published its concrete type");
-            };
+            const concrete_ty = self.finalizedPatternTypeInfo(pattern_id);
             const symbol = if (self.binderForSimplePatternMaybe(pattern.data)) |binder| blk: {
                 try self.recordConcreteTypeForBinder(binder, concrete_ty);
                 break :blk try self.symbolForBinder(binder);
@@ -8117,6 +8629,99 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                 if (scoped_expr.body != self.current_body) continue;
                 try self.graph.expr_types.put(scoped_expr, try self.publishRuntimeConcreteTypeInfo(entry.value_ptr.*));
             }
+        }
+
+        fn recordStrInspectExprObligation(
+            self: *Self,
+            expr_id: checked_artifact.CheckedExprId,
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+            try self.graph.post_demand_obligations.append(self.allocator, .{ .str_inspect_call = expr_id });
+        }
+
+        fn recordConstSummaryPayloadObligation(
+            self: *Self,
+            expr_id: checked_artifact.CheckedExprId,
+            const_use: checked_artifact.ConstUseTemplate,
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+            if (self.input.mode != .comptime_dependency_summary) return;
+            _ = const_use.requested_source_ty_payload orelse return;
+            try self.graph.post_demand_obligations.append(self.allocator, .{ .const_summary_payload = .{
+                .expr = expr_id,
+                .const_use = const_use,
+            } });
+        }
+
+        fn recordCallableSummaryPayloadObligation(
+            self: *Self,
+            expr_id: checked_artifact.CheckedExprId,
+            proc_use: checked_artifact.ProcedureUseTemplate,
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+            if (self.input.mode != .comptime_dependency_summary) return;
+            switch (proc_use.binding) {
+                .top_level,
+                .imported,
+                .platform_required,
+                => {},
+                .hosted,
+                .promoted,
+                => return,
+            }
+            try self.graph.post_demand_obligations.append(self.allocator, .{ .callable_summary_payload = .{
+                .expr = expr_id,
+                .proc_use = proc_use,
+            } });
+        }
+
+        fn recordMatchPatternObligation(
+            self: *Self,
+            cond: checked_artifact.CheckedExprId,
+            pattern: checked_artifact.CheckedPatternId,
+            binder_remaps: []const checked_artifact.CheckedAlternativeBinderRemap,
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+            try self.graph.post_demand_obligations.append(self.allocator, .{ .match_pattern = .{
+                .cond = cond,
+                .pattern = pattern,
+                .binder_remaps = binder_remaps,
+            } });
+        }
+
+        fn finalizePostDemandObligations(
+            self: *Self,
+            start: usize,
+        ) Allocator.Error!void {
+            if (mode == .body_emitter) return;
+            const obligations = self.graph.post_demand_obligations.items[start..];
+            for (obligations) |obligation| {
+                switch (obligation) {
+                    .str_inspect_call => |expr_id| try self.finalizeStrInspectCallTarget(
+                        try self.concreteResultTypeForExpr(expr_id),
+                        try self.ensureStrType(),
+                    ),
+                    .const_summary_payload => |request| try self.finalizeConstUseForPublishedExpr(
+                        request.const_use,
+                        request.expr,
+                    ),
+                    .callable_summary_payload => |request| {
+                        const concrete_info = try self.concreteResultTypeForExpr(request.expr);
+                        _ = try self.summaryPendingCallableBindingInstanceForProcedureUse(
+                            request.proc_use,
+                            concrete_info.source_ref,
+                        );
+                    },
+                    .match_pattern => |request| {
+                        try self.publishFinalizedPatternInfoWithRemaps(
+                            request.pattern,
+                            try self.concreteResultTypeForExpr(request.cond),
+                            request.binder_remaps,
+                        );
+                    },
+                }
+            }
+            self.graph.post_demand_obligations.shrinkRetainingCapacity(start);
         }
 
         fn concreteTypeForLookupExpr(
@@ -8737,11 +9342,9 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
 
             try self.graphInstantiator().unifyTemplateWithConcrete(self.checkedExpr(decl.expr).ty, concrete_fn);
 
-            const fn_ty = try self.graphInstantiator().lowerConcreteRef(concrete_fn);
-            const params = try self.paramTypesFromConcreteFunction(concrete_fn);
-            const ret_ty = try self.returnTypeFromConcreteFunction(concrete_fn);
-            self.current_return_type = ret_ty;
-            self.current_return_source_ref = ret_ty.source_ref;
+            const ret_ref = try self.sourceReturnRefFromFunction(concrete_fn);
+            self.current_return_type = null;
+            self.current_return_source_ref = ret_ref;
 
             const param_refs = try self.sourceParamRefsFromFunction(concrete_fn);
             defer if (param_refs.len != 0) self.allocator.free(param_refs);
@@ -8752,9 +9355,41 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                 try self.recordPatternDemand(arg, param_ref);
             }
 
+            const obligations_start = self.graph.post_demand_obligations.items.len;
+            try self.collectExprDemand(lambda.body, ret_ref);
+
+            const runtime_fn_ref = try self.graphInstantiator().runtimeConcreteRef(concrete_fn);
+            const finalized_source_fn_ty = self.program.concrete_source_types.key(runtime_fn_ref);
+            const fn_ty = try self.graphInstantiator().lowerConcreteRef(runtime_fn_ref);
+            const params = try self.paramTypesFromConcreteFunction(runtime_fn_ref);
+            const ret_ty = try self.returnTypeFromConcreteFunction(runtime_fn_ref);
+            try self.publishFinalizedParamPatternInfos(lambda.args, params);
+            try self.publishLocalConcreteDemands();
+            try self.publishExprConcreteDemands();
+            try self.finalizePostDemandObligations(obligations_start);
+
+            var finalized_instance = instance;
+            finalized_instance.source_fn_ty_payload = runtime_fn_ref;
+            if (std.mem.eql(u8, &source_fn_ty.bytes, &finalized_source_fn_ty.bytes)) {
+                const stored = self.graph.local_proc_instances.getPtr(key) orelse {
+                    invariantViolation("mono graph finalization lost reserved local procedure instance");
+                };
+                stored.* = finalized_instance;
+            } else {
+                const finalized_key = LocalProcInstanceKey{
+                    .binder = binder,
+                    .source_fn_ty = finalized_source_fn_ty,
+                };
+                if (self.graph.local_proc_instances.contains(finalized_key)) {
+                    invariantViolation("mono graph finalization local procedure key changed to an already reserved instance");
+                }
+                _ = self.graph.local_proc_instances.remove(key);
+                try self.graph.local_proc_instances.put(finalized_key, finalized_instance);
+            }
+
             try self.graph.body_instances.put(body_instance, .{
-                .source_fn_ty = source_fn_ty,
-                .source_fn_ty_payload = concrete_fn,
+                .source_fn_ty = finalized_source_fn_ty,
+                .source_fn_ty_payload = runtime_fn_ref,
                 .fn_ty = fn_ty,
                 .params = params,
                 .ret_ty = ret_ty,
@@ -8767,11 +9402,8 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                     .body = lambda.body,
                 } },
             });
-            try self.collectExprDemand(lambda.body, ret_ty.source_ref);
-            try self.publishLocalConcreteDemands();
-            try self.publishExprConcreteDemands();
 
-            return instance;
+            return finalized_instance;
         }
 
         fn lowerLocalProcInstance(
@@ -8878,13 +9510,22 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             }
         }
 
-        fn finalizeConstUseForExpected(
+        fn finalizeConstUseForPublishedExpr(
             self: *Self,
             const_use: checked_artifact.ConstUseTemplate,
-            expected_ref: ConcreteSourceType.ConcreteSourceTypeRef,
+            expr_id: checked_artifact.CheckedExprId,
         ) Allocator.Error!void {
             _ = const_use.requested_source_ty_payload orelse return;
-            const concrete_info = try self.runtimeConcreteTypeInfo(expected_ref);
+            const concrete_info = try self.concreteResultTypeForExpr(expr_id);
+            try self.finalizeConstUseForConcreteInfo(const_use, concrete_info);
+        }
+
+        fn finalizeConstUseForConcreteInfo(
+            self: *Self,
+            const_use: checked_artifact.ConstUseTemplate,
+            concrete_info: ConcreteTypeInfo,
+        ) Allocator.Error!void {
+            _ = const_use.requested_source_ty_payload orelse return;
             const requested_key = concrete_info.source_ty;
             const key = checked_artifact.ConstInstantiationKey{
                 .const_ref = const_use.const_ref,
@@ -9248,7 +9889,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                 .dbg => |expr| {
                     const expr_ref = try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(expr).ty);
                     try self.collectExprDemand(expr, expr_ref);
-                    try self.finalizeStrInspectCallTarget(try self.runtimeConcreteTypeInfo(expr_ref), try self.ensureStrType());
+                    try self.recordStrInspectExprObligation(expr);
                 },
                 .expr => |expr| try self.collectExprDemand(expr, try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(expr).ty)),
                 .expect => |expr| {
@@ -9323,14 +9964,17 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             try self.graphInstantiator().unifyTemplateWithConcrete(expr.ty, expected_ref);
             switch (expr.data) {
                 .lookup_local => |lookup| try self.collectResolvedLookupDemand(
+                    expr_id,
                     lookup.resolved orelse invariantViolation("checked lookup_local reached mono without a resolved value ref"),
                     expected_ref,
                 ),
                 .lookup_external => |lookup| try self.collectResolvedLookupDemand(
+                    expr_id,
                     lookup orelse invariantViolation("checked lookup_external reached mono without a resolved value ref"),
                     expected_ref,
                 ),
                 .lookup_required => |lookup| try self.collectResolvedLookupDemand(
+                    expr_id,
                     lookup orelse invariantViolation("checked lookup_required reached mono without a resolved value ref"),
                     expected_ref,
                 ),
@@ -9459,7 +10103,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                 .dbg => |child| {
                     const child_ref = try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(child).ty);
                     try self.collectExprDemand(child, child_ref);
-                    try self.finalizeStrInspectCallTarget(try self.runtimeConcreteTypeInfo(child_ref), try self.ensureStrType());
+                    try self.recordStrInspectExprObligation(child);
                 },
                 .expect => |child| try self.collectExprDemand(child, try self.concreteSourceRefForCheckedPreservingVariables(self.checkedExpr(child).ty)),
                 .num,
@@ -9549,6 +10193,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             for (match_.branches) |branch| {
                 for (branch.patterns) |branch_pattern| {
                     try self.recordPatternDemandWithRemaps(branch_pattern.pattern, cond_ref, branch_pattern.binder_remaps);
+                    try self.recordMatchPatternObligation(match_.cond, branch_pattern.pattern, branch_pattern.binder_remaps);
                 }
             }
             try self.collectExprDemand(match_.cond, cond_ref);
@@ -9574,6 +10219,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             for (match_.branches) |branch| {
                 for (branch.patterns) |branch_pattern| {
                     try self.recordPatternDemandWithRemaps(branch_pattern.pattern, cond_ref, branch_pattern.binder_remaps);
+                    try self.recordMatchPatternObligation(match_.cond, branch_pattern.pattern, branch_pattern.binder_remaps);
                     if (branch.guard) |guard| {
                         const bool_info = try self.boolConcreteTypeInfo();
                         try self.collectExprDemand(guard, bool_info.source_ref);
@@ -9619,6 +10265,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             for (args, param_refs) |arg, param_ref| {
                 try self.recordPatternDemand(arg, param_ref);
             }
+            const obligations_start = self.graph.post_demand_obligations.items.len;
             try self.collectExprDemand(body, ret_ref);
 
             const runtime_fn_ref = try self.graphInstantiator().runtimeConcreteRef(source_fn_ref);
@@ -9628,6 +10275,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             try self.publishFinalizedParamPatternInfos(args, params);
             try self.publishLocalConcreteDemands();
             try self.publishExprConcreteDemands();
+            try self.finalizePostDemandObligations(obligations_start);
             try self.graph.body_instances.put(body_instance, .{
                 .source_fn_ty = self.program.concrete_source_types.key(runtime_fn_ref),
                 .source_fn_ty_payload = runtime_fn_ref,
@@ -9666,16 +10314,6 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             try self.unifyFunctionReturnWithConcrete(source_fn_ty_payload, expected_ref);
 
             const concrete_fn = try self.graphInstantiator().concreteRefForTemplateType(source_fn_ty_payload);
-            const source_arg_refs = try self.sourceParamRefsFromFunction(concrete_fn);
-            defer if (source_arg_refs.len != 0) self.allocator.free(source_arg_refs);
-            if (source_arg_refs.len != call.args.len) invariantViolation("mono demand collection call argument count disagreed with checked function type");
-            for (call.args, source_arg_refs) |arg, source_arg_ref| {
-                try self.collectExprDemand(arg, source_arg_ref);
-            }
-            if (proc_use == null and local_proc_use == null) {
-                try self.collectExprDemand(call.func, concrete_fn);
-            }
-
             const finalized = try self.runtimeCallInstantiation(.{
                 .concrete_fn = concrete_fn,
                 .func_ty = try self.graphInstantiator().lowerConcreteRef(concrete_fn),
@@ -9683,6 +10321,10 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                 .ret_ty = try self.returnTypeFromConcreteFunction(concrete_fn),
                 .arg_infos = &.{},
             });
+            try self.collectExprSpanConcreteDemand(call.args, finalized.arg_infos);
+            if (proc_use == null and local_proc_use == null) {
+                try self.collectExprDemand(call.func, finalized.concrete_fn);
+            }
             if (local_proc_use) |local_proc| {
                 _ = try self.finalizeLocalProcInstanceForConcrete(local_proc.binder, finalized.concrete_fn);
             }
@@ -10117,6 +10759,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
 
         fn collectResolvedLookupDemand(
             self: *Self,
+            expr_id: checked_artifact.CheckedExprId,
             ref_id: checked_artifact.ResolvedValueRefId,
             expected_ref: ConcreteSourceType.ConcreteSourceTypeRef,
         ) Allocator.Error!void {
@@ -10124,17 +10767,17 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             switch (record.ref) {
                 .top_level_const,
                 .imported_const,
-                => |const_use| try self.finalizeConstUseForExpected(const_use, expected_ref),
-                .platform_required_const => |required| try self.finalizeConstUseForExpected(required.const_use, expected_ref),
+                => |const_use| try self.recordConstSummaryPayloadObligation(expr_id, const_use),
+                .platform_required_const => |required| try self.recordConstSummaryPayloadObligation(expr_id, required.const_use),
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
                 => |proc_use| {
-                    _ = try self.summaryPendingCallableBindingInstanceForProcedureUse(proc_use, expected_ref);
+                    try self.recordCallableSummaryPayloadObligation(expr_id, proc_use);
                 },
                 .platform_required_proc => |required| {
-                    _ = try self.summaryPendingCallableBindingInstanceForProcedureUse(required.procedure, expected_ref);
+                    try self.recordCallableSummaryPayloadObligation(expr_id, required.procedure);
                 },
                 else => try self.recordLocalLookupDemand(ref_id, expected_ref),
             }
@@ -10276,7 +10919,6 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                     try self.recordPatternDemandWithRemaps(as.pattern, source_ref, binder_remaps);
                     return;
                 },
-                .underscore => return,
                 else => {},
             }
             const pattern_info = try self.runtimeConcreteTypeInfo(source_ref);
@@ -10813,7 +11455,11 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             } };
             if (self.graph.concrete_source_children.get(requested_key)) |field_ref| return field_ref;
             if (mode == .body_emitter) {
-                invariantViolation("mono body emission reached record field child before graph finalization published it");
+                return switch (self.concretePayload(record_ref)) {
+                    .alias => |alias| try self.concreteRecordFieldRef(try self.concreteAliasBackingChildRef(record_ref, alias), field_name),
+                    .nominal => try self.concreteRecordFieldRef(try self.concreteNominalBackingRef(record_ref), field_name),
+                    else => invariantViolation("mono body emission reached record field child before graph finalization published it"),
+                };
             } else {
                 var current = record_ref;
                 while (true) {
@@ -12147,6 +12793,21 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             return try self.lowerPatternWithRemaps(expected, pattern_id, &.{});
         }
 
+        fn binderPatternExpectedInfo(
+            self: *Self,
+            binder: checked_artifact.PatternBinderId,
+            expected: ConcreteTypeInfo,
+        ) Allocator.Error!ConcreteTypeInfo {
+            const scoped = self.scopedBinder(binder);
+            if (mode == .body_emitter) {
+                return self.graph.local_symbol_types.get(scoped) orelse expected;
+            }
+            return if (self.graph.local_type_demands.get(scoped)) |demanded_ref|
+                try self.runtimeConcreteTypeInfo(demanded_ref)
+            else
+                expected;
+        }
+
         fn lowerPatternWithRemaps(
             self: *Self,
             expected: ConcreteTypeInfo,
@@ -12158,10 +12819,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
             const lowered = switch (pattern.data) {
                 .assign => |binder| blk: {
                     const representative = self.representativeBinderForCandidate(binder, binder_remaps);
-                    const binder_expected = if (self.graph.local_type_demands.get(self.scopedBinder(representative))) |demanded_ref|
-                        try self.runtimeConcreteTypeInfo(demanded_ref)
-                    else
-                        expected;
+                    const binder_expected = try self.binderPatternExpectedInfo(representative, expected);
                     try self.recordConcreteTypeForBinder(representative, binder_expected);
                     break :blk try self.program.ast.addPat(.{ .ty = binder_expected.ty, .data = .{
                         .var_ = try self.symbolForBinder(representative),
@@ -12169,10 +12827,7 @@ fn MonoSpecializationLowering(comptime mode: MonoLoweringMode) type {
                 },
                 .as => |as| {
                     const representative = self.representativeBinderForCandidate(as.binder, binder_remaps);
-                    const binder_expected = if (self.graph.local_type_demands.get(self.scopedBinder(representative))) |demanded_ref|
-                        try self.runtimeConcreteTypeInfo(demanded_ref)
-                    else
-                        expected;
+                    const binder_expected = try self.binderPatternExpectedInfo(representative, expected);
                     try self.recordConcreteTypeForBinder(representative, binder_expected);
                     const symbol = try self.symbolForBinder(representative);
                     const nested = try self.lowerPatternWithRemaps(binder_expected, as.pattern, binder_remaps);

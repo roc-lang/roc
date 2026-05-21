@@ -6931,6 +6931,7 @@ const CallableEmissionAssigner = struct {
             source_view.names,
             source_view.view,
             source_view.root,
+            self.program.concrete_source_types.root(source_payload),
         );
     }
 
@@ -6952,6 +6953,7 @@ const CallableEmissionAssigner = struct {
                 source.names,
                 source.view,
                 source.root,
+                source_root,
             );
         }
         return try repr.sessionExecutableTypeEndpointForErasedBoundaryTypeIntoStore(
@@ -6963,6 +6965,7 @@ const CallableEmissionAssigner = struct {
             &self.representationStore().session_executable_type_payloads,
             info.logical_ty,
             info.source_ty,
+            null,
             null,
             null,
             null,
@@ -7004,6 +7007,7 @@ const CallableEmissionAssigner = struct {
             source_names,
             source_view,
             source_root,
+            null,
         );
     }
 
@@ -7146,11 +7150,16 @@ const BoxPayloadValueRef = struct {
     value: repr.ValueInfoId,
 };
 
-const NominalCapabilityResolution = struct {
-    artifact: checked_artifact.CheckedModuleArtifactKey,
-    is_root: bool,
-    capability: checked_artifact.BoxPayloadCapabilityEntry,
-    opaque_proof: ?checked_artifact.OpaqueAtomicProofEntry,
+const NominalPayloadResolution = union(enum) {
+    transparent_backing,
+    imported_capability: struct {
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        capability: checked_artifact.BoxPayloadCapabilityId,
+    },
+    opaque_atomic: struct {
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        proof: checked_artifact.OpaqueAtomicProofId,
+    },
 };
 
 fn finalizeBoxPayloadRepresentationPlans(
@@ -7348,45 +7357,51 @@ const BoxPayloadPlanFinalizer = struct {
         self: *BoxPayloadPlanFinalizer,
         nominal: repr.SessionExecutableNominalPayload,
     ) Allocator.Error!repr.BoxPayloadRepresentationPlan {
-        const capability = self.nominalCapability(nominal) orelse {
+        const resolution = self.nominalPayloadResolution(nominal) orelse {
             lambdaInvariant("lambda-solved imported/private nominal boxed payload traversal has no published interface capability");
         };
-        if (capability.opaque_proof) |proof| {
-            return .{ .nominal = .{ .opaque_atomic = .{
-                .nominal = nominal.nominal,
-                .source_ty = nominal.source_ty,
-                .proof = .{
-                    .artifact = capability.artifact,
-                    .proof = proof.id,
-                },
-            } } };
+        switch (resolution) {
+            .opaque_atomic => |opaque_resolution| {
+                _ = self.capabilityProof(opaque_resolution.artifact, opaque_resolution.proof);
+                return .{ .nominal = .{ .opaque_atomic = .{
+                    .nominal = nominal.nominal,
+                    .source_ty = nominal.source_ty,
+                    .proof = .{
+                        .artifact = opaque_resolution.artifact,
+                        .proof = opaque_resolution.proof,
+                    },
+                } } };
+            },
+            .transparent_backing,
+            .imported_capability,
+            => {},
         }
 
         const backing_plan_id = try self.planForPayload(nominal.backing);
-
-        const nominal_plan: repr.NominalPayloadRepresentation = if (capability.is_root)
-            .{ .transparent_backing = .{
+        const nominal_plan: repr.NominalPayloadRepresentation = switch (resolution) {
+            .transparent_backing => .{ .transparent_backing = .{
                 .nominal = nominal.nominal,
                 .source_ty = nominal.source_ty,
                 .backing_plan = backing_plan_id,
-            } }
-        else
-            .{ .imported_capability = .{
+            } },
+            .imported_capability => |capability_ref| .{ .imported_capability = .{
                 .nominal = nominal.nominal,
                 .source_ty = nominal.source_ty,
                 .capability = .{
-                    .artifact = capability.artifact,
-                    .capability = capability.capability.id,
+                    .artifact = capability_ref.artifact,
+                    .capability = capability_ref.capability,
                 },
                 .backing_plan = backing_plan_id,
-            } };
+            } },
+            .opaque_atomic => unreachable,
+        };
         return .{ .nominal = nominal_plan };
     }
 
-    fn nominalCapability(
+    fn nominalPayloadResolution(
         self: *BoxPayloadPlanFinalizer,
         nominal: repr.SessionExecutableNominalPayload,
-    ) ?NominalCapabilityResolution {
+    ) ?NominalPayloadResolution {
         if (isEmptyCanonicalTypeKey(nominal.source_ty)) return null;
         const source_root = nominal.source_root orelse {
             lambdaInvariant("lambda-solved nominal payload has no published source payload authority");
@@ -7394,46 +7409,117 @@ const BoxPayloadPlanFinalizer = struct {
         if (!repr.canonicalTypeKeyEql(source_root.key, nominal.source_ty)) {
             lambdaInvariant("lambda-solved nominal payload source authority key differs from nominal source type");
         }
-        return switch (source_root.source) {
-            .local => null,
-            .artifact => |artifact_ref| self.capabilityInArtifact(artifact_ref),
+        const source = self.sourceViewForRoot(source_root);
+        const resolved = self.resolvedSourcePayload(source) orelse return null;
+        const checked_nominal = switch (checkedTypePayload(resolved.view, resolved.root)) {
+            .nominal => |payload| payload,
+            else => lambdaInvariant("lambda-solved nominal payload source authority did not resolve to a nominal"),
+        };
+        return self.resolutionForNominalRepresentation(source_root.source, checked_nominal.representation);
+    }
+
+    fn resolutionForNominalRepresentation(
+        self: *BoxPayloadPlanFinalizer,
+        source: ConcreteSourceType.ConcreteSourceTypeSource,
+        representation: checked_artifact.CheckedNominalRepresentationRef,
+    ) ?NominalPayloadResolution {
+        return switch (representation) {
+            .builtin,
+            .imported_declaration,
+            .opaque_without_backing,
+            => null,
+            .local_declaration => switch (source) {
+                .local => .transparent_backing,
+                .artifact => |artifact_ref| if (artifactKeyEql(self.artifact_views.root.artifact.key, artifact_ref.artifact))
+                    .transparent_backing
+                else
+                    null,
+            },
+            .local_box_payload_capability => |capability| self.resolutionForBoxPayloadCapability(
+                switch (source) {
+                    .local => self.artifact_views.root.artifact.key,
+                    .artifact => |artifact_ref| artifact_ref.artifact,
+                },
+                capability.capability,
+                capability.opaque_atomic_proof,
+            ),
+            .imported_box_payload_capability => |capability| self.resolutionForBoxPayloadCapability(
+                capability.artifact,
+                capability.capability,
+                capability.opaque_atomic_proof,
+            ),
         };
     }
 
-    fn capabilityInArtifact(
+    fn resolutionForBoxPayloadCapability(
         self: *BoxPayloadPlanFinalizer,
-        artifact_ref: checked_artifact.ArtifactCheckedTypeRef,
-    ) ?NominalCapabilityResolution {
-        const checked_types = checkedTypesForArtifactViews(self.artifact_views, artifact_ref.artifact) orelse {
-            lambdaInvariant("lambda-solved nominal payload referenced unavailable checked types");
-        };
-        const payload_index: usize = @intFromEnum(artifact_ref.ty);
-        if (payload_index >= checked_types.payloads.len) {
-            lambdaInvariant("lambda-solved nominal payload artifact ref was out of range");
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        capability: checked_artifact.BoxPayloadCapabilityId,
+        opaque_proof: ?checked_artifact.OpaqueAtomicProofId,
+    ) NominalPayloadResolution {
+        _ = self.capabilityEntry(artifact, capability);
+        if (opaque_proof) |proof| {
+            _ = self.capabilityProof(artifact, proof);
+            return .{ .opaque_atomic = .{
+                .artifact = artifact,
+                .proof = proof,
+            } };
         }
-        const nominal = switch (checked_types.payloads[payload_index]) {
-            .nominal => |payload| payload,
-            else => lambdaInvariant("lambda-solved nominal payload artifact ref was not nominal"),
-        };
-        const capability_artifact, const capability_id, const proof_id = switch (nominal.representation) {
-            .local_box_payload_capability => |capability| .{ artifact_ref.artifact, capability.capability, capability.opaque_atomic_proof },
-            .imported_box_payload_capability => |capability| .{ capability.artifact, capability.capability, capability.opaque_atomic_proof },
-            .builtin,
-            .local_declaration,
-            .imported_declaration,
-            .opaque_without_backing,
-            => return null,
-        };
-        const capabilities = interfaceCapabilitiesForArtifactViews(self.artifact_views, capability_artifact) orelse {
+
+        if (artifactKeyEql(self.artifact_views.root.artifact.key, artifact)) return .transparent_backing;
+        return .{ .imported_capability = .{
+            .artifact = artifact,
+            .capability = capability,
+        } };
+    }
+
+    fn capabilityEntry(
+        self: *BoxPayloadPlanFinalizer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        capability: checked_artifact.BoxPayloadCapabilityId,
+    ) checked_artifact.BoxPayloadCapabilityEntry {
+        const capabilities = interfaceCapabilitiesForArtifactViews(self.artifact_views, artifact) orelse {
             lambdaInvariant("lambda-solved nominal payload referenced unavailable interface capabilities");
         };
-        const capability = capabilities.boxPayloadCapability(capability_id);
-        return .{
-            .artifact = capability_artifact,
-            .is_root = artifactKeyEql(self.artifact_views.root.artifact.key, capability_artifact),
-            .capability = capability,
-            .opaque_proof = if (proof_id) |id| capabilities.opaqueAtomicProof(id) else null,
+        return capabilities.boxPayloadCapability(capability);
+    }
+
+    fn capabilityProof(
+        self: *BoxPayloadPlanFinalizer,
+        artifact: checked_artifact.CheckedModuleArtifactKey,
+        proof: checked_artifact.OpaqueAtomicProofId,
+    ) checked_artifact.OpaqueAtomicProofEntry {
+        const capabilities = interfaceCapabilitiesForArtifactViews(self.artifact_views, artifact) orelse {
+            lambdaInvariant("lambda-solved nominal payload referenced unavailable interface capabilities");
         };
+        return capabilities.opaqueAtomicProof(proof);
+    }
+
+    fn sourceViewForRoot(
+        self: *BoxPayloadPlanFinalizer,
+        root: ConcreteSourceType.ConcreteSourceTypeRoot,
+    ) ConcreteSourceTypeView {
+        return switch (root.source) {
+            .local => |local| .{
+                .names = &self.program.canonical_names,
+                .view = self.program.concrete_source_types.localView(),
+                .root = local,
+            },
+            .artifact => |artifact| artifactCheckedTypeSourceForArtifactViews(self.artifact_views, artifact.artifact, artifact.ty),
+        };
+    }
+
+    fn resolvedSourcePayload(
+        _: *BoxPayloadPlanFinalizer,
+        source: ConcreteSourceTypeView,
+    ) ?ConcreteSourceTypeView {
+        var current = source;
+        while (true) {
+            switch (checkedTypePayload(current.view, current.root)) {
+                .alias => |alias| current.root = alias.backing,
+                else => return current,
+            }
+        }
     }
 
     fn planIdNeedsMaterialization(
