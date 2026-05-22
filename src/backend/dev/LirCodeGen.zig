@@ -7790,8 +7790,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitInternalCodeAddress(self: *Self, target_offset: usize, dst_reg: GeneralReg) !void {
             const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
-                const rel: i21 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)));
-                try self.codegen.emit.adr(dst_reg, rel);
+                // ADR alone has only ±1 MB range, which is exceeded by larger programs.
+                // ADRP+ADD would extend that, but its page-relative form requires the
+                // emit buffer's runtime base to be 4 KB-aligned — and the buffer here is
+                // appended into the host's __TEXT at an unaligned offset. Stay purely
+                // PC-relative by emitting ADR (anchor at this instruction) plus two
+                // ADD/SUB imm12 instructions (hi shifted by LSL #12, then lo). This
+                // supports offsets up to ±16 MB without any base-alignment assumption.
+                try self.emitAarch64PcRelAddress(dst_reg, current, target_offset);
             } else {
                 const rel: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)) - 7);
                 try self.codegen.emit.leaRegRipRel(dst_reg, rel);
@@ -7803,10 +7809,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             });
         }
 
+        /// Emit a 3-instruction PC-relative address calculation on aarch64.
+        /// Layout (12 bytes): ADR Xd, anchor (offset 0) — ADD/SUB Xd, Xd, #hi12, LSL #12 — ADD/SUB Xd, Xd, #lo12.
+        /// `anchor` is the address of the ADR instruction. The final value of Xd equals
+        /// `anchor + (target_off - anchor)`. Caller must ensure |target_off - anchor| ≤ 0xFFFFFF.
+        fn emitAarch64PcRelAddress(self: *Self, dst: GeneralReg, anchor: usize, target_off: usize) !void {
+            const rel: i64 = @as(i64, @intCast(target_off)) - @as(i64, @intCast(anchor));
+            const negative = rel < 0;
+            const abs_rel: u64 = if (negative) @intCast(-rel) else @intCast(rel);
+            const hi12: u12 = @truncate(abs_rel >> 12);
+            const lo12: u12 = @truncate(abs_rel);
+
+            try self.codegen.emit.adr(dst, 0);
+            if (negative) {
+                try self.codegen.emit.subRegRegImm12Shifted(.w64, dst, dst, hi12, true);
+                try self.codegen.emit.subRegRegImm12(.w64, dst, dst, lo12);
+            } else {
+                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst, dst, hi12, true);
+                try self.codegen.emit.addRegRegImm12(.w64, dst, dst, lo12);
+            }
+        }
+
         fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) !void {
             const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
+                // Reserve a 3-instruction (12-byte) PC-relative address sequence so the
+                // patcher can rewrite ADR + ADD/SUB(hi) + ADD/SUB(lo) once the target
+                // proc's code offset is known. See emitAarch64PcRelAddress.
                 try self.codegen.emit.adr(dst_reg, 0);
+                try self.codegen.emit.addRegRegImm12Shifted(.w64, dst_reg, dst_reg, 0, true);
+                try self.codegen.emit.addRegRegImm12(.w64, dst_reg, dst_reg, 0);
             } else {
                 try self.codegen.emit.leaRegRipRel(dst_reg, 0);
             }
@@ -11356,21 +11388,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn patchInternalCodeAddress(self: *Self, instr_offset: usize, target_offset: usize) void {
             const buf = self.codegen.emit.buf.items;
-            const new_rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
             if (comptime target.toCpuArch() == .aarch64) {
-                const existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
-                const rd_bits: u32 = existing & 0x1F;
-                const imm: u21 = @bitCast(@as(i21, @intCast(new_rel)));
-                const immlo: u2 = @truncate(imm);
-                const immhi: u19 = @truncate(imm >> 2);
-                const inst: u32 = (0 << 31) |
-                    (@as(u32, immlo) << 29) |
+                // The emit reserves a 3-instruction PC-relative sequence (ADR + two
+                // ADD/SUB imm12) starting at instr_offset. Re-derive the relative offset
+                // from the new instr_offset and rewrite all three instructions. The
+                // existing ADR's Rd is preserved so the patched sequence targets the
+                // same register the caller originally chose.
+                const rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
+                const negative = rel < 0;
+                const abs_rel: u64 = if (negative) @intCast(-rel) else @intCast(rel);
+                const hi12: u32 = @as(u32, @as(u12, @truncate(abs_rel >> 12)));
+                const lo12: u32 = @as(u32, @as(u12, @truncate(abs_rel)));
+
+                const adr_existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
+                const rd_bits: u32 = adr_existing & 0x1F;
+
+                // Rewrite the ADR with offset 0 so Xd holds the anchor PC.
+                const adr_inst: u32 = (0 << 31) |
                     (0b10000 << 24) |
-                    (@as(u32, immhi) << 5) |
                     rd_bits;
-                const bytes: [4]u8 = @bitCast(inst);
-                @memcpy(buf[instr_offset..][0..4], &bytes);
+                @memcpy(buf[instr_offset..][0..4], &@as([4]u8, @bitCast(adr_inst)));
+
+                // ADD/SUB Xd, Xd, #hi12, LSL #12
+                const op_bits: u32 = if (negative) 0b1010001 else 0b0010001;
+                const rn_rd_bits: u32 = (rd_bits << 5) | rd_bits;
+                const hi_inst: u32 = (1 << 31) |
+                    (op_bits << 24) |
+                    (1 << 22) |
+                    (hi12 << 10) |
+                    rn_rd_bits;
+                @memcpy(buf[instr_offset + 4 ..][0..4], &@as([4]u8, @bitCast(hi_inst)));
+
+                // ADD/SUB Xd, Xd, #lo12
+                const lo_inst: u32 = (1 << 31) |
+                    (op_bits << 24) |
+                    (0 << 22) |
+                    (lo12 << 10) |
+                    rn_rd_bits;
+                @memcpy(buf[instr_offset + 8 ..][0..4], &@as([4]u8, @bitCast(lo_inst)));
             } else {
+                const new_rel: i64 = @as(i64, @intCast(target_offset)) - @as(i64, @intCast(instr_offset));
                 const lea_size: i64 = 7;
                 const disp: i32 = @intCast(new_rel - lea_size);
                 const bytes: [4]u8 = @bitCast(disp);
