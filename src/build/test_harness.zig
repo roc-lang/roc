@@ -248,7 +248,7 @@ pub fn printSlowestN(
 pub const StandardArgs = struct {
     filters: []const []const u8 = &.{},
     max_threads: ?usize = null,
-    timeout_ms: u64 = 60_000,
+    timeout_ms: u64 = 120_000,
     timeout_provided: bool = false,
     verbose: bool = false,
     help_requested: bool = false,
@@ -295,7 +295,7 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
             i += 1;
             if (i < raw_args.len) {
                 args.timeout_provided = true;
-                args.timeout_ms = std.fmt.parseInt(u64, raw_args[i], 10) catch 60_000;
+                args.timeout_ms = std.fmt.parseInt(u64, raw_args[i], 10) catch 120_000;
             }
         } else if (std.mem.eql(u8, arg, "--worker")) {
             i += 1;
