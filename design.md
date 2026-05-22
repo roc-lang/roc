@@ -284,7 +284,7 @@ path.
 The checked module may publish checked facts that later stages need, such
 as:
 
-- checked procedure and promoted callable templates
+- checked procedure templates
 - `ConstStore` entries for compile-time constants
 - checked dispatch plans
 - method registries
@@ -295,8 +295,8 @@ Those facts must remain target-independent and representation-free.
 
 Imported checked modules must contain every checked procedure template and checked
 body that may be instantiated by an importing root. This includes private helper
-templates reachable from exported templates, static-dispatch targets, promoted
-callables, and compile-time checked callable leaves. Privacy affects source
+templates reachable from exported templates, static-dispatch targets, and
+compile-time checked callable leaves. Privacy affects source
 name lookup and diagnostics. It must not hide checked bodies from whole-program
 post-check specialization.
 
@@ -309,8 +309,7 @@ Monotype `fn_def` expressions and in compile-time checked callable leaves.
 const FnDef = union(enum) {
     local_checked_template: ProcTemplate,
     imported_checked_template: ImportedProcTemplate,
-    local_promoted_template: PromotedTemplate,
-    imported_promoted_template: ImportedPromotedTemplate,
+    nested: NestedFn,
     local_hosted: HostedProcId,
     imported_hosted: ImportedHostedProc,
     checked_compiler_generated: GeneratedFn,
@@ -319,6 +318,11 @@ const FnDef = union(enum) {
 const ImportedProcTemplate = struct {
     module: CheckedModuleId,
     template: ProcTemplate,
+};
+
+const NestedFn = struct {
+    owner: ProcTemplate,
+    site: NestedProcSiteId,
 };
 
 const PromotedTemplate = struct {
@@ -341,6 +345,11 @@ const GeneratedFn = union(enum) {
     entry_wrapper: EntryWrapperId,
     intrinsic_wrapper: IntrinsicWrapperId,
 };
+
+const FnTemplate = struct {
+    fn_def: FnDef,
+    source_fn_ty: CheckedTypeId,
+};
 ```
 
 A `FnDef` names the checked body/template to instantiate. It is not a
@@ -348,6 +357,19 @@ procedure value, LIR proc id, object symbol, erased ABI id, callable-set member,
 layout id, or runtime code pointer. If a callable value captures data, the
 captures are stored next to the `FnDef` by the value that contains it; the
 `FnDef` itself remains capture-free.
+`FnTemplate` is the checked callable template used by post-check function-value
+flow. It pairs the checked function identity with the checked source function
+type. Later stages must carry it forward instead of recovering the checked
+function type from generated procedures, runtime layouts, or call sites.
+
+Checked module publication assigns a `NestedProcSiteId` to every
+expression-position function inside each checked procedure template. A nested
+function is identified by the pair `(owner template, nested site)`. The site id
+is assigned from the checked body traversal before post-check lowering starts.
+Monotype lowering carries that checked identity together with the checked source
+function type. Post-check stages must consume those checked facts; they must not
+name nested functions by allocation order, generated symbols, source display
+strings, body shape, capture shape, runtime layout, or LIR procedure ids.
 
 `local_checked_template` is checked-module-relative while the owning builder/checked module
 is being processed. Importers refer to the same body through
@@ -519,7 +541,7 @@ const MonoType = union(enum) {
     tuple: Span(TypeId),
     list: TypeId,
     box: TypeId,
-    erased,
+    erased: TypeDigest,
 };
 
 const CheckedModuleId = enum(u32) { _ };
@@ -687,6 +709,12 @@ const LoopExpr = struct {
 const ContinueExpr = struct {
     values: Span(ExprId),
 };
+
+const LambdaExpr = struct {
+    args: Span(TypedSymbol),
+    body: ExprId,
+    source: FnTemplate,
+};
 ```
 
 `LoopExpr.params` and `LoopExpr.initial` have the same length. Each initial
@@ -706,11 +734,11 @@ Monotype IR has no:
 - uninstantiated checked type variable
 - pending owner search
 
-`FnDef` is the checked identity for a checked, imported, hosted, promoted,
-or compiler-generated function. It does not contain a capture record, closure
-layout, callable tag, erased ABI, or lowered call target. Captures remain ordinary
-free variables until Monotype Lifted IR records them on lifted function
-definitions.
+`FnDef` is the checked identity for a checked, imported, nested, hosted,
+promoted, or checked-stage generated function. It does not contain a capture
+record, closure layout, callable tag, erased ABI, or lowered call target.
+Captures remain ordinary free variables until Monotype Lifted IR records them
+on lifted function definitions.
 
 ### Monotype Specialization
 
@@ -888,7 +916,7 @@ const LambdaContent = union(enum) {
     named: NamedType,
     func: Fn,
     lambda_set: LambdaSet,
-    erased,
+    erased: TypeDigest,
 };
 
 const Fn = struct {
@@ -1171,8 +1199,6 @@ const LirLowerOutput = struct {
     runtime_schemas: RuntimeSchemaStore,
     fn_sets: Span(FnSet),
     erased_fns: Span(ErasedFns),
-    capture_slots: Span(CaptureSlot),
-    erased_entries: Span(ErasedEntry),
 };
 ```
 
@@ -1180,11 +1206,10 @@ const LirLowerOutput = struct {
 consumed by ARC and then by backends, the interpreter, and LirImage.
 `requested_layouts` is for static data and provided data exports that asked for
 layout decisions during the same lowering. `runtime_schemas` is for glue and
-static data. `fn_sets`, `erased_fns`, and `capture_slots` are temporary
-compile-time publication contexts used by `CheckedModuleBuilder` while storing
-function values in `ConstStore`. `erased_entries` maps erased callable LIR
-procedure ids to the checked callable templates needed by compile-time
-publication and glue.
+static data. `fn_sets` and `erased_fns` are temporary compile-time publication
+contexts used by `CheckedModuleBuilder` while storing function values in
+`ConstStore`. Capture slots are stored inside the corresponding function
+variant or erased-function entry.
 
 The output owns all of these stores and spans. Consumers borrow the fields they
 need and must not add their own side stores for the same facts. `LirImage`
@@ -1256,9 +1281,13 @@ Solved data, Lambda Mono data, runtime addresses, allocation identity, layout
 ids, runtime discriminants, field offsets, LIR locals, LIR procedure ids,
 backend symbols, backend bytes, or host handles.
 
-`ConstStore` uses node ids so stored constants can preserve sharing and cycles
-without expanding forever. Multiple fields may reference the same `ConstNodeId`.
-A recursive value uses a `ref` edge back to an existing node.
+`ConstStore` uses node ids so stored constants can preserve sharing without
+duplicating large values. Multiple fields may reference the same `ConstNodeId`.
+Stored constants are acyclic. Roc source cannot define recursive non-function
+values; checking reports those definitions as errors and records `Malformed`
+source nodes instead. `Malformed` source nodes are never published as valid
+`ConstStore` values. A cycle in published `ConstStore` node edges is therefore
+a compiler bug, not a supported stored-constant representation.
 
 ```zig
 const ConstStore = struct {
@@ -1276,7 +1305,6 @@ const ConstValue = union(enum) {
     box: ConstNodeId,
     declared: ConstDeclared,
     fn_: ConstFn,
-    ref: ConstNodeId,
 };
 ```
 
@@ -1322,34 +1350,36 @@ being finalized. OOM remains OOM. A post-check invariant failure while lowering
 or interpreting a compile-time root is still a compiler bug, not a user-facing
 diagnostic.
 
-While storing an eval result, the builder may reserve a `ConstNodeId` and fill
-it later to represent cycles or shared recursive structure. Publication verifies
-that every reserved node was filled exactly once. Restoring cached consts and
-dependency summarization must memoize by `ConstNodeId`, so sharing and recursive
-references are preserved and traversal terminates. A consumer must not recover
-stored-const identity by comparing node contents.
+While storing an eval result, the builder may reserve a `ConstNodeId` before
+storing its children so repeated references to the same acyclic runtime value
+can reuse the same stored node. Publication verifies that every reserved node
+was filled exactly once and that stored value edges are acyclic. Restoring
+cached consts and dependency summarization must memoize by `ConstNodeId`, so
+sharing is preserved and traversal is linear in the stored node count. A
+consumer must not recover stored-const identity by comparing node contents.
 
 A stored function value keeps checked identity only:
 
 ```zig
 const ConstFn = struct {
-    function: FnDef,
+    fn_def: FnDef,
     source_fn_ty: CheckedTypeId,
     captures: Span(ConstCapture),
 };
 
 const ConstCapture = struct {
-    symbol: Symbol,
+    binder: PatternBinderId,
     value: ConstNodeId,
 };
 ```
 
-`function` names a checked, imported, hosted, promoted, or compiler-generated
-procedure template that the checked module owns or references explicitly.
-`captures` bind the exact lexical capture symbols required by that template to
+`fn_def` names a checked, imported, nested, hosted, promoted, or checked-stage
+generated procedure template that the checked module owns or references
+explicitly.
+`captures` bind the exact checked pattern binders required by that function to
 stored const nodes. A stored function does not store a lambda set, callable-set
-descriptor, call specialization id, erased ABI, capture layout, runtime
-tag, or LIR proc id.
+descriptor, call specialization id, erased ABI, capture layout, runtime tag, or
+LIR proc id.
 
 During compile-time evaluation, the direct LIR builder also produces temporary
 function result-store data. Storing a function result is scoped by `FnSet`
@@ -1370,9 +1400,9 @@ const FnSet = struct {
 
 const FnVariant = struct {
     id: FnVariantId,
-    discrim: RuntimeDiscriminant,
-    slot: RuntimeVariantIndex,
-    payload: LayoutId,
+    discriminant: RuntimeDiscriminant,
+    variant_index: RuntimeVariantIndex,
+    payload_layout: LayoutId,
     template: FnTemplate,
     captures: Span(CaptureSlot),
 };
@@ -1389,12 +1419,12 @@ const ErasedFn = struct {
 };
 
 const FnTemplate = struct {
-    function: FnDef,
+    fn_def: FnDef,
     source_fn_ty: CheckedTypeId,
 };
 
 const CaptureSlot = struct {
-    symbol: Symbol,
+    binder: PatternBinderId,
     slot: u32,
 };
 ```
@@ -1410,9 +1440,9 @@ procedure from the runtime value and looks it up inside the explicit
 `ErasedFns` context.
 
 `CaptureSlot` says which committed capture-payload slot contains the value for
-one captured symbol. The direct LIR builder publishes these slots while lowering
-the generated function value. The `ConstStore` writer recursively stores each
-captured runtime value, then stores the resulting `ConstFn`.
+one captured checked binder. The direct LIR builder publishes these slots while
+lowering the generated function value. The `ConstStore` writer recursively
+stores each captured runtime value, then stores the resulting `ConstFn`.
 
 Storing an eval result never uses a global id made only of layout,
 discriminant, variant slot, byte pattern, display name, object symbol, or

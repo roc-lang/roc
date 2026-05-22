@@ -1,9 +1,9 @@
 //! Checked artifact cache keys.
 //!
-//! This cache key is semantic and target-independent. It names one complete
-//! checked artifact, including compile-time values and every checked-stage table
-//! consumed by later MIR-family stages. Object-code, layout, pointer-width, and
-//! backend inputs belong to later target-specific caches only.
+//! This cache key is target-independent. It names one complete checked module,
+//! including compile-time values and every checked-stage table consumed by
+//! post-check lowering. Object code, layout, pointer width, and backend inputs
+//! belong to later target-specific caches only.
 
 const std = @import("std");
 const check = @import("check");

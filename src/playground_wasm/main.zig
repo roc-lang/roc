@@ -1013,7 +1013,7 @@ fn compileReplInspectedModule(source: []const u8) !ReplCompiledModule {
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.test_helpers.lowerArtifactSetToLir(allocator, &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, &root_artifact, &import_artifacts, .u32);
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1847,7 +1847,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
         import_views[i] = check.CheckedArtifact.importedView(artifact);
     }
 
-    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),

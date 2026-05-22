@@ -63,12 +63,15 @@ pub const Graph = @import("graph.zig").Graph;
 pub const GraphNode = @import("graph.zig").Node;
 pub const GraphNodeId = @import("graph.zig").NodeId;
 pub const GraphRef = @import("graph.zig").Ref;
+pub const GraphInput = GraphRef;
 pub const graphRefKey = @import("graph.zig").refKey;
 pub const GraphField = @import("graph.zig").Field;
 pub const GraphFieldSpan = @import("graph.zig").FieldSpan;
 pub const GraphRefSpan = @import("graph.zig").RefSpan;
+pub const GraphInputSpan = GraphRefSpan;
 pub const RcOp = @import("rc_helper.zig").RcOp;
 pub const RcHelperKey = @import("rc_helper.zig").HelperKey;
+pub const RcHelper = RcHelperKey;
 pub const RcHelperPlan = @import("rc_helper.zig").Plan;
 pub const RcStructPlan = @import("rc_helper.zig").StructPlan;
 pub const RcTagUnionPlan = @import("rc_helper.zig").TagUnionPlan;
@@ -78,6 +81,28 @@ pub const RcFieldPlan = @import("rc_helper.zig").FieldPlan;
 pub const RcIncrefFn = @import("rc_helper.zig").RcIncrefFn;
 pub const RcDecrefFn = @import("rc_helper.zig").RcDecrefFn;
 pub const RcFreeFn = @import("rc_helper.zig").RcFreeFn;
+
+pub fn committedGraphInput(idx: Idx) GraphInput {
+    return .{ .canonical = idx };
+}
+
+pub fn graphInputCommitted(input: GraphInput) ?Idx {
+    return switch (input) {
+        .canonical => |idx| idx,
+        .local => null,
+    };
+}
+
+pub fn localGraphInput(node: GraphNodeId) GraphInput {
+    return .{ .local = node };
+}
+
+pub fn graphInputLocal(input: GraphInput) ?GraphNodeId {
+    return switch (input) {
+        .canonical => null,
+        .local => |node| node,
+    };
+}
 
 test "layout tests" {
     std.testing.refAllDecls(@This());

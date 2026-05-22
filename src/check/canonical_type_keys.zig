@@ -1,4 +1,4 @@
-//! Deterministic checked-type keys for artifact and MIR boundaries.
+//! Deterministic checked-type digests for checked module and post-check boundaries.
 //!
 //! These keys are produced during checking finalization, while it is still valid
 //! to inspect the checked type store and module-local identifiers. Post-check

@@ -4088,12 +4088,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processing => {
                         if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
-                            if (builtin.mode == .Debug) {
-                                std.debug.panic(
-                                    "frontend invariant violated: recursive non-function top-level def {d} reached type checking",
-                                    .{@intFromEnum(processing_def.def_idx)},
-                                );
-                            } else unreachable;
+                            try self.poisonRecursiveNonFunctionProcessingDef(processing_def, expr_idx, env);
+                            break :blk;
                         }
 
                         // Recursive function reference. We assign the lookup a
@@ -6830,6 +6826,38 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+fn poisonRecursiveNonFunctionProcessingDef(
+    self: *Self,
+    processing_def: DefProcessed,
+    use_expr: ?CIR.Expr.Idx,
+    env: *Env,
+) Allocator.Error!void {
+    const def = self.cir.store.getDef(processing_def.def_idx);
+    const diagnostic_idx = if (processing_def.def_name) |ident|
+        try self.cir.addDiagnostic(.{ .circular_value_definition = .{
+            .ident = ident,
+            .region = self.cir.store.getPatternRegion(def.pattern),
+        } })
+    else
+        try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(def.expr),
+        } });
+
+    if (self.cir.store.getExpr(def.expr) != .e_runtime_error) {
+        self.cir.store.replaceExprWithRuntimeError(def.expr, diagnostic_idx);
+    }
+    try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+    try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+
+    if (use_expr) |expr_idx| {
+        if (self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
+            self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+        }
+        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        try self.unifyWith(ModuleEnv.varFrom(expr_idx), .err, env);
+    }
+}
+
 fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
     for (self.value_lookup_tracking.items) |entry| {
         const pattern_var = ModuleEnv.varFrom(entry.pattern_idx);
@@ -7371,12 +7399,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 },
                                 .processing => {
                                     if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
-                                        if (builtin.mode == .Debug) {
-                                            std.debug.panic(
-                                                "frontend invariant violated: recursive non-function top-level method/value def {d} reached type checking",
-                                                .{@intFromEnum(processing_def.def_idx)},
-                                            );
-                                        } else unreachable;
+                                        try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
+                                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                                        continue;
                                     }
 
                                     // Create a fresh flex var at the current rank for
@@ -7562,12 +7587,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 },
                                 .processing => {
                                     if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
-                                        if (builtin.mode == .Debug) {
-                                            std.debug.panic(
-                                                "frontend invariant violated: recursive non-function top-level method/value def {d} reached type checking",
-                                                .{@intFromEnum(processing_def.def_idx)},
-                                            );
-                                        } else unreachable;
+                                        try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
+                                        try self.unifyWith(deferred_constraint.var_, .err, env);
+                                        continue;
                                     }
 
                                     cycle_method_expr_var = try self.fresh(env, region);
@@ -8020,10 +8042,10 @@ fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected
 
     const expr_var = ModuleEnv.varFrom(expr_idx);
     const region = self.cir.store.getExprRegion(expr_idx);
-    const bridge_var = try self.fresh(env, region);
-    _ = try self.unifyInContext(bridge_var, expected_ret, env, .none);
+    const redirected_ret = try self.fresh(env, region);
+    _ = try self.unifyInContext(redirected_ret, expected_ret, env, .none);
 
-    try self.types.dangerousSetVarRedirect(expr_var, bridge_var);
+    try self.types.dangerousSetVarRedirect(expr_var, redirected_ret);
 }
 
 fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {

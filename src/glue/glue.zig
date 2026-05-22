@@ -291,7 +291,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer gpa.free(relation_artifacts);
 
-    var lowered = lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),

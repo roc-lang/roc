@@ -156,11 +156,11 @@ pub const BuildEnv = struct {
     /// Controls which checked-artifact publication work runs after ordinary
     /// checking has completed.
     ///
-    /// Executable builds need the full platform/app executable relation because
-    /// later MIR/LIR stages consume it as lowering input. `roc check` needs the
-    /// type-level platform/app validation, but must not republish executable
-    /// platform roots; diagnostic-only checking must not force MIR/LIR lowering
-    /// of declarations that are not part of a valid executable program.
+    /// Executable builds need the full platform/app relation because post-check
+    /// lowering consumes it as input. `roc check` needs the type-level
+    /// platform/app validation, but must not republish runnable platform roots;
+    /// diagnostic-only checking must not force post-check lowering of
+    /// declarations that are not part of a valid executable program.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)

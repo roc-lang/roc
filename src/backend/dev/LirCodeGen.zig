@@ -6,7 +6,7 @@
 //!
 //! Pipeline position:
 //! ```
-//! checked artifacts -> MIR -> IR -> LIR -> LirCodeGen -> Machine Code
+//! checked modules -> post-check IRs -> LIR -> LirCodeGen -> Machine Code
 //! ```
 //!
 //! Key properties:
@@ -4778,7 +4778,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .field => |field| field.source,
                 .tag_payload => |payload| payload.source,
                 .tag_payload_struct => |payload| payload.source,
-                .list_reinterpret => |list_bridge| list_bridge.backing_ref,
+                .list_reinterpret => |list_reinterpret| list_reinterpret.backing_ref,
                 .nominal => |nominal| nominal.backing_ref,
             };
         }
@@ -4844,9 +4844,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .tag_discriminant = payload.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .list_reinterpret => |list_bridge| self.requireExplicitListValueLocationToLayout(
-                    try self.emitValueLocal(list_bridge.backing_ref),
-                    self.localLayout(list_bridge.backing_ref),
+                .list_reinterpret => |list_reinterpret| self.requireExplicitListValueLocationToLayout(
+                    try self.emitValueLocal(list_reinterpret.backing_ref),
+                    self.localLayout(list_reinterpret.backing_ref),
                     target_layout,
                     "assign_ref.list_reinterpret",
                 ),
@@ -7430,7 +7430,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     (expected_is_box and actual_is_erased_ptr);
                 if (!boxing_compatible or actual_is_list or expected_is_list) {
                     std.debug.panic(
-                        "LIR/codegen invariant violated at {s}: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={} ({s}) expected={} ({s})",
+                        "LIR/codegen invariant violated at {s}: explicit nominal reinterpret expected non-list layouts on the same side of layout boxing, got actual={} ({s}) expected={} ({s})",
                         .{
                             site,
                             @intFromEnum(actual_layout),
@@ -7458,7 +7458,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
                 if (!actual_is_list or !expected_is_list) {
                     std.debug.panic(
-                        "LIR/codegen invariant violated at {s}: explicit list bridge expected list layouts, got actual={} expected={}",
+                        "LIR/codegen invariant violated at {s}: explicit list reinterpret expected list layouts, got actual={} expected={}",
                         .{ site, @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
                     );
                 }

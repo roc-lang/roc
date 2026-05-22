@@ -1,6 +1,6 @@
-//! Interpreter shim for already-lowered LIR runtime images.
+//! Interpreter shim for already-lowered LIR images.
 //!
-//! The compiler parent process publishes an ARC-inserted LIR runtime image into
+//! The compiler parent process publishes an ARC-inserted LIR image into
 //! shared memory. This shim maps that image, creates zero-copy LIR views, and
 //! invokes the requested platform entrypoint through the LIR interpreter.
 
@@ -17,11 +17,11 @@ const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
 const RuntimeState = struct {
     shm: SharedMemoryAllocator,
-    view: lir.RuntimeImage.ProgramView,
+    view: lir.LirImage.ProgramView,
 };
 
 const ShimError = error{
-    RuntimeImageUnavailable,
+    LirImageUnavailable,
     InvalidEntrypoint,
     OutOfMemory,
 };
@@ -40,8 +40,8 @@ fn openRuntimeState(gpa: Allocator) !RuntimeState {
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
-    const header: *const lir.RuntimeImage.Header = @ptrCast(@alignCast(shm.base_ptr + header_offset));
-    const view = try lir.RuntimeImage.viewMappedImage(header, shm.base_ptr, shm.total_size);
+    const header: *const lir.LirImage.Header = @ptrCast(@alignCast(shm.base_ptr + header_offset));
+    const view = try lir.LirImage.viewMappedImage(header, shm.base_ptr, shm.total_size);
 
     return .{
         .shm = shm,
@@ -58,14 +58,14 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
     if (runtime_state_initialized) return &runtime_state;
 
     runtime_state = openRuntimeState(allocator()) catch {
-        ops.crash("Interpreter shim could not map the LIR runtime image");
-        return error.RuntimeImageUnavailable;
+        ops.crash("Interpreter shim could not map the LIR image");
+        return error.LirImageUnavailable;
     };
     runtime_state_initialized = true;
     return &runtime_state;
 }
 
-fn entrypointForOrdinal(view: *const lir.RuntimeImage.ProgramView, ordinal: u32) ?lir.RuntimeImage.PlatformEntrypoint {
+fn entrypointForOrdinal(view: *const lir.LirImage.ProgramView, ordinal: u32) ?lir.LirImage.PlatformEntrypoint {
     for (view.platform_entrypoints) |entrypoint| {
         if (entrypoint.ordinal == ordinal) return entrypoint;
     }
@@ -110,7 +110,7 @@ fn evaluateEntrypoint(
 }
 
 fn evaluateEntrypointInView(
-    view: *const lir.RuntimeImage.ProgramView,
+    view: *const lir.LirImage.ProgramView,
     entry_idx: u32,
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
@@ -154,17 +154,17 @@ fn evaluateEntrypointInView(
     };
 }
 
-fn viewEmbeddedRuntimeImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) ShimError!lir.RuntimeImage.ProgramView {
-    if (image_len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.RuntimeImage.Header)) {
-        ops.crash("Interpreter shim received an invalid embedded LIR runtime image");
-        return error.RuntimeImageUnavailable;
+fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) ShimError!lir.LirImage.ProgramView {
+    if (image_len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
+        ops.crash("Interpreter shim received an invalid embedded LIR image");
+        return error.LirImageUnavailable;
     }
 
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(image_base));
-    const header: *const lir.RuntimeImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    return lir.RuntimeImage.viewMappedImage(header, base_ptr, image_len) catch {
-        ops.crash("Interpreter shim could not view the embedded LIR runtime image");
-        return error.RuntimeImageUnavailable;
+    const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    return lir.LirImage.viewMappedImage(header, base_ptr, image_len) catch {
+        ops.crash("Interpreter shim could not view the embedded LIR image");
+        return error.LirImageUnavailable;
     };
 }
 
@@ -175,7 +175,7 @@ export fn roc_entrypoint(
     arg_ptr: ?*anyopaque,
 ) callconv(.c) void {
     evaluateEntrypoint(entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
-        error.RuntimeImageUnavailable,
+        error.LirImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => {},
@@ -191,19 +191,19 @@ export fn roc_entrypoint_from_image(
     image_len: usize,
 ) callconv(.c) void {
     const base = image_base orelse {
-        ops.crash("Interpreter shim received no embedded LIR runtime image");
+        ops.crash("Interpreter shim received no embedded LIR image");
         return;
     };
 
-    const view = viewEmbeddedRuntimeImage(base, image_len, ops) catch |err| switch (err) {
-        error.RuntimeImageUnavailable,
+    const view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
+        error.LirImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return,
     };
 
     evaluateEntrypointInView(&view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
-        error.RuntimeImageUnavailable,
+        error.LirImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => {},

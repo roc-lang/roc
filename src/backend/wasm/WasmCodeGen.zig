@@ -1848,7 +1848,7 @@ fn recordRefOpLocals(locals: *std.AutoHashMap(u64, void), op: RefOp) Allocator.E
         .field => |field| try recordProcLocal(locals, field.source),
         .tag_payload => |payload| try recordProcLocal(locals, payload.source),
         .tag_payload_struct => |payload| try recordProcLocal(locals, payload.source),
-        .list_reinterpret => |list_bridge| try recordProcLocal(locals, list_bridge.backing_ref),
+        .list_reinterpret => |list_reinterpret| try recordProcLocal(locals, list_reinterpret.backing_ref),
         .nominal => |nominal| try recordProcLocal(locals, nominal.backing_ref),
     }
 }
@@ -5844,7 +5844,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 try self.emitLoadOpForLayout(target_layout, 0);
             }
         },
-        .list_reinterpret => |list_bridge| try self.emitProcLocal(list_bridge.backing_ref),
+        .list_reinterpret => |list_reinterpret| try self.emitProcLocal(list_reinterpret.backing_ref),
         .nominal => |nom| try self.emitProcLocal(nom.backing_ref),
     }
 }

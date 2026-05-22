@@ -6,14 +6,18 @@ const std = @import("std");
 pub const LIR = @import("LIR.zig");
 /// Flat storage for statement-only LIR nodes and spans.
 pub const LirStore = @import("LirStore.zig");
-/// Source-blind IR-to-LIR lowering boundary.
-pub const LowerIr = @import("lower_ir.zig");
-/// Public checked-artifact-to-LIR lowering entrypoint.
+/// LIR-owned root metadata.
+pub const RootMetadata = @import("root_metadata.zig");
+/// Hosted ABI metadata carried by LIR proc specs.
+pub const Hosted = @import("hosted.zig");
+/// LIR program result shared by post-check lowering and consumers.
+pub const Program = @import("program.zig");
+/// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Mechanical ARC insertion over explicit LIR values and control flow.
 pub const Arc = @import("arc.zig");
-/// Shared-memory ARC-inserted LIR runtime image for interpreter-shim execution.
-pub const RuntimeImage = @import("runtime_image.zig");
+/// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
+pub const LirImage = @import("lir_image.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -50,8 +54,10 @@ test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
-    std.testing.refAllDecls(LowerIr);
+    std.testing.refAllDecls(RootMetadata);
+    std.testing.refAllDecls(Hosted);
+    std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(Arc);
-    std.testing.refAllDecls(RuntimeImage);
+    std.testing.refAllDecls(LirImage);
 }

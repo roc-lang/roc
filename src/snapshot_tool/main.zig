@@ -3954,7 +3954,7 @@ fn processDevObjectSnapshot(
     };
 
     if (snapshotHasProvidedProcedureExports(root_artifact)) {
-        lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+        lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
             allocator,
             .{
                 .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),

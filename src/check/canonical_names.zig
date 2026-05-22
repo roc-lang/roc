@@ -1,8 +1,8 @@
 //! Canonical post-check names and procedure identities.
 //!
-//! These ids are artifact-boundary data. They are derived from source spellings
-//! during checking finalization so post-check stages do not consume module-local
-//! `Ident.Idx` values or raw `Symbol` values as semantic identity.
+//! These ids are checked-module boundary data. They are derived from source
+//! spellings during checking finalization so post-check stages do not consume
+//! module-local `Ident.Idx` values or raw `Symbol` values as checked identity.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -32,23 +32,19 @@ pub const ProcBaseKeyRef = enum(u32) { _ };
 pub const CheckedProcedureTemplateId = enum(u32) { _ };
 /// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };
-/// Public `PromotedCallableWrapperId` declaration.
-pub const PromotedCallableWrapperId = enum(u32) { _ };
 /// Public `HostedWrapperId` declaration.
 pub const HostedWrapperId = enum(u32) { _ };
 /// Public `IntrinsicWrapperId` declaration.
 pub const IntrinsicWrapperId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
-/// Public `PromotedCallableNodeId` declaration.
-pub const PromotedCallableNodeId = enum(u32) { _ };
-/// Public `PromotedCallableBodyPlanId` declaration.
-pub const PromotedCallableBodyPlanId = enum(u32) { _ };
 
 /// Public `ArtifactRef` declaration.
 pub const ArtifactRef = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
+
+pub const CheckedModuleDigest = ArtifactRef;
 
 /// Public `ProcedureValueRef` declaration.
 pub const ProcedureValueRef = struct {
@@ -63,11 +59,25 @@ pub const ProcedureTemplateRef = struct {
     template: CheckedProcedureTemplateId,
 };
 
+pub const ProcTemplate = ProcedureTemplateRef;
+
+pub fn procTemplateModuleDigest(template: ProcTemplate) CheckedModuleDigest {
+    return template.artifact;
+}
+
 /// Public `MonoSpecializationKey` declaration.
 pub const MonoSpecializationKey = struct {
     template: ProcedureTemplateRef,
     requested_mono_fn_ty: CanonicalTypeKey,
 };
+
+pub const TypeDigest = CanonicalTypeKey;
+pub const ExecValueDigest = CanonicalExecValueTypeKey;
+pub const NameStore = CanonicalNameStore;
+pub const RecordFieldNameId = RecordFieldLabelId;
+pub const TagNameId = TagLabelId;
+pub const ProcSiteId = NestedProcSiteId;
+pub const CallableProcTemplate = CallableProcedureTemplateRef;
 
 /// Public `MonoSpecializedProcRef` declaration.
 pub const MonoSpecializedProcRef = struct {
@@ -75,8 +85,8 @@ pub const MonoSpecializedProcRef = struct {
     specialization: MonoSpecializationKey,
 };
 
-/// Public `MirProcedureRef` declaration.
-pub const MirProcedureRef = struct {
+/// Public `ProcCallable` declaration.
+pub const ProcCallable = struct {
     proc: ProcedureValueRef,
     callable: ProcedureCallableRef,
 };
@@ -106,8 +116,8 @@ pub fn monoSpecializedProcRefEql(a: MonoSpecializedProcRef, b: MonoSpecializedPr
         monoSpecializationKeyEql(a.specialization, b.specialization);
 }
 
-/// Public `mirProcedureRefFromMono` function.
-pub fn mirProcedureRefFromMono(proc: MonoSpecializedProcRef) MirProcedureRef {
+/// Public `procCallableFromMono` function.
+pub fn procCallableFromMono(proc: MonoSpecializedProcRef) ProcCallable {
     return .{
         .proc = proc.proc,
         .callable = .{
@@ -117,8 +127,8 @@ pub fn mirProcedureRefFromMono(proc: MonoSpecializedProcRef) MirProcedureRef {
     };
 }
 
-/// Public `mirProcedureRefEql` function.
-pub fn mirProcedureRefEql(a: MirProcedureRef, b: MirProcedureRef) bool {
+/// Public `procCallableEql` function.
+pub fn procCallableEql(a: ProcCallable, b: ProcCallable) bool {
     return procedureValueRefEql(a.proc, b.proc) and
         procedureCallableRefEql(a.callable, b.callable);
 }
@@ -315,7 +325,7 @@ pub const CallableSetCaptureSlot = struct {
 pub const CanonicalCallableSetMember = struct {
     member: CallableSetMemberId,
     proc_value: ProcedureCallableRef,
-    source_proc: MirProcedureRef,
+    source_proc: ProcCallable,
     capture_slots: []const CallableSetCaptureSlot,
     capture_shape_key: CaptureShapeKey,
 };
@@ -412,7 +422,6 @@ pub const CanonicalTypeSchemeKey = struct {
 pub const ProcBaseKind = enum {
     checked_source,
     hosted_wrapper,
-    promoted_callable_wrapper,
     intrinsic_wrapper,
     entry_wrapper,
 };

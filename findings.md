@@ -267,7 +267,7 @@ The active roundtrip still checks identifiers, exposed items, line starts,
 module name, imports, import deduplication after deserialization, and
 store/type data. This is a cleaner replacement, not a regression.
 
-### Shared-Memory / Runtime-Image Integration Coverage Was Restored
+### Shared-Memory / LirImage Integration Coverage Was Restored
 
 Changed file:
 
@@ -283,10 +283,10 @@ Restored active tests:
 - `integration - diamond dependency pattern (A imports B and C, both import D)`
 - `integration - direct Core and Utils calls from app`
 
-These tests use the final runtime-image shared-memory API and checked-artifact
-pipeline. They assert that a parent-published ARC-inserted LIR runtime image can
-be viewed from a mapped child-side header without exposing CIR, checked
-artifacts, MIR, or IR to the child.
+These tests use the final LirImage shared-memory API and checked-module
+pipeline. They assert that a parent-published ARC-inserted LIR image can be
+viewed from a mapped child-side header without exposing CIR, checked modules, or
+post-check IRs to the child.
 
 ### MIR Tests Were Rewritten For The New Architecture
 

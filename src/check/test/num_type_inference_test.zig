@@ -171,8 +171,9 @@ test "numeric literal in comparison unifies with typed operand" {
                 found_result = true;
                 // After static-dispatch constraint finalization, `==` is
                 // represented as the explicit equality dispatch expression
-                // that MIR lowering consumes. The source operands are still
-                // the original comparison operands and must both resolve to I64.
+                // that post-check lowering consumes. The source operands are
+                // still the original comparison operands and must both resolve
+                // to I64.
                 const expr = test_env.module_env.store.getExpr(def.expr);
                 try testing.expect(expr == .e_method_eq);
                 const eq = expr.e_method_eq;

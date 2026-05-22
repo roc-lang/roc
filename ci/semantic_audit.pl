@@ -15,6 +15,7 @@ my @roots = qw(
     src/mir
     src/monotype
     src/monotype_lifted
+    src/postcheck
 );
 
 my @new_postcheck_roots = qw(

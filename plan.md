@@ -178,7 +178,7 @@ Work:
   LIR may depend on a small hosted ABI module, but not on the old middle.
 - Document the compile-time function result-storage contract before code
   changes: the `CheckedModuleBuilder` publication contract, stored function
-  shape, exact `FnDef` variants, `ConstNodeId` identity/sharing/cycles,
+  shape, exact `FnDef` variants, `ConstNodeId` identity/sharing,
   capture symbol bindings, generated function-set identity, exact `FnResult`
   selection rules, committed `CaptureSlot` data, and restoring cached consts
   without runtime wrappers.
@@ -232,8 +232,8 @@ Checked module boundary checklist:
   and direct-builder `fn_sets`; delete in Phase 5/6; verification grep
   `callable_set_descriptor`.
 - `erased_fn_abis`: pre-existing code scheduled for deletion; replace with
-  checked erased callable requirements and direct-builder `erased_fns` /
-  `erased_entries`; delete in Phase 4/7; verification grep `erased_fn_abi`.
+  checked erased callable requirements and direct-builder `erased_fns`; delete
+  in Phase 4/7; verification grep `erased_fn_abi`.
 - compile-time plan stores and compile-time value stores: replace with
   `ConstStore`, `ConstNodeId`, `ConstFn`, `FnResult`, `FnSet`, `ErasedFns`, and
   `CaptureSlot`; delete old graph/plan stores in Phase 6; verification grep for
@@ -324,6 +324,8 @@ Data structures:
   source row position
 - `Monotype.FnDef`, a checked function definition with no capture record,
   layout, erased ABI, callable tag, or lowered call target
+- `Monotype.NestedFn`, the checked `(owner template, nested site)` identity for
+  every expression-position function
 - `Monotype.Spec`
 - `Monotype.SpecializationQueue`
 
@@ -348,6 +350,11 @@ Work:
   Preserve opacity/interface permission separately from static-dispatch owner
   identity.
 - Instantiate checked procedure templates into `Monotype.Def` records.
+- Require every expression-position lambda/closure lowered into Monotype to
+  carry the checked nested function identity and checked source function type
+  published during checked module publication. Post-check stages must not name
+  nested functions from generated symbols, traversal order, body shape, capture
+  shape, runtime layout, or LIR procedure ids.
 - Build the root-driven specialization queue from explicit root requests.
 - Lower checked expressions, patterns, and statements into Monotype nodes.
 - Resolve static dispatch plans during lowering:
@@ -359,9 +366,9 @@ Work:
   `TypeDef` owners, and transparent backing representation remains
   separate from owner identity.
 - Treat `FnDef` as a closed checked union: local checked
-  template, imported checked template, local promoted callable template,
-  imported promoted callable template, local hosted function, imported hosted
-  function, or checked-stage compiler-generated function. Do not encode
+  template, imported checked template, nested function, local promoted callable
+  template, imported promoted callable template, local hosted function, imported
+  hosted function, or checked-stage generated function. Do not encode
   specialization, capture layout, LIR proc id, callable member, or runtime code
   identity in it. Post-check generated functions use stage-local symbols, not
   `FnDef`.
@@ -583,10 +590,10 @@ Data structures:
 - `ConstValue`
 - `ConstNodeId`
 - `ConstFn`
-- `ConstCapture { symbol, value }`
+- `ConstCapture { binder, value }`
 - exact `FnDef` variants for local/imported checked templates,
-  local/imported promoted callable templates, local/imported hosted functions,
-  and checked-stage compiler-generated functions
+  nested functions, local/imported promoted callable templates,
+  local/imported hosted functions, and checked-stage generated functions
 - temporary `FnResult`
 - `FnSet`
 - `FnVariant`
@@ -624,11 +631,17 @@ Work:
 - Replace old middle runtime payload and callable descriptor data in compile-time
   stores with `ConstStore` nodes.
 - Give stored consts explicit `ConstNodeId`s. Sharing is represented by multiple
-  references to the same node id. Cycles are represented only by
-  builder-reserved node ids filled exactly once before publication; published
-  stores contain no pending nodes.
+  references to the same node id. The builder may reserve node ids before
+  storing children so repeated references to the same acyclic runtime value use
+  one `ConstNodeId`; every reserved node must be filled exactly once before
+  publication. Recursive non-function source values are checking errors and
+  never become valid `ConstStore` entries.
 - Represent callable leaves as checked function references plus checked
-  captured `ConstNodeId`s bound to exact capture symbols.
+  captured `ConstNodeId`s bound to exact checked pattern binders.
+- Define `FnTemplate` as the pair of checked `FnDef` identity and checked source
+  function type. Carry it from Monotype through lifting, Lambda Solved, Lambda
+  Mono, and direct LIR lowering instead of making LIR recover checked function
+  types from layouts or generated procedure ids.
 - During compile-time lowering, have Lambda Mono/LIR lowering publish temporary
   `FnResult` data scoped by `FnSet` identity. Finite singleton sets
   select their only `FnVariant`; finite multi-variant sets read the runtime
@@ -636,7 +649,8 @@ Work:
   erased entry procedure and look it up inside the explicit `ErasedFns`.
 - Have the direct LIR builder publish committed `CaptureSlot` data for every
   generated callable representation that can be stored during compile-time
-  evaluation.
+  evaluation. A capture slot identifies the checked binder whose value occupies
+  the slot; it is not named by generated symbol or field position alone.
 - Have the LIR interpreter use that temporary `FnResult` data to store function
   values in `ConstStore`.
 - When restoring cached consts, make Monotype lowering turn `ConstStore` nodes
@@ -662,7 +676,9 @@ Tests:
 - compile-time scalar, record, tuple, tag, list, box, and nominal values
 - compile-time values containing direct function leaves
 - compile-time values containing captured function leaves
-- `ConstStore` sharing and recursive references
+- `ConstStore` DAG sharing
+- recursive non-function values are rejected by checking, converted to
+  `Malformed`, and never published as valid `ConstStore` entries
 - storing finite and erased function eval results
 - imported compile-time values containing callables
 - compile-time callable values passed through records/tags/lists and called at

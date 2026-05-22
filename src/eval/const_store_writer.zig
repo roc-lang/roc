@@ -1,0 +1,489 @@
+//! Store LIR interpreter results as checked constants.
+
+const std = @import("std");
+const builtins = @import("builtins");
+const check = @import("check");
+const layout = @import("layout");
+const lir = @import("lir");
+
+const Interpreter = @import("interpreter.zig").Interpreter;
+const Value = @import("value.zig").Value;
+
+const Allocator = std.mem.Allocator;
+const checked = check.CheckedArtifact;
+const LirProgram = lir.Program;
+const RocList = builtins.list.RocList;
+const RocStr = builtins.str.RocStr;
+
+const RuntimeValueAddress = struct {
+    ptr: usize,
+    plan: u32,
+    layout: u32,
+};
+
+const TagBase = struct {
+    value: Value,
+    layout_idx: layout.Idx,
+};
+
+pub const Writer = struct {
+    allocator: Allocator,
+    module: *checked.CheckedModuleArtifact,
+    program: *const LirProgram.Result,
+    stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
+
+    pub fn init(
+        allocator: Allocator,
+        module: *checked.CheckedModuleArtifact,
+        program: *const LirProgram.Result,
+    ) Writer {
+        return .{
+            .allocator = allocator,
+            .module = module,
+            .program = program,
+            .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Writer) void {
+        self.stored_values.deinit();
+    }
+
+    pub fn storeRoot(
+        self: *Writer,
+        root: LirProgram.ConstRootPlan,
+        value: Value,
+    ) Allocator.Error!checked.CompileTimeRootPayload {
+        const plan = self.constPlan(root.plan);
+        return switch (root.request.kind) {
+            .compile_time_constant => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
+            .compile_time_callable => switch (plan) {
+                .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
+                .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, root.ret_layout, value) },
+                else => writerInvariant("compile-time callable root did not have a function const plan"),
+            },
+            else => writerInvariant("non compile-time root reached ConstStore writer"),
+        };
+    }
+
+    fn storeValue(
+        self: *Writer,
+        plan_id: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstNodeId {
+        if (self.memoAddress(plan_id, layout_idx, value)) |address| {
+            if (self.stored_values.get(address)) |existing| return existing;
+            const node = try self.storeValueFresh(plan_id, layout_idx, value);
+            try self.stored_values.put(address, node);
+            return node;
+        }
+        return try self.storeValueFresh(plan_id, layout_idx, value);
+    }
+
+    fn storeValueFresh(
+        self: *Writer,
+        plan_id: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstNodeId {
+        return switch (self.constPlan(plan_id)) {
+            .pending => writerInvariant("pending const plan reached ConstStore writer"),
+            .zst => try self.module.const_store.append(.zst),
+            .scalar => try self.module.const_store.append(.{ .scalar = self.storeScalar(layout_idx, value) }),
+            .str => try self.storeStr(value),
+            .list => |elem_plan| try self.storeList(elem_plan, layout_idx, value),
+            .box => |elem_plan| try self.storeBox(elem_plan, layout_idx, value),
+            .tuple => |items| try self.storeTuple(items, layout_idx, value),
+            .record => |fields| try self.storeRecord(fields, layout_idx, value),
+            .tag_union => |variants| try self.storeTag(variants, layout_idx, value),
+            .named => |named| blk: {
+                const backing = try self.storeValue(named.backing, layout_idx, value);
+                break :blk try self.module.const_store.append(.{ .nominal = .{
+                    .named_type = named.named_type,
+                    .backing = backing,
+                } });
+            },
+            .fn_value => |set| blk: {
+                const fn_id = try self.storeFnValue(set, layout_idx, value);
+                break :blk try self.module.const_store.append(.{ .fn_value = fn_id });
+            },
+            .erased_fn => |set| blk: {
+                const fn_id = try self.storeErasedFn(set, layout_idx, value);
+                break :blk try self.module.const_store.append(.{ .fn_value = fn_id });
+            },
+        };
+    }
+
+    fn storeScalar(self: *Writer, layout_idx: layout.Idx, value: Value) checked.ConstScalar {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag != .scalar) writerInvariant("scalar const plan had non-scalar layout");
+        const scalar = layout_value.data.scalar;
+        return switch (scalar.tag) {
+            .str => writerInvariant("string scalar layout reached scalar const plan"),
+            .int => switch (scalar.data.int) {
+                .u8 => .{ .u8 = value.read(u8) },
+                .i8 => .{ .i8 = value.read(i8) },
+                .u16 => .{ .u16 = value.read(u16) },
+                .i16 => .{ .i16 = value.read(i16) },
+                .u32 => .{ .u32 = value.read(u32) },
+                .i32 => .{ .i32 = value.read(i32) },
+                .u64 => .{ .u64 = value.read(u64) },
+                .i64 => .{ .i64 = value.read(i64) },
+                .u128 => .{ .u128 = value.read(u128) },
+                .i128 => .{ .i128 = value.read(i128) },
+            },
+            .frac => switch (scalar.data.frac) {
+                .f32 => .{ .f32_bits = @bitCast(value.read(f32)) },
+                .f64 => .{ .f64_bits = @bitCast(value.read(f64)) },
+                .dec => .{ .dec_bits = value.read(builtins.dec.RocDec).num },
+            },
+        };
+    }
+
+    fn storeStr(self: *Writer, value: Value) Allocator.Error!checked.ConstNodeId {
+        const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
+        const bytes = try self.module.const_store.allocator.dupe(u8, roc_str.asSlice());
+        errdefer self.module.const_store.allocator.free(bytes);
+        return try self.module.const_store.append(.{ .str = bytes });
+    }
+
+    fn storeList(
+        self: *Writer,
+        elem_plan: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstNodeId {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag != .list and layout_value.tag != .list_of_zst) {
+            writerInvariant("list const plan had non-list layout");
+        }
+        const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, roc_list.len());
+        errdefer self.module.const_store.allocator.free(nodes);
+        if (layout_value.tag == .list_of_zst) {
+            for (nodes) |*node| node.* = try self.storeValue(elem_plan, .zst, Value.zst);
+        } else {
+            const elem_layout = layout_value.data.list;
+            const elem_size: usize = self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout));
+            if (roc_list.bytes) |bytes| {
+                for (nodes, 0..) |*node, index| {
+                    node.* = try self.storeValue(elem_plan, elem_layout, .{ .ptr = bytes + index * elem_size });
+                }
+            } else if (roc_list.len() != 0) {
+                writerInvariant("non-empty list had null element pointer");
+            }
+        }
+        return try self.module.const_store.append(.{ .list = nodes });
+    }
+
+    fn storeBox(
+        self: *Writer,
+        elem_plan: LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstNodeId {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        const child = switch (layout_value.tag) {
+            .box_of_zst => try self.storeValue(elem_plan, .zst, Value.zst),
+            .box => blk: {
+                const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed value had null payload pointer");
+                break :blk try self.storeValue(elem_plan, layout_value.data.box, .{ .ptr = ptr });
+            },
+            else => writerInvariant("box const plan had non-box layout"),
+        };
+        return try self.module.const_store.append(.{ .box = child });
+    }
+
+    fn storeTuple(
+        self: *Writer,
+        items: []const LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstNodeId {
+        const nodes = try self.storeStructChildren(items, layout_idx, value);
+        return try self.module.const_store.append(.{ .tuple = nodes });
+    }
+
+    fn storeRecord(
+        self: *Writer,
+        fields: []const LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstNodeId {
+        const nodes = try self.storeStructChildren(fields, layout_idx, value);
+        return try self.module.const_store.append(.{ .record = nodes });
+    }
+
+    fn storeStructChildren(
+        self: *Writer,
+        plans: []const LirProgram.ConstPlanId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error![]const checked.ConstNodeId {
+        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
+        errdefer self.module.const_store.allocator.free(nodes);
+        if (plans.len == 0) return nodes;
+
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag == .zst) {
+            for (nodes, 0..) |*node, index| {
+                node.* = try self.storeValue(plans[index], .zst, Value.zst);
+            }
+            return nodes;
+        }
+        if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
+
+        for (nodes, 0..) |*node, index| {
+            const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+            const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+            node.* = try self.storeValue(plans[index], field_layout, value.offset(offset));
+        }
+        return nodes;
+    }
+
+    fn storeTag(
+        self: *Writer,
+        variants: []const LirProgram.ConstTagVariant,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstNodeId {
+        const tag_base = self.resolveTagBase(layout_idx, value);
+        const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
+        const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
+        const payload_nodes = try self.storeTagPayloads(selected.payloads, payload_layout, tag_base.value);
+        return try self.module.const_store.append(.{ .tag = .{
+            .tag_name = selected.name,
+            .payloads = payload_nodes,
+        } });
+    }
+
+    fn storeTagPayloads(
+        self: *Writer,
+        plans: []const LirProgram.ConstPlanId,
+        payload_layout: layout.Idx,
+        value: Value,
+    ) Allocator.Error![]const checked.ConstNodeId {
+        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
+        errdefer self.module.const_store.allocator.free(nodes);
+        if (plans.len == 0) return nodes;
+        const layout_value = self.program.layouts.getLayout(payload_layout);
+        if (layout_value.tag == .zst) {
+            for (nodes, 0..) |*node, index| {
+                node.* = try self.storeValue(plans[index], .zst, Value.zst);
+            }
+        } else if (layout_value.tag == .struct_) {
+            for (nodes, 0..) |*node, index| {
+                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+                node.* = try self.storeValue(plans[index], field_layout, value.offset(offset));
+            }
+        } else if (plans.len == 1) {
+            nodes[0] = try self.storeValue(plans[0], payload_layout, value);
+        } else {
+            writerInvariant("multi-payload tag did not use a struct payload layout");
+        }
+        return nodes;
+    }
+
+    fn storeFnValue(
+        self: *Writer,
+        set_id: LirProgram.FnSetId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstFnId {
+        const set = self.program.fn_sets.items[@intFromEnum(set_id)];
+        const tag_base = self.resolveTagBase(layout_idx, value);
+        const variant = self.selectFnVariant(set, tag_base.layout_idx, tag_base.value);
+        const captures = try self.storeCaptures(variant.captures, variant.payload_layout, tag_base.value);
+        errdefer if (captures.len > 0) self.module.const_store.allocator.free(captures);
+        return try self.module.const_store.appendFn(.{
+            .fn_def = variant.template.fn_def,
+            .source_fn_ty = variant.template.source_fn_ty,
+            .captures = captures,
+        });
+    }
+
+    fn storeErasedFn(
+        self: *Writer,
+        set_id: LirProgram.ErasedFnsId,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) Allocator.Error!checked.ConstFnId {
+        _ = layout_idx;
+        const set = self.program.erased_fns.items[@intFromEnum(set_id)];
+        const data_ptr = self.readErasedCallablePointer(value);
+        const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
+        for (set.entries) |entry| {
+            if (entry.entry != proc) continue;
+            const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
+            const captures = try self.storeCaptures(entry.captures, set.layout, .{ .ptr = capture_ptr });
+            errdefer if (captures.len > 0) self.module.const_store.allocator.free(captures);
+            return try self.module.const_store.appendFn(.{
+                .fn_def = entry.template.fn_def,
+                .source_fn_ty = entry.template.source_fn_ty,
+                .captures = captures,
+            });
+        }
+        writerInvariant("erased callable result did not match an explicit erased function entry");
+    }
+
+    fn storeCaptures(
+        self: *Writer,
+        slots: []const LirProgram.CaptureSlot,
+        payload_layout: layout.Idx,
+        payload_value: Value,
+    ) Allocator.Error![]const checked.ConstCapture {
+        const captures = try self.module.const_store.allocator.alloc(checked.ConstCapture, slots.len);
+        errdefer self.module.const_store.allocator.free(captures);
+        if (slots.len == 0) return captures;
+
+        const layout_value = self.program.layouts.getLayout(payload_layout);
+        if (layout_value.tag == .zst) {
+            for (slots, 0..) |slot, index| {
+                captures[index] = .{
+                    .binder = slot.binder,
+                    .value = try self.storeValue(slot.plan, .zst, Value.zst),
+                };
+            }
+        } else if (layout_value.tag == .struct_) {
+            for (slots, 0..) |slot, index| {
+                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, slot.slot);
+                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, slot.slot);
+                captures[index] = .{
+                    .binder = slot.binder,
+                    .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
+                };
+            }
+        } else if (slots.len == 1) {
+            captures[0] = .{
+                .binder = slots[0].binder,
+                .value = try self.storeValue(slots[0].plan, payload_layout, payload_value),
+            };
+        } else {
+            writerInvariant("multi-capture function did not use a struct capture layout");
+        }
+        return captures;
+    }
+
+    fn selectFnVariant(
+        self: *Writer,
+        set: LirProgram.FnSet,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) LirProgram.FnVariant {
+        if (set.variants.len == 1) return set.variants[0];
+        const discriminant = self.readTagDiscriminant(layout_idx, value);
+        for (set.variants) |variant| {
+            if (variant.discriminant == discriminant) return variant;
+        }
+        writerInvariant("finite callable result discriminant did not match an explicit variant");
+    }
+
+    fn selectTagVariant(
+        self: *Writer,
+        variants: []const LirProgram.ConstTagVariant,
+        layout_idx: layout.Idx,
+        value: Value,
+    ) LirProgram.ConstTagVariant {
+        const discriminant = self.readTagDiscriminant(layout_idx, value);
+        for (variants) |variant| {
+            if (variant.discriminant == discriminant) return variant;
+        }
+        writerInvariant("tag result discriminant did not match an explicit const variant");
+    }
+
+    fn readTagDiscriminant(self: *Writer, layout_idx: layout.Idx, value: Value) u32 {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        return switch (layout_value.tag) {
+            .zst => 0,
+            .tag_union => self.program.layouts.getTagUnionData(layout_value.data.tag_union.idx).readDiscriminant(value.ptr),
+            else => writerInvariant("tag discriminant read had non-tag-union layout"),
+        };
+    }
+
+    fn tagPayloadLayout(self: *Writer, layout_idx: layout.Idx, discriminant: u16) layout.Idx {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag == .zst) return .zst;
+        if (layout_value.tag != .tag_union) writerInvariant("tag payload read had non-tag-union layout");
+        const data = self.program.layouts.getTagUnionData(layout_value.data.tag_union.idx);
+        const variants = self.program.layouts.getTagUnionVariants(data);
+        const index: usize = discriminant;
+        if (index >= variants.len) writerInvariant("tag discriminant was outside variant layouts");
+        return variants.get(@intCast(index)).payload_layout;
+    }
+
+    fn readBoxDataPointer(self: *Writer, value: Value) ?[*]u8 {
+        const raw = self.readPointerSizedInt(value);
+        if (raw == 0) return null;
+        return @ptrFromInt(raw);
+    }
+
+    fn resolveTagBase(self: *Writer, layout_idx: layout.Idx, value: Value) TagBase {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        return switch (layout_value.tag) {
+            .zst, .tag_union => .{
+                .value = value,
+                .layout_idx = layout_idx,
+            },
+            .box => .{
+                .value = .{
+                    .ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed tag value had null payload pointer"),
+                },
+                .layout_idx = layout_value.data.box,
+            },
+            else => writerInvariant("tag value read had non-tag layout"),
+        };
+    }
+
+    fn readErasedCallablePointer(self: *Writer, value: Value) [*]u8 {
+        const ptr = self.readPointerSizedInt(value);
+        if (ptr == 0) writerInvariant("erased callable result had null pointer");
+        return @ptrFromInt(ptr);
+    }
+
+    fn readPointerSizedInt(self: *Writer, value: Value) usize {
+        return if (self.program.layouts.targetUsize().size() == 8)
+            value.read(usize)
+        else
+            @as(usize, value.read(u32));
+    }
+
+    fn memoAddress(self: *Writer, plan_id: LirProgram.ConstPlanId, layout_idx: layout.Idx, value: Value) ?RuntimeValueAddress {
+        const layout_value = self.program.layouts.getLayout(layout_idx);
+        const ptr: ?usize = switch (layout_value.tag) {
+            .box => if (self.readBoxDataPointer(value)) |payload| @intFromPtr(payload) else null,
+            .list => blk: {
+                const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+                break :blk if (roc_list.bytes) |bytes| @intFromPtr(bytes) else null;
+            },
+            .scalar => if (layout_value.data.scalar.tag == .str) blk: {
+                const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
+                break :blk @intFromPtr(roc_str.asSlice().ptr);
+            } else null,
+            else => null,
+        };
+        return if (ptr) |raw| .{
+            .ptr = raw,
+            .plan = @intFromEnum(plan_id),
+            .layout = @intFromEnum(layout_idx),
+        } else null;
+    }
+
+    fn constPlan(self: *const Writer, id: LirProgram.ConstPlanId) LirProgram.ConstPlan {
+        const raw = @intFromEnum(id);
+        if (raw >= self.program.const_plans.items.len) writerInvariant("const plan id is out of range");
+        return self.program.const_plans.items[raw];
+    }
+};
+
+fn writerInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("ConstStore writer invariant violated: {s}", .{message});
+    }
+    unreachable;
+}
+
+test "const store writer declarations are referenced" {
+    std.testing.refAllDecls(@This());
+}

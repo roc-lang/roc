@@ -731,7 +731,7 @@ pub const Coordinator = struct {
     /// call `compile.app_header.parseAppHeader` themselves, resolve URLs to
     /// local paths through their own policy, and register packages via
     /// `ensurePackage` / `registerInlinePackage`. See
-    /// `buildLirRuntimeImageWithCoordinator` in `src/cli/main.zig` for a
+    /// `buildLirImageWithCoordinator` in `src/cli/main.zig` for a
     /// worked example of the URL-aware path.
     ///
     /// `arena` holds strings extracted from the header (qualifiers, specs).

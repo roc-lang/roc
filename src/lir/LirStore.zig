@@ -4,20 +4,20 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 
-const ir = @import("LIR.zig");
+const lir_defs = @import("LIR.zig");
 
 const Allocator = std.mem.Allocator;
 
-const CFStmt = ir.CFStmt;
-const CFStmtId = ir.CFStmtId;
-const CFSwitchBranch = ir.CFSwitchBranch;
-const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
-const LirProcSpec = ir.LirProcSpec;
-const LirProcSpecId = ir.LirProcSpecId;
-const Local = ir.Local;
-const LocalId = ir.LocalId;
-const LocalSpan = ir.LocalSpan;
-const Symbol = ir.Symbol;
+const CFStmt = lir_defs.CFStmt;
+const CFStmtId = lir_defs.CFStmtId;
+const CFSwitchBranch = lir_defs.CFSwitchBranch;
+const CFSwitchBranchSpan = lir_defs.CFSwitchBranchSpan;
+const LirProcSpec = lir_defs.LirProcSpec;
+const LirProcSpecId = lir_defs.LirProcSpecId;
+const Local = lir_defs.Local;
+const LocalId = lir_defs.LocalId;
+const LocalSpan = lir_defs.LocalSpan;
+const Symbol = lir_defs.Symbol;
 
 const Self = @This();
 

@@ -12,7 +12,7 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
-const mir = @import("mir");
+const hosted = @import("hosted.zig");
 
 const StringLiteral = base.StringLiteral;
 
@@ -140,7 +140,7 @@ pub const RefOp = union(enum) {
 };
 
 /// Platform-hosted proc metadata used for external proc ABIs.
-pub const HostedProc = mir.Hosted.Proc;
+pub const HostedProc = hosted.Proc;
 
 /// One explicit switch branch keyed by an integer branch value.
 pub const CFSwitchBranch = struct {

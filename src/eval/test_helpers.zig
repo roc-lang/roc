@@ -30,7 +30,7 @@ const ExecutableMemory = backend.ExecutableMemory;
 const LayoutStore = @import("layout").Store;
 const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
-const RuntimeImage = lir.RuntimeImage;
+const LirImage = lir.LirImage;
 const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct {
     base_ptr: [*]align(1) u8,
     buffer: []align(collections.max_roc_alignment.toByteUnits()) u8,
@@ -197,32 +197,32 @@ fn configuredSharedMemorySize() usize {
     return @intCast(build_options.shared_memory_size);
 }
 
-/// Public `RuntimeImageProgram` declaration.
-pub const RuntimeImageProgram = struct {
+/// Public `LirImageProgram` declaration.
+pub const LirImageProgram = struct {
     shm: SharedMemoryAllocator,
-    runtime_header: *RuntimeImage.Header,
-    view: RuntimeImage.ProgramView,
+    image_header: *LirImage.Header,
+    view: LirImage.ProgramView,
 
     /// First explicit LIR root for eval helpers. The root set was selected by
     /// checked-artifact publication and lowering; runtime evaluators must not
     /// rediscover roots from compiler data.
-    pub fn mainProc(self: *const RuntimeImageProgram) LirProcSpecId {
+    pub fn mainProc(self: *const LirImageProgram) LirProcSpecId {
         if (self.view.root_procs.len == 0) {
             if (builtin.mode == .Debug) {
-                std.debug.panic("eval runtime image invariant violated: no root procedures", .{});
+                std.debug.panic("eval LIR image invariant violated: no root procedures", .{});
             }
             unreachable;
         }
         return self.view.root_procs[0];
     }
 
-    pub fn deinit(self: *RuntimeImageProgram, allocator: Allocator) void {
+    pub fn deinit(self: *LirImageProgram, allocator: Allocator) void {
         self.shm.deinit(allocator);
     }
 };
 
 /// Public `LoweredProgram` declaration.
-pub const LoweredProgram = RuntimeImageProgram;
+pub const LoweredProgram = LirImageProgram;
 
 /// Public `CompiledProgram` declaration.
 pub const CompiledProgram = struct {
@@ -836,20 +836,20 @@ fn lowerParsedProgramToLir(
     resources: *ParsedResources,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
-    return lowerArtifactSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
+    return lowerCheckedModuleSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
 }
 
-/// Lower an already-published checked artifact set to a runtime image.
-pub fn lowerArtifactSetToLir(
+/// Lower already-published checked modules to a LIR image.
+pub fn lowerCheckedModuleSetToLir(
     allocator: Allocator,
-    root_artifact: *check.CheckedArtifact.CheckedModuleArtifact,
-    import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
+    root_module: *check.CheckedArtifact.CheckedModuleArtifact,
+    import_modules: []check.CheckedArtifact.CheckedModuleArtifact,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_artifacts.len);
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_modules.len);
     defer allocator.free(import_views);
-    for (import_artifacts, 0..) |*artifact, i| {
-        import_views[i] = check.CheckedArtifact.importedView(artifact);
+    for (import_modules, 0..) |*module, i| {
+        import_views[i] = check.CheckedArtifact.importedView(module);
     }
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -857,22 +857,22 @@ pub fn lowerArtifactSetToLir(
     errdefer shm.deinit(allocator);
 
     const shm_allocator = shm.allocator();
-    const runtime_header = try shm_allocator.create(RuntimeImage.Header);
+    const image_header = try shm_allocator.create(LirImage.Header);
 
-    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         shm_allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(root_artifact),
+            .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
         },
-        .{ .requests = root_artifact.root_requests.requests },
+        .{ .requests = root_module.root_requests.requests },
         .{
             .target_usize = target_usize,
         },
     );
 
-    try RuntimeImage.fillHeaderInSharedMemory(
-        runtime_header,
+    try LirImage.fillHeaderInSharedMemory(
+        image_header,
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
@@ -881,10 +881,10 @@ pub fn lowerArtifactSetToLir(
     );
     shm.updateHeader();
 
-    const view = try RuntimeImage.viewMappedImage(runtime_header, shm.base_ptr, shm.getUsedSize());
+    const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize());
     return .{
         .shm = shm,
-        .runtime_header = runtime_header,
+        .image_header = image_header,
         .view = view,
     };
 }

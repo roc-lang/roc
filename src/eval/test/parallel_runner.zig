@@ -22,10 +22,10 @@
 //!
 //! A single-threaded parent process manages up to N concurrent child
 //! processes (one per test). The parent runs the frontend once, lowers through
-//! checked artifacts to an ARC-inserted LIR runtime image, and allocates that
-//! image in shared memory. Children inherit or map that runtime image and run
-//! backend evaluation only; they never inspect CIR, checked artifacts, MIR, or
-//! IR. Children write only outcome text/metadata back through a pipe. The
+//! checked modules to an ARC-inserted LIR image, and allocates that
+//! image in shared memory. Children inherit or map that LIR image and run
+//! backend evaluation only; they never inspect CIR, checked modules, or
+//! post-check IRs. Children write only outcome text/metadata back through a pipe. The
 //! parent multiplexes pipe reads using poll().
 //!
 //! This avoids the fork-in-multithreaded-process hazard: forking from
@@ -221,10 +221,10 @@ const ForkResult = union(enum) {
 
 /// Fork a child process to evaluate a backend, communicating the result via pipe.
 ///
-/// The child calls `eval_fn(page_allocator, lowered_runtime_image)`, where
-/// `lowered_runtime_image` is already a zero-copy view over ARC-inserted LIR
+/// The child calls `eval_fn(page_allocator, lowered_lir_image)`, where
+/// `lowered_lir_image` is already a zero-copy view over ARC-inserted LIR
 /// allocated in shared memory. Backend children must not inspect CIR, checked
-/// artifacts, MIR, or IR; they write only the resulting string to the pipe and
+/// modules, or post-check IRs; they write only the resulting string to the pipe and
 /// `_exit(0)`. On error they `_exit(1)`.
 ///
 /// The parent reads the pipe until EOF (important: before waitpid to avoid pipe

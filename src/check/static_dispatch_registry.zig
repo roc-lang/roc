@@ -1,6 +1,6 @@
 //! Checked static-dispatch target registry and normalized dispatch-site records.
 //!
-//! The registry is built at the checked-artifact boundary. Later MIR stages use
+//! The registry is built at checked-module publication. Post-check lowering uses
 //! it as a target table only; the dispatch-site record chooses the dispatcher
 //! type variable explicitly.
 
@@ -135,7 +135,7 @@ pub const MethodRegistry = struct {
             const template = local_templates.templateForDef(def_idx) orelse {
                 // Associated values without arguments are checked field access,
                 // not static-dispatch call targets. The method registry is a
-                // procedure-target table for mono MIR static dispatch lowering,
+                // procedure-target table for Monotype static dispatch lowering,
                 // so only procedure-backed entries belong here.
                 continue;
             };
@@ -274,8 +274,8 @@ pub const IteratorDispatchOperand = union(enum) {
     loop_iterator_state,
 };
 
-/// Public `IteratorDispatchObligation` declaration.
-pub const IteratorDispatchObligation = struct {
+/// Public `IteratorDispatchCall` declaration.
+pub const IteratorDispatchCall = struct {
     method: canonical.MethodNameId,
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
@@ -285,8 +285,8 @@ pub const IteratorDispatchObligation = struct {
 
 /// Public `IteratorForPlan` declaration.
 pub const IteratorForPlan = struct {
-    iter: IteratorDispatchObligation,
-    next: IteratorDispatchObligation,
+    iter: IteratorDispatchCall,
+    next: IteratorDispatchCall,
     iterable: CheckedExprId,
     item_ty: CheckedTypeId,
     iterator_ty: CheckedTypeId,

@@ -269,7 +269,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [28]ModuleTest,
+    tests: []const ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -304,8 +304,6 @@ pub const ModuleType = enum {
     backend,
     lir,
     symbol,
-    mir,
-    ir,
     roc_target,
     sljmp,
     echo_platform,
@@ -330,8 +328,8 @@ pub const ModuleType = enum {
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp, .ipc },
-            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .mir, .ir, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
             .ipc => &.{},
             .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
             .watch => &.{.build_options},
@@ -340,10 +338,8 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
-            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .mir, .ir },
+            .lir => &.{ .base, .collections, .layout, .types, .can, .check },
             .symbol => &.{.base},
-            .mir => &.{ .base, .types, .can, .check, .symbol, .layout },
-            .ir => &.{ .base, .types, .symbol, .mir, .layout },
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
@@ -382,8 +378,6 @@ pub const RocModules = struct {
     backend: *Module,
     lir: *Module,
     symbol: *Module,
-    mir: *Module,
-    ir: *Module,
     roc_target: *Module,
     sljmp: *Module,
     echo_platform: *Module,
@@ -425,8 +419,6 @@ pub const RocModules = struct {
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
             .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
-            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
-            .ir = b.addModule("ir", .{ .root_source_file = b.path("src/ir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
@@ -474,8 +466,6 @@ pub const RocModules = struct {
             .backend,
             .lir,
             .symbol,
-            .mir,
-            .ir,
             .roc_target,
             .sljmp,
             .echo_platform,
@@ -519,8 +509,6 @@ pub const RocModules = struct {
         step.root_module.addImport("backend", self.backend);
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("symbol", self.symbol);
-        step.root_module.addImport("mir", self.mir);
-        step.root_module.addImport("ir", self.ir);
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
@@ -571,8 +559,6 @@ pub const RocModules = struct {
             .backend => self.backend,
             .lir => self.lir,
             .symbol => self.symbol,
-            .mir => self.mir,
-            .ir => self.ir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
             .echo_platform => self.echo_platform,
@@ -622,14 +608,13 @@ pub const RocModules = struct {
             .backend,
             .lir,
             .symbol,
-            .mir,
-            .ir,
             .sljmp,
             .echo_platform,
             .docs,
         };
 
-        var tests: [test_configs.len]ModuleTest = undefined;
+        const tests = b.allocator.alloc(ModuleTest, test_configs.len) catch
+            @panic("OOM while creating module tests");
         var forced_passes: usize = 0;
 
         inline for (test_configs, 0..) |module_type, i| {

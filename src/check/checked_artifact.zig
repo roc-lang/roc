@@ -16,6 +16,7 @@ const checked_ids = @import("checked_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
+const const_store = @import("const_store.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -115,6 +116,8 @@ pub const CheckedModuleArtifactKey = struct {
         };
     }
 };
+
+pub const ModuleId = CheckedModuleArtifactKey;
 
 fn computeCheckedArtifactKeyBytes(
     source_hash: [32]u8,
@@ -567,22 +570,11 @@ pub const RootRequest = struct {
 /// Public `LoweringEntrypointRequest` declaration.
 pub const LoweringEntrypointRequest = union(enum) {
     root: RootRequest,
-    const_instance: ConstInstantiationRequest,
-    callable_binding_instance: CallableBindingInstantiationRequest,
 };
 
 /// Public `CompileTimeEvaluationRequest` declaration.
 pub const CompileTimeEvaluationRequest = union(enum) {
     local_root: RootRequest,
-    const_instance: ConstInstantiationRequest,
-    callable_binding_instance: CallableBindingInstantiationRequest,
-};
-
-/// Public `CompileTimeEvaluationPayload` declaration.
-pub const CompileTimeEvaluationPayload = union(enum) {
-    local_root: CompileTimeRootPayload,
-    const_instance: ConstGraphReificationPlanId,
-    callable_binding_instance: CallableResultPlanId,
 };
 
 /// Public `RootRequestTable` declaration.
@@ -1177,11 +1169,17 @@ pub const CheckedExprId = checked_ids.CheckedExprId;
 pub const CheckedPatternId = checked_ids.CheckedPatternId;
 pub const CheckedStatementId = checked_ids.CheckedStatementId;
 pub const CheckedTypeId = checked_ids.CheckedTypeId;
+pub const ConstStore = const_store.ConstStore;
+pub const ConstNodeId = const_store.ConstNodeId;
+pub const ConstFnId = const_store.ConstFnId;
+pub const ConstValue = const_store.ConstValue;
+pub const ConstScalar = const_store.ConstScalar;
+pub const ConstNamedType = const_store.NamedType;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
 pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
 pub const IteratorForPlanId = static_dispatch.IteratorForPlanId;
 /// Public `PatternBinderId` declaration.
-pub const PatternBinderId = enum(u32) { _ };
+pub const PatternBinderId = checked_ids.PatternBinderId;
 
 /// Public `CheckedTypeRoot` declaration.
 pub const CheckedTypeRoot = struct {
@@ -5434,7 +5432,6 @@ fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
 /// Public `CheckedProcedureBody` declaration.
 pub const CheckedProcedureBody = union(enum) {
     checked_body: CheckedBodyId,
-    promoted_callable_wrapper: canonical.PromotedCallableWrapperId,
     intrinsic_wrapper: canonical.IntrinsicWrapperId,
     entry_wrapper: canonical.EntryWrapperId,
 };
@@ -5542,1068 +5539,6 @@ pub const EntryWrapperTable = struct {
     }
 };
 
-/// Public `PromotedWrapperParam` declaration.
-pub const PromotedWrapperParam = struct {
-    index: u32,
-    checked_ty: CheckedTypeId,
-    source_ty: canonical.CanonicalTypeKey,
-};
-
-/// Public `PrivateCaptureRef` declaration.
-pub const PrivateCaptureRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    owner: PromotedCaptureId,
-    node: PrivateCaptureNodeId,
-    source_ty_payload: CheckedTypeId,
-};
-
-/// Public `PrivateCaptureInstantiationKey` declaration.
-pub const PrivateCaptureInstantiationKey = struct {
-    capture_ref: PrivateCaptureRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
-};
-
-/// Public `PromotedWrapperArg` declaration.
-pub const PromotedWrapperArg = union(enum) {
-    param: u32,
-    private_capture: PrivateCaptureRef,
-};
-
-/// Public `ExecutableValueTransformPlanId` declaration.
-pub const ExecutableValueTransformPlanId = enum(u32) { _ };
-/// Public `SessionExecutableValueTransformId` declaration.
-pub const SessionExecutableValueTransformId = enum(u32) { _ };
-
-/// Public `PublishedExecutableValueTransformRef` declaration.
-pub const PublishedExecutableValueTransformRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    transform: ExecutableValueTransformPlanId,
-};
-
-/// Public `ExecutableValueTransformRef` declaration.
-pub const ExecutableValueTransformRef = union(enum) {
-    session: SessionExecutableValueTransformId,
-    published: PublishedExecutableValueTransformRef,
-};
-
-/// Public `ExecutableValueEndpoint` declaration.
-pub const ExecutableValueEndpoint = struct {
-    ty: ExecutableTypePayloadRef,
-    key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ValueTransformRecordField` declaration.
-pub const ValueTransformRecordField = struct {
-    field: canonical.RecordFieldLabelId,
-    transform: ExecutableValueTransformPlanId,
-};
-
-/// Public `ValueTransformTupleElem` declaration.
-pub const ValueTransformTupleElem = struct {
-    index: u32,
-    transform: ExecutableValueTransformPlanId,
-};
-
-/// Public `ValueTransformTagPayloadEdge` declaration.
-pub const ValueTransformTagPayloadEdge = struct {
-    source_payload_index: u32,
-    target_payload_index: u32,
-    transform: ExecutableValueTransformPlanId,
-};
-
-/// Public `ValueTransformTagCase` declaration.
-pub const ValueTransformTagCase = struct {
-    source_tag: canonical.TagLabelId,
-    target_tag: canonical.TagLabelId,
-    payloads: []const ValueTransformTagPayloadEdge = &.{},
-};
-
-/// Public `BoxPayloadTransformKind` declaration.
-pub const BoxPayloadTransformKind = enum {
-    payload_to_box,
-    box_to_payload,
-    box_to_box,
-};
-
-/// Public `BoxPayloadTransformPlan` declaration.
-pub const BoxPayloadTransformPlan = struct {
-    boundary: ?canonical.BoxBoundaryId = null,
-    kind: BoxPayloadTransformKind,
-    payload: ExecutableValueTransformPlanId,
-};
-
-/// Public `ExecutableValueTransformOp` declaration.
-pub const ExecutableValueTransformOp = union(enum) {
-    identity,
-    structural_bridge: ExecutableStructuralBridgePlan,
-    record: []const ValueTransformRecordField,
-    tuple: []const ValueTransformTupleElem,
-    tag_union: []const ValueTransformTagCase,
-    nominal: struct {
-        nominal: canonical.NominalTypeKey,
-        source_ty: canonical.CanonicalTypeKey,
-        backing: ExecutableValueTransformPlanId,
-    },
-    list: struct {
-        elem: ExecutableValueTransformPlanId,
-    },
-    box_payload: BoxPayloadTransformPlan,
-    callable_to_erased: CallableToErasedTransformPlan,
-    already_erased_callable: AlreadyErasedCallableTransformPlan,
-};
-
-/// Public `ExecutableStructuralBridgePlan` declaration.
-pub const ExecutableStructuralBridgePlan = union(enum) {
-    direct,
-    zst,
-    list_reinterpret,
-    nominal_reinterpret,
-    box_unbox: ExecutableValueTransformPlanId,
-    box_box: ExecutableValueTransformPlanId,
-    singleton_to_tag_union: struct {
-        source_tag: canonical.TagLabelId,
-        target_tag: canonical.TagLabelId,
-        value_transform: ?ExecutableValueTransformPlanId = null,
-    },
-    tag_union_to_singleton: struct {
-        source_tag: canonical.TagLabelId,
-        target_tag: canonical.TagLabelId,
-        value_transform: ?ExecutableValueTransformPlanId = null,
-    },
-};
-
-/// Public `CallableToErasedTransformPlan` declaration.
-pub const CallableToErasedTransformPlan = union(enum) {
-    finite_value: FiniteCallableValueToErasedPlan,
-    proc_value: ProcValueToErasedPlan,
-};
-
-/// Public `FiniteCallableValueToErasedPlan` declaration.
-pub const FiniteCallableValueToErasedPlan = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    callable_set_key: canonical.CanonicalCallableSetKey,
-    adapter_key: canonical.ErasedAdapterKey,
-    adapter_branches: []const PublishedFiniteSetEraseAdapterBranchPlan = &.{},
-};
-
-/// Public `PublishedFiniteSetEraseAdapterBranchPlan` declaration.
-pub const PublishedFiniteSetEraseAdapterBranchPlan = struct {
-    member: canonical.CallableSetMemberRef,
-    member_proc_source_fn_ty_payload: CheckedTypeId,
-    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
-    target_key: canonical.ExecutableSpecializationKey,
-    arg_transforms: []const PublishedExecutableValueTransformRef = &.{},
-    capture_transforms: []const PublishedExecutableValueTransformRef = &.{},
-    result_transform: PublishedExecutableValueTransformRef,
-};
-
-/// Public `ErasedCallableBoundary` declaration.
-pub const ErasedCallableBoundary = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    checked_fn_root: CheckedTypeId,
-    sig_key: canonical.ErasedFnSigKey,
-    provenance: []const BoxErasureProvenance,
-};
-
-/// Public `SealedDirectErasedProc` declaration.
-pub const SealedDirectErasedProc = struct {
-    code: canonical.ErasedDirectProcCodeRef,
-};
-
-/// Public `SealedFiniteErasedAdapterMember` declaration.
-pub const SealedFiniteErasedAdapterMember = struct {
-    member: canonical.CallableSetMemberRef,
-    source_proc: canonical.MirProcedureRef,
-    proc_value: canonical.ProcedureCallableRef,
-    member_proc_source_fn_ty_payload: CheckedTypeId,
-    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
-    target_key: canonical.ExecutableSpecializationKey,
-    arg_transforms: []const PublishedExecutableValueTransformRef = &.{},
-    capture_transforms: []const PublishedExecutableValueTransformRef = &.{},
-    result_transform: PublishedExecutableValueTransformRef,
-};
-
-/// Public `SealedFiniteErasedAdapter` declaration.
-pub const SealedFiniteErasedAdapter = struct {
-    adapter_key: canonical.ErasedAdapterKey,
-    members: []const SealedFiniteErasedAdapterMember,
-};
-
-/// Public `SealedErasedCallableCode` declaration.
-pub const SealedErasedCallableCode = union(enum) {
-    direct_proc: SealedDirectErasedProc,
-    finite_adapter: SealedFiniteErasedAdapter,
-};
-
-/// Public `SealedErasedCallableValue` declaration.
-pub const SealedErasedCallableValue = struct {
-    boundary: ErasedCallableBoundary,
-    code: SealedErasedCallableCode,
-    capture: ErasedCaptureExecutableMaterializationPlan,
-};
-
-/// Public `ProcValueToErasedPlan` declaration.
-pub const ProcValueToErasedPlan = struct {
-    proc_value: canonical.ProcedureCallableRef,
-    erased_fn_sig_key: canonical.ErasedFnSigKey,
-    capture_shape_key: canonical.CaptureShapeKey,
-    executable_specialization_key: canonical.ExecutableSpecializationKey,
-    capture: ErasedCaptureExecutableMaterializationPlan,
-};
-
-/// Public `AlreadyErasedCallableTransformPlan` declaration.
-pub const AlreadyErasedCallableTransformPlan = union(enum) {
-    /// Source and target endpoints have the same erased source function type
-    /// and erased ABI. Lowering verifies both endpoints against this signature.
-    exact: canonical.ErasedFnSigKey,
-
-    /// Source and target endpoints use the same erased ABI but have different
-    /// canonical source function identities, for example a transparent function
-    /// type alias versus its expanded function type. This is a typed executable
-    /// reclassification of the same runtime erased callable value; it must not
-    /// allocate, repack, or synthesize an adapter.
-    same_abi_retype: struct {
-        source_sig: canonical.ErasedFnSigKey,
-        target_sig: canonical.ErasedFnSigKey,
-    },
-};
-
-/// Public `ConstGraphBoxErasureWitness` declaration.
-pub const ConstGraphBoxErasureWitness = struct {
-    artifact: CheckedModuleArtifactKey,
-    box_plan: ConstGraphReificationPlanId,
-};
-
-/// Public `BoxErasureProvenance` declaration.
-pub const BoxErasureProvenance = union(enum) {
-    /// Local Box(T) boundary from the representation solve session that created the erased value.
-    /// This is not artifact-stable and must not be stored in compile-time values.
-    local_box_boundary: canonical.BoxBoundaryId,
-    /// Stable checked-artifact Box(T) witness for an already-reified compile-time value.
-    const_graph_box: ConstGraphBoxErasureWitness,
-    /// Promoted executable wrapper whose sealed plan already carries Box(T) erasure authorization.
-    promoted_wrapper: canonical.MirProcedureRef,
-};
-
-/// Public `ValueTransformProvenance` declaration.
-pub const ValueTransformProvenance = union(enum) {
-    none,
-    box_erasure: []const BoxErasureProvenance,
-};
-
-/// Public `ExecutableValueTransformPlan` declaration.
-pub const ExecutableValueTransformPlan = struct {
-    from: ExecutableValueEndpoint,
-    to: ExecutableValueEndpoint,
-    provenance: ValueTransformProvenance = .none,
-    op: ExecutableValueTransformOp,
-};
-
-/// Public `ExecutableValueTransformPlanStore` declaration.
-pub const ExecutableValueTransformPlanStore = struct {
-    plans: []ExecutableValueTransformPlan = &.{},
-
-    pub fn append(
-        self: *ExecutableValueTransformPlanStore,
-        allocator: Allocator,
-        plan: ExecutableValueTransformPlan,
-    ) Allocator.Error!ExecutableValueTransformPlanId {
-        const id: ExecutableValueTransformPlanId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
-        const old = self.plans;
-        const next = try allocator.alloc(ExecutableValueTransformPlan, old.len + 1);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = plan;
-        allocator.free(old);
-        self.plans = next;
-        return id;
-    }
-
-    pub fn get(self: *const ExecutableValueTransformPlanStore, id: ExecutableValueTransformPlanId) ExecutableValueTransformPlan {
-        const index = @intFromEnum(id);
-        if (index >= self.plans.len) {
-            checkedArtifactInvariant("executable value transform id is out of range", .{});
-        }
-        return self.plans[index];
-    }
-
-    pub fn verifyPublished(
-        self: *const ExecutableValueTransformPlanStore,
-        payloads: *const ExecutableTypePayloadStore,
-        artifact_key: CheckedModuleArtifactKey,
-    ) void {
-        if (builtin.mode != .Debug) return;
-        for (self.plans) |plan| {
-            verifyExecutableTypePayloadRefKey(payloads, artifact_key, plan.from.ty, plan.from.key);
-            verifyExecutableTypePayloadRefKey(payloads, artifact_key, plan.to.ty, plan.to.key);
-            verifyValueTransformProvenance(plan.provenance);
-            switch (plan.op) {
-                .callable_to_erased => switch (plan.provenance) {
-                    .box_erasure => {},
-                    .none => std.debug.panic("checked artifact invariant violated: callable-to-erased transform has no Box(T) provenance", .{}),
-                },
-                .already_erased_callable => |erased| verifyAlreadyErasedCallableTransformPlan(payloads, plan, erased),
-                else => {},
-            }
-            verifyExecutableValueTransformOp(self, plan.op);
-        }
-    }
-
-    pub fn deinit(self: *ExecutableValueTransformPlanStore, allocator: Allocator) void {
-        for (self.plans) |*plan| deinitExecutableValueTransformPlan(allocator, plan);
-        allocator.free(self.plans);
-        self.* = .{};
-    }
-};
-
-/// Public `ExecutableTypePayloadId` declaration.
-pub const ExecutableTypePayloadId = enum(u32) { _ };
-
-/// Public `ExecutableTypePayloadRef` declaration.
-pub const ExecutableTypePayloadRef = struct {
-    artifact: canonical.ArtifactRef,
-    payload: ExecutableTypePayloadId,
-};
-
-/// Public `ExecutablePrimitive` declaration.
-pub const ExecutablePrimitive = enum {
-    bool,
-    str,
-    u8,
-    i8,
-    u16,
-    i16,
-    u32,
-    i32,
-    u64,
-    i64,
-    u128,
-    i128,
-    f32,
-    f64,
-    dec,
-    erased,
-};
-
-/// Public `ExecutableTypePayloadChild` declaration.
-pub const ExecutableTypePayloadChild = struct {
-    ty: ExecutableTypePayloadRef,
-    key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ExecutableRecordFieldPayload` declaration.
-pub const ExecutableRecordFieldPayload = struct {
-    field: canonical.RecordFieldLabelId,
-    ty: ExecutableTypePayloadRef,
-    key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ExecutableTupleElemPayload` declaration.
-pub const ExecutableTupleElemPayload = struct {
-    index: u32,
-    ty: ExecutableTypePayloadRef,
-    key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ExecutableTagPayload` declaration.
-pub const ExecutableTagPayload = struct {
-    index: u32,
-    ty: ExecutableTypePayloadRef,
-    key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ExecutableTagVariantPayload` declaration.
-pub const ExecutableTagVariantPayload = struct {
-    tag: canonical.TagLabelId,
-    payloads: []const ExecutableTagPayload = &.{},
-};
-
-/// Public `ExecutableNominalPayload` declaration.
-pub const ExecutableNominalPayload = struct {
-    nominal: canonical.NominalTypeKey,
-    source_ty: canonical.CanonicalTypeKey,
-    source_ty_payload: ArtifactCheckedTypeRef,
-    is_opaque: bool,
-    backing: ExecutableTypePayloadRef,
-    backing_key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ExecutableCallableSetMemberPayload` declaration.
-pub const ExecutableCallableSetMemberPayload = struct {
-    member: canonical.CallableSetMemberId,
-    payload_ty: ?ExecutableTypePayloadRef = null,
-    payload_ty_key: ?canonical.CanonicalExecValueTypeKey = null,
-};
-
-/// Public `ExecutableCallableSetPayload` declaration.
-pub const ExecutableCallableSetPayload = struct {
-    key: canonical.CanonicalCallableSetKey,
-    members: []const ExecutableCallableSetMemberPayload = &.{},
-};
-
-/// Public `ExecutableErasedFnPayload` declaration.
-pub const ExecutableErasedFnPayload = struct {
-    sig_key: canonical.ErasedFnSigKey,
-    capture_shape_key: canonical.CaptureShapeKey,
-    capture_ty: ?ExecutableTypePayloadRef = null,
-    capture_ty_key: ?canonical.CanonicalExecValueTypeKey = null,
-};
-
-/// Public `ExecutableTypePayload` declaration.
-pub const ExecutableTypePayload = union(enum) {
-    pending,
-    primitive: ExecutablePrimitive,
-    record: []const ExecutableRecordFieldPayload,
-    tuple: []const ExecutableTupleElemPayload,
-    tag_union: []const ExecutableTagVariantPayload,
-    list: ExecutableTypePayloadChild,
-    box: ExecutableTypePayloadChild,
-    nominal: ExecutableNominalPayload,
-    callable_set: ExecutableCallableSetPayload,
-    erased_fn: ExecutableErasedFnPayload,
-    vacant_callable_slot,
-    recursive_ref: ExecutableTypePayloadId,
-};
-
-/// Public `ExecutableTypePayloadEntry` declaration.
-pub const ExecutableTypePayloadEntry = struct {
-    key: canonical.CanonicalExecValueTypeKey,
-    payload: ExecutableTypePayload,
-};
-
-/// Public `ExecutableTypePayloadStore` declaration.
-pub const ExecutableTypePayloadStore = struct {
-    entries: []ExecutableTypePayloadEntry = &.{},
-    by_key: std.AutoHashMap(canonical.CanonicalExecValueTypeKey, ExecutableTypePayloadId),
-
-    pub fn init(allocator: Allocator) ExecutableTypePayloadStore {
-        return .{
-            .by_key = std.AutoHashMap(canonical.CanonicalExecValueTypeKey, ExecutableTypePayloadId).init(allocator),
-        };
-    }
-
-    pub fn reserve(
-        self: *ExecutableTypePayloadStore,
-        allocator: Allocator,
-        key: canonical.CanonicalExecValueTypeKey,
-    ) Allocator.Error!ExecutableTypePayloadId {
-        if (self.by_key.get(key) != null) checkedArtifactInvariant("executable type payload reserve saw duplicate key", .{});
-        return try self.appendNew(allocator, key, .pending);
-    }
-
-    pub fn append(
-        self: *ExecutableTypePayloadStore,
-        allocator: Allocator,
-        key: canonical.CanonicalExecValueTypeKey,
-        payload: ExecutableTypePayload,
-    ) Allocator.Error!ExecutableTypePayloadId {
-        if (self.by_key.get(key)) |existing| {
-            var duplicate = payload;
-            deinitExecutableTypePayload(allocator, &duplicate);
-            return existing;
-        }
-        return try self.appendNew(allocator, key, payload);
-    }
-
-    pub fn replaceDerived(
-        self: *ExecutableTypePayloadStore,
-        allocator: Allocator,
-        key: canonical.CanonicalExecValueTypeKey,
-        payload: ExecutableTypePayload,
-    ) Allocator.Error!ExecutableTypePayloadId {
-        if (self.by_key.get(key)) |existing| {
-            const index = @intFromEnum(existing);
-            if (index >= self.entries.len) {
-                checkedArtifactInvariant("executable type payload id is out of range", .{});
-            }
-            deinitExecutableTypePayload(allocator, &self.entries[index].payload);
-            self.entries[index].payload = payload;
-            return existing;
-        }
-        return try self.appendNew(allocator, key, payload);
-    }
-
-    fn appendNew(
-        self: *ExecutableTypePayloadStore,
-        allocator: Allocator,
-        key: canonical.CanonicalExecValueTypeKey,
-        payload: ExecutableTypePayload,
-    ) Allocator.Error!ExecutableTypePayloadId {
-        const id: ExecutableTypePayloadId = @enumFromInt(@as(u32, @intCast(self.entries.len)));
-        const old = self.entries;
-        const next = try allocator.alloc(ExecutableTypePayloadEntry, old.len + 1);
-        errdefer allocator.free(next);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = .{
-            .key = key,
-            .payload = payload,
-        };
-        try self.by_key.put(key, id);
-        allocator.free(old);
-        self.entries = next;
-        return id;
-    }
-
-    pub fn fill(
-        self: *ExecutableTypePayloadStore,
-        id: ExecutableTypePayloadId,
-        payload: ExecutableTypePayload,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.entries.len) {
-            checkedArtifactInvariant("executable type payload id is out of range", .{});
-        }
-        switch (payload) {
-            .pending => checkedArtifactInvariant("cannot fill executable type payload with pending", .{}),
-            else => {},
-        }
-        switch (self.entries[index].payload) {
-            .pending => self.entries[index].payload = payload,
-            else => checkedArtifactInvariant("executable type payload was filled twice", .{}),
-        }
-    }
-
-    pub fn get(self: *const ExecutableTypePayloadStore, id: ExecutableTypePayloadId) ExecutableTypePayload {
-        const index = @intFromEnum(id);
-        if (index >= self.entries.len) {
-            checkedArtifactInvariant("executable type payload id is out of range", .{});
-        }
-        return self.entries[index].payload;
-    }
-
-    pub fn keyFor(self: *const ExecutableTypePayloadStore, id: ExecutableTypePayloadId) canonical.CanonicalExecValueTypeKey {
-        const index = @intFromEnum(id);
-        if (index >= self.entries.len) {
-            checkedArtifactInvariant("executable type payload id is out of range", .{});
-        }
-        return self.entries[index].key;
-    }
-
-    pub fn refForKey(
-        self: *const ExecutableTypePayloadStore,
-        artifact: canonical.ArtifactRef,
-        key: canonical.CanonicalExecValueTypeKey,
-    ) ?ExecutableTypePayloadRef {
-        const id = self.by_key.get(key) orelse return null;
-        return .{
-            .artifact = artifact,
-            .payload = id,
-        };
-    }
-
-    pub fn verifyPublished(
-        self: *const ExecutableTypePayloadStore,
-        artifact_key: CheckedModuleArtifactKey,
-        erased_fn_abis: *const canonical.ErasedFnAbiStore,
-    ) void {
-        if (builtin.mode != .Debug) return;
-        for (self.entries, 0..) |entry, i| {
-            const indexed = self.by_key.get(entry.key) orelse {
-                std.debug.panic("checked artifact invariant violated: executable type payload key was missing from index", .{});
-            };
-            if (@intFromEnum(indexed) != i) {
-                std.debug.panic("checked artifact invariant violated: executable type payload key index pointed at the wrong entry", .{});
-            }
-            verifyExecutableTypePayload(self, artifact_key, erased_fn_abis, entry.payload);
-        }
-        for (erased_fn_abis.abis) |abi| {
-            if (self.by_key.get(abi.ret_exec_key) == null) {
-                std.debug.panic("checked artifact invariant violated: erased ABI result key has no executable type payload", .{});
-            }
-            for (abi.arg_exec_keys) |arg_key| {
-                if (self.by_key.get(arg_key) == null) {
-                    std.debug.panic("checked artifact invariant violated: erased ABI argument key has no executable type payload", .{});
-                }
-            }
-        }
-    }
-
-    pub fn deinit(self: *ExecutableTypePayloadStore, allocator: Allocator) void {
-        for (self.entries) |*entry| deinitExecutableTypePayload(allocator, &entry.payload);
-        allocator.free(self.entries);
-        self.by_key.deinit();
-        self.* = ExecutableTypePayloadStore.init(allocator);
-    }
-};
-
-/// Public `CallableSetDescriptorStore` declaration.
-pub const CallableSetDescriptorStore = struct {
-    descriptors: []const canonical.CanonicalCallableSetDescriptor = &.{},
-
-    pub fn descriptorFor(
-        self: *const CallableSetDescriptorStore,
-        key: canonical.CanonicalCallableSetKey,
-    ) ?*const canonical.CanonicalCallableSetDescriptor {
-        for (self.descriptors) |*descriptor| {
-            if (canonicalCallableSetKeyEql(descriptor.key, key)) return descriptor;
-        }
-        return null;
-    }
-
-    pub fn publishFromDescriptors(
-        self: *CallableSetDescriptorStore,
-        allocator: Allocator,
-        source_descriptors: []const canonical.CanonicalCallableSetDescriptor,
-    ) Allocator.Error!void {
-        if (source_descriptors.len == 0) return;
-
-        var additions = std.ArrayList(canonical.CanonicalCallableSetDescriptor).empty;
-        defer additions.deinit(allocator);
-        for (source_descriptors) |source| {
-            if (self.descriptorFor(source.key)) |existing| {
-                if (!canonicalCallableSetDescriptorEql(existing.*, source)) {
-                    checkedArtifactInvariant("callable-set descriptor store was already published with different descriptor contents", .{});
-                }
-                continue;
-            }
-
-            var duplicate_addition = false;
-            for (additions.items) |existing| {
-                if (!canonicalCallableSetKeyEql(existing.key, source.key)) continue;
-                duplicate_addition = true;
-                if (!canonicalCallableSetDescriptorEql(existing, source)) {
-                    checkedArtifactInvariant("duplicate callable-set descriptor key has different descriptor contents", .{});
-                }
-                break;
-            }
-            if (!duplicate_addition) try additions.append(allocator, source);
-        }
-        if (additions.items.len == 0) {
-            return;
-        }
-
-        const old = self.descriptors;
-        const copied = try allocator.alloc(canonical.CanonicalCallableSetDescriptor, old.len + additions.items.len);
-        errdefer allocator.free(copied);
-        @memcpy(copied[0..old.len], old);
-
-        var descriptor_count: usize = old.len;
-        errdefer {
-            for (copied[old.len..descriptor_count]) |descriptor| {
-                for (descriptor.members) |member| allocator.free(member.capture_slots);
-                allocator.free(descriptor.members);
-            }
-        }
-
-        for (additions.items) |descriptor| {
-            const members = try cloneCallableSetMembers(allocator, descriptor.members);
-            copied[descriptor_count] = .{
-                .key = descriptor.key,
-                .members = members,
-            };
-            descriptor_count += 1;
-        }
-
-        self.descriptors = copied;
-        if (old.len != 0) allocator.free(old);
-    }
-
-    pub fn deinit(self: *CallableSetDescriptorStore, allocator: Allocator) void {
-        for (self.descriptors) |descriptor| {
-            for (descriptor.members) |member| allocator.free(member.capture_slots);
-            allocator.free(descriptor.members);
-        }
-        allocator.free(self.descriptors);
-        self.* = .{};
-    }
-
-    pub fn verifyPublished(self: *const CallableSetDescriptorStore) void {
-        if (builtin.mode != .Debug) return;
-
-        for (self.descriptors, 0..) |descriptor, i| {
-            verifyCallableSetDescriptor(descriptor);
-            for (self.descriptors[i + 1 ..]) |other| {
-                if (!canonicalCallableSetKeyEql(descriptor.key, other.key)) continue;
-                if (!canonicalCallableSetDescriptorEql(descriptor, other)) {
-                    std.debug.panic("checked artifact invariant violated: duplicate callable-set descriptor key has different descriptor", .{});
-                }
-            }
-        }
-    }
-};
-
-fn cloneCallableSetMembers(
-    allocator: Allocator,
-    source_members: []const canonical.CanonicalCallableSetMember,
-) Allocator.Error![]const canonical.CanonicalCallableSetMember {
-    const members = try allocator.alloc(canonical.CanonicalCallableSetMember, source_members.len);
-    errdefer allocator.free(members);
-    var member_count: usize = 0;
-    errdefer {
-        for (members[0..member_count]) |member| allocator.free(member.capture_slots);
-    }
-
-    for (source_members, 0..) |member, i| {
-        const capture_slots = try allocator.dupe(canonical.CallableSetCaptureSlot, member.capture_slots);
-        members[i] = .{
-            .member = member.member,
-            .proc_value = member.proc_value,
-            .source_proc = member.source_proc,
-            .capture_slots = capture_slots,
-            .capture_shape_key = member.capture_shape_key,
-        };
-        member_count += 1;
-    }
-
-    return members;
-}
-
-/// Public `ExecutableProcedureParamPayload` declaration.
-pub const ExecutableProcedureParamPayload = struct {
-    param: PromotedWrapperParam,
-    exec_ty: ExecutableTypePayloadRef,
-    exec_ty_key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ExecutableHiddenCapturePayload` declaration.
-pub const ExecutableHiddenCapturePayload = struct {
-    exec_ty: ExecutableTypePayloadRef,
-    exec_ty_key: canonical.CanonicalExecValueTypeKey,
-};
-
-/// Public `ErasedPromotedProcedureExecutableSignaturePayloads` declaration.
-pub const ErasedPromotedProcedureExecutableSignaturePayloads = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    param_exec_tys: []const ExecutableTypePayloadRef = &.{},
-    param_exec_ty_keys: []const canonical.CanonicalExecValueTypeKey = &.{},
-    wrapper_ret: ExecutableTypePayloadRef,
-    wrapper_ret_key: canonical.CanonicalExecValueTypeKey,
-    erased_call_args: []const ExecutableTypePayloadRef = &.{},
-    erased_call_arg_keys: []const canonical.CanonicalExecValueTypeKey = &.{},
-    erased_call_ret: ExecutableTypePayloadRef,
-    erased_call_ret_key: canonical.CanonicalExecValueTypeKey,
-    hidden_capture: ?ExecutableHiddenCapturePayload = null,
-    capture_shape_key: canonical.CaptureShapeKey,
-};
-
-/// Public `ErasedPromotedProcedureExecutableSignature` declaration.
-pub const ErasedPromotedProcedureExecutableSignature = struct {
-    specialization_key: canonical.ExecutableSpecializationKey,
-    source_fn_ty: canonical.CanonicalTypeKey,
-    wrapper_params: []const ExecutableProcedureParamPayload = &.{},
-    wrapper_ret: ExecutableTypePayloadRef,
-    wrapper_ret_key: canonical.CanonicalExecValueTypeKey,
-    erased_call_args: []const ExecutableTypePayloadRef = &.{},
-    erased_call_arg_keys: []const canonical.CanonicalExecValueTypeKey = &.{},
-    erased_call_ret: ExecutableTypePayloadRef,
-    erased_call_ret_key: canonical.CanonicalExecValueTypeKey,
-    hidden_capture: ?ExecutableHiddenCapturePayload = null,
-};
-
-/// Public `ExecutableSpecializationEndpoint` declaration.
-pub const ExecutableSpecializationEndpoint = struct {
-    requested_fn_ty: canonical.CanonicalTypeKey,
-    exec_arg_tys: []const canonical.CanonicalExecValueTypeKey,
-    exec_ret_ty: canonical.CanonicalExecValueTypeKey,
-    callable_repr_mode: canonical.CallableReprMode,
-    capture_shape_key: canonical.CaptureShapeKey,
-};
-
-/// Public `CallableResultMemberTargetPlan` declaration.
-pub const CallableResultMemberTargetPlan = union(enum) {
-    artifact_owned: canonical.ExecutableSpecializationKey,
-    member_proc_relative: ExecutableSpecializationEndpoint,
-};
-
-/// Public `FinitePromotedWrapperBodyPlan` declaration.
-pub const FinitePromotedWrapperBodyPlan = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    callable_set_key: canonical.CanonicalCallableSetKey,
-    member: canonical.CallableSetMemberId,
-    member_proc: canonical.ProcedureCallableRef,
-    member_proc_source_fn_ty_payload: CheckedTypeId,
-    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
-    member_proc_template_closure: ?ImportedTemplateClosureView = null,
-    member_lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
-    member_target: CallableResultMemberTargetPlan,
-    member_target_promoted_wrapper: ?canonical.MirProcedureRef = null,
-    member_capture_shape: canonical.CaptureShapeKey,
-    member_capture_slots: []const canonical.CallableSetCaptureSlot = &.{},
-    captures: []const PrivateCaptureRef = &.{},
-    params: []const PromotedWrapperParam = &.{},
-    call_args: []const PromotedWrapperArg = &.{},
-};
-
-/// Public `ErasedHiddenCaptureArgPlan` declaration.
-pub const ErasedHiddenCaptureArgPlan = union(enum) {
-    none,
-    materialized_capture: ErasedCaptureExecutableMaterializationPlan,
-};
-
-/// Public `ErasedCaptureExecutableMaterializationPlan` declaration.
-pub const ErasedCaptureExecutableMaterializationPlan = union(enum) {
-    none,
-    zero_sized_typed: canonical.CanonicalExecValueTypeKey,
-    node: ErasedCaptureExecutableMaterializationNodeId,
-};
-
-/// Public `ArtifactErasedCaptureMaterializationRef` declaration.
-pub const ArtifactErasedCaptureMaterializationRef = struct {
-    owner: CheckedModuleArtifactKey,
-    capture: ErasedCaptureExecutableMaterializationPlan,
-};
-
-/// Public `NoReachableCallableSlotsProof` declaration.
-pub const NoReachableCallableSlotsProof = enum {
-    checked_artifact_verified,
-};
-
-/// Public `PureConstInstanceRef` declaration.
-pub const PureConstInstanceRef = struct {
-    const_instance: ConstInstanceRef,
-    no_reachable_callable_slots: NoReachableCallableSlotsProof,
-};
-
-/// Public `PureComptimeValueRef` declaration.
-pub const PureComptimeValueRef = struct {
-    schema: ComptimeSchemaId,
-    value: ComptimeValueId,
-    no_reachable_callable_slots: NoReachableCallableSlotsProof,
-};
-
-/// Public `ErasedCaptureExecutableMaterializationRecordField` declaration.
-pub const ErasedCaptureExecutableMaterializationRecordField = struct {
-    field: canonical.RecordFieldLabelId,
-    value: ErasedCaptureExecutableMaterializationPlan,
-};
-
-/// Public `ErasedCaptureExecutableMaterializationTagPayload` declaration.
-pub const ErasedCaptureExecutableMaterializationTagPayload = struct {
-    index: u32,
-    value: ErasedCaptureExecutableMaterializationPlan,
-};
-
-/// Public `ErasedCaptureExecutableMaterializationTagNode` declaration.
-pub const ErasedCaptureExecutableMaterializationTagNode = struct {
-    tag: canonical.TagLabelId,
-    payloads: []const ErasedCaptureExecutableMaterializationTagPayload,
-};
-
-/// Public `MaterializedFiniteCallableSetValue` declaration.
-pub const MaterializedFiniteCallableSetValue = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    callable_set_key: canonical.CanonicalCallableSetKey,
-    selected_member: canonical.CallableSetMemberId,
-    selected_proc: canonical.ProcedureCallableRef,
-    selected_source_proc: canonical.MirProcedureRef,
-    member_proc_source_fn_ty_payload: CheckedTypeId,
-    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
-    member_proc_template_closure: ?ImportedTemplateClosureView = null,
-    member_lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
-    captures: []const ErasedCaptureExecutableMaterializationPlan = &.{},
-};
-
-/// Public `MaterializedErasedCallableValue` declaration.
-pub const MaterializedErasedCallableValue = struct {
-    sealed: SealedErasedCallableValue,
-};
-
-/// Public `ErasedCaptureExecutableMaterializationNode` declaration.
-pub const ErasedCaptureExecutableMaterializationNode = union(enum) {
-    pending,
-    const_instance: ConstInstanceRef,
-    pure_const: PureConstInstanceRef,
-    pure_value: PureComptimeValueRef,
-    finite_callable_set: MaterializedFiniteCallableSetValue,
-    erased_callable: MaterializedErasedCallableValue,
-    record: []const ErasedCaptureExecutableMaterializationRecordField,
-    tuple: []const ErasedCaptureExecutableMaterializationPlan,
-    tag_union: ErasedCaptureExecutableMaterializationTagNode,
-    list: []const ErasedCaptureExecutableMaterializationPlan,
-    box: ErasedCaptureExecutableMaterializationPlan,
-    nominal: struct {
-        nominal: canonical.NominalTypeKey,
-        backing: ErasedCaptureExecutableMaterializationPlan,
-    },
-    recursive_ref: ErasedCaptureExecutableMaterializationNodeId,
-};
-
-/// Public `ErasedPromotedWrapperBodyPlan` declaration.
-pub const ErasedPromotedWrapperBodyPlan = struct {
-    sealed: SealedErasedCallableValue,
-    params: []const PromotedWrapperParam = &.{},
-    executable_signature: ErasedPromotedProcedureExecutableSignature,
-    arg_transforms: []const PublishedExecutableValueTransformRef = &.{},
-    hidden_capture_arg: ErasedHiddenCaptureArgPlan = .none,
-    result_transform: PublishedExecutableValueTransformRef,
-};
-
-/// Public `PromotedCallableBodyPlan` declaration.
-pub const PromotedCallableBodyPlan = union(enum) {
-    pending,
-    finite: FinitePromotedWrapperBodyPlan,
-    erased: ErasedPromotedWrapperBodyPlan,
-};
-
-/// Public `PromotedCallableBodyPlanTable` declaration.
-pub const PromotedCallableBodyPlanTable = struct {
-    plans: []PromotedCallableBodyPlan = &.{},
-
-    pub fn append(
-        self: *PromotedCallableBodyPlanTable,
-        allocator: Allocator,
-        plan: PromotedCallableBodyPlan,
-    ) Allocator.Error!canonical.PromotedCallableBodyPlanId {
-        const id: canonical.PromotedCallableBodyPlanId = @enumFromInt(@as(u32, @intCast(self.plans.len)));
-        const old = self.plans;
-        const next = try allocator.alloc(PromotedCallableBodyPlan, old.len + 1);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = plan;
-        allocator.free(old);
-        self.plans = next;
-        return id;
-    }
-
-    pub fn reserve(
-        self: *PromotedCallableBodyPlanTable,
-        allocator: Allocator,
-    ) Allocator.Error!canonical.PromotedCallableBodyPlanId {
-        return try self.append(allocator, .pending);
-    }
-
-    pub fn fill(
-        self: *PromotedCallableBodyPlanTable,
-        id: canonical.PromotedCallableBodyPlanId,
-        plan: PromotedCallableBodyPlan,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.plans.len) {
-            checkedArtifactInvariant("promoted callable body plan id is out of range", .{});
-        }
-        switch (plan) {
-            .pending => checkedArtifactInvariant("cannot fill promoted callable body plan with pending", .{}),
-            .finite, .erased => {},
-        }
-        switch (self.plans[index]) {
-            .pending => self.plans[index] = plan,
-            .finite, .erased => checkedArtifactInvariant("promoted callable body plan was filled twice", .{}),
-        }
-    }
-
-    pub fn get(self: *const PromotedCallableBodyPlanTable, id: canonical.PromotedCallableBodyPlanId) PromotedCallableBodyPlan {
-        const index = @intFromEnum(id);
-        if (index >= self.plans.len) {
-            checkedArtifactInvariant("promoted callable body plan id is out of range", .{});
-        }
-        return self.plans[index];
-    }
-
-    pub fn verifyPublished(
-        self: *const PromotedCallableBodyPlanTable,
-        plans: *const CompileTimePlanStore,
-        checked_types: *const CheckedTypeStore,
-        executable_type_payloads: *const ExecutableTypePayloadStore,
-        executable_value_transforms: *const ExecutableValueTransformPlanStore,
-        erased_fn_abis: *const canonical.ErasedFnAbiStore,
-        artifact_key: CheckedModuleArtifactKey,
-    ) void {
-        if (builtin.mode != .Debug) return;
-
-        for (self.plans) |plan| verifyPromotedCallableBodyPlan(
-            plans,
-            checked_types,
-            executable_type_payloads,
-            executable_value_transforms,
-            erased_fn_abis,
-            artifact_key,
-            plan,
-        );
-    }
-
-    pub fn deinit(self: *PromotedCallableBodyPlanTable, allocator: Allocator) void {
-        for (self.plans) |*plan| deinitPromotedCallableBodyPlan(allocator, plan);
-        allocator.free(self.plans);
-        self.* = .{};
-    }
-};
-
-/// Public `PromotedCallableWrapper` declaration.
-pub const PromotedCallableWrapper = struct {
-    id: canonical.PromotedCallableWrapperId,
-    promoted_proc: canonical.ProcedureValueRef,
-    proc_base_key: canonical.ProcBaseKeyRef,
-    callable_node: canonical.PromotedCallableNodeId,
-    source_binding: ?CheckedPatternId,
-    source_fn_ty: canonical.CanonicalTypeKey,
-    provenance: PromotedProcedureProvenance,
-    checked_fn_root: CheckedTypeId,
-    body_plan: canonical.PromotedCallableBodyPlanId,
-};
-
-/// Public `PromotedCallableWrapperTable` declaration.
-pub const PromotedCallableWrapperTable = struct {
-    wrappers: []PromotedCallableWrapper = &.{},
-
-    pub fn append(
-        self: *PromotedCallableWrapperTable,
-        allocator: Allocator,
-        wrapper: PromotedCallableWrapper,
-    ) Allocator.Error!canonical.PromotedCallableWrapperId {
-        const id: canonical.PromotedCallableWrapperId = @enumFromInt(@as(u32, @intCast(self.wrappers.len)));
-        if (wrapper.id != id) {
-            checkedArtifactInvariant("promoted callable wrapper id does not match append slot", .{});
-        }
-        for (self.wrappers) |existing| {
-            if (canonical.procedureValueRefEql(existing.promoted_proc, wrapper.promoted_proc)) {
-                checkedArtifactInvariant("promoted callable wrapper procedure was published twice", .{});
-            }
-        }
-        const old = self.wrappers;
-        const next = try allocator.alloc(PromotedCallableWrapper, old.len + 1);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = wrapper;
-        allocator.free(old);
-        self.wrappers = next;
-        return id;
-    }
-
-    pub fn get(self: *const PromotedCallableWrapperTable, id: canonical.PromotedCallableWrapperId) PromotedCallableWrapper {
-        const index = @intFromEnum(id);
-        if (index >= self.wrappers.len) {
-            checkedArtifactInvariant("promoted callable wrapper id is out of range", .{});
-        }
-        return self.wrappers[index];
-    }
-
-    pub fn verifyPublished(
-        self: *const PromotedCallableWrapperTable,
-        artifact_key: CheckedModuleArtifactKey,
-        checked_types: *const CheckedTypeStore,
-        checked_bodies: *const CheckedBodyStore,
-        body_plans: *const PromotedCallableBodyPlanTable,
-    ) void {
-        if (builtin.mode != .Debug) return;
-
-        for (self.wrappers, 0..) |wrapper, i| {
-            std.debug.assert(@intFromEnum(wrapper.id) == i);
-            if (!std.meta.eql(wrapper.promoted_proc.artifact.bytes, artifact_key.bytes)) {
-                std.debug.panic("checked artifact invariant violated: promoted callable wrapper procedure belongs to a different artifact", .{});
-            }
-            if (wrapper.promoted_proc.proc_base != wrapper.proc_base_key) {
-                std.debug.panic("checked artifact invariant violated: promoted callable wrapper procedure/base mismatch", .{});
-            }
-            if (@intFromEnum(wrapper.checked_fn_root) >= checked_types.roots.len) {
-                std.debug.panic("checked artifact invariant violated: promoted callable wrapper checked function root is out of range", .{});
-            }
-            if (wrapper.source_binding) |source_binding| {
-                if (@intFromEnum(source_binding) >= checked_bodies.patterns.len) {
-                    std.debug.panic("checked artifact invariant violated: promoted callable wrapper source binding is out of range", .{});
-                }
-            }
-            if (!std.meta.eql(wrapper.source_fn_ty.bytes, checked_types.roots[@intFromEnum(wrapper.checked_fn_root)].key.bytes)) {
-                std.debug.panic("checked artifact invariant violated: promoted callable wrapper source function type differs from checked root", .{});
-            }
-            if (@intFromEnum(wrapper.body_plan) >= body_plans.plans.len) {
-                std.debug.panic("checked artifact invariant violated: promoted callable wrapper body plan is out of range", .{});
-            }
-        }
-    }
-
-    pub fn deinit(self: *PromotedCallableWrapperTable, allocator: Allocator) void {
-        allocator.free(self.wrappers);
-        self.* = .{};
-    }
-};
-
 /// Public `StaticDispatchPlanTableRef` declaration.
 pub const StaticDispatchPlanTableRef = struct {
     start: u32 = 0,
@@ -6618,6 +5553,7 @@ pub const ResolvedValueRefTableRef = struct {
 
 /// Public `ResolvedValueRefId` declaration.
 pub const ResolvedValueRefId = enum(u32) { _ };
+pub const ResolvedValueId = ResolvedValueRefId;
 
 /// Public `LocalBindingRef` declaration.
 pub const LocalBindingRef = struct {
@@ -6660,12 +5596,6 @@ pub const RequiredAppProcedureRef = struct {
     procedure_binding: TopLevelProcedureBindingRef,
 };
 
-/// Public `PromotedProcedureRef` declaration.
-pub const PromotedProcedureRef = struct {
-    module_idx: u32,
-    proc: canonical.ProcedureValueRef,
-};
-
 /// Public `ConstUseTemplate` declaration.
 pub const ConstUseTemplate = struct {
     const_ref: ConstRef,
@@ -6685,7 +5615,6 @@ pub const ProcedureBindingRef = union(enum) {
     imported: ImportedProcedureBindingRef,
     hosted: HostedProcRef,
     platform_required: RequiredAppProcedureRef,
-    promoted: PromotedProcedureRef,
 };
 
 /// Public `TopLevelProcedureBindingRef` declaration.
@@ -6844,6 +5773,22 @@ pub const ProcedureUseTemplate = struct {
     source_fn_ty_template: canonical.CanonicalTypeKey,
     source_fn_ty_payload: ?CheckedTypeId = null,
 };
+
+pub fn topLevelProcedureModuleId(ref: ArtifactTopLevelProcedureBindingRef) ModuleId {
+    return ref.artifact;
+}
+
+pub fn importedProcedureModuleId(ref: ImportedProcedureBindingRef) ModuleId {
+    return ref.artifact;
+}
+
+pub fn hostedProcedureTemplateModuleId(ref: HostedProcRef) ModuleId {
+    return .{ .bytes = canonical.procTemplateModuleDigest(ref.template).bytes };
+}
+
+pub fn requiredProcedureModuleId(ref: RequiredAppProcedureRef) ModuleId {
+    return ref.artifact;
+}
 
 /// Public `PlatformRequiredConstResolvedRef` declaration.
 pub const PlatformRequiredConstResolvedRef = struct {
@@ -7010,6 +5955,7 @@ pub const ResolvedValueRefTable = struct {
         self.* = .{};
     }
 };
+pub const ResolvedValueTable = ResolvedValueRefTable;
 
 fn categorizeValueRef(
     _: Allocator,
@@ -7662,7 +6608,6 @@ fn sealCheckedProcedureTemplateRefs(
                 try collector.collectExpr(wrapper.body_expr);
             },
             .intrinsic_wrapper => {},
-            .promoted_callable_wrapper => {},
         }
 
         template.resolved_value_refs = try resolved_value_refs.appendTemplateRefSpan(allocator, collector.value_refs.items);
@@ -7890,15 +6835,15 @@ const CheckedTemplateRefCollector = struct {
             checkedArtifactInvariant("checked template iterator-for plan id was outside the plan table", .{});
         }
         const plan = self.static_dispatch_plans.iterator_for_plans[raw];
-        try self.collectIteratorDispatchObligation(plan.iter);
-        try self.collectIteratorDispatchObligation(plan.next);
+        try self.collectIteratorDispatchCall(plan.iter);
+        try self.collectIteratorDispatchCall(plan.next);
     }
 
-    fn collectIteratorDispatchObligation(
+    fn collectIteratorDispatchCall(
         self: *CheckedTemplateRefCollector,
-        obligation: static_dispatch.IteratorDispatchObligation,
+        call: static_dispatch.IteratorDispatchCall,
     ) Allocator.Error!void {
-        for (obligation.args) |arg| switch (arg) {
+        for (call.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.collectExpr(expr),
             .loop_iterator_state => {},
         };
@@ -8055,9 +7000,7 @@ pub const NestedProcSiteTable = struct {
             switch (template.body) {
                 .checked_body => |body_id| try builder.scanCheckedBody(body_id, template),
                 .entry_wrapper => |wrapper_id| try builder.scanEntryWrapper(entry_wrappers.get(wrapper_id), template),
-                .intrinsic_wrapper,
-                .promoted_callable_wrapper,
-                => {},
+                .intrinsic_wrapper => {},
             }
             template.nested_proc_sites = .{
                 .start = start,
@@ -8092,7 +7035,6 @@ pub const ProcTarget = union(enum) {
     intrinsic,
     entry,
     comptime_only,
-    promoted_callable,
 };
 
 /// Public `CheckedProcedureTemplate` declaration.
@@ -11425,16 +10367,8 @@ fn checkedTagsHaveNoReachableCallableSlots(
     return true;
 }
 
-/// Public `ComptimeSchemaId` declaration.
-pub const ComptimeSchemaId = enum(u32) { _ };
-/// Public `ComptimeValueId` declaration.
-pub const ComptimeValueId = enum(u32) { _ };
 /// Public `ComptimeRootId` declaration.
 pub const ComptimeRootId = enum(u32) { _ };
-/// Public `ComptimeDependencySummaryRequestId` declaration.
-pub const ComptimeDependencySummaryRequestId = enum(u32) { _ };
-/// Public `ConstGraphReificationPlanId` declaration.
-pub const ConstGraphReificationPlanId = enum(u32) { _ };
 
 /// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
@@ -11446,8 +10380,8 @@ pub const CompileTimeRootKind = enum {
 /// Public `CompileTimeRootPayload` declaration.
 pub const CompileTimeRootPayload = union(enum) {
     pending,
-    const_graph: ConstGraphReificationPlanId,
-    callable_result: CallableResultPlanId,
+    const_node: ConstNodeId,
+    fn_value: ConstFnId,
     expect,
 };
 
@@ -11460,7 +10394,6 @@ pub const CompileTimeRoot = struct {
     pattern: ?CheckedPatternId,
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
-    dependency_summary_request: ComptimeDependencySummaryRequestId,
     payload: CompileTimeRootPayload,
 };
 
@@ -11566,7 +10499,6 @@ pub const CompileTimeRootTable = struct {
             .pattern = entry.pattern,
             .expr = entry.expr,
             .checked_type = entry.checked_type,
-            .dependency_summary_request = @enumFromInt(@intFromEnum(id)),
             .payload = entry.payload,
         });
     }
@@ -11575,11 +10507,11 @@ pub const CompileTimeRootTable = struct {
 fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
     const matches = switch (kind) {
         .constant => switch (payload) {
-            .const_graph => true,
+            .const_node => true,
             else => false,
         },
         .callable_binding => switch (payload) {
-            .callable_result => true,
+            .fn_value => true,
             else => false,
         },
         .expect => switch (payload) {
@@ -11609,1656 +10541,6 @@ fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: C
     };
 }
 
-/// Public `FiniteCallableLeafInstance` declaration.
-pub const FiniteCallableLeafInstance = struct {
-    proc_value: canonical.ProcedureCallableRef,
-    source_fn_ty_payload: CheckedTypeId,
-    lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
-    proc_template_closure: ?ImportedTemplateClosureView = null,
-    lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
-};
-
-/// Public `ErasedCallableLeafInstance` declaration.
-pub const ErasedCallableLeafInstance = struct {
-    sealed: SealedErasedCallableValue,
-};
-
-/// Public `CallableLeafInstance` declaration.
-pub const CallableLeafInstance = union(enum) {
-    finite: FiniteCallableLeafInstance,
-    erased_boxed: ErasedCallableLeafInstance,
-};
-
-/// Public `CallableLeafReificationPlan` declaration.
-pub const CallableLeafReificationPlan = union(enum) {
-    finite: CallableResultPlanId,
-    erased_boxed: CallableResultPlanId,
-    already_resolved: CallableLeafInstance,
-};
-
-/// Public `ConstRecordFieldPlan` declaration.
-pub const ConstRecordFieldPlan = struct {
-    field: canonical.RecordFieldLabelId,
-    value: ConstGraphReificationPlanId,
-};
-
-/// Public `ConstTupleElemPlan` declaration.
-pub const ConstTupleElemPlan = struct {
-    index: u32,
-    value: ConstGraphReificationPlanId,
-};
-
-/// Public `ConstTagPayloadPlan` declaration.
-pub const ConstTagPayloadPlan = struct {
-    index: u32,
-    value: ConstGraphReificationPlanId,
-};
-
-/// Public `ConstTagVariantPlan` declaration.
-pub const ConstTagVariantPlan = struct {
-    tag: canonical.TagLabelId,
-    payloads: []const ConstTagPayloadPlan,
-};
-
-/// Public `ConstGraphReificationPlan` declaration.
-pub const ConstGraphReificationPlan = union(enum) {
-    pending,
-    scalar: CheckedTypeId,
-    string: CheckedTypeId,
-    list: struct {
-        elem: ConstGraphReificationPlanId,
-    },
-    box: struct {
-        payload: ConstGraphReificationPlanId,
-    },
-    tuple: []const ConstTupleElemPlan,
-    record: []const ConstRecordFieldPlan,
-    tag_union: []const ConstTagVariantPlan,
-    transparent_alias: struct {
-        alias: canonical.NominalTypeKey,
-        backing: ConstGraphReificationPlanId,
-    },
-    nominal: struct {
-        nominal: canonical.NominalTypeKey,
-        backing: ConstGraphReificationPlanId,
-    },
-    callable_leaf: CallableLeafReificationPlan,
-    callable_schema: canonical.CanonicalTypeKey,
-    recursive_ref: ConstGraphReificationPlanId,
-};
-
-/// Public `SerializableCaptureLeafPlan` declaration.
-pub const SerializableCaptureLeafPlan = struct {
-    schema: ComptimeSchemaId,
-    reification_plan: ConstGraphReificationPlanId,
-};
-
-/// Public `PrivateCaptureConstMode` declaration.
-pub const PrivateCaptureConstMode = enum {
-    pure_no_callable_slots,
-    general_may_contain_callable_slots,
-};
-
-/// Public `PrivateCaptureConstLeaf` declaration.
-pub const PrivateCaptureConstLeaf = struct {
-    const_ref: ConstRef,
-    const_instance: ConstInstanceRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
-    schema: ComptimeSchemaId,
-    mode: PrivateCaptureConstMode,
-};
-
-/// Public `CaptureRecordFieldPlan` declaration.
-pub const CaptureRecordFieldPlan = struct {
-    field: canonical.RecordFieldLabelId,
-    value: CaptureSlotReificationPlanId,
-};
-
-/// Public `CaptureTupleElemPlan` declaration.
-pub const CaptureTupleElemPlan = struct {
-    index: u32,
-    value: CaptureSlotReificationPlanId,
-};
-
-/// Public `CaptureTagPayloadPlan` declaration.
-pub const CaptureTagPayloadPlan = struct {
-    index: u32,
-    value: CaptureSlotReificationPlanId,
-};
-
-/// Public `CaptureTagVariantPlan` declaration.
-pub const CaptureTagVariantPlan = struct {
-    tag: canonical.TagLabelId,
-    payloads: []const CaptureTagPayloadPlan,
-};
-
-/// Public `PrivateCaptureRecordField` declaration.
-pub const PrivateCaptureRecordField = struct {
-    field: canonical.RecordFieldLabelId,
-    value: PrivateCaptureNodeId,
-};
-
-/// Public `PrivateCaptureTagPayload` declaration.
-pub const PrivateCaptureTagPayload = struct {
-    index: u32,
-    value: PrivateCaptureNodeId,
-};
-
-/// Public `PrivateCaptureTagNode` declaration.
-pub const PrivateCaptureTagNode = struct {
-    tag: canonical.TagLabelId,
-    payloads: []const PrivateCaptureTagPayload,
-};
-
-/// Public `CaptureSlotReificationKind` declaration.
-pub const CaptureSlotReificationKind = union(enum) {
-    serializable_leaf: SerializableCaptureLeafPlan,
-    callable_leaf: CallableResultPlanId,
-    callable_schema: canonical.CanonicalTypeKey,
-    record: []const CaptureRecordFieldPlan,
-    tuple: []const CaptureTupleElemPlan,
-    tag_union: []const CaptureTagVariantPlan,
-    list: struct {
-        elem: CaptureSlotReificationPlanId,
-    },
-    box: CaptureSlotReificationPlanId,
-    nominal: struct {
-        nominal: canonical.NominalTypeKey,
-        backing: CaptureSlotReificationPlanId,
-    },
-    recursive_ref: CaptureSlotReificationPlanId,
-};
-
-/// Public `CaptureSlotReificationNode` declaration.
-pub const CaptureSlotReificationNode = struct {
-    source_ty: canonical.CanonicalTypeKey,
-    source_ty_payload: CheckedTypeId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
-    kind: CaptureSlotReificationKind,
-};
-
-/// Public `CaptureSlotReificationPlan` declaration.
-pub const CaptureSlotReificationPlan = union(enum) {
-    pending,
-    sealed: CaptureSlotReificationNode,
-};
-
-/// Public `CallableResultMemberPlan` declaration.
-pub const CallableResultMemberPlan = struct {
-    member: canonical.CallableSetMemberId,
-    member_proc: canonical.ProcedureCallableRef,
-    member_proc_source_fn_ty_payload: CheckedTypeId,
-    member_lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
-    member_proc_template_closure: ?ImportedTemplateClosureView = null,
-    member_lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
-    target: CallableResultMemberTargetPlan,
-    capture_slots: []const CaptureSlotReificationPlanId,
-};
-
-/// Public `FiniteCallableResultPlan` declaration.
-pub const FiniteCallableResultPlan = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    source_fn_ty_payload: CheckedTypeId,
-    callable_set_key: canonical.CanonicalCallableSetKey,
-    members: []const CallableResultMemberPlan,
-};
-
-/// Public `ErasedCaptureReificationPlan` declaration.
-pub const ErasedCaptureReificationPlan = union(enum) {
-    none,
-    zero_sized_typed: canonical.CanonicalExecValueTypeKey,
-    materialized_capture: ArtifactErasedCaptureMaterializationRef,
-    whole_hidden_capture_value: ErasedCaptureSlotReificationRef,
-    proc_capture_tuple: []const ErasedCaptureSlotReificationRef,
-    finite_callable_set_value: CallableResultPlanId,
-};
-
-/// Public `ErasedCaptureSlotReificationRef` declaration.
-pub const ErasedCaptureSlotReificationRef = struct {
-    source_ty: canonical.CanonicalTypeKey,
-    plan: CaptureSlotReificationPlanId,
-};
-
-/// Public `MaterializedErasedCallableCodePlan` declaration.
-pub const MaterializedErasedCallableCodePlan = union(enum) {
-    direct_proc_value: canonical.ErasedDirectProcCodeRef,
-    finite_set_adapter: ErasedFiniteAdapterResultCodePlan,
-};
-
-/// Public `ErasedFiniteAdapterResultCodePlan` declaration.
-pub const ErasedFiniteAdapterResultCodePlan = struct {
-    adapter: canonical.ErasedAdapterKey,
-    finite_result_plan: CallableResultPlanId,
-};
-
-/// Public `ErasedCallableResultCodePlan` declaration.
-pub const ErasedCallableResultCodePlan = union(enum) {
-    materialized_by_lowering: MaterializedErasedCallableCodePlan,
-    read_from_interpreted_erased_value,
-};
-
-/// Public `ErasedCallableResultPlan` declaration.
-pub const ErasedCallableResultPlan = struct {
-    source_fn_ty: canonical.CanonicalTypeKey,
-    source_fn_ty_payload: CheckedTypeId,
-    sig_key: canonical.ErasedFnSigKey,
-    provenance: []const BoxErasureProvenance,
-    code_plan: ErasedCallableResultCodePlan,
-    capture: ErasedCaptureReificationPlan,
-    result_ty: canonical.CanonicalExecValueTypeKey,
-    executable_signature_payloads: ErasedPromotedProcedureExecutableSignaturePayloads,
-};
-
-/// Public `CallableResultPlan` declaration.
-pub const CallableResultPlan = union(enum) {
-    finite: FiniteCallableResultPlan,
-    erased: ErasedCallableResultPlan,
-};
-
-/// Public `FiniteCallablePromotionPlan` declaration.
-pub const FiniteCallablePromotionPlan = struct {
-    result_plan: CallableResultPlanId,
-    selected_member: canonical.CallableSetMemberId,
-    promoted_proc: PromotedProcedureRef,
-};
-
-/// Public `ErasedCallablePromotionPlan` declaration.
-pub const ErasedCallablePromotionPlan = struct {
-    result_plan: CallableResultPlanId,
-    promoted_proc: PromotedProcedureRef,
-};
-
-/// Public `CallablePromotionPlan` declaration.
-pub const CallablePromotionPlan = union(enum) {
-    finite: FiniteCallablePromotionPlan,
-    erased: ErasedCallablePromotionPlan,
-};
-
-/// Public `PrivateCaptureNode` declaration.
-pub const PrivateCaptureNode = union(enum) {
-    pending,
-    const_instance_leaf: PrivateCaptureConstLeaf,
-    finite_callable_leaf: FiniteCallableLeafInstance,
-    record: []const PrivateCaptureRecordField,
-    tuple: []const PrivateCaptureNodeId,
-    tag_union: PrivateCaptureTagNode,
-    list: []const PrivateCaptureNodeId,
-    box: PrivateCaptureNodeId,
-    nominal: struct {
-        nominal: canonical.NominalTypeKey,
-        backing: PrivateCaptureNodeId,
-    },
-    recursive_ref: PrivateCaptureNodeId,
-};
-
-/// Public `CompileTimePlanStore` declaration.
-pub const CompileTimePlanStore = struct {
-    const_graphs: std.ArrayList(ConstGraphReificationPlan) = .empty,
-    callable_results: std.ArrayList(CallableResultPlan) = .empty,
-    callable_promotions: std.ArrayList(CallablePromotionPlan) = .empty,
-    capture_slots: std.ArrayList(CaptureSlotReificationPlan) = .empty,
-    private_captures: std.ArrayList(PrivateCaptureNode) = .empty,
-    erased_capture_executable_materialization_nodes: std.ArrayList(ErasedCaptureExecutableMaterializationNode) = .empty,
-
-    pub fn reserveConstGraph(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-    ) Allocator.Error!ConstGraphReificationPlanId {
-        const id: ConstGraphReificationPlanId = @enumFromInt(@as(u32, @intCast(self.const_graphs.items.len)));
-        try self.const_graphs.append(allocator, .pending);
-        return id;
-    }
-
-    pub fn fillConstGraph(
-        self: *CompileTimePlanStore,
-        id: ConstGraphReificationPlanId,
-        plan: ConstGraphReificationPlan,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.const_graphs.items.len) {
-            checkedArtifactInvariant("const graph reification plan id is out of range", .{});
-        }
-        switch (self.const_graphs.items[index]) {
-            .pending => self.const_graphs.items[index] = plan,
-            else => checkedArtifactInvariant("const graph reification plan was filled twice", .{}),
-        }
-    }
-
-    pub fn constGraph(self: *const CompileTimePlanStore, id: ConstGraphReificationPlanId) ConstGraphReificationPlan {
-        const index = @intFromEnum(id);
-        if (index >= self.const_graphs.items.len) {
-            checkedArtifactInvariant("const graph reification plan id is out of range", .{});
-        }
-        return self.const_graphs.items[index];
-    }
-
-    pub fn appendCallableResult(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-        plan: CallableResultPlan,
-    ) Allocator.Error!CallableResultPlanId {
-        const id: CallableResultPlanId = @enumFromInt(@as(u32, @intCast(self.callable_results.items.len)));
-        try self.callable_results.append(allocator, plan);
-        return id;
-    }
-
-    pub fn callableResult(self: *const CompileTimePlanStore, id: CallableResultPlanId) CallableResultPlan {
-        const index = @intFromEnum(id);
-        if (index >= self.callable_results.items.len) {
-            checkedArtifactInvariant("callable result plan id is out of range", .{});
-        }
-        return self.callable_results.items[index];
-    }
-
-    pub fn appendCallablePromotion(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-        plan: CallablePromotionPlan,
-    ) Allocator.Error!CallablePromotionPlanId {
-        const id: CallablePromotionPlanId = @enumFromInt(@as(u32, @intCast(self.callable_promotions.items.len)));
-        try self.callable_promotions.append(allocator, plan);
-        return id;
-    }
-
-    pub fn callablePromotion(self: *const CompileTimePlanStore, id: CallablePromotionPlanId) CallablePromotionPlan {
-        const index = @intFromEnum(id);
-        if (index >= self.callable_promotions.items.len) {
-            checkedArtifactInvariant("callable promotion plan id is out of range", .{});
-        }
-        return self.callable_promotions.items[index];
-    }
-
-    pub fn appendCaptureSlot(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-        plan: CaptureSlotReificationPlan,
-    ) Allocator.Error!CaptureSlotReificationPlanId {
-        const id: CaptureSlotReificationPlanId = @enumFromInt(@as(u32, @intCast(self.capture_slots.items.len)));
-        try self.capture_slots.append(allocator, plan);
-        return id;
-    }
-
-    pub fn reserveCaptureSlot(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-    ) Allocator.Error!CaptureSlotReificationPlanId {
-        return try self.appendCaptureSlot(allocator, .pending);
-    }
-
-    pub fn fillCaptureSlot(
-        self: *CompileTimePlanStore,
-        id: CaptureSlotReificationPlanId,
-        plan: CaptureSlotReificationPlan,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.capture_slots.items.len) {
-            checkedArtifactInvariant("capture slot reification plan id is out of range", .{});
-        }
-        switch (plan) {
-            .pending => checkedArtifactInvariant("cannot fill capture slot reification plan with pending", .{}),
-            else => {},
-        }
-        switch (self.capture_slots.items[index]) {
-            .pending => self.capture_slots.items[index] = plan,
-            else => checkedArtifactInvariant("capture slot reification plan was filled twice", .{}),
-        }
-    }
-
-    pub fn captureSlot(self: *const CompileTimePlanStore, id: CaptureSlotReificationPlanId) CaptureSlotReificationPlan {
-        const index = @intFromEnum(id);
-        if (index >= self.capture_slots.items.len) {
-            checkedArtifactInvariant("capture slot reification plan id is out of range", .{});
-        }
-        return self.capture_slots.items[index];
-    }
-
-    pub fn appendPrivateCapture(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-        node: PrivateCaptureNode,
-    ) Allocator.Error!PrivateCaptureNodeId {
-        const id: PrivateCaptureNodeId = @enumFromInt(@as(u32, @intCast(self.private_captures.items.len)));
-        try self.private_captures.append(allocator, node);
-        return id;
-    }
-
-    pub fn reservePrivateCapture(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-    ) Allocator.Error!PrivateCaptureNodeId {
-        return try self.appendPrivateCapture(allocator, .pending);
-    }
-
-    pub fn fillPrivateCapture(
-        self: *CompileTimePlanStore,
-        id: PrivateCaptureNodeId,
-        node: PrivateCaptureNode,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.private_captures.items.len) {
-            checkedArtifactInvariant("private capture node id is out of range", .{});
-        }
-        switch (node) {
-            .pending => checkedArtifactInvariant("cannot fill private capture node with pending", .{}),
-            else => {},
-        }
-        switch (self.private_captures.items[index]) {
-            .pending => self.private_captures.items[index] = node,
-            else => checkedArtifactInvariant("private capture node was filled twice", .{}),
-        }
-    }
-
-    pub fn privateCapture(self: *const CompileTimePlanStore, id: PrivateCaptureNodeId) PrivateCaptureNode {
-        const index = @intFromEnum(id);
-        if (index >= self.private_captures.items.len) {
-            checkedArtifactInvariant("private capture node id is out of range", .{});
-        }
-        return self.private_captures.items[index];
-    }
-
-    pub fn appendErasedCaptureExecutableMaterializationNode(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-        node: ErasedCaptureExecutableMaterializationNode,
-    ) Allocator.Error!ErasedCaptureExecutableMaterializationNodeId {
-        const id: ErasedCaptureExecutableMaterializationNodeId = @enumFromInt(@as(u32, @intCast(self.erased_capture_executable_materialization_nodes.items.len)));
-        try self.erased_capture_executable_materialization_nodes.append(allocator, node);
-        return id;
-    }
-
-    pub fn reserveErasedCaptureExecutableMaterializationNode(
-        self: *CompileTimePlanStore,
-        allocator: Allocator,
-    ) Allocator.Error!ErasedCaptureExecutableMaterializationNodeId {
-        return try self.appendErasedCaptureExecutableMaterializationNode(allocator, .pending);
-    }
-
-    pub fn fillErasedCaptureExecutableMaterializationNode(
-        self: *CompileTimePlanStore,
-        id: ErasedCaptureExecutableMaterializationNodeId,
-        node: ErasedCaptureExecutableMaterializationNode,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.erased_capture_executable_materialization_nodes.items.len) {
-            checkedArtifactInvariant("erased capture materialization node id is out of range", .{});
-        }
-        switch (node) {
-            .pending => checkedArtifactInvariant("cannot fill erased capture materialization node with pending", .{}),
-            else => {},
-        }
-        switch (self.erased_capture_executable_materialization_nodes.items[index]) {
-            .pending => self.erased_capture_executable_materialization_nodes.items[index] = node,
-            else => checkedArtifactInvariant("erased capture materialization node was filled twice", .{}),
-        }
-    }
-
-    pub fn erasedCaptureExecutableMaterializationNode(
-        self: *const CompileTimePlanStore,
-        id: ErasedCaptureExecutableMaterializationNodeId,
-    ) ErasedCaptureExecutableMaterializationNode {
-        const index = @intFromEnum(id);
-        if (index >= self.erased_capture_executable_materialization_nodes.items.len) {
-            checkedArtifactInvariant("erased capture materialization node id is out of range", .{});
-        }
-        return self.erased_capture_executable_materialization_nodes.items[index];
-    }
-
-    pub fn deinit(self: *CompileTimePlanStore, allocator: Allocator) void {
-        for (self.const_graphs.items) |*plan| deinitConstGraphReificationPlan(allocator, plan);
-        for (self.callable_results.items) |*plan| deinitCallableResultPlan(allocator, plan);
-        for (self.capture_slots.items) |*plan| deinitCaptureSlotReificationPlan(allocator, plan);
-        for (self.private_captures.items) |*node| deinitPrivateCaptureNode(allocator, node);
-        for (self.erased_capture_executable_materialization_nodes.items) |*node| deinitErasedCaptureExecutableMaterializationNode(allocator, node);
-        self.erased_capture_executable_materialization_nodes.deinit(allocator);
-        self.private_captures.deinit(allocator);
-        self.capture_slots.deinit(allocator);
-        self.callable_promotions.deinit(allocator);
-        self.callable_results.deinit(allocator);
-        self.const_graphs.deinit(allocator);
-        self.* = .{};
-    }
-
-    pub fn verifySealed(
-        self: *const CompileTimePlanStore,
-        checked_types: *const CheckedTypeStore,
-        callable_set_descriptors: *const CallableSetDescriptorStore,
-    ) void {
-        if (builtin.mode != .Debug) return;
-
-        for (self.const_graphs.items) |plan| verifyConstGraphReificationPlan(self, plan);
-        for (self.callable_results.items) |plan| verifyCallableResultPlan(self, checked_types, plan);
-        for (self.callable_promotions.items) |plan| verifyCallablePromotionPlan(self, plan);
-        for (self.capture_slots.items) |plan| verifyCaptureSlotReificationPlan(self, checked_types, plan);
-        for (self.private_captures.items) |node| verifyPrivateCaptureNode(self, callable_set_descriptors, node);
-        for (self.erased_capture_executable_materialization_nodes.items) |node| verifyErasedCaptureExecutableMaterializationNode(self, callable_set_descriptors, node);
-    }
-};
-
-fn deinitConstGraphReificationPlan(allocator: Allocator, plan: *ConstGraphReificationPlan) void {
-    switch (plan.*) {
-        .pending,
-        .scalar,
-        .string,
-        .list,
-        .box,
-        .transparent_alias,
-        .nominal,
-        .callable_schema,
-        .recursive_ref,
-        => {},
-        .callable_leaf => |*leaf| deinitCallableLeafReificationPlan(allocator, leaf),
-        .tuple => |items| allocator.free(items),
-        .record => |fields| allocator.free(fields),
-        .tag_union => |variants| {
-            for (variants) |variant| allocator.free(variant.payloads);
-            allocator.free(variants);
-        },
-    }
-}
-
-fn deinitCallableResultPlan(allocator: Allocator, plan: *CallableResultPlan) void {
-    switch (plan.*) {
-        .finite => |finite| {
-            for (finite.members) |member| {
-                var target = member.target;
-                deinitCallableResultMemberTargetPlan(allocator, &target);
-                deinitOptionalImportedTemplateClosure(allocator, member.member_proc_template_closure);
-                deinitOptionalImportedTemplateClosure(allocator, member.member_lifted_owner_template_closure);
-                allocator.free(member.capture_slots);
-            }
-            allocator.free(finite.members);
-        },
-        .erased => |erased| {
-            var payloads = erased.executable_signature_payloads;
-            deinitErasedPromotedProcedureExecutableSignaturePayloads(allocator, &payloads);
-            allocator.free(erased.provenance);
-            deinitErasedCaptureReificationPlan(allocator, erased.capture);
-        },
-    }
-}
-
-fn deinitCallableResultMemberTargetPlan(
-    allocator: Allocator,
-    target: *CallableResultMemberTargetPlan,
-) void {
-    switch (target.*) {
-        .artifact_owned => |*key| deinitExecutableSpecializationKey(allocator, key),
-        .member_proc_relative => |endpoint| if (endpoint.exec_arg_tys.len != 0) allocator.free(endpoint.exec_arg_tys),
-    }
-}
-
-fn deinitCaptureSlotReificationPlan(allocator: Allocator, plan: *CaptureSlotReificationPlan) void {
-    switch (plan.*) {
-        .pending => {},
-        .sealed => |node| {
-            switch (node.kind) {
-                .serializable_leaf,
-                .callable_leaf,
-                .callable_schema,
-                .box,
-                .nominal,
-                .recursive_ref,
-                => {},
-                .record => |fields| allocator.free(fields),
-                .tuple => |items| allocator.free(items),
-                .tag_union => |variants| {
-                    for (variants) |variant| allocator.free(variant.payloads);
-                    allocator.free(variants);
-                },
-                .list => {},
-            }
-        },
-    }
-}
-
-fn deinitPrivateCaptureNode(allocator: Allocator, node: *PrivateCaptureNode) void {
-    switch (node.*) {
-        .pending,
-        .const_instance_leaf,
-        .finite_callable_leaf,
-        .box,
-        .nominal,
-        .recursive_ref,
-        => {},
-        .record => |fields| allocator.free(fields),
-        .tuple => |items| allocator.free(items),
-        .tag_union => |tag| allocator.free(tag.payloads),
-        .list => |items| allocator.free(items),
-    }
-}
-
-fn deinitCallableLeafReificationPlan(allocator: Allocator, leaf: *CallableLeafReificationPlan) void {
-    switch (leaf.*) {
-        .finite,
-        .erased_boxed,
-        => {},
-        .already_resolved => |*instance| deinitCallableLeafInstance(allocator, instance),
-    }
-}
-
-fn deinitCallableLeafInstance(allocator: Allocator, leaf: *CallableLeafInstance) void {
-    switch (leaf.*) {
-        .finite => |finite| {
-            deinitOptionalImportedTemplateClosure(allocator, finite.proc_template_closure);
-            deinitOptionalImportedTemplateClosure(allocator, finite.lifted_owner_template_closure);
-        },
-        .erased_boxed => |*erased| deinitSealedErasedCallableValue(allocator, &erased.sealed),
-    }
-}
-
-fn deinitErasedCaptureReificationPlan(allocator: Allocator, capture: ErasedCaptureReificationPlan) void {
-    switch (capture) {
-        .none,
-        .zero_sized_typed,
-        .materialized_capture,
-        .whole_hidden_capture_value,
-        .finite_callable_set_value,
-        => {},
-        .proc_capture_tuple => |values| allocator.free(values),
-    }
-}
-
-fn deinitErasedCaptureExecutableMaterializationPlan(_: Allocator, capture: ErasedCaptureExecutableMaterializationPlan) void {
-    switch (capture) {
-        .none,
-        .zero_sized_typed,
-        .node,
-        => {},
-    }
-}
-
-fn deinitErasedHiddenCaptureArgPlan(allocator: Allocator, hidden: ErasedHiddenCaptureArgPlan) void {
-    switch (hidden) {
-        .none => {},
-        .materialized_capture => |capture| deinitErasedCaptureExecutableMaterializationPlan(allocator, capture),
-    }
-}
-
-fn deinitMaterializedFiniteCallableSetValue(allocator: Allocator, finite: *MaterializedFiniteCallableSetValue) void {
-    deinitOptionalImportedTemplateClosure(allocator, finite.member_proc_template_closure);
-    deinitOptionalImportedTemplateClosure(allocator, finite.member_lifted_owner_template_closure);
-    allocator.free(finite.captures);
-}
-
-fn deinitMaterializedErasedCallableValue(allocator: Allocator, erased: *MaterializedErasedCallableValue) void {
-    deinitSealedErasedCallableValue(allocator, &erased.sealed);
-}
-
-fn deinitSealedErasedCallableValue(allocator: Allocator, sealed: *SealedErasedCallableValue) void {
-    allocator.free(sealed.boundary.provenance);
-    deinitSealedErasedCallableCode(allocator, &sealed.code);
-    deinitErasedCaptureExecutableMaterializationPlan(allocator, sealed.capture);
-}
-
-fn deinitSealedErasedCallableCode(allocator: Allocator, code: *SealedErasedCallableCode) void {
-    switch (code.*) {
-        .direct_proc => {},
-        .finite_adapter => |finite| {
-            for (finite.members) |member| {
-                var target_key = member.target_key;
-                deinitExecutableSpecializationKey(allocator, &target_key);
-                if (member.arg_transforms.len > 0) allocator.free(member.arg_transforms);
-                if (member.capture_transforms.len > 0) allocator.free(member.capture_transforms);
-            }
-            if (finite.members.len > 0) allocator.free(finite.members);
-        },
-    }
-}
-
-fn deinitErasedCaptureExecutableMaterializationNode(allocator: Allocator, node: *ErasedCaptureExecutableMaterializationNode) void {
-    switch (node.*) {
-        .pending,
-        .const_instance,
-        .pure_const,
-        .pure_value,
-        .box,
-        .nominal,
-        .recursive_ref,
-        => {},
-        .finite_callable_set => |*finite| deinitMaterializedFiniteCallableSetValue(allocator, finite),
-        .erased_callable => |*erased| deinitMaterializedErasedCallableValue(allocator, erased),
-        .record => |fields| allocator.free(fields),
-        .tuple => |items| allocator.free(items),
-        .tag_union => |tag| allocator.free(tag.payloads),
-        .list => |items| allocator.free(items),
-    }
-}
-
-fn deinitExecutableTypePayload(allocator: Allocator, payload: *ExecutableTypePayload) void {
-    switch (payload.*) {
-        .pending,
-        .primitive,
-        .list,
-        .box,
-        .nominal,
-        .erased_fn,
-        .vacant_callable_slot,
-        .recursive_ref,
-        => {},
-        .record => |fields| allocator.free(fields),
-        .tuple => |items| allocator.free(items),
-        .tag_union => |variants| {
-            for (variants) |variant| allocator.free(variant.payloads);
-            allocator.free(variants);
-        },
-        .callable_set => |callable_set| allocator.free(callable_set.members),
-    }
-    payload.* = .pending;
-}
-
-fn deinitValueTransformProvenance(allocator: Allocator, provenance: ValueTransformProvenance) void {
-    switch (provenance) {
-        .none => {},
-        .box_erasure => |boundaries| allocator.free(boundaries),
-    }
-}
-
-fn deinitCallableToErasedTransformPlan(allocator: Allocator, plan: CallableToErasedTransformPlan) void {
-    switch (plan) {
-        .finite_value => |finite| deinitPublishedFiniteSetEraseAdapterBranches(allocator, finite.adapter_branches),
-        .proc_value => |proc| deinitErasedCaptureExecutableMaterializationPlan(allocator, proc.capture),
-    }
-}
-
-fn deinitExecutableValueTransformPlan(allocator: Allocator, plan: *ExecutableValueTransformPlan) void {
-    deinitValueTransformProvenance(allocator, plan.provenance);
-    switch (plan.op) {
-        .identity,
-        .structural_bridge,
-        .nominal,
-        .list,
-        .box_payload,
-        .already_erased_callable,
-        => {},
-        .record => |fields| allocator.free(fields),
-        .tuple => |items| allocator.free(items),
-        .tag_union => |tags| {
-            for (tags) |tag| allocator.free(tag.payloads);
-            allocator.free(tags);
-        },
-        .callable_to_erased => |callable| deinitCallableToErasedTransformPlan(allocator, callable),
-    }
-}
-
-fn deinitExecutableSpecializationKey(allocator: Allocator, key: *canonical.ExecutableSpecializationKey) void {
-    allocator.free(key.exec_arg_tys);
-    key.exec_arg_tys = &.{};
-}
-
-fn deinitErasedPromotedProcedureExecutableSignaturePayloads(
-    allocator: Allocator,
-    payloads: *ErasedPromotedProcedureExecutableSignaturePayloads,
-) void {
-    allocator.free(payloads.param_exec_tys);
-    allocator.free(payloads.param_exec_ty_keys);
-    allocator.free(payloads.erased_call_args);
-    allocator.free(payloads.erased_call_arg_keys);
-    payloads.param_exec_tys = &.{};
-    payloads.param_exec_ty_keys = &.{};
-    payloads.erased_call_args = &.{};
-    payloads.erased_call_arg_keys = &.{};
-}
-
-fn deinitErasedPromotedProcedureExecutableSignature(
-    allocator: Allocator,
-    signature: *ErasedPromotedProcedureExecutableSignature,
-) void {
-    deinitExecutableSpecializationKey(allocator, &signature.specialization_key);
-    allocator.free(signature.wrapper_params);
-    allocator.free(signature.erased_call_args);
-    allocator.free(signature.erased_call_arg_keys);
-    signature.wrapper_params = &.{};
-    signature.erased_call_args = &.{};
-    signature.erased_call_arg_keys = &.{};
-}
-
-fn deinitPromotedCallableBodyPlan(allocator: Allocator, plan: *PromotedCallableBodyPlan) void {
-    switch (plan.*) {
-        .pending => {},
-        .finite => |finite| {
-            var member_target = finite.member_target;
-            deinitCallableResultMemberTargetPlan(allocator, &member_target);
-            deinitOptionalImportedTemplateClosure(allocator, finite.member_proc_template_closure);
-            deinitOptionalImportedTemplateClosure(allocator, finite.member_lifted_owner_template_closure);
-            allocator.free(finite.member_capture_slots);
-            allocator.free(finite.captures);
-            allocator.free(finite.params);
-            allocator.free(finite.call_args);
-        },
-        .erased => |erased| {
-            var signature = erased.executable_signature;
-            deinitErasedPromotedProcedureExecutableSignature(allocator, &signature);
-            allocator.free(erased.params);
-            allocator.free(erased.arg_transforms);
-            var sealed = erased.sealed;
-            deinitSealedErasedCallableValue(allocator, &sealed);
-            deinitErasedHiddenCaptureArgPlan(allocator, erased.hidden_capture_arg);
-        },
-    }
-}
-
-fn verifyConstGraphRef(store: *const CompileTimePlanStore, id: ConstGraphReificationPlanId) void {
-    std.debug.assert(@intFromEnum(id) < store.const_graphs.items.len);
-}
-
-fn verifyCallableResultRef(store: *const CompileTimePlanStore, id: CallableResultPlanId) void {
-    std.debug.assert(@intFromEnum(id) < store.callable_results.items.len);
-}
-
-fn verifyCallablePromotionRef(store: *const CompileTimePlanStore, id: CallablePromotionPlanId) void {
-    std.debug.assert(@intFromEnum(id) < store.callable_promotions.items.len);
-}
-
-fn verifyCaptureSlotRef(store: *const CompileTimePlanStore, id: CaptureSlotReificationPlanId) void {
-    std.debug.assert(@intFromEnum(id) < store.capture_slots.items.len);
-}
-
-fn verifyPrivateCaptureRef(store: *const CompileTimePlanStore, id: PrivateCaptureNodeId) void {
-    std.debug.assert(@intFromEnum(id) < store.private_captures.items.len);
-}
-
-fn verifyErasedCaptureExecutableMaterializationRef(store: *const CompileTimePlanStore, id: ErasedCaptureExecutableMaterializationNodeId) void {
-    std.debug.assert(@intFromEnum(id) < store.erased_capture_executable_materialization_nodes.items.len);
-}
-
-fn verifyPrivateCaptureHandle(store: *const CompileTimePlanStore, ref: PrivateCaptureRef) void {
-    verifyPrivateCaptureRef(store, ref.node);
-}
-
-fn canonicalCallableSetKeyEql(a: canonical.CanonicalCallableSetKey, b: canonical.CanonicalCallableSetKey) bool {
-    return std.meta.eql(a.bytes, b.bytes);
-}
-
-fn canonicalExecValueTypeKeyEql(a: canonical.CanonicalExecValueTypeKey, b: canonical.CanonicalExecValueTypeKey) bool {
-    return std.meta.eql(a.bytes, b.bytes);
-}
-
-fn captureShapeKeyEql(a: canonical.CaptureShapeKey, b: canonical.CaptureShapeKey) bool {
-    return std.meta.eql(a.bytes, b.bytes);
-}
-
-fn erasedFnAbiKeyEql(a: canonical.ErasedFnAbiKey, b: canonical.ErasedFnAbiKey) bool {
-    return std.meta.eql(a.bytes, b.bytes);
-}
-
-fn erasedFnSigKeyEql(a: canonical.ErasedFnSigKey, b: canonical.ErasedFnSigKey) bool {
-    return canonicalTypeKeyEql(a.source_fn_ty, b.source_fn_ty) and erasedFnAbiKeyEql(a.abi, b.abi);
-}
-
-fn verifyAlreadyErasedCallableTransformPlan(
-    payloads: *const ExecutableTypePayloadStore,
-    plan: ExecutableValueTransformPlan,
-    erased: AlreadyErasedCallableTransformPlan,
-) void {
-    const source = switch (payloads.get(plan.from.ty.payload)) {
-        .erased_fn => |payload| payload,
-        else => std.debug.panic("checked artifact invariant violated: already-erased transform source endpoint is not erased", .{}),
-    };
-    const target = switch (payloads.get(plan.to.ty.payload)) {
-        .erased_fn => |payload| payload,
-        else => std.debug.panic("checked artifact invariant violated: already-erased transform target endpoint is not erased", .{}),
-    };
-
-    switch (erased) {
-        .exact => |sig_key| {
-            if (!erasedFnSigKeyEql(source.sig_key, sig_key)) {
-                std.debug.panic("checked artifact invariant violated: already-erased exact transform source signature differs", .{});
-            }
-            if (!erasedFnSigKeyEql(target.sig_key, sig_key)) {
-                std.debug.panic("checked artifact invariant violated: already-erased exact transform target signature differs", .{});
-            }
-        },
-        .same_abi_retype => |retype| {
-            if (!erasedFnSigKeyEql(source.sig_key, retype.source_sig)) {
-                std.debug.panic("checked artifact invariant violated: already-erased retype source signature differs", .{});
-            }
-            if (!erasedFnSigKeyEql(target.sig_key, retype.target_sig)) {
-                std.debug.panic("checked artifact invariant violated: already-erased retype target signature differs", .{});
-            }
-            if (!erasedFnAbiKeyEql(retype.source_sig.abi, retype.target_sig.abi)) {
-                std.debug.panic("checked artifact invariant violated: already-erased retype changed erased ABI", .{});
-            }
-            if (canonicalTypeKeyEql(retype.source_sig.source_fn_ty, retype.target_sig.source_fn_ty)) {
-                std.debug.panic("checked artifact invariant violated: already-erased retype did not change source function identity", .{});
-            }
-        },
-    }
-}
-
-fn callableSetCaptureSlotEql(a: canonical.CallableSetCaptureSlot, b: canonical.CallableSetCaptureSlot) bool {
-    return a.slot == b.slot and
-        std.meta.eql(a.source_ty.bytes, b.source_ty.bytes) and
-        canonicalExecValueTypeKeyEql(a.exec_value_ty, b.exec_value_ty);
-}
-
-fn callableSetMemberEql(a: canonical.CanonicalCallableSetMember, b: canonical.CanonicalCallableSetMember) bool {
-    if (a.member != b.member) return false;
-    if (!canonical.procedureCallableRefEql(a.proc_value, b.proc_value)) return false;
-    if (!canonical.mirProcedureRefEql(a.source_proc, b.source_proc)) return false;
-    if (!captureShapeKeyEql(a.capture_shape_key, b.capture_shape_key)) return false;
-    if (a.capture_slots.len != b.capture_slots.len) return false;
-    for (a.capture_slots, b.capture_slots) |left, right| {
-        if (!callableSetCaptureSlotEql(left, right)) return false;
-    }
-    return true;
-}
-
-fn canonicalCallableSetDescriptorEql(a: canonical.CanonicalCallableSetDescriptor, b: canonical.CanonicalCallableSetDescriptor) bool {
-    if (!canonicalCallableSetKeyEql(a.key, b.key)) return false;
-    if (a.members.len != b.members.len) return false;
-    for (a.members, b.members) |left, right| {
-        if (!callableSetMemberEql(left, right)) return false;
-    }
-    return true;
-}
-
-fn verifyCallableSetDescriptor(descriptor: canonical.CanonicalCallableSetDescriptor) void {
-    if (descriptor.members.len == 0) {
-        std.debug.panic("checked artifact invariant violated: callable-set descriptor has no members", .{});
-    }
-    for (descriptor.members, 0..) |member, i| {
-        if (@as(usize, @intFromEnum(member.member)) != i) {
-            std.debug.panic("checked artifact invariant violated: callable-set descriptor members are not dense canonical ids", .{});
-        }
-        for (member.capture_slots, 0..) |slot, slot_index| {
-            if (@as(usize, slot.slot) != slot_index) {
-                std.debug.panic("checked artifact invariant violated: callable-set descriptor capture slots are not canonical", .{});
-            }
-        }
-    }
-}
-
-fn verifyErasedCaptureSlotReificationRef(store: *const CompileTimePlanStore, ref: ErasedCaptureSlotReificationRef) void {
-    verifyCaptureSlotRef(store, ref.plan);
-}
-
-fn verifyConstGraphReificationPlan(
-    store: *const CompileTimePlanStore,
-    plan: ConstGraphReificationPlan,
-) void {
-    switch (plan) {
-        .pending => std.debug.panic("checked artifact invariant violated: published const graph plan is pending", .{}),
-        .scalar,
-        .string,
-        => {},
-        .list => |list| verifyConstGraphRef(store, list.elem),
-        .box => |box| verifyConstGraphRef(store, box.payload),
-        .tuple => |items| for (items) |item| verifyConstGraphRef(store, item.value),
-        .record => |fields| for (fields) |field| verifyConstGraphRef(store, field.value),
-        .tag_union => |variants| for (variants) |variant| {
-            for (variant.payloads) |payload| verifyConstGraphRef(store, payload.value);
-        },
-        .transparent_alias => |alias| verifyConstGraphRef(store, alias.backing),
-        .nominal => |nominal| verifyConstGraphRef(store, nominal.backing),
-        .callable_leaf => |leaf| switch (leaf) {
-            .finite,
-            .erased_boxed,
-            => |result| verifyCallableResultRef(store, result),
-            .already_resolved => |resolved| verifyCallableLeafInstance(store, resolved),
-        },
-        .callable_schema => {},
-        .recursive_ref => |ref| verifyConstGraphRef(store, ref),
-    }
-}
-
-fn verifyCallableResultPlan(
-    store: *const CompileTimePlanStore,
-    checked_types: *const CheckedTypeStore,
-    plan: CallableResultPlan,
-) void {
-    switch (plan) {
-        .finite => |finite| {
-            if (finite.members.len == 0) {
-                std.debug.panic("checked artifact invariant violated: finite callable result plan has no members", .{});
-            }
-            verifyCheckedTypePayloadKey(checked_types, finite.source_fn_ty_payload, finite.source_fn_ty, "finite callable result source type payload differs from result source type");
-            for (finite.members) |member| {
-                verifyCheckedTypePayloadKey(checked_types, member.member_proc_source_fn_ty_payload, member.member_proc.source_fn_ty, "finite callable result member proc source type payload differs from member proc source type");
-                switch (member.member_proc.template) {
-                    .lifted => |lifted| {
-                        const owner_payload = member.member_lifted_owner_source_fn_ty_payload orelse {
-                            std.debug.panic("checked artifact invariant violated: finite callable result lifted member has no owner source type payload", .{});
-                        };
-                        if (member.member_proc_template_closure != null) {
-                            std.debug.panic("checked artifact invariant violated: finite callable result lifted member carried direct proc template closure", .{});
-                        }
-                        verifyCheckedTypePayloadKey(checked_types, owner_payload, lifted.owner_mono_specialization.requested_mono_fn_ty, "finite callable result lifted owner source type payload differs from owner specialization source type");
-                    },
-                    .checked, .synthetic => {
-                        if (member.member_lifted_owner_source_fn_ty_payload != null) {
-                            std.debug.panic("checked artifact invariant violated: non-lifted finite callable result member carried lifted owner source type payload", .{});
-                        }
-                        if (member.member_lifted_owner_template_closure != null) {
-                            std.debug.panic("checked artifact invariant violated: non-lifted finite callable result member carried lifted owner template closure", .{});
-                        }
-                    },
-                }
-                if (!std.meta.eql(callableResultMemberTargetSourceTy(member.target).bytes, finite.source_fn_ty.bytes)) {
-                    std.debug.panic("checked artifact invariant violated: finite callable result member target source type differs from result plan", .{});
-                }
-                for (member.capture_slots) |capture| verifyCaptureSlotRef(store, capture);
-            }
-        },
-        .erased => |erased| {
-            if (erased.provenance.len == 0) {
-                std.debug.panic("checked artifact invariant violated: erased callable result plan has no Box(T) provenance", .{});
-            }
-            verifyCheckedTypePayloadKey(checked_types, erased.source_fn_ty_payload, erased.source_fn_ty, "erased callable result source type payload differs from result source type");
-            if (!std.meta.eql(erased.source_fn_ty.bytes, erased.sig_key.source_fn_ty.bytes)) {
-                std.debug.panic("checked artifact invariant violated: erased callable result source type differs from signature source type", .{});
-            }
-            if (!std.meta.eql(erased.executable_signature_payloads.source_fn_ty.bytes, erased.source_fn_ty.bytes)) {
-                std.debug.panic("checked artifact invariant violated: erased callable result signature payload source type differs from result source type", .{});
-            }
-            switch (erased.code_plan) {
-                .materialized_by_lowering => |code| switch (code) {
-                    .direct_proc_value => {},
-                    .finite_set_adapter => |finite_code| {
-                        verifyCallableResultRef(store, finite_code.finite_result_plan);
-                        const finite_result = switch (store.callableResult(finite_code.finite_result_plan)) {
-                            .finite => |finite| finite,
-                            .erased => {
-                                std.debug.panic("checked artifact invariant violated: finite adapter erased result code points at an erased callable result plan", .{});
-                            },
-                        };
-                        if (!std.meta.eql(finite_result.callable_set_key.bytes, finite_code.adapter.callable_set_key.bytes)) {
-                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code result plan uses a different callable-set key", .{});
-                        }
-                        if (!std.meta.eql(finite_code.adapter.erased_fn_sig_key.abi.bytes, erased.sig_key.abi.bytes)) {
-                            std.debug.panic("checked artifact invariant violated: finite adapter erased result code ABI differs from result signature", .{});
-                        }
-                        if ((finite_code.adapter.erased_fn_sig_key.capture_ty == null) != (erased.sig_key.capture_ty == null)) {
-                            std.debug.panic("checked artifact invariant violated: finite adapter erased result capture presence differs from result signature", .{});
-                        }
-                        if (finite_code.adapter.erased_fn_sig_key.capture_ty) |adapter_capture| {
-                            if (!std.meta.eql(adapter_capture.bytes, erased.sig_key.capture_ty.?.bytes)) {
-                                std.debug.panic("checked artifact invariant violated: finite adapter erased result capture key differs from result signature", .{});
-                            }
-                        }
-                    },
-                },
-                .read_from_interpreted_erased_value => {},
-            }
-            switch (erased.capture) {
-                .none,
-                .zero_sized_typed,
-                => {},
-                .whole_hidden_capture_value => |value| verifyErasedCaptureSlotReificationRef(store, value),
-                .proc_capture_tuple => |values| for (values) |value| verifyErasedCaptureSlotReificationRef(store, value),
-                .finite_callable_set_value => |result| verifyCallableResultRef(store, result),
-                .materialized_capture => {},
-            }
-        },
-    }
-}
-
-fn callableResultMemberTargetSourceTy(target: CallableResultMemberTargetPlan) canonical.CanonicalTypeKey {
-    return switch (target) {
-        .artifact_owned => |key| key.requested_fn_ty,
-        .member_proc_relative => |endpoint| endpoint.requested_fn_ty,
-    };
-}
-
-fn verifyCheckedTypePayloadKey(
-    checked_types: *const CheckedTypeStore,
-    ty: CheckedTypeId,
-    key: canonical.CanonicalTypeKey,
-    comptime message: []const u8,
-) void {
-    const raw = @intFromEnum(ty);
-    if (raw >= checked_types.roots.len) {
-        std.debug.panic("checked artifact invariant violated: checked type payload id is out of range", .{});
-    }
-    if (!std.meta.eql(checked_types.roots[raw].key.bytes, key.bytes)) {
-        std.debug.panic("checked artifact invariant violated: " ++ message, .{});
-    }
-}
-
-fn verifyCallablePromotionPlan(store: *const CompileTimePlanStore, plan: CallablePromotionPlan) void {
-    switch (plan) {
-        .finite => |finite| {
-            verifyCallableResultRef(store, finite.result_plan);
-            switch (store.callableResult(finite.result_plan)) {
-                .finite => |result| {
-                    for (result.members) |member| {
-                        if (member.member == finite.selected_member) break;
-                    } else {
-                        std.debug.panic("checked artifact invariant violated: finite callable promotion selects a member outside its result plan", .{});
-                    }
-                },
-                .erased => std.debug.panic("checked artifact invariant violated: finite callable promotion points at an erased result plan", .{}),
-            }
-        },
-        .erased => |erased| {
-            verifyCallableResultRef(store, erased.result_plan);
-            switch (store.callableResult(erased.result_plan)) {
-                .erased => {},
-                .finite => std.debug.panic("checked artifact invariant violated: erased callable promotion points at a finite result plan", .{}),
-            }
-        },
-    }
-}
-
-fn verifyCaptureSlotReificationPlan(
-    store: *const CompileTimePlanStore,
-    checked_types: *const CheckedTypeStore,
-    plan: CaptureSlotReificationPlan,
-) void {
-    switch (plan) {
-        .pending => std.debug.panic("checked artifact invariant violated: published capture slot reification plan is pending", .{}),
-        .sealed => |node| {
-            verifyCheckedTypePayloadKey(checked_types, node.source_ty_payload, node.source_ty, "capture slot source type payload differs from source type");
-            switch (node.kind) {
-                .serializable_leaf => {},
-                .callable_leaf => |callable| verifyCallableResultRef(store, callable),
-                .callable_schema => {},
-                .record => |fields| for (fields) |field| verifyCaptureSlotRef(store, field.value),
-                .tuple => |items| for (items) |item| verifyCaptureSlotRef(store, item.value),
-                .tag_union => |variants| for (variants) |variant| {
-                    for (variant.payloads) |payload| verifyCaptureSlotRef(store, payload.value);
-                },
-                .list => |list| verifyCaptureSlotRef(store, list.elem),
-                .box => |payload| verifyCaptureSlotRef(store, payload),
-                .nominal => |nominal| verifyCaptureSlotRef(store, nominal.backing),
-                .recursive_ref => |ref| verifyCaptureSlotRef(store, ref),
-            }
-        },
-    }
-}
-
-fn verifyPrivateCaptureNode(
-    store: *const CompileTimePlanStore,
-    _: *const CallableSetDescriptorStore,
-    node: PrivateCaptureNode,
-) void {
-    switch (node) {
-        .pending => std.debug.panic("checked artifact invariant violated: published private capture node is pending", .{}),
-        .const_instance_leaf => {},
-        .finite_callable_leaf => {},
-        .record => |fields| for (fields) |field| verifyPrivateCaptureRef(store, field.value),
-        .tuple => |items| for (items) |item| verifyPrivateCaptureRef(store, item),
-        .tag_union => |tag| {
-            for (tag.payloads) |payload| verifyPrivateCaptureRef(store, payload.value);
-        },
-        .list => |items| for (items) |item| verifyPrivateCaptureRef(store, item),
-        .box => |payload| verifyPrivateCaptureRef(store, payload),
-        .nominal => |nominal| verifyPrivateCaptureRef(store, nominal.backing),
-        .recursive_ref => |ref| verifyPrivateCaptureRef(store, ref),
-    }
-}
-
-fn verifyCallableLeafInstance(
-    store: *const CompileTimePlanStore,
-    leaf: CallableLeafInstance,
-) void {
-    switch (leaf) {
-        .finite => |finite| switch (finite.proc_value.template) {
-            .lifted => {
-                if (finite.lifted_owner_source_fn_ty_payload == null) {
-                    std.debug.panic("checked artifact invariant violated: finite callable leaf lifted proc has no owner source type payload", .{});
-                }
-            },
-            .checked, .synthetic => {
-                if (finite.lifted_owner_source_fn_ty_payload != null) {
-                    std.debug.panic("checked artifact invariant violated: non-lifted finite callable leaf carried lifted owner source type payload", .{});
-                }
-                if (finite.lifted_owner_template_closure != null) {
-                    std.debug.panic("checked artifact invariant violated: non-lifted finite callable leaf carried lifted owner template closure", .{});
-                }
-            },
-        },
-        .erased_boxed => |erased| verifySealedErasedCallableValue(store, erased.sealed),
-    }
-}
-
-fn verifyMaterializedFiniteCallableSetValue(
-    store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
-    finite: MaterializedFiniteCallableSetValue,
-) void {
-    const descriptor = callable_set_descriptors.descriptorFor(finite.callable_set_key) orelse {
-        std.debug.panic("checked artifact invariant violated: materialized finite erased capture references missing callable-set descriptor", .{});
-    };
-    var selected: ?canonical.CanonicalCallableSetMember = null;
-    for (descriptor.members) |member| {
-        if (member.member == finite.selected_member) {
-            selected = member;
-            break;
-        }
-    }
-    const member = selected orelse {
-        std.debug.panic("checked artifact invariant violated: materialized finite erased capture selects missing callable-set member", .{});
-    };
-    if (!std.meta.eql(member.proc_value.source_fn_ty.bytes, finite.source_fn_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: materialized finite erased capture member source type differs from capture source type", .{});
-    }
-    if (!canonical.procedureCallableRefEql(member.proc_value, finite.selected_proc)) {
-        std.debug.panic("checked artifact invariant violated: materialized finite erased capture selected proc differs from descriptor member", .{});
-    }
-    if (!canonical.mirProcedureRefEql(member.source_proc, finite.selected_source_proc)) {
-        std.debug.panic("checked artifact invariant violated: materialized finite erased capture selected source proc differs from descriptor member", .{});
-    }
-    switch (finite.selected_proc.template) {
-        .lifted => {
-            if (finite.member_lifted_owner_source_fn_ty_payload == null) {
-                std.debug.panic("checked artifact invariant violated: materialized finite lifted member has no owner source type payload", .{});
-            }
-        },
-        .checked, .synthetic => {
-            if (finite.member_lifted_owner_source_fn_ty_payload != null) {
-                std.debug.panic("checked artifact invariant violated: non-lifted materialized finite member carried lifted owner payload", .{});
-            }
-            if (finite.member_lifted_owner_template_closure != null) {
-                std.debug.panic("checked artifact invariant violated: non-lifted materialized finite member carried lifted owner closure", .{});
-            }
-        },
-    }
-    if (member.capture_slots.len != finite.captures.len) {
-        std.debug.panic("checked artifact invariant violated: materialized finite erased capture capture count differs from member schema", .{});
-    }
-    for (member.capture_slots, 0..) |slot, i| {
-        if (slot.slot != i) {
-            std.debug.panic("checked artifact invariant violated: materialized finite erased capture slots are not canonical", .{});
-        }
-    }
-    for (finite.captures) |capture| verifyErasedCaptureExecutableMaterializationPlan(store, capture);
-}
-
-fn verifyMaterializedErasedCallableValue(
-    store: *const CompileTimePlanStore,
-    erased: MaterializedErasedCallableValue,
-) void {
-    verifySealedErasedCallableValue(store, erased.sealed);
-}
-
-fn verifySealedErasedCallableValue(
-    store: *const CompileTimePlanStore,
-    sealed: SealedErasedCallableValue,
-) void {
-    if (sealed.boundary.provenance.len == 0) {
-        std.debug.panic("checked artifact invariant violated: sealed erased callable has no Box(T) provenance", .{});
-    }
-    if (!std.meta.eql(sealed.boundary.sig_key.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: sealed erased callable signature source type differs from boundary", .{});
-    }
-    for (sealed.boundary.provenance) |provenance| {
-        switch (provenance) {
-            .local_box_boundary => std.debug.panic("checked artifact invariant violated: sealed erased callable contains session-local BoxBoundaryId", .{}),
-            .const_graph_box,
-            .promoted_wrapper,
-            => {},
-        }
-    }
-    switch (sealed.code) {
-        .direct_proc => {},
-        .finite_adapter => |finite| {
-            if (finite.members.len == 0) {
-                std.debug.panic("checked artifact invariant violated: sealed finite erased adapter has no members", .{});
-            }
-            if (!std.meta.eql(finite.adapter_key.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
-                std.debug.panic("checked artifact invariant violated: sealed finite adapter source type differs from boundary", .{});
-            }
-            if (!std.meta.eql(finite.adapter_key.erased_fn_sig_key.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes) or
-                !std.meta.eql(finite.adapter_key.erased_fn_sig_key.abi.bytes, sealed.boundary.sig_key.abi.bytes) or
-                ((finite.adapter_key.erased_fn_sig_key.capture_ty == null) != (sealed.boundary.sig_key.capture_ty == null)))
-            {
-                std.debug.panic("checked artifact invariant violated: sealed finite adapter signature differs from boundary", .{});
-            }
-            if (finite.adapter_key.erased_fn_sig_key.capture_ty) |left| {
-                const right = sealed.boundary.sig_key.capture_ty orelse unreachable;
-                if (!std.meta.eql(left.bytes, right.bytes)) {
-                    std.debug.panic("checked artifact invariant violated: sealed finite adapter hidden capture key differs from boundary", .{});
-                }
-            }
-            for (finite.members) |member| {
-                if (!canonical.procedureCallableRefEql(member.source_proc.callable, member.proc_value)) {
-                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member procedure refs disagree", .{});
-                }
-                if (member.source_proc.proc.proc_base != member.target_key.base) {
-                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member target base differs from source proc", .{});
-                }
-                if (!std.meta.eql(member.target_key.requested_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
-                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member target source type differs from boundary", .{});
-                }
-                if (!std.meta.eql(member.proc_value.source_fn_ty.bytes, sealed.boundary.source_fn_ty.bytes)) {
-                    std.debug.panic("checked artifact invariant violated: sealed finite adapter member proc value source type differs from boundary", .{});
-                }
-            }
-        },
-    }
-    verifyErasedCaptureExecutableMaterializationPlan(store, sealed.capture);
-}
-
-fn verifyErasedCaptureExecutableMaterializationPlan(
-    store: *const CompileTimePlanStore,
-    capture: ErasedCaptureExecutableMaterializationPlan,
-) void {
-    switch (capture) {
-        .none,
-        .zero_sized_typed,
-        => {},
-        .node => |node| verifyErasedCaptureExecutableMaterializationRef(store, node),
-    }
-}
-
-fn verifyErasedCaptureExecutableMaterializationNode(
-    store: *const CompileTimePlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
-    node: ErasedCaptureExecutableMaterializationNode,
-) void {
-    switch (node) {
-        .pending => std.debug.panic("checked artifact invariant violated: published erased capture materialization node is pending", .{}),
-        .const_instance => {},
-        .pure_const => {},
-        .pure_value => {},
-        .finite_callable_set => |finite| verifyMaterializedFiniteCallableSetValue(store, callable_set_descriptors, finite),
-        .erased_callable => |erased| verifyMaterializedErasedCallableValue(store, erased),
-        .record => |fields| for (fields) |field| verifyErasedCaptureExecutableMaterializationPlan(store, field.value),
-        .tuple => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, item),
-        .tag_union => |tag| {
-            for (tag.payloads) |payload| verifyErasedCaptureExecutableMaterializationPlan(store, payload.value);
-        },
-        .list => |items| for (items) |item| verifyErasedCaptureExecutableMaterializationPlan(store, item),
-        .box => |payload| verifyErasedCaptureExecutableMaterializationPlan(store, payload),
-        .nominal => |nominal| verifyErasedCaptureExecutableMaterializationPlan(store, nominal.backing),
-        .recursive_ref => |ref| verifyErasedCaptureExecutableMaterializationRef(store, ref),
-    }
-}
-
-fn verifyPromotedWrapperArg(store: *const CompileTimePlanStore, arg: PromotedWrapperArg) void {
-    switch (arg) {
-        .param => {},
-        .private_capture => |capture| verifyPrivateCaptureHandle(store, capture),
-    }
-}
-
-fn verifyExecutableTypePayloadRef(
-    payloads: *const ExecutableTypePayloadStore,
-    artifact_key: CheckedModuleArtifactKey,
-    ref: ExecutableTypePayloadRef,
-) void {
-    if (!std.meta.eql(ref.artifact.bytes, artifact_key.bytes)) {
-        std.debug.panic("checked artifact invariant violated: executable type payload ref belongs to a different artifact", .{});
-    }
-    if (@intFromEnum(ref.payload) >= payloads.entries.len) {
-        std.debug.panic("checked artifact invariant violated: executable type payload ref is out of range", .{});
-    }
-}
-
-fn verifyExecutableTypePayloadRefKey(
-    payloads: *const ExecutableTypePayloadStore,
-    artifact_key: CheckedModuleArtifactKey,
-    ref: ExecutableTypePayloadRef,
-    expected_key: canonical.CanonicalExecValueTypeKey,
-) void {
-    verifyExecutableTypePayloadRef(payloads, artifact_key, ref);
-    const actual_key = payloads.keyFor(ref.payload);
-    if (!std.meta.eql(actual_key.bytes, expected_key.bytes)) {
-        std.debug.panic("checked artifact invariant violated: executable type payload ref key differs from endpoint key", .{});
-    }
-}
-
-fn verifyExecutableTypePayload(
-    payloads: *const ExecutableTypePayloadStore,
-    artifact_key: CheckedModuleArtifactKey,
-    erased_fn_abis: *const canonical.ErasedFnAbiStore,
-    payload: ExecutableTypePayload,
-) void {
-    switch (payload) {
-        .pending => std.debug.panic("checked artifact invariant violated: executable type payload was not filled", .{}),
-        .primitive => {},
-        .record => |fields| for (fields) |field| verifyExecutableTypePayloadRefKey(payloads, artifact_key, field.ty, field.key),
-        .tuple => |items| for (items) |item| verifyExecutableTypePayloadRefKey(payloads, artifact_key, item.ty, item.key),
-        .tag_union => |variants| for (variants) |variant| {
-            for (variant.payloads) |tag_payload| verifyExecutableTypePayloadRefKey(payloads, artifact_key, tag_payload.ty, tag_payload.key);
-        },
-        .list => |child| verifyExecutableTypePayloadRefKey(payloads, artifact_key, child.ty, child.key),
-        .box => |child| verifyExecutableTypePayloadRefKey(payloads, artifact_key, child.ty, child.key),
-        .nominal => |nominal| verifyExecutableTypePayloadRefKey(payloads, artifact_key, nominal.backing, nominal.backing_key),
-        .vacant_callable_slot => {},
-        .callable_set => |callable_set| for (callable_set.members) |member| {
-            if ((member.payload_ty == null) != (member.payload_ty_key == null)) {
-                std.debug.panic("checked artifact invariant violated: callable-set executable payload member has mismatched payload ref/key presence", .{});
-            }
-            if (member.payload_ty) |payload_ty| verifyExecutableTypePayloadRefKey(payloads, artifact_key, payload_ty, member.payload_ty_key.?);
-        },
-        .erased_fn => |erased| {
-            const abi = erased_fn_abis.abiFor(erased.sig_key.abi) orelse {
-                std.debug.panic("checked artifact invariant violated: erased executable payload signature ABI is not published", .{});
-            };
-            if ((erased.capture_ty == null) != (erased.capture_ty_key == null)) {
-                std.debug.panic("checked artifact invariant violated: erased executable payload has mismatched capture ref/key presence", .{});
-            }
-            if (erased.capture_ty) |capture| verifyExecutableTypePayloadRefKey(payloads, artifact_key, capture, erased.capture_ty_key.?);
-            if (erased.sig_key.capture_ty == null and erased.capture_ty != null) {
-                std.debug.panic("checked artifact invariant violated: erased executable payload has capture payload but signature has no capture", .{});
-            }
-            if (erased.sig_key.capture_ty != null and erased.capture_ty == null) {
-                std.debug.panic("checked artifact invariant violated: erased executable payload signature has capture but payload is missing", .{});
-            }
-            if (abi.capture_arg == null) {
-                std.debug.panic("checked artifact invariant violated: erased executable payload ABI has no opaque capture argument", .{});
-            }
-        },
-        .recursive_ref => |ref| {
-            if (@intFromEnum(ref) >= payloads.entries.len) {
-                std.debug.panic("checked artifact invariant violated: executable recursive type payload ref is out of range", .{});
-            }
-        },
-    }
-}
-
-fn verifyErasedPromotedProcedureExecutableSignature(
-    payloads: *const ExecutableTypePayloadStore,
-    erased_fn_abis: *const canonical.ErasedFnAbiStore,
-    artifact_key: CheckedModuleArtifactKey,
-    signature: ErasedPromotedProcedureExecutableSignature,
-    erased: ErasedPromotedWrapperBodyPlan,
-) void {
-    const boundary = erased.sealed.boundary;
-    const abi = erased_fn_abis.abiFor(boundary.sig_key.abi) orelse {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable signature ABI is not published", .{});
-    };
-    if (!std.meta.eql(signature.source_fn_ty.bytes, boundary.source_fn_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable signature source type differs from wrapper source type", .{});
-    }
-    if (!std.meta.eql(boundary.sig_key.source_fn_ty.bytes, boundary.source_fn_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable signature key source type differs from wrapper source type", .{});
-    }
-    if (!std.meta.eql(signature.specialization_key.requested_fn_ty.bytes, boundary.source_fn_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable specialization source type differs from wrapper source type", .{});
-    }
-    if (signature.specialization_key.callable_repr_mode != .erased_callable) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable signature was not marked erased-callable", .{});
-    }
-    if (signature.wrapper_params.len != erased.params.len) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable signature param count differs from wrapper params", .{});
-    }
-    if (signature.specialization_key.exec_arg_tys.len != signature.wrapper_params.len) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable specialization arg count differs from wrapper params", .{});
-    }
-    for (signature.wrapper_params, erased.params, signature.specialization_key.exec_arg_tys) |param_payload, wrapper_param, arg_key| {
-        if (param_payload.param.index != wrapper_param.index) {
-            std.debug.panic("checked artifact invariant violated: erased promoted executable signature param order differs from wrapper params", .{});
-        }
-        if (!std.meta.eql(param_payload.exec_ty_key.bytes, arg_key.bytes)) {
-            std.debug.panic("checked artifact invariant violated: erased promoted executable param key differs from specialization key", .{});
-        }
-        verifyExecutableTypePayloadRefKey(payloads, artifact_key, param_payload.exec_ty, param_payload.exec_ty_key);
-    }
-    verifyExecutableTypePayloadRefKey(payloads, artifact_key, signature.wrapper_ret, signature.wrapper_ret_key);
-    verifyExecutableTypePayloadRefKey(payloads, artifact_key, signature.erased_call_ret, signature.erased_call_ret_key);
-    if (signature.erased_call_args.len != signature.erased_call_arg_keys.len) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg refs/keys differ in length", .{});
-    }
-    for (signature.erased_call_args, signature.erased_call_arg_keys) |arg, arg_key| {
-        verifyExecutableTypePayloadRefKey(payloads, artifact_key, arg, arg_key);
-    }
-    if (!std.meta.eql(signature.wrapper_ret_key.bytes, signature.specialization_key.exec_ret_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable wrapper return key differs from specialization key", .{});
-    }
-    if (signature.erased_call_arg_keys.len != abi.fixed_arity) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arity differs from ABI payload", .{});
-    }
-    for (signature.erased_call_arg_keys, abi.arg_exec_keys) |arg_key, abi_arg_key| {
-        if (!std.meta.eql(arg_key.bytes, abi_arg_key.bytes)) {
-            std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call arg key differs from ABI payload", .{});
-        }
-    }
-    if (!std.meta.eql(signature.erased_call_ret_key.bytes, abi.ret_exec_key.bytes)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable erased-call return key differs from ABI payload", .{});
-    }
-    if ((boundary.sig_key.capture_ty == null) != (signature.hidden_capture == null)) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture presence differs from signature key", .{});
-    }
-    if (abi.capture_arg == null) {
-        std.debug.panic("checked artifact invariant violated: erased promoted executable ABI has no opaque capture argument", .{});
-    }
-    if (signature.hidden_capture) |hidden| {
-        const capture_ty = boundary.sig_key.capture_ty orelse unreachable;
-        if (!std.meta.eql(hidden.exec_ty_key.bytes, capture_ty.bytes)) {
-            std.debug.panic("checked artifact invariant violated: erased promoted executable hidden capture key differs from signature key", .{});
-        }
-        verifyExecutableTypePayloadRefKey(payloads, artifact_key, hidden.exec_ty, hidden.exec_ty_key);
-    }
-}
-
-fn verifyExecutableValueTransformRef(store: *const ExecutableValueTransformPlanStore, transform: ExecutableValueTransformPlanId) void {
-    if (@intFromEnum(transform) >= store.plans.len) {
-        std.debug.panic("checked artifact invariant violated: executable value transform id is out of range", .{});
-    }
-}
-
-fn verifyPublishedExecutableValueTransformRef(
-    store: *const ExecutableValueTransformPlanStore,
-    artifact_key: CheckedModuleArtifactKey,
-    transform: PublishedExecutableValueTransformRef,
-) void {
-    if (!std.meta.eql(transform.artifact.bytes, artifact_key.bytes)) {
-        std.debug.panic("checked artifact invariant violated: published executable value transform points at a different artifact", .{});
-    }
-    verifyExecutableValueTransformRef(store, transform.transform);
-}
-
-fn verifyValueTransformProvenance(provenance: ValueTransformProvenance) void {
-    switch (provenance) {
-        .none => {},
-        .box_erasure => |boundaries| {
-            if (boundaries.len == 0) {
-                std.debug.panic("checked artifact invariant violated: executable value transform has empty Box(T) erasure provenance", .{});
-            }
-        },
-    }
-}
-
-fn verifyExecutableStructuralBridgePlan(store: *const ExecutableValueTransformPlanStore, plan: ExecutableStructuralBridgePlan) void {
-    switch (plan) {
-        .direct,
-        .zst,
-        .list_reinterpret,
-        .nominal_reinterpret,
-        => {},
-        .box_unbox => |child| verifyExecutableValueTransformRef(store, child),
-        .box_box => |child| verifyExecutableValueTransformRef(store, child),
-        .singleton_to_tag_union => |bridge| if (bridge.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
-        .tag_union_to_singleton => |bridge| if (bridge.value_transform) |payload| verifyExecutableValueTransformRef(store, payload),
-    }
-}
-
-fn verifyExecutableValueTransformOp(store: *const ExecutableValueTransformPlanStore, op: ExecutableValueTransformOp) void {
-    switch (op) {
-        .identity,
-        .already_erased_callable,
-        => {},
-        .structural_bridge => |bridge| verifyExecutableStructuralBridgePlan(store, bridge),
-        .record => |fields| for (fields) |field| verifyExecutableValueTransformRef(store, field.transform),
-        .tuple => |items| for (items) |item| verifyExecutableValueTransformRef(store, item.transform),
-        .tag_union => |tags| for (tags) |tag| {
-            for (tag.payloads) |payload| verifyExecutableValueTransformRef(store, payload.transform);
-        },
-        .nominal => |nominal| verifyExecutableValueTransformRef(store, nominal.backing),
-        .list => |list| verifyExecutableValueTransformRef(store, list.elem),
-        .box_payload => |box| verifyExecutableValueTransformRef(store, box.payload),
-        .callable_to_erased => {},
-    }
-}
-
-fn verifyPromotedCallableBodyPlan(
-    store: *const CompileTimePlanStore,
-    checked_types: *const CheckedTypeStore,
-    executable_type_payloads: *const ExecutableTypePayloadStore,
-    executable_value_transforms: *const ExecutableValueTransformPlanStore,
-    erased_fn_abis: *const canonical.ErasedFnAbiStore,
-    artifact_key: CheckedModuleArtifactKey,
-    plan: PromotedCallableBodyPlan,
-) void {
-    switch (plan) {
-        .pending => std.debug.panic("checked artifact invariant violated: published promoted callable body plan is pending", .{}),
-        .finite => |finite| {
-            verifyCheckedTypePayloadKey(checked_types, finite.member_proc_source_fn_ty_payload, finite.member_proc.source_fn_ty, "finite promoted callable body member proc source type payload differs from member proc source type");
-            switch (finite.member_proc.template) {
-                .lifted => |lifted| {
-                    const owner_payload = finite.member_lifted_owner_source_fn_ty_payload orelse {
-                        std.debug.panic("checked artifact invariant violated: finite promoted callable body lifted member has no owner source type payload", .{});
-                    };
-                    if (finite.member_proc_template_closure != null) {
-                        std.debug.panic("checked artifact invariant violated: finite promoted callable body lifted member carried direct proc template closure", .{});
-                    }
-                    verifyCheckedTypePayloadKey(checked_types, owner_payload, lifted.owner_mono_specialization.requested_mono_fn_ty, "finite promoted callable body lifted owner source type payload differs from owner specialization source type");
-                },
-                .checked, .synthetic => {
-                    if (finite.member_lifted_owner_source_fn_ty_payload != null) {
-                        std.debug.panic("checked artifact invariant violated: non-lifted finite promoted callable body carried lifted owner source type payload", .{});
-                    }
-                    if (finite.member_lifted_owner_template_closure != null) {
-                        std.debug.panic("checked artifact invariant violated: non-lifted finite promoted callable body carried lifted owner template closure", .{});
-                    }
-                },
-            }
-            if (!std.meta.eql(callableResultMemberTargetSourceTy(finite.member_target).bytes, finite.source_fn_ty.bytes)) {
-                std.debug.panic("checked artifact invariant violated: finite promoted callable body member target source type differs from wrapper source type", .{});
-            }
-            if (finite.member_capture_slots.len != finite.captures.len) {
-                std.debug.panic("checked artifact invariant violated: finite promoted callable body capture count differs from selected member schema", .{});
-            }
-            for (finite.member_capture_slots, 0..) |slot, i| {
-                if (slot.slot != i) {
-                    std.debug.panic("checked artifact invariant violated: finite promoted callable body member capture slots are not canonical slot order", .{});
-                }
-            }
-            for (finite.captures) |capture| verifyPrivateCaptureHandle(store, capture);
-            for (finite.call_args) |arg| verifyPromotedWrapperArg(store, arg);
-        },
-        .erased => |erased| {
-            verifySealedErasedCallableValue(store, erased.sealed);
-            switch (erased.sealed.code) {
-                .direct_proc => {},
-                .finite_adapter => |finite| for (finite.members) |member| {
-                    for (member.arg_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
-                    for (member.capture_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
-                    verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, member.result_transform);
-                },
-            }
-            if (erased.arg_transforms.len != erased.params.len) {
-                std.debug.panic("checked artifact invariant violated: erased promoted callable arg transform count differs from wrapper params", .{});
-            }
-            for (erased.arg_transforms) |transform| verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, transform);
-            verifyPublishedExecutableValueTransformRef(executable_value_transforms, artifact_key, erased.result_transform);
-            verifyErasedPromotedProcedureExecutableSignature(
-                executable_type_payloads,
-                erased_fn_abis,
-                artifact_key,
-                erased.executable_signature,
-                erased,
-            );
-            switch (erased.hidden_capture_arg) {
-                .none => {},
-                .materialized_capture => |capture| verifyErasedCaptureExecutableMaterializationPlan(store, capture),
-            }
-        },
-    }
-}
-
 /// Public `ConstRef` declaration.
 pub const ConstRef = struct {
     artifact: CheckedModuleArtifactKey,
@@ -13267,22 +10549,19 @@ pub const ConstRef = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
 };
 
+pub fn constModuleId(ref: ConstRef) ModuleId {
+    return ref.artifact;
+}
+
 /// Public `ConstOwner` declaration.
 pub const ConstOwner = union(enum) {
     top_level_binding: ConstTopLevelOwner,
-    promoted_capture: PromotedCaptureId,
 };
 
 /// Public `ConstTopLevelOwner` declaration.
 pub const ConstTopLevelOwner = struct {
     module_idx: u32,
     pattern: CheckedPatternId,
-};
-
-/// Public `PromotedCaptureId` declaration.
-pub const PromotedCaptureId = struct {
-    promoted_proc: PromotedProcedureRef,
-    capture_index: u32,
 };
 
 /// Public `TopLevelValueKind` declaration.
@@ -13434,418 +10713,12 @@ pub const TopLevelValueTable = struct {
     }
 };
 
-/// Public `PromotedProcedureProvenance` declaration.
-pub const PromotedProcedureProvenance = union(enum) {
-    local_callable_root_result: struct {
-        root: ComptimeRootId,
-        result_plan: CallableResultPlanId,
-    },
-    local_const_root_callable_leaf: struct {
-        root: ComptimeRootId,
-        instance: ConstInstantiationKey,
-        result_plan: CallableResultPlanId,
-        value_path: ComptimeValuePathKey,
-    },
-    callable_binding_instance_result: struct {
-        instance: CallableBindingInstantiationKey,
-        result_plan: CallableResultPlanId,
-        callable_path: PromotedCallablePathKey,
-    },
-    const_instance_callable_leaf: struct {
-        instance: ConstInstantiationKey,
-        result_plan: CallableResultPlanId,
-        value_path: ComptimeValuePathKey,
-    },
-    private_capture_callable_leaf: struct {
-        promoted_proc: PromotedProcedureRef,
-        result_plan: CallableResultPlanId,
-        capture_path: PrivateCapturePathKey,
-    },
-};
-
-/// Public `PromotedProcedure` declaration.
-pub const PromotedProcedure = struct {
-    proc: canonical.ProcedureValueRef,
-    template: canonical.ProcedureTemplateRef,
-    source_binding: ?CheckedPatternId,
-    source_fn_ty: canonical.CanonicalTypeKey,
-    provenance: PromotedProcedureProvenance,
-};
-
-/// Public `ReservedPromotedCallableWrapper` declaration.
-pub const ReservedPromotedCallableWrapper = struct {
-    promoted_ref: PromotedProcedureRef,
-    proc_value: canonical.ProcedureValueRef,
-    template: canonical.ProcedureTemplateRef,
-    wrapper: canonical.PromotedCallableWrapperId,
-    body_plan: canonical.PromotedCallableBodyPlanId,
-    source_fn_ty: canonical.CanonicalTypeKey,
-    provenance: PromotedProcedureProvenance,
-};
-
-/// Public `PromotedProcedureTable` declaration.
-pub const PromotedProcedureTable = struct {
-    procedures: []PromotedProcedure = &.{},
-
-    pub fn append(
-        self: *PromotedProcedureTable,
-        allocator: Allocator,
-        module_idx: u32,
-        procedure: PromotedProcedure,
-    ) Allocator.Error!PromotedProcedureRef {
-        for (self.procedures) |existing| {
-            if (canonical.procedureValueRefEql(existing.proc, procedure.proc)) {
-                checkedArtifactInvariant("promoted procedure was published twice", .{});
-            }
-            if (canonical.procedureTemplateRefEql(existing.template, procedure.template)) {
-                checkedArtifactInvariant("promoted procedure template was published twice", .{});
-            }
-        }
-
-        const old = self.procedures;
-        const next = try allocator.alloc(PromotedProcedure, old.len + 1);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = procedure;
-        if (old.len > 0) allocator.free(old);
-        self.procedures = next;
-
-        return .{
-            .module_idx = module_idx,
-            .proc = procedure.proc,
-        };
-    }
-
-    pub fn get(self: *const PromotedProcedureTable, ref: PromotedProcedureRef) ?PromotedProcedure {
-        for (self.procedures) |procedure| {
-            if (canonical.procedureValueRefEql(procedure.proc, ref.proc)) return procedure;
-        }
-        return null;
-    }
-
-    pub fn verifyPublished(
-        self: *const PromotedProcedureTable,
-        artifact_key: CheckedModuleArtifactKey,
-        templates: *const CheckedProcedureTemplateTable,
-        checked_bodies: *const CheckedBodyStore,
-        wrappers: *const PromotedCallableWrapperTable,
-    ) void {
-        if (builtin.mode != .Debug) return;
-
-        for (self.procedures, 0..) |procedure, i| {
-            for (self.procedures[0..i]) |previous| {
-                if (canonical.procedureValueRefEql(previous.proc, procedure.proc)) {
-                    std.debug.panic("checked artifact invariant violated: promoted procedure value appears more than once", .{});
-                }
-                if (canonical.procedureTemplateRefEql(previous.template, procedure.template)) {
-                    std.debug.panic("checked artifact invariant violated: promoted procedure template appears more than once", .{});
-                }
-            }
-            if (!std.meta.eql(procedure.proc.artifact.bytes, artifact_key.bytes)) {
-                std.debug.panic("checked artifact invariant violated: promoted procedure value belongs to a different artifact", .{});
-            }
-            if (!std.meta.eql(procedure.template.artifact.bytes, artifact_key.bytes)) {
-                std.debug.panic("checked artifact invariant violated: promoted procedure template belongs to a different artifact", .{});
-            }
-            if (procedure.source_binding) |source_binding| {
-                if (@intFromEnum(source_binding) >= checked_bodies.patterns.len) {
-                    std.debug.panic("checked artifact invariant violated: promoted procedure source binding is out of range", .{});
-                }
-            }
-            if (procedure.proc.proc_base != procedure.template.proc_base) {
-                std.debug.panic("checked artifact invariant violated: promoted procedure proc base differs from its template", .{});
-            }
-            const template_index = @intFromEnum(procedure.template.template);
-            if (template_index >= templates.templates.len) {
-                std.debug.panic("checked artifact invariant violated: promoted procedure template id is out of range", .{});
-            }
-            const template = templates.templates[template_index];
-            if (template.proc_base != procedure.template.proc_base) {
-                std.debug.panic("checked artifact invariant violated: promoted procedure table references a template with a different proc base", .{});
-            }
-            switch (template.body) {
-                .promoted_callable_wrapper => |wrapper_id| {
-                    const wrapper = wrappers.get(wrapper_id);
-                    if (!std.meta.eql(wrapper.source_fn_ty.bytes, procedure.source_fn_ty.bytes)) {
-                        std.debug.panic("checked artifact invariant violated: promoted procedure source function type differs from wrapper", .{});
-                    }
-                    if (!optionalCheckedPatternIdEql(wrapper.source_binding, procedure.source_binding)) {
-                        std.debug.panic("checked artifact invariant violated: promoted procedure source binding differs from wrapper", .{});
-                    }
-                    if (!promotedProcedureProvenanceEql(wrapper.provenance, procedure.provenance)) {
-                        std.debug.panic("checked artifact invariant violated: promoted procedure provenance differs from wrapper", .{});
-                    }
-                },
-                else => std.debug.panic("checked artifact invariant violated: promoted procedure table row does not point at a promoted callable wrapper", .{}),
-            }
-        }
-    }
-
-    pub fn deinit(self: *PromotedProcedureTable, allocator: Allocator) void {
-        allocator.free(self.procedures);
-        self.* = .{};
-    }
-};
-
-/// Public `ComptimeWrappedSchema` declaration.
-pub const ComptimeWrappedSchema = struct {
-    type_name: canonical.NominalTypeKey,
-    backing: ComptimeSchemaId,
-    is_opaque: bool = false,
-};
-
-/// Public `ComptimeFieldSchema` declaration.
-pub const ComptimeFieldSchema = struct {
-    name: canonical.RecordFieldLabelId,
-    schema: ComptimeSchemaId,
-};
-
-/// Public `ComptimeVariantSchema` declaration.
-pub const ComptimeVariantSchema = struct {
-    name: canonical.TagLabelId,
-    payloads: []ComptimeSchemaId,
-};
-
-/// Public `ComptimeSchema` declaration.
-pub const ComptimeSchema = union(enum) {
-    pending,
-    zst,
-    int: types.Int.Precision,
-    frac: types.Frac.Precision,
-    str,
-    list: ComptimeSchemaId,
-    box: ComptimeSchemaId,
-    tuple: []ComptimeSchemaId,
-    record: []ComptimeFieldSchema,
-    tag_union: []ComptimeVariantSchema,
-    alias: ComptimeWrappedSchema,
-    nominal: ComptimeWrappedSchema,
-    callable: canonical.CanonicalTypeKey,
-};
-
-/// Public `ComptimeVariantValue` declaration.
-pub const ComptimeVariantValue = struct {
-    variant_index: u32,
-    payloads: []ComptimeValueId,
-};
-
-/// Public `ComptimeValue` declaration.
-pub const ComptimeValue = union(enum) {
-    pending,
-    zst,
-    int_bytes: [16]u8,
-    f32: f32,
-    f64: f64,
-    dec: [16]u8,
-    str: []u8,
-    list: []ComptimeValueId,
-    box: ComptimeValueId,
-    tuple: []ComptimeValueId,
-    record: []ComptimeValueId,
-    tag_union: ComptimeVariantValue,
-    alias: ComptimeValueId,
-    nominal: ComptimeValueId,
-    callable: CallableLeafInstance,
-};
-
-/// Public `ComptimeBinding` declaration.
-pub const ComptimeBinding = struct {
-    pattern: CheckedPatternId,
-    schema: ComptimeSchemaId,
-    value: ComptimeValueId,
-};
-
-/// Public `CompileTimeValueStore` declaration.
-pub const CompileTimeValueStore = struct {
-    allocator: Allocator,
-    schemas: std.ArrayList(ComptimeSchema),
-    values: std.ArrayList(ComptimeValue),
-    bindings: []ComptimeBinding = &.{},
-    by_pattern: std.AutoHashMapUnmanaged(CheckedPatternId, ComptimeBinding) = .{},
-
-    pub fn init(allocator: Allocator) CompileTimeValueStore {
-        return .{
-            .allocator = allocator,
-            .schemas = .empty,
-            .values = .empty,
-        };
-    }
-
-    pub fn addSchema(self: *CompileTimeValueStore, schema: ComptimeSchema) Allocator.Error!ComptimeSchemaId {
-        const id: ComptimeSchemaId = @enumFromInt(@as(u32, @intCast(self.schemas.items.len)));
-        try self.schemas.append(self.allocator, schema);
-        return id;
-    }
-
-    pub fn overwriteSchema(self: *CompileTimeValueStore, id: ComptimeSchemaId, schema: ComptimeSchema) void {
-        self.deinitSchema(&self.schemas.items[@intFromEnum(id)]);
-        self.schemas.items[@intFromEnum(id)] = schema;
-    }
-
-    pub fn addValue(self: *CompileTimeValueStore, value: ComptimeValue) Allocator.Error!ComptimeValueId {
-        const id: ComptimeValueId = @enumFromInt(@as(u32, @intCast(self.values.items.len)));
-        try self.values.append(self.allocator, value);
-        return id;
-    }
-
-    pub fn overwriteValue(self: *CompileTimeValueStore, id: ComptimeValueId, value: ComptimeValue) void {
-        self.deinitValue(&self.values.items[@intFromEnum(id)]);
-        self.values.items[@intFromEnum(id)] = value;
-    }
-
-    pub fn bind(
-        self: *CompileTimeValueStore,
-        pattern: CheckedPatternId,
-        schema: ComptimeSchemaId,
-        value: ComptimeValueId,
-    ) Allocator.Error!void {
-        try self.by_pattern.put(self.allocator, pattern, .{
-            .pattern = pattern,
-            .schema = schema,
-            .value = value,
-        });
-    }
-
-    pub fn sealBindings(self: *CompileTimeValueStore) Allocator.Error!void {
-        self.allocator.free(self.bindings);
-        self.bindings = &.{};
-
-        const count = self.by_pattern.count();
-        const bindings = try self.allocator.alloc(ComptimeBinding, count);
-        errdefer self.allocator.free(bindings);
-
-        var it = self.by_pattern.valueIterator();
-        var i: usize = 0;
-        while (it.next()) |binding| : (i += 1) {
-            bindings[i] = binding.*;
-        }
-
-        std.mem.sort(ComptimeBinding, bindings, {}, struct {
-            fn lessThan(_: void, a: ComptimeBinding, b: ComptimeBinding) bool {
-                return @intFromEnum(a.pattern) < @intFromEnum(b.pattern);
-            }
-        }.lessThan);
-
-        self.bindings = bindings;
-    }
-
-    pub fn lookupBinding(self: *const CompileTimeValueStore, pattern: CheckedPatternId) ?ComptimeBinding {
-        return self.by_pattern.get(pattern);
-    }
-
-    pub fn verifySealed(self: *const CompileTimeValueStore) void {
-        if (builtin.mode != .Debug) return;
-
-        for (self.schemas.items) |schema| {
-            switch (schema) {
-                .pending => std.debug.panic(
-                    "checked artifact invariant violated: published compile-time schema store contains a pending schema",
-                    .{},
-                ),
-                else => {},
-            }
-        }
-
-        for (self.values.items) |value| {
-            switch (value) {
-                .pending => std.debug.panic(
-                    "checked artifact invariant violated: published compile-time value store contains a pending value",
-                    .{},
-                ),
-                else => {},
-            }
-        }
-
-        for (self.bindings) |binding| {
-            std.debug.assert(@intFromEnum(binding.schema) < self.schemas.items.len);
-            std.debug.assert(@intFromEnum(binding.value) < self.values.items.len);
-            const by_pattern = self.by_pattern.get(binding.pattern) orelse unreachable;
-            std.debug.assert(by_pattern.schema == binding.schema);
-            std.debug.assert(by_pattern.value == binding.value);
-        }
-    }
-
-    fn deinitSchema(self: *CompileTimeValueStore, schema: *ComptimeSchema) void {
-        switch (schema.*) {
-            .pending,
-            .zst,
-            .int,
-            .frac,
-            .str,
-            .list,
-            .box,
-            .alias,
-            .nominal,
-            .callable,
-            => {},
-            .tuple => |items| self.allocator.free(items),
-            .record => |fields| self.allocator.free(fields),
-            .tag_union => |variants| {
-                for (variants) |variant| self.allocator.free(variant.payloads);
-                self.allocator.free(variants);
-            },
-        }
-    }
-
-    fn deinitValue(self: *CompileTimeValueStore, value: *ComptimeValue) void {
-        switch (value.*) {
-            .pending,
-            .zst,
-            .int_bytes,
-            .f32,
-            .f64,
-            .dec,
-            .box,
-            .alias,
-            .nominal,
-            => {},
-            .callable => |*leaf| deinitCallableLeafInstance(self.allocator, leaf),
-            .str => |bytes| self.allocator.free(bytes),
-            .list => |items| self.allocator.free(items),
-            .tuple => |items| self.allocator.free(items),
-            .record => |items| self.allocator.free(items),
-            .tag_union => |variant| self.allocator.free(variant.payloads),
-        }
-    }
-
-    pub fn deinit(self: *CompileTimeValueStore, _: Allocator) void {
-        for (self.values.items) |*value| self.deinitValue(value);
-        for (self.schemas.items) |*schema| self.deinitSchema(schema);
-        self.allocator.free(self.bindings);
-        self.by_pattern.deinit(self.allocator);
-        self.values.deinit(self.allocator);
-        self.schemas.deinit(self.allocator);
-        self.* = CompileTimeValueStore.init(self.allocator);
-    }
-};
-
 /// Public `CheckedCallableBodyRef` declaration.
 pub const CheckedCallableBodyRef = enum(u32) { _ };
 /// Public `CheckedConstBodyRef` declaration.
 pub const CheckedConstBodyRef = enum(u32) { _ };
 /// Public `ConstTemplateId` declaration.
 pub const ConstTemplateId = enum(u32) { _ };
-/// Public `ConstInstanceId` declaration.
-pub const ConstInstanceId = enum(u32) { _ };
-/// Public `CallableBindingInstanceId` declaration.
-pub const CallableBindingInstanceId = enum(u32) { _ };
-/// Public `SemanticInstantiationProcedureId` declaration.
-pub const SemanticInstantiationProcedureId = enum(u32) { _ };
-/// Public `CallableResultPlanId` declaration.
-pub const CallableResultPlanId = enum(u32) { _ };
-/// Public `CallablePromotionPlanId` declaration.
-pub const CallablePromotionPlanId = enum(u32) { _ };
-/// Public `ConstReificationPlanId` declaration.
-pub const ConstReificationPlanId = ConstGraphReificationPlanId;
-/// Public `CaptureSlotReificationPlanId` declaration.
-pub const CaptureSlotReificationPlanId = enum(u32) { _ };
-/// Public `ErasedCaptureExecutableMaterializationNodeId` declaration.
-pub const ErasedCaptureExecutableMaterializationNodeId = enum(u32) { _ };
-/// Public `ComptimeDependencySummaryId` declaration.
-pub const ComptimeDependencySummaryId = enum(u32) { _ };
-/// Public `ComptimeProcDependencySummaryId` declaration.
-pub const ComptimeProcDependencySummaryId = enum(u32) { _ };
-/// Public `ComptimeCallSiteId` declaration.
-pub const ComptimeCallSiteId = enum(u32) { _ };
 
 /// Public `CheckedConstBody` declaration.
 pub const CheckedConstBody = struct {
@@ -13908,432 +10781,6 @@ pub const CheckedConstBodyTable = struct {
     }
 };
 
-/// Public `ComptimeAvailabilityUse` declaration.
-pub const ComptimeAvailabilityUse = union(enum) {
-    local_root: ComptimeRootId,
-    imported_value: TopLevelValueRef,
-    const_template: ConstRef,
-    procedure_binding: ProcedureBindingRef,
-};
-
-/// Public `ProcedureCallableDependency` declaration.
-pub const ProcedureCallableDependency = struct {
-    proc_value: canonical.ProcedureCallableRef,
-    source_fn_ty_payload: CheckedTypeId,
-    lifted_owner_source_fn_ty_payload: ?CheckedTypeId = null,
-    proc_template_closure: ?ImportedTemplateClosureView = null,
-    lifted_owner_template_closure: ?ImportedTemplateClosureView = null,
-};
-
-/// Public `ComptimeConcreteValueUse` declaration.
-pub const ComptimeConcreteValueUse = union(enum) {
-    const_instance: ConstInstantiationRequest,
-    callable_binding_instance: CallableBindingInstantiationRequest,
-    procedure_callable_with_payloads: ProcedureCallableDependency,
-};
-
-/// Public `ComptimeDependencySummary` declaration.
-pub const ComptimeDependencySummary = struct {
-    availability_values: []const ComptimeAvailabilityUse = &.{},
-    concrete_values: []const ComptimeConcreteValueUse = &.{},
-};
-
-/// Public `ComptimeCallDependency` declaration.
-pub const ComptimeCallDependency = union(enum) {
-    call_proc: canonical.ExecutableSpecializationKey,
-    call_value_finite: ComptimeFiniteCallValueDependency,
-    call_value_erased: ComptimeErasedCallValueDependency,
-};
-
-/// Public `ComptimeFiniteCallValueDependency` declaration.
-pub const ComptimeFiniteCallValueDependency = struct {
-    call_site: ComptimeCallSiteId,
-    callable_set: canonical.CanonicalCallableSetKey,
-    members: []const canonical.ExecutableSpecializationKey = &.{},
-};
-
-/// Public `ComptimeErasedCallValueDependency` declaration.
-pub const ComptimeErasedCallValueDependency = struct {
-    call_site: ComptimeCallSiteId,
-    code: ErasedCallableCodeDependency,
-    capture_availability: []const ComptimeAvailabilityUse = &.{},
-    capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
-    provenance: []const BoxErasureProvenance = &.{},
-};
-
-/// Public `ErasedCallableCodeDependency` declaration.
-pub const ErasedCallableCodeDependency = union(enum) {
-    direct_proc_value: ErasedDirectProcCodeDependency,
-    finite_set_adapter: ErasedFiniteAdapterDependency,
-    supplied_erased_value: SuppliedErasedValueDependency,
-};
-
-/// Public `ErasedDirectProcCodeDependency` declaration.
-pub const ErasedDirectProcCodeDependency = struct {
-    erase_plan: ProcValueEraseDependencyPlan,
-};
-
-/// Public `ProcValueEraseDependencyPlan` declaration.
-pub const ProcValueEraseDependencyPlan = struct {
-    proc_value: canonical.ProcedureCallableRef,
-    erased_fn_sig_key: canonical.ErasedFnSigKey,
-    capture_shape_key: canonical.CaptureShapeKey,
-    executable_specialization_key: canonical.ExecutableSpecializationKey,
-    capture_slots: []const canonical.CallableSetCaptureSlot = &.{},
-};
-
-/// Public `ErasedFiniteAdapterDependency` declaration.
-pub const ErasedFiniteAdapterDependency = struct {
-    adapter_key: canonical.ErasedAdapterKey,
-    member_targets: []const canonical.ExecutableSpecializationKey = &.{},
-    branches: []const PublishedFiniteSetEraseAdapterBranchPlan = &.{},
-};
-
-/// Public `SuppliedErasedValueDependency` declaration.
-///
-/// This records a call through an already-erased callable value whose concrete
-/// code is owned by the value producer, not by the procedure being summarized.
-pub const SuppliedErasedValueDependency = struct {
-    sig_key: canonical.ErasedFnSigKey,
-};
-
-/// Public `ConstGraphDependency` declaration.
-pub const ConstGraphDependency = struct {
-    plan: ConstGraphReificationPlanId,
-    availability_values: []const ComptimeAvailabilityUse = &.{},
-    concrete_values: []const ComptimeConcreteValueUse = &.{},
-    callable_leaves: []const CallableLeafDependency = &.{},
-};
-
-/// Public `CallableResultDependency` declaration.
-pub const CallableResultDependency = struct {
-    plan: CallableResultPlanId,
-    members: []const canonical.ExecutableSpecializationKey = &.{},
-    capture_availability: []const ComptimeAvailabilityUse = &.{},
-    capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
-    erased: ?ErasedCallableDependency = null,
-};
-
-/// Public `CallableLeafDependency` declaration.
-pub const CallableLeafDependency = union(enum) {
-    resolved_finite: FiniteCallableLeafInstance,
-    promoted_callable: CallableResultPlanId,
-    erased_boxed_callable: ErasedCallableDependency,
-};
-
-/// Public `ErasedCallableDependency` declaration.
-pub const ErasedCallableDependency = struct {
-    code: ErasedCallableCodeDependency,
-    capture_availability: []const ComptimeAvailabilityUse = &.{},
-    capture_concrete_values: []const ComptimeConcreteValueUse = &.{},
-    provenance: []const BoxErasureProvenance = &.{},
-};
-
-/// Public `ComptimeProcDependencySummary` declaration.
-pub const ComptimeProcDependencySummary = struct {
-    proc: canonical.ExecutableSpecializationKey,
-    availability_values: []const ComptimeAvailabilityUse = &.{},
-    concrete_values: []const ComptimeConcreteValueUse = &.{},
-    call_deps: []const ComptimeCallDependency = &.{},
-    const_graph_deps: []const ConstGraphDependency = &.{},
-    callable_result_deps: []const CallableResultDependency = &.{},
-};
-
-/// Public `ComptimeDependencySummaryStoreView` declaration.
-pub const ComptimeDependencySummaryStoreView = struct {
-    owner: CheckedModuleArtifactKey,
-    root_requests: []const ?ComptimeDependencySummaryId = &.{},
-    summaries: []const ComptimeDependencySummary = &.{},
-    proc_summaries: []const ComptimeProcDependencySummary = &.{},
-};
-
-/// Public `ComptimeDependencySummaryStore` declaration.
-pub const ComptimeDependencySummaryStore = struct {
-    owner: CheckedModuleArtifactKey = .{},
-    root_requests: []?ComptimeDependencySummaryId = &.{},
-    summaries: std.ArrayList(ComptimeDependencySummary) = .empty,
-    proc_summaries: std.ArrayList(ComptimeProcDependencySummary) = .empty,
-
-    pub fn init(owner: CheckedModuleArtifactKey) ComptimeDependencySummaryStore {
-        return .{ .owner = owner };
-    }
-
-    pub fn view(self: *const ComptimeDependencySummaryStore) ComptimeDependencySummaryStoreView {
-        return .{
-            .owner = self.owner,
-            .root_requests = self.root_requests,
-            .summaries = self.summaries.items,
-            .proc_summaries = self.proc_summaries.items,
-        };
-    }
-
-    pub fn reserveRootRequests(
-        self: *ComptimeDependencySummaryStore,
-        allocator: Allocator,
-        count: usize,
-    ) Allocator.Error!void {
-        if (self.root_requests.len != 0) {
-            checkedArtifactInvariant("compile-time dependency root requests were reserved twice", .{});
-        }
-        if (count == 0) return;
-        self.root_requests = try allocator.alloc(?ComptimeDependencySummaryId, count);
-        @memset(self.root_requests, null);
-    }
-
-    pub fn fillRootRequest(
-        self: *ComptimeDependencySummaryStore,
-        request: ComptimeDependencySummaryRequestId,
-        summary: ComptimeDependencySummaryId,
-    ) void {
-        const idx = @intFromEnum(request);
-        if (idx >= self.root_requests.len) {
-            checkedArtifactInvariant("compile-time dependency root request id is out of range", .{});
-        }
-        if (self.root_requests[idx] != null) {
-            checkedArtifactInvariant("compile-time dependency root request was filled twice", .{});
-        }
-        self.root_requests[idx] = summary;
-    }
-
-    pub fn summaryForRootRequest(
-        self: *const ComptimeDependencySummaryStore,
-        request: ComptimeDependencySummaryRequestId,
-    ) ComptimeDependencySummary {
-        return self.getSummary(self.summaryIdForRootRequest(request));
-    }
-
-    pub fn summaryIdForRootRequest(
-        self: *const ComptimeDependencySummaryStore,
-        request: ComptimeDependencySummaryRequestId,
-    ) ComptimeDependencySummaryId {
-        const idx = @intFromEnum(request);
-        if (idx >= self.root_requests.len) {
-            checkedArtifactInvariant("compile-time dependency root request id is out of range", .{});
-        }
-        return self.root_requests[idx] orelse {
-            checkedArtifactInvariant("compile-time dependency root request was consumed before it was filled", .{});
-        };
-    }
-
-    pub fn appendSummary(
-        self: *ComptimeDependencySummaryStore,
-        allocator: Allocator,
-        summary: ComptimeDependencySummary,
-    ) Allocator.Error!ComptimeDependencySummaryId {
-        const id: ComptimeDependencySummaryId = @enumFromInt(@as(u32, @intCast(self.summaries.items.len)));
-        const availability_values = try allocator.dupe(ComptimeAvailabilityUse, summary.availability_values);
-        errdefer allocator.free(availability_values);
-        const concrete_values = try cloneComptimeConcreteValueUseSlice(allocator, summary.concrete_values);
-        errdefer deinitComptimeConcreteValueUseSlice(allocator, concrete_values);
-        try self.summaries.append(allocator, .{
-            .availability_values = availability_values,
-            .concrete_values = concrete_values,
-        });
-        return id;
-    }
-
-    /// Append an already-owned callable-aware procedure summary.
-    ///
-    /// The summary-only MIR-family path allocates the nested slices in this
-    /// record. The store takes ownership so it can remain an immutable checked
-    /// artifact input for later mono dependency reservation.
-    pub fn appendProcSummary(
-        self: *ComptimeDependencySummaryStore,
-        allocator: Allocator,
-        summary: ComptimeProcDependencySummary,
-    ) Allocator.Error!ComptimeProcDependencySummaryId {
-        const id: ComptimeProcDependencySummaryId = @enumFromInt(@as(u32, @intCast(self.proc_summaries.items.len)));
-        try self.proc_summaries.append(allocator, summary);
-        return id;
-    }
-
-    pub fn getSummary(
-        self: *const ComptimeDependencySummaryStore,
-        id: ComptimeDependencySummaryId,
-    ) ComptimeDependencySummary {
-        const idx = @intFromEnum(id);
-        if (idx >= self.summaries.items.len) checkedArtifactInvariant("compile-time dependency summary id is out of range", .{});
-        return self.summaries.items[idx];
-    }
-
-    pub fn getProcSummary(
-        self: *const ComptimeDependencySummaryStore,
-        id: ComptimeProcDependencySummaryId,
-    ) ComptimeProcDependencySummary {
-        const idx = @intFromEnum(id);
-        if (idx >= self.proc_summaries.items.len) checkedArtifactInvariant("compile-time procedure dependency summary id is out of range", .{});
-        return self.proc_summaries.items[idx];
-    }
-
-    pub fn verifySealed(self: *const ComptimeDependencySummaryStore) void {
-        if (builtin.mode != .Debug) return;
-
-        for (self.summaries.items, 0..) |_, i| {
-            std.debug.assert(i <= std.math.maxInt(u32));
-        }
-        for (self.proc_summaries.items, 0..) |_, i| {
-            std.debug.assert(i <= std.math.maxInt(u32));
-        }
-        for (self.root_requests, 0..) |summary_id, i| {
-            std.debug.assert(i <= std.math.maxInt(u32));
-            const id = summary_id orelse continue;
-            if (@intFromEnum(id) >= self.summaries.items.len) {
-                std.debug.panic(
-                    "checked artifact invariant violated: compile-time dependency root request {d} references missing summary",
-                    .{i},
-                );
-            }
-        }
-    }
-
-    pub fn deinit(self: *ComptimeDependencySummaryStore, allocator: Allocator) void {
-        for (self.proc_summaries.items) |*summary| deinitComptimeProcDependencySummary(allocator, summary);
-        self.proc_summaries.deinit(allocator);
-        for (self.summaries.items) |summary| {
-            allocator.free(summary.availability_values);
-            deinitComptimeConcreteValueUseSlice(allocator, summary.concrete_values);
-        }
-        allocator.free(self.root_requests);
-        self.summaries.deinit(allocator);
-        self.* = .{};
-    }
-};
-
-fn deinitComptimeProcDependencySummary(
-    allocator: Allocator,
-    summary: *ComptimeProcDependencySummary,
-) void {
-    deinitExecutableSpecializationKey(allocator, &summary.proc);
-    allocator.free(summary.availability_values);
-    deinitComptimeConcreteValueUseSlice(allocator, summary.concrete_values);
-    for (summary.call_deps) |*dep| deinitComptimeCallDependency(allocator, dep);
-    allocator.free(summary.call_deps);
-    for (summary.const_graph_deps) |*dep| deinitConstGraphDependency(allocator, dep);
-    allocator.free(summary.const_graph_deps);
-    for (summary.callable_result_deps) |*dep| deinitCallableResultDependency(allocator, dep);
-    allocator.free(summary.callable_result_deps);
-}
-
-fn deinitComptimeCallDependency(allocator: Allocator, dep: *const ComptimeCallDependency) void {
-    switch (dep.*) {
-        .call_proc => |key| {
-            var owned_key = key;
-            deinitExecutableSpecializationKey(allocator, &owned_key);
-        },
-        .call_value_finite => |finite| deinitExecutableSpecializationKeySlice(allocator, finite.members),
-        .call_value_erased => |erased| deinitErasedCallableDependencyFields(
-            allocator,
-            erased.code,
-            erased.capture_availability,
-            erased.capture_concrete_values,
-            erased.provenance,
-        ),
-    }
-}
-
-fn deinitConstGraphDependency(allocator: Allocator, dep: *const ConstGraphDependency) void {
-    allocator.free(dep.availability_values);
-    deinitComptimeConcreteValueUseSlice(allocator, dep.concrete_values);
-    for (dep.callable_leaves) |*leaf| deinitCallableLeafDependency(allocator, leaf);
-    allocator.free(dep.callable_leaves);
-}
-
-fn deinitCallableResultDependency(allocator: Allocator, dep: *const CallableResultDependency) void {
-    deinitExecutableSpecializationKeySlice(allocator, dep.members);
-    allocator.free(dep.capture_availability);
-    deinitComptimeConcreteValueUseSlice(allocator, dep.capture_concrete_values);
-    if (dep.erased) |erased| deinitErasedCallableDependency(allocator, erased);
-}
-
-fn deinitCallableLeafDependency(allocator: Allocator, leaf: *const CallableLeafDependency) void {
-    switch (leaf.*) {
-        .resolved_finite,
-        .promoted_callable,
-        => {},
-        .erased_boxed_callable => |erased| deinitErasedCallableDependency(allocator, erased),
-    }
-}
-
-fn deinitErasedCallableDependency(allocator: Allocator, erased: ErasedCallableDependency) void {
-    deinitErasedCallableDependencyFields(
-        allocator,
-        erased.code,
-        erased.capture_availability,
-        erased.capture_concrete_values,
-        erased.provenance,
-    );
-}
-
-fn deinitErasedCallableDependencyFields(
-    allocator: Allocator,
-    code: ErasedCallableCodeDependency,
-    availability: []const ComptimeAvailabilityUse,
-    concrete: []const ComptimeConcreteValueUse,
-    provenance: []const BoxErasureProvenance,
-) void {
-    deinitErasedCallableCodeDependency(allocator, code);
-    allocator.free(availability);
-    deinitComptimeConcreteValueUseSlice(allocator, concrete);
-    allocator.free(provenance);
-}
-
-fn deinitErasedCallableCodeDependency(allocator: Allocator, code: ErasedCallableCodeDependency) void {
-    switch (code) {
-        .direct_proc_value => |direct| deinitProcValueEraseDependencyPlan(allocator, direct.erase_plan),
-        .finite_set_adapter => |adapter| {
-            deinitExecutableSpecializationKeySlice(allocator, adapter.member_targets);
-            deinitPublishedFiniteSetEraseAdapterBranches(allocator, adapter.branches);
-        },
-        .supplied_erased_value => {},
-    }
-}
-
-fn deinitPublishedFiniteSetEraseAdapterBranches(
-    allocator: Allocator,
-    branches: []const PublishedFiniteSetEraseAdapterBranchPlan,
-) void {
-    for (branches) |branch| {
-        var target_key = branch.target_key;
-        deinitExecutableSpecializationKey(allocator, &target_key);
-        allocator.free(branch.arg_transforms);
-        allocator.free(branch.capture_transforms);
-    }
-    allocator.free(branches);
-}
-
-fn deinitProcValueEraseDependencyPlan(allocator: Allocator, plan: ProcValueEraseDependencyPlan) void {
-    var key = plan.executable_specialization_key;
-    deinitExecutableSpecializationKey(allocator, &key);
-    allocator.free(plan.capture_slots);
-}
-
-fn deinitExecutableSpecializationKeySlice(
-    allocator: Allocator,
-    keys: []const canonical.ExecutableSpecializationKey,
-) void {
-    for (keys) |key| {
-        var owned_key = key;
-        deinitExecutableSpecializationKey(allocator, &owned_key);
-    }
-    allocator.free(keys);
-}
-
-/// Public `ComptimeValuePathKey` declaration.
-pub const ComptimeValuePathKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-/// Public `PromotedCallablePathKey` declaration.
-pub const PromotedCallablePathKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-/// Public `PrivateCapturePathKey` declaration.
-pub const PrivateCapturePathKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-/// Public `PrivateCaptureId` declaration.
-pub const PrivateCaptureId = enum(u32) { _ };
-/// Public `PrivateCaptureNodeId` declaration.
-pub const PrivateCaptureNodeId = enum(u32) { _ };
 /// Public `MethodRegistryEntryRef` declaration.
 pub const MethodRegistryEntryRef = enum(u32) { _ };
 
@@ -14398,42 +10845,6 @@ pub const ArtifactModuleInterfaceCapabilitiesRef = struct {
     artifact: CheckedModuleArtifactKey,
 };
 
-/// Public `ArtifactCallableResultPlanRef` declaration.
-pub const ArtifactCallableResultPlanRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    plan: CallableResultPlanId,
-};
-
-/// Public `ArtifactCallablePromotionPlanRef` declaration.
-pub const ArtifactCallablePromotionPlanRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    plan: CallablePromotionPlanId,
-};
-
-/// Public `ArtifactConstGraphReificationPlanRef` declaration.
-pub const ArtifactConstGraphReificationPlanRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    plan: ConstReificationPlanId,
-};
-
-/// Public `ArtifactPrivateCaptureNodeRef` declaration.
-pub const ArtifactPrivateCaptureNodeRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    node: PrivateCaptureNodeId,
-};
-
-/// Public `ArtifactPromotedCallableWrapperRef` declaration.
-pub const ArtifactPromotedCallableWrapperRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    wrapper: canonical.PromotedCallableWrapperId,
-};
-
-/// Public `ArtifactPromotedCallableBodyPlanRef` declaration.
-pub const ArtifactPromotedCallableBodyPlanRef = struct {
-    artifact: CheckedModuleArtifactKey,
-    plan: canonical.PromotedCallableBodyPlanId,
-};
-
 /// Public `ImportedTemplateClosureView` declaration.
 pub const ImportedTemplateClosureView = struct {
     checked_bodies: []const ArtifactCheckedBodyRef = &.{},
@@ -14444,16 +10855,6 @@ pub const ImportedTemplateClosureView = struct {
     checked_procedure_templates: []const ArtifactProcedureTemplateRef = &.{},
     callable_eval_templates: []const ArtifactCallableEvalTemplateRef = &.{},
     const_templates: []const ConstRef = &.{},
-    promoted_procedures: []const PromotedProcedureRef = &.{},
-    semantic_instantiation_procedures: []const SemanticInstantiationProcedureId = &.{},
-    promoted_callable_wrappers: []const ArtifactPromotedCallableWrapperRef = &.{},
-    promoted_callable_body_plans: []const ArtifactPromotedCallableBodyPlanRef = &.{},
-    private_capture_roots: []const PrivateCaptureId = &.{},
-    private_capture_nodes: []const ArtifactPrivateCaptureNodeRef = &.{},
-    private_capture_const_templates: []const ConstRef = &.{},
-    callable_result_plans: []const ArtifactCallableResultPlanRef = &.{},
-    callable_promotion_plans: []const ArtifactCallablePromotionPlanRef = &.{},
-    const_reification_plans: []const ArtifactConstGraphReificationPlanRef = &.{},
     nested_proc_sites: []const ArtifactNestedProcSiteTableRef = &.{},
     resolved_value_refs: []const ArtifactResolvedValueRefTableRef = &.{},
     static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = &.{},
@@ -14480,14 +10881,6 @@ pub fn appendImportedTemplateClosureArtifactKeys(
     for (closure.checked_procedure_templates) |value| try appendClosureArtifactKey(allocator, keys, checkedArtifactKeyFromArtifactRef(value.artifact));
     for (closure.callable_eval_templates) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
     for (closure.const_templates) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.promoted_procedures) |value| try appendClosureArtifactKey(allocator, keys, checkedArtifactKeyFromArtifactRef(value.proc.artifact));
-    for (closure.promoted_callable_wrappers) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.promoted_callable_body_plans) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.private_capture_nodes) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.private_capture_const_templates) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.callable_result_plans) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.callable_promotion_plans) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
-    for (closure.const_reification_plans) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
     for (closure.nested_proc_sites) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
     for (closure.resolved_value_refs) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
     for (closure.static_dispatch_plans) |value| try appendClosureArtifactKey(allocator, keys, value.artifact);
@@ -15087,16 +11480,6 @@ fn buildImportedTemplateClosure(
         .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
         .callable_eval_templates = try builder.callable_eval_templates.toOwnedSlice(allocator),
         .const_templates = try builder.const_templates.toOwnedSlice(allocator),
-        .promoted_procedures = try builder.promoted_procedures.toOwnedSlice(allocator),
-        .semantic_instantiation_procedures = try builder.semantic_instantiation_procedures.toOwnedSlice(allocator),
-        .promoted_callable_wrappers = try builder.promoted_callable_wrappers.toOwnedSlice(allocator),
-        .promoted_callable_body_plans = try builder.promoted_callable_body_plans.toOwnedSlice(allocator),
-        .private_capture_roots = try builder.private_capture_roots.toOwnedSlice(allocator),
-        .private_capture_nodes = try builder.private_capture_nodes.toOwnedSlice(allocator),
-        .private_capture_const_templates = try builder.private_capture_const_templates.toOwnedSlice(allocator),
-        .callable_result_plans = try builder.callable_result_plans.toOwnedSlice(allocator),
-        .callable_promotion_plans = try builder.callable_promotion_plans.toOwnedSlice(allocator),
-        .const_reification_plans = try builder.const_reification_plans.toOwnedSlice(allocator),
         .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
         .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
         .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
@@ -15125,16 +11508,6 @@ const ImportedTemplateClosureBuilder = struct {
     checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef),
     callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef),
     const_templates: std.ArrayList(ConstRef),
-    promoted_procedures: std.ArrayList(PromotedProcedureRef),
-    semantic_instantiation_procedures: std.ArrayList(SemanticInstantiationProcedureId),
-    promoted_callable_wrappers: std.ArrayList(ArtifactPromotedCallableWrapperRef),
-    promoted_callable_body_plans: std.ArrayList(ArtifactPromotedCallableBodyPlanRef),
-    private_capture_roots: std.ArrayList(PrivateCaptureId),
-    private_capture_nodes: std.ArrayList(ArtifactPrivateCaptureNodeRef),
-    private_capture_const_templates: std.ArrayList(ConstRef),
-    callable_result_plans: std.ArrayList(ArtifactCallableResultPlanRef),
-    callable_promotion_plans: std.ArrayList(ArtifactCallablePromotionPlanRef),
-    const_reification_plans: std.ArrayList(ArtifactConstGraphReificationPlanRef),
     nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef),
     resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef),
     static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef),
@@ -15174,16 +11547,6 @@ const ImportedTemplateClosureBuilder = struct {
             .checked_procedure_templates = .empty,
             .callable_eval_templates = .empty,
             .const_templates = .empty,
-            .promoted_procedures = .empty,
-            .semantic_instantiation_procedures = .empty,
-            .promoted_callable_wrappers = .empty,
-            .promoted_callable_body_plans = .empty,
-            .private_capture_roots = .empty,
-            .private_capture_nodes = .empty,
-            .private_capture_const_templates = .empty,
-            .callable_result_plans = .empty,
-            .callable_promotion_plans = .empty,
-            .const_reification_plans = .empty,
             .nested_proc_sites = .empty,
             .resolved_value_refs = .empty,
             .static_dispatch_plans = .empty,
@@ -15198,16 +11561,6 @@ const ImportedTemplateClosureBuilder = struct {
         self.static_dispatch_plans.deinit(self.allocator);
         self.resolved_value_refs.deinit(self.allocator);
         self.nested_proc_sites.deinit(self.allocator);
-        self.const_reification_plans.deinit(self.allocator);
-        self.callable_promotion_plans.deinit(self.allocator);
-        self.callable_result_plans.deinit(self.allocator);
-        self.private_capture_const_templates.deinit(self.allocator);
-        self.private_capture_nodes.deinit(self.allocator);
-        self.private_capture_roots.deinit(self.allocator);
-        self.promoted_callable_body_plans.deinit(self.allocator);
-        self.promoted_callable_wrappers.deinit(self.allocator);
-        self.semantic_instantiation_procedures.deinit(self.allocator);
-        self.promoted_procedures.deinit(self.allocator);
         self.const_templates.deinit(self.allocator);
         self.callable_eval_templates.deinit(self.allocator);
         self.checked_procedure_templates.deinit(self.allocator);
@@ -15228,7 +11581,6 @@ const ImportedTemplateClosureBuilder = struct {
         try self.checked_procedure_templates.append(self.allocator, template_ref);
         switch (template.body) {
             .checked_body => |body| try self.appendCheckedBody(body),
-            .promoted_callable_wrapper,
             .intrinsic_wrapper,
             .entry_wrapper,
             => {},
@@ -15347,16 +11699,6 @@ const ImportedTemplateClosureBuilder = struct {
         for (closure.checked_procedure_templates) |value| try appendUniqueValue(ArtifactProcedureTemplateRef, self.allocator, &self.checked_procedure_templates, value);
         for (closure.callable_eval_templates) |value| try appendUniqueValue(ArtifactCallableEvalTemplateRef, self.allocator, &self.callable_eval_templates, value);
         for (closure.const_templates) |value| try appendUniqueValue(ConstRef, self.allocator, &self.const_templates, value);
-        for (closure.promoted_procedures) |value| try appendUniqueValue(PromotedProcedureRef, self.allocator, &self.promoted_procedures, value);
-        for (closure.semantic_instantiation_procedures) |value| try appendUniqueValue(SemanticInstantiationProcedureId, self.allocator, &self.semantic_instantiation_procedures, value);
-        for (closure.promoted_callable_wrappers) |value| try appendUniqueValue(ArtifactPromotedCallableWrapperRef, self.allocator, &self.promoted_callable_wrappers, value);
-        for (closure.promoted_callable_body_plans) |value| try appendUniqueValue(ArtifactPromotedCallableBodyPlanRef, self.allocator, &self.promoted_callable_body_plans, value);
-        for (closure.private_capture_roots) |value| try appendUniqueValue(PrivateCaptureId, self.allocator, &self.private_capture_roots, value);
-        for (closure.private_capture_nodes) |value| try appendUniqueValue(ArtifactPrivateCaptureNodeRef, self.allocator, &self.private_capture_nodes, value);
-        for (closure.private_capture_const_templates) |value| try appendUniqueValue(ConstRef, self.allocator, &self.private_capture_const_templates, value);
-        for (closure.callable_result_plans) |value| try appendUniqueValue(ArtifactCallableResultPlanRef, self.allocator, &self.callable_result_plans, value);
-        for (closure.callable_promotion_plans) |value| try appendUniqueValue(ArtifactCallablePromotionPlanRef, self.allocator, &self.callable_promotion_plans, value);
-        for (closure.const_reification_plans) |value| try appendUniqueValue(ArtifactConstGraphReificationPlanRef, self.allocator, &self.const_reification_plans, value);
         for (closure.nested_proc_sites) |value| try appendUniqueValue(ArtifactNestedProcSiteTableRef, self.allocator, &self.nested_proc_sites, value);
         for (closure.resolved_value_refs) |value| try appendUniqueValue(ArtifactResolvedValueRefTableRef, self.allocator, &self.resolved_value_refs, value);
         for (closure.static_dispatch_plans) |value| try appendUniqueValue(ArtifactStaticDispatchPlanTableRef, self.allocator, &self.static_dispatch_plans, value);
@@ -15403,7 +11745,6 @@ const ImportedTemplateClosureBuilder = struct {
                     .top_level,
                     .hosted,
                     .platform_required,
-                    .promoted,
                     => checkedArtifactInvariant("imported procedure ref did not carry imported binding", .{}),
                 };
                 const binding = self.importedProcedureBinding(imported);
@@ -15511,7 +11852,7 @@ const ImportedTemplateClosureBuilder = struct {
                 const entry_template = self.checked_templates.get(eval.entry_template.template);
                 try self.appendTemplate(eval.entry_template, entry_template);
             },
-            .value_graph_template => {},
+            .stored_const => {},
             .reserved => checkedArtifactInvariant("imported template closure reached unsealed const template", .{}),
         }
     }
@@ -15532,7 +11873,6 @@ const ImportedTemplateClosureBuilder = struct {
             .top_level => |binding_ref| self.templateForTopLevelBinding(binding_ref),
             .hosted => |hosted| hosted.template,
             .platform_required => checkedArtifactInvariant("platform-required procedure dependency must be provided by its relation template closure", .{}),
-            .promoted => null,
             .imported => null,
         };
     }
@@ -15657,16 +11997,6 @@ fn buildImportedConstTemplateClosure(
         .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
         .callable_eval_templates = try builder.callable_eval_templates.toOwnedSlice(allocator),
         .const_templates = try builder.const_templates.toOwnedSlice(allocator),
-        .promoted_procedures = try builder.promoted_procedures.toOwnedSlice(allocator),
-        .semantic_instantiation_procedures = try builder.semantic_instantiation_procedures.toOwnedSlice(allocator),
-        .promoted_callable_wrappers = try builder.promoted_callable_wrappers.toOwnedSlice(allocator),
-        .promoted_callable_body_plans = try builder.promoted_callable_body_plans.toOwnedSlice(allocator),
-        .private_capture_roots = try builder.private_capture_roots.toOwnedSlice(allocator),
-        .private_capture_nodes = try builder.private_capture_nodes.toOwnedSlice(allocator),
-        .private_capture_const_templates = try builder.private_capture_const_templates.toOwnedSlice(allocator),
-        .callable_result_plans = try builder.callable_result_plans.toOwnedSlice(allocator),
-        .callable_promotion_plans = try builder.callable_promotion_plans.toOwnedSlice(allocator),
-        .const_reification_plans = try builder.const_reification_plans.toOwnedSlice(allocator),
         .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
         .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
         .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
@@ -15703,16 +12033,6 @@ pub fn deinitImportedTemplateClosure(
     freeConstSlice(allocator, closure.checked_procedure_templates);
     freeConstSlice(allocator, closure.callable_eval_templates);
     freeConstSlice(allocator, closure.const_templates);
-    freeConstSlice(allocator, closure.promoted_procedures);
-    freeConstSlice(allocator, closure.semantic_instantiation_procedures);
-    freeConstSlice(allocator, closure.promoted_callable_wrappers);
-    freeConstSlice(allocator, closure.promoted_callable_body_plans);
-    freeConstSlice(allocator, closure.private_capture_roots);
-    freeConstSlice(allocator, closure.private_capture_nodes);
-    freeConstSlice(allocator, closure.private_capture_const_templates);
-    freeConstSlice(allocator, closure.callable_result_plans);
-    freeConstSlice(allocator, closure.callable_promotion_plans);
-    freeConstSlice(allocator, closure.const_reification_plans);
     freeConstSlice(allocator, closure.nested_proc_sites);
     freeConstSlice(allocator, closure.resolved_value_refs);
     freeConstSlice(allocator, closure.static_dispatch_plans);
@@ -15737,16 +12057,6 @@ pub fn cloneImportedTemplateClosure(
     out.checked_procedure_templates = try cloneConstSlice(allocator, ArtifactProcedureTemplateRef, closure.checked_procedure_templates);
     out.callable_eval_templates = try cloneConstSlice(allocator, ArtifactCallableEvalTemplateRef, closure.callable_eval_templates);
     out.const_templates = try cloneConstSlice(allocator, ConstRef, closure.const_templates);
-    out.promoted_procedures = try cloneConstSlice(allocator, PromotedProcedureRef, closure.promoted_procedures);
-    out.semantic_instantiation_procedures = try cloneConstSlice(allocator, SemanticInstantiationProcedureId, closure.semantic_instantiation_procedures);
-    out.promoted_callable_wrappers = try cloneConstSlice(allocator, ArtifactPromotedCallableWrapperRef, closure.promoted_callable_wrappers);
-    out.promoted_callable_body_plans = try cloneConstSlice(allocator, ArtifactPromotedCallableBodyPlanRef, closure.promoted_callable_body_plans);
-    out.private_capture_roots = try cloneConstSlice(allocator, PrivateCaptureId, closure.private_capture_roots);
-    out.private_capture_nodes = try cloneConstSlice(allocator, ArtifactPrivateCaptureNodeRef, closure.private_capture_nodes);
-    out.private_capture_const_templates = try cloneConstSlice(allocator, ConstRef, closure.private_capture_const_templates);
-    out.callable_result_plans = try cloneConstSlice(allocator, ArtifactCallableResultPlanRef, closure.callable_result_plans);
-    out.callable_promotion_plans = try cloneConstSlice(allocator, ArtifactCallablePromotionPlanRef, closure.callable_promotion_plans);
-    out.const_reification_plans = try cloneConstSlice(allocator, ArtifactConstGraphReificationPlanRef, closure.const_reification_plans);
     out.nested_proc_sites = try cloneConstSlice(allocator, ArtifactNestedProcSiteTableRef, closure.nested_proc_sites);
     out.resolved_value_refs = try cloneConstSlice(allocator, ArtifactResolvedValueRefTableRef, closure.resolved_value_refs);
     out.static_dispatch_plans = try cloneConstSlice(allocator, ArtifactStaticDispatchPlanTableRef, closure.static_dispatch_plans);
@@ -15771,78 +12081,6 @@ fn deinitOptionalImportedTemplateClosure(
         var owned = value;
         deinitImportedTemplateClosure(allocator, &owned);
     }
-}
-
-/// Release any owned closure metadata attached to a concrete dependency use.
-pub fn deinitComptimeConcreteValueUse(
-    allocator: Allocator,
-    value: ComptimeConcreteValueUse,
-) void {
-    switch (value) {
-        .const_instance,
-        .callable_binding_instance,
-        => {},
-        .procedure_callable_with_payloads => |dependency| {
-            deinitOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
-            deinitOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
-        },
-    }
-}
-
-/// Release owned closure metadata for a caller-owned concrete dependency slice.
-pub fn deinitComptimeConcreteValueUseElements(
-    allocator: Allocator,
-    values: []const ComptimeConcreteValueUse,
-) void {
-    for (values) |value| deinitComptimeConcreteValueUse(allocator, value);
-}
-
-/// Release a concrete dependency slice and any owned closure metadata inside it.
-pub fn deinitComptimeConcreteValueUseSlice(
-    allocator: Allocator,
-    values: []const ComptimeConcreteValueUse,
-) void {
-    deinitComptimeConcreteValueUseElements(allocator, values);
-    allocator.free(values);
-}
-
-/// Clone a concrete dependency use, including any owned imported-template closures.
-pub fn cloneComptimeConcreteValueUse(
-    allocator: Allocator,
-    value: ComptimeConcreteValueUse,
-) Allocator.Error!ComptimeConcreteValueUse {
-    return switch (value) {
-        .const_instance => |request| .{ .const_instance = request },
-        .callable_binding_instance => |request| .{ .callable_binding_instance = request },
-        .procedure_callable_with_payloads => |dependency| blk: {
-            const proc_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.proc_template_closure);
-            errdefer deinitOptionalImportedTemplateClosure(allocator, proc_template_closure);
-            const lifted_owner_template_closure = try cloneOptionalImportedTemplateClosure(allocator, dependency.lifted_owner_template_closure);
-            break :blk .{ .procedure_callable_with_payloads = .{
-                .proc_value = dependency.proc_value,
-                .source_fn_ty_payload = dependency.source_fn_ty_payload,
-                .lifted_owner_source_fn_ty_payload = dependency.lifted_owner_source_fn_ty_payload,
-                .proc_template_closure = proc_template_closure,
-                .lifted_owner_template_closure = lifted_owner_template_closure,
-            } };
-        },
-    };
-}
-
-/// Clone a concrete dependency slice, including all owned imported-template closures.
-pub fn cloneComptimeConcreteValueUseSlice(
-    allocator: Allocator,
-    values: []const ComptimeConcreteValueUse,
-) Allocator.Error![]const ComptimeConcreteValueUse {
-    const out = try allocator.alloc(ComptimeConcreteValueUse, values.len);
-    errdefer allocator.free(out);
-    var initialized: usize = 0;
-    errdefer deinitComptimeConcreteValueUseElements(allocator, out[0..initialized]);
-    for (values, 0..) |value, i| {
-        out[i] = try cloneComptimeConcreteValueUse(allocator, value);
-        initialized += 1;
-    }
-    return out;
 }
 
 fn cloneConstSlice(
@@ -16056,16 +12294,6 @@ fn buildProcedureBindingClosure(
                 .checked_procedure_templates = try builder.checked_procedure_templates.toOwnedSlice(allocator),
                 .callable_eval_templates = try builder.callable_eval_templates.toOwnedSlice(allocator),
                 .const_templates = try builder.const_templates.toOwnedSlice(allocator),
-                .promoted_procedures = try builder.promoted_procedures.toOwnedSlice(allocator),
-                .semantic_instantiation_procedures = try builder.semantic_instantiation_procedures.toOwnedSlice(allocator),
-                .promoted_callable_wrappers = try builder.promoted_callable_wrappers.toOwnedSlice(allocator),
-                .promoted_callable_body_plans = try builder.promoted_callable_body_plans.toOwnedSlice(allocator),
-                .private_capture_roots = try builder.private_capture_roots.toOwnedSlice(allocator),
-                .private_capture_nodes = try builder.private_capture_nodes.toOwnedSlice(allocator),
-                .private_capture_const_templates = try builder.private_capture_const_templates.toOwnedSlice(allocator),
-                .callable_result_plans = try builder.callable_result_plans.toOwnedSlice(allocator),
-                .callable_promotion_plans = try builder.callable_promotion_plans.toOwnedSlice(allocator),
-                .const_reification_plans = try builder.const_reification_plans.toOwnedSlice(allocator),
                 .nested_proc_sites = try builder.nested_proc_sites.toOwnedSlice(allocator),
                 .resolved_value_refs = try builder.resolved_value_refs.toOwnedSlice(allocator),
                 .static_dispatch_plans = try builder.static_dispatch_plans.toOwnedSlice(allocator),
@@ -16086,17 +12314,16 @@ pub const ConstEvalTemplate = struct {
     nested_proc_sites: NestedProcSiteTableRef = .{},
 };
 
-/// Public `ConstValueGraphTemplate` declaration.
-pub const ConstValueGraphTemplate = struct {
-    schema: ComptimeSchemaId,
-    value: ComptimeValueId,
+/// Public `StoredConstTemplate` declaration.
+pub const StoredConstTemplate = struct {
+    node: ConstNodeId,
 };
 
 /// Public `ConstTemplateState` declaration.
 pub const ConstTemplateState = union(enum) {
     reserved,
     eval_template: ConstEvalTemplate,
-    value_graph_template: ConstValueGraphTemplate,
+    stored_const: StoredConstTemplate,
 };
 
 /// Public `ConstTemplate` declaration.
@@ -16138,33 +12365,6 @@ pub const ConstTemplateTable = struct {
         };
     }
 
-    pub fn reservePromotedCapture(
-        self: *ConstTemplateTable,
-        allocator: Allocator,
-        artifact_key: CheckedModuleArtifactKey,
-        promoted_proc: PromotedProcedureRef,
-        capture_index: u32,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
-    ) Allocator.Error!ConstRef {
-        const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
-        const owner: ConstOwner = .{ .promoted_capture = .{
-            .promoted_proc = promoted_proc,
-            .capture_index = capture_index,
-        } };
-        try self.templates.append(allocator, .{
-            .id = id,
-            .owner = owner,
-            .source_scheme = source_scheme,
-            .state = .reserved,
-        });
-        return .{
-            .artifact = artifact_key,
-            .owner = owner,
-            .template = id,
-            .source_scheme = source_scheme,
-        };
-    }
-
     pub fn fillEval(
         self: *ConstTemplateTable,
         ref: ConstRef,
@@ -16176,19 +12376,19 @@ pub const ConstTemplateTable = struct {
         }
         switch (record.state) {
             .reserved => record.state = .{ .eval_template = template },
-            .eval_template, .value_graph_template => checkedArtifactInvariant("constant template was filled twice", .{}),
+            .eval_template, .stored_const => checkedArtifactInvariant("constant template was filled twice", .{}),
         }
     }
 
-    pub fn fillValueGraph(
+    pub fn fillStoredConst(
         self: *ConstTemplateTable,
         ref: ConstRef,
-        template: ConstValueGraphTemplate,
+        template: StoredConstTemplate,
     ) void {
         const record = self.recordForRef(ref);
         switch (record.state) {
-            .reserved => record.state = .{ .value_graph_template = template },
-            .eval_template, .value_graph_template => checkedArtifactInvariant("constant template was filled twice", .{}),
+            .reserved, .eval_template => record.state = .{ .stored_const = template },
+            .stored_const => checkedArtifactInvariant("constant template was filled twice", .{}),
         }
     }
 
@@ -16212,7 +12412,7 @@ pub const ConstTemplateTable = struct {
         for (self.templates.items, 0..) |template, i| {
             std.debug.assert(@intFromEnum(template.id) == i);
             switch (template.state) {
-                .eval_template, .value_graph_template => {},
+                .eval_template, .stored_const => {},
                 .reserved => std.debug.panic(
                     "checked artifact invariant violated: constant template {d} was not sealed before publication",
                     .{i},
@@ -16326,961 +12526,22 @@ pub const ExportedConstTemplateTable = struct {
         self.* = .{};
     }
 
+    pub fn fillStoredConst(
+        self: *ExportedConstTemplateTable,
+        ref: ConstRef,
+        template: StoredConstTemplate,
+    ) void {
+        for (self.templates) |*entry| {
+            if (!constRefEql(entry.const_ref, ref)) continue;
+            entry.template.state = .{ .stored_const = template };
+            return;
+        }
+    }
+
     pub fn view(self: *const ExportedConstTemplateTable) ExportedConstTemplateView {
         return .{ .templates = self.templates };
     }
 };
-
-/// Public `ConstInstantiationStoreView` declaration.
-pub const ConstInstantiationStoreView = struct {
-    owner: CheckedModuleArtifactKey = .{},
-    instances: []const ConstInstantiationRecord = &.{},
-};
-
-/// Public `CallableBindingInstantiationStoreView` declaration.
-pub const CallableBindingInstantiationStoreView = struct {
-    owner: CheckedModuleArtifactKey = .{},
-    instances: []const CallableBindingInstantiationRecord = &.{},
-};
-
-/// Public `SemanticInstantiationProcedureTableView` declaration.
-pub const SemanticInstantiationProcedureTableView = struct {
-    owner: CheckedModuleArtifactKey = .{},
-    procedures: []const SemanticInstantiationProcedureRecord = &.{},
-};
-
-/// Public `ConstInstantiationKey` declaration.
-pub const ConstInstantiationKey = struct {
-    const_ref: ConstRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
-};
-
-/// Public `ConstInstantiationRequest` declaration.
-pub const ConstInstantiationRequest = struct {
-    key: ConstInstantiationKey,
-    requested_source_ty_payload: CheckedTypeId,
-};
-
-/// Public `ConstInstanceRef` declaration.
-pub const ConstInstanceRef = struct {
-    owner: CheckedModuleArtifactKey,
-    key: ConstInstantiationKey,
-    instance: ConstInstanceId,
-};
-
-/// Public `ConstInstance` declaration.
-pub const ConstInstance = struct {
-    schema: ComptimeSchemaId,
-    value: ComptimeValueId,
-    dependency_summary: ?ComptimeDependencySummaryId = null,
-    reification_plan: ?ConstReificationPlanId = null,
-    generated_procedures: []const SemanticInstantiationProcedureId = &.{},
-};
-
-/// Public `ConstInstantiationState` declaration.
-pub const ConstInstantiationState = union(enum) {
-    reserved,
-    evaluating,
-    evaluated: ConstInstance,
-};
-
-/// Public `ConstInstantiationRecord` declaration.
-pub const ConstInstantiationRecord = struct {
-    id: ConstInstanceId,
-    key: ConstInstantiationKey,
-    requested_source_ty_payload: CheckedTypeId,
-    state: ConstInstantiationState,
-};
-
-/// Public `ConstInstantiationStore` declaration.
-pub const ConstInstantiationStore = struct {
-    owner: CheckedModuleArtifactKey = .{},
-    instances: std.ArrayList(ConstInstantiationRecord) = .empty,
-    by_key: std.AutoHashMapUnmanaged([32]u8, ConstInstanceId) = .{},
-
-    pub fn init(owner: CheckedModuleArtifactKey) ConstInstantiationStore {
-        return .{ .owner = owner };
-    }
-
-    pub fn view(self: *const ConstInstantiationStore) ConstInstantiationStoreView {
-        return .{
-            .owner = self.owner,
-            .instances = self.instances.items,
-        };
-    }
-
-    pub fn reserveRequest(
-        self: *ConstInstantiationStore,
-        allocator: Allocator,
-        checked_types: *const CheckedTypeStore,
-        request: ConstInstantiationRequest,
-    ) Allocator.Error!ConstInstanceRef {
-        verifyConstInstantiationRequest(checked_types, request);
-        const key_hash = hashConstInstantiationKey(request.key);
-        if (self.by_key.get(key_hash)) |existing| {
-            const record = &self.instances.items[@intFromEnum(existing)];
-            if (record.requested_source_ty_payload != request.requested_source_ty_payload) {
-                checkedArtifactInvariant("constant instantiation request payload changed for an existing key", .{});
-            }
-            return .{ .owner = self.owner, .key = request.key, .instance = existing };
-        }
-
-        const id: ConstInstanceId = @enumFromInt(@as(u32, @intCast(self.instances.items.len)));
-        try self.instances.append(allocator, .{
-            .id = id,
-            .key = request.key,
-            .requested_source_ty_payload = request.requested_source_ty_payload,
-            .state = .reserved,
-        });
-        errdefer _ = self.instances.pop();
-        try self.by_key.put(allocator, key_hash, id);
-
-        return .{ .owner = self.owner, .key = request.key, .instance = id };
-    }
-
-    pub fn markEvaluating(self: *ConstInstantiationStore, ref: ConstInstanceRef) void {
-        const record = self.recordForRef(ref);
-        switch (record.state) {
-            .reserved => record.state = .evaluating,
-            .evaluating => {},
-            .evaluated => checkedArtifactInvariant("constant instance was evaluated twice", .{}),
-        }
-    }
-
-    pub fn fill(
-        self: *ConstInstantiationStore,
-        ref: ConstInstanceRef,
-        instance: ConstInstance,
-    ) void {
-        const record = self.recordForRef(ref);
-        switch (record.state) {
-            .reserved, .evaluating => record.state = .{ .evaluated = instance },
-            .evaluated => checkedArtifactInvariant("constant instance was filled twice", .{}),
-        }
-    }
-
-    pub fn lookup(self: *const ConstInstantiationStore, key: ConstInstantiationKey) ?ConstInstanceRef {
-        const id = self.by_key.get(hashConstInstantiationKey(key)) orelse return null;
-        return .{ .owner = self.owner, .key = key, .instance = id };
-    }
-
-    pub fn requestForRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstantiationRequest {
-        const record = self.recordForConstRef(ref);
-        return .{
-            .key = record.key,
-            .requested_source_ty_payload = record.requested_source_ty_payload,
-        };
-    }
-
-    pub fn stateForRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstantiationState {
-        return self.recordForConstRef(ref).state;
-    }
-
-    pub fn get(self: *const ConstInstantiationStore, ref: ConstInstanceRef) ConstInstance {
-        const record = self.recordForConstRef(ref);
-        return switch (record.state) {
-            .evaluated => |instance| instance,
-            .reserved, .evaluating => checkedArtifactInvariant("constant instance was consumed before it was sealed", .{}),
-        };
-    }
-
-    pub fn verifySealed(
-        self: *const ConstInstantiationStore,
-        const_templates: *const ConstTemplateTable,
-        comptime_dependencies: *const ComptimeDependencySummaryStore,
-        semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
-    ) void {
-        if (builtin.mode != .Debug) return;
-
-        std.debug.assert(self.by_key.count() == self.instances.items.len);
-        for (self.instances.items, 0..) |record, i| {
-            std.debug.assert(@intFromEnum(record.id) == i);
-            const key_hash = hashConstInstantiationKey(record.key);
-            const indexed = self.by_key.get(key_hash) orelse {
-                std.debug.panic("checked artifact invariant violated: constant instance key was not indexed", .{});
-            };
-            std.debug.assert(indexed == record.id);
-            switch (record.state) {
-                .evaluated => |instance| {
-                    if (instance.dependency_summary == null) {
-                        std.debug.panic(
-                            "checked artifact invariant violated: constant instance {d} has no dependency summary",
-                            .{i},
-                        );
-                    }
-                    if (@intFromEnum(instance.dependency_summary.?) >= comptime_dependencies.summaries.items.len) {
-                        std.debug.panic(
-                            "checked artifact invariant violated: constant instance {d} references missing dependency summary",
-                            .{i},
-                        );
-                    }
-                    if (std.meta.eql(record.key.const_ref.artifact.bytes, self.owner.bytes)) {
-                        const template = const_templates.get(record.key.const_ref);
-                        switch (template.state) {
-                            .eval_template => {
-                                if (instance.reification_plan == null) {
-                                    std.debug.panic(
-                                        "checked artifact invariant violated: eval constant instance {d} has no reification plan",
-                                        .{i},
-                                    );
-                                }
-                            },
-                            .value_graph_template => {},
-                            .reserved => std.debug.panic(
-                                "checked artifact invariant violated: constant instance {d} references an unsealed local template",
-                                .{i},
-                            ),
-                        }
-                    }
-                    for (instance.generated_procedures) |procedure| {
-                        const proc_index = @intFromEnum(procedure);
-                        if (proc_index >= semantic_instantiation_procedures.procedures.items.len) {
-                            std.debug.panic(
-                                "checked artifact invariant violated: constant instance {d} references missing generated procedure {d}",
-                                .{ i, proc_index },
-                            );
-                        }
-                        const procedure_record = semantic_instantiation_procedures.procedures.items[proc_index];
-                        switch (procedure_record.key) {
-                            .const_instance_callable_leaf => |leaf| {
-                                if (!constInstantiationKeyEql(leaf.instance, record.key)) {
-                                    std.debug.panic(
-                                        "checked artifact invariant violated: constant instance {d} generated procedure belongs to a different instance",
-                                        .{i},
-                                    );
-                                }
-                            },
-                            else => std.debug.panic(
-                                "checked artifact invariant violated: constant instance {d} generated procedure has the wrong key shape",
-                                .{i},
-                            ),
-                        }
-                        switch (procedure_record.state) {
-                            .sealed => {},
-                            .reserved => std.debug.panic(
-                                "checked artifact invariant violated: constant instance {d} references unsealed generated procedure {d}",
-                                .{ i, proc_index },
-                            ),
-                        }
-                    }
-                },
-                .reserved, .evaluating => std.debug.panic(
-                    "checked artifact invariant violated: constant instance {d} was not sealed before publication",
-                    .{i},
-                ),
-            }
-        }
-    }
-
-    fn recordForRef(self: *ConstInstantiationStore, ref: ConstInstanceRef) *ConstInstantiationRecord {
-        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
-            checkedArtifactInvariant("constant instance ref names the wrong owning artifact", .{});
-        }
-        const idx = @intFromEnum(ref.instance);
-        if (idx >= self.instances.items.len) {
-            checkedArtifactInvariant("constant instance ref is out of range", .{});
-        }
-        const record = &self.instances.items[idx];
-        if (!constInstantiationKeyEql(record.key, ref.key)) {
-            checkedArtifactInvariant("constant instance ref key does not match reserved row", .{});
-        }
-        return record;
-    }
-
-    fn recordForConstRef(self: *const ConstInstantiationStore, ref: ConstInstanceRef) *const ConstInstantiationRecord {
-        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
-            checkedArtifactInvariant("constant instance ref names the wrong owning artifact", .{});
-        }
-        const idx = @intFromEnum(ref.instance);
-        if (idx >= self.instances.items.len) {
-            checkedArtifactInvariant("constant instance ref is out of range", .{});
-        }
-        const record = &self.instances.items[idx];
-        if (!constInstantiationKeyEql(record.key, ref.key)) {
-            checkedArtifactInvariant("constant instance ref key does not match reserved row", .{});
-        }
-        return record;
-    }
-
-    pub fn deinit(self: *ConstInstantiationStore, allocator: Allocator) void {
-        for (self.instances.items) |*record| switch (record.state) {
-            .evaluated => |instance| allocator.free(instance.generated_procedures),
-            .reserved, .evaluating => {},
-        };
-        self.by_key.deinit(allocator);
-        self.instances.deinit(allocator);
-        self.* = .{};
-    }
-};
-
-fn verifyConstInstantiationRequest(
-    checked_types: *const CheckedTypeStore,
-    request: ConstInstantiationRequest,
-) void {
-    const idx = @intFromEnum(request.requested_source_ty_payload);
-    if (idx >= checked_types.roots.len) {
-        checkedArtifactInvariant("constant instantiation request type payload is out of range", .{});
-    }
-    const payload_key = checked_types.roots[idx].key;
-    if (!std.meta.eql(payload_key.bytes, request.key.requested_source_ty.bytes)) {
-        checkedArtifactInvariant("constant instantiation request key disagrees with checked type payload", .{});
-    }
-}
-
-/// Public `CallableBindingInstantiationKey` declaration.
-pub const CallableBindingInstantiationKey = struct {
-    binding: ProcedureBindingRef,
-    requested_source_fn_ty: canonical.CanonicalTypeKey,
-};
-
-/// Public `CallableBindingInstantiationRequest` declaration.
-pub const CallableBindingInstantiationRequest = struct {
-    key: CallableBindingInstantiationKey,
-    requested_source_fn_ty_payload: CheckedTypeId,
-};
-
-/// Public `CallableBindingInstanceRef` declaration.
-pub const CallableBindingInstanceRef = struct {
-    owner: CheckedModuleArtifactKey,
-    key: CallableBindingInstantiationKey,
-    instance: CallableBindingInstanceId,
-};
-
-/// Public `CallablePromotionOutput` declaration.
-pub const CallablePromotionOutput = union(enum) {
-    existing_procedure: canonical.ProcedureCallableRef,
-    promoted_procedure: PromotedProcedureRef,
-};
-
-/// Public `CallableBindingExecutableRoot` declaration.
-pub const CallableBindingExecutableRoot = union(enum) {
-    local_root: ComptimeRootId,
-    concrete_request: CallableBindingInstantiationKey,
-};
-
-/// Public `DirectCallableBindingInstance` declaration.
-pub const DirectCallableBindingInstance = struct {
-    binding: ProcedureBindingRef,
-    template: canonical.CallableProcedureTemplateRef,
-};
-
-/// Public `EvaluatedCallableBindingInstance` declaration.
-pub const EvaluatedCallableBindingInstance = struct {
-    executable_root: CallableBindingExecutableRoot,
-    result_plan: CallableResultPlanId,
-    promotion_plan: ?CallablePromotionPlanId = null,
-    promotion_output: CallablePromotionOutput,
-};
-
-/// Public `CallableBindingInstanceBody` declaration.
-pub const CallableBindingInstanceBody = union(enum) {
-    direct: DirectCallableBindingInstance,
-    evaluated: EvaluatedCallableBindingInstance,
-};
-
-/// Public `CallableBindingInstance` declaration.
-pub const CallableBindingInstance = struct {
-    key: CallableBindingInstantiationKey,
-    dependency_summary: ComptimeDependencySummaryId,
-    proc_value: canonical.ProcedureCallableRef,
-    body: CallableBindingInstanceBody,
-    generated_procedures: []const SemanticInstantiationProcedureId = &.{},
-};
-
-/// Public `CallableBindingInstantiationState` declaration.
-pub const CallableBindingInstantiationState = union(enum) {
-    reserved,
-    evaluating,
-    evaluated: CallableBindingInstance,
-};
-
-/// Public `CallableBindingInstantiationRecord` declaration.
-pub const CallableBindingInstantiationRecord = struct {
-    id: CallableBindingInstanceId,
-    key: CallableBindingInstantiationKey,
-    requested_source_fn_ty_payload: CheckedTypeId,
-    state: CallableBindingInstantiationState,
-};
-
-/// Public `CallableBindingInstantiationStore` declaration.
-pub const CallableBindingInstantiationStore = struct {
-    owner: CheckedModuleArtifactKey = .{},
-    instances: std.ArrayList(CallableBindingInstantiationRecord) = .empty,
-    by_key: std.AutoHashMapUnmanaged([32]u8, CallableBindingInstanceId) = .{},
-
-    pub fn init(owner: CheckedModuleArtifactKey) CallableBindingInstantiationStore {
-        return .{ .owner = owner };
-    }
-
-    pub fn view(self: *const CallableBindingInstantiationStore) CallableBindingInstantiationStoreView {
-        return .{
-            .owner = self.owner,
-            .instances = self.instances.items,
-        };
-    }
-
-    pub fn reserveRequest(
-        self: *CallableBindingInstantiationStore,
-        allocator: Allocator,
-        checked_types: *const CheckedTypeStore,
-        request: CallableBindingInstantiationRequest,
-    ) Allocator.Error!CallableBindingInstanceRef {
-        verifyCallableBindingInstantiationRequest(checked_types, request);
-        const key_hash = hashCallableBindingInstantiationKey(request.key);
-        if (self.by_key.get(key_hash)) |existing| {
-            const record = &self.instances.items[@intFromEnum(existing)];
-            if (record.requested_source_fn_ty_payload != request.requested_source_fn_ty_payload) {
-                checkedArtifactInvariant("callable binding instantiation request payload changed for an existing key", .{});
-            }
-            return .{ .owner = self.owner, .key = request.key, .instance = existing };
-        }
-
-        const id: CallableBindingInstanceId = @enumFromInt(@as(u32, @intCast(self.instances.items.len)));
-        try self.instances.append(allocator, .{
-            .id = id,
-            .key = request.key,
-            .requested_source_fn_ty_payload = request.requested_source_fn_ty_payload,
-            .state = .reserved,
-        });
-        errdefer _ = self.instances.pop();
-        try self.by_key.put(allocator, key_hash, id);
-
-        return .{ .owner = self.owner, .key = request.key, .instance = id };
-    }
-
-    pub fn markEvaluating(self: *CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) void {
-        const record = self.recordForRef(ref);
-        switch (record.state) {
-            .reserved => record.state = .evaluating,
-            .evaluating => {},
-            .evaluated => checkedArtifactInvariant("callable binding instance was evaluated twice", .{}),
-        }
-    }
-
-    pub fn fill(
-        self: *CallableBindingInstantiationStore,
-        ref: CallableBindingInstanceRef,
-        instance: CallableBindingInstance,
-    ) void {
-        const record = self.recordForRef(ref);
-        if (!callableBindingInstantiationKeyEql(instance.key, ref.key)) {
-            checkedArtifactInvariant("callable binding instance payload key does not match reserved key", .{});
-        }
-        switch (record.state) {
-            .reserved, .evaluating => record.state = .{ .evaluated = instance },
-            .evaluated => checkedArtifactInvariant("callable binding instance was filled twice", .{}),
-        }
-    }
-
-    pub fn lookup(self: *const CallableBindingInstantiationStore, key: CallableBindingInstantiationKey) ?CallableBindingInstanceRef {
-        const id = self.by_key.get(hashCallableBindingInstantiationKey(key)) orelse return null;
-        return .{ .owner = self.owner, .key = key, .instance = id };
-    }
-
-    pub fn requestForRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstantiationRequest {
-        const record = self.recordForConstRef(ref);
-        return .{
-            .key = record.key,
-            .requested_source_fn_ty_payload = record.requested_source_fn_ty_payload,
-        };
-    }
-
-    pub fn stateForRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstantiationState {
-        return self.recordForConstRef(ref).state;
-    }
-
-    pub fn get(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) CallableBindingInstance {
-        const record = self.recordForConstRef(ref);
-        return switch (record.state) {
-            .evaluated => |instance| instance,
-            .reserved, .evaluating => checkedArtifactInvariant("callable binding instance was consumed before it was sealed", .{}),
-        };
-    }
-
-    pub fn verifySealed(
-        self: *const CallableBindingInstantiationStore,
-        comptime_dependencies: *const ComptimeDependencySummaryStore,
-        plans: *const CompileTimePlanStore,
-        roots: *const CompileTimeRootTable,
-        promoted_procedures: *const PromotedProcedureTable,
-        semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
-    ) void {
-        if (builtin.mode != .Debug) return;
-
-        std.debug.assert(self.by_key.count() == self.instances.items.len);
-        for (self.instances.items, 0..) |record, i| {
-            std.debug.assert(@intFromEnum(record.id) == i);
-            const key_hash = hashCallableBindingInstantiationKey(record.key);
-            const indexed = self.by_key.get(key_hash) orelse {
-                std.debug.panic("checked artifact invariant violated: callable binding instance key was not indexed", .{});
-            };
-            std.debug.assert(indexed == record.id);
-            switch (record.state) {
-                .evaluated => |instance| verifyCallableBindingInstance(
-                    i,
-                    record.key,
-                    instance,
-                    comptime_dependencies,
-                    plans,
-                    roots,
-                    promoted_procedures,
-                    semantic_instantiation_procedures,
-                ),
-                .reserved, .evaluating => std.debug.panic(
-                    "checked artifact invariant violated: callable binding instance {d} was not sealed before publication",
-                    .{i},
-                ),
-            }
-        }
-    }
-
-    fn recordForRef(self: *CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) *CallableBindingInstantiationRecord {
-        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
-            checkedArtifactInvariant("callable binding instance ref names the wrong owning artifact", .{});
-        }
-        const idx = @intFromEnum(ref.instance);
-        if (idx >= self.instances.items.len) {
-            checkedArtifactInvariant("callable binding instance ref is out of range", .{});
-        }
-        const record = &self.instances.items[idx];
-        if (!callableBindingInstantiationKeyEql(record.key, ref.key)) {
-            checkedArtifactInvariant("callable binding instance ref key does not match reserved row", .{});
-        }
-        return record;
-    }
-
-    fn recordForConstRef(self: *const CallableBindingInstantiationStore, ref: CallableBindingInstanceRef) *const CallableBindingInstantiationRecord {
-        if (!std.meta.eql(ref.owner.bytes, self.owner.bytes)) {
-            checkedArtifactInvariant("callable binding instance ref names the wrong owning artifact", .{});
-        }
-        const idx = @intFromEnum(ref.instance);
-        if (idx >= self.instances.items.len) {
-            checkedArtifactInvariant("callable binding instance ref is out of range", .{});
-        }
-        const record = &self.instances.items[idx];
-        if (!callableBindingInstantiationKeyEql(record.key, ref.key)) {
-            checkedArtifactInvariant("callable binding instance ref key does not match reserved row", .{});
-        }
-        return record;
-    }
-
-    pub fn deinit(self: *CallableBindingInstantiationStore, allocator: Allocator) void {
-        for (self.instances.items) |*record| switch (record.state) {
-            .evaluated => |instance| allocator.free(instance.generated_procedures),
-            .reserved, .evaluating => {},
-        };
-        self.by_key.deinit(allocator);
-        self.instances.deinit(allocator);
-        self.* = .{};
-    }
-};
-
-fn verifyCallableBindingInstantiationRequest(
-    checked_types: *const CheckedTypeStore,
-    request: CallableBindingInstantiationRequest,
-) void {
-    const idx = @intFromEnum(request.requested_source_fn_ty_payload);
-    if (idx >= checked_types.roots.len) {
-        checkedArtifactInvariant("callable binding instantiation request type payload is out of range", .{});
-    }
-    const payload_key = checked_types.roots[idx].key;
-    if (!std.meta.eql(payload_key.bytes, request.key.requested_source_fn_ty.bytes)) {
-        checkedArtifactInvariant("callable binding instantiation request key disagrees with checked type payload", .{});
-    }
-}
-
-fn verifyCallableBindingInstance(
-    index: usize,
-    key: CallableBindingInstantiationKey,
-    instance: CallableBindingInstance,
-    comptime_dependencies: *const ComptimeDependencySummaryStore,
-    plans: *const CompileTimePlanStore,
-    roots: *const CompileTimeRootTable,
-    promoted_procedures: *const PromotedProcedureTable,
-    semantic_instantiation_procedures: *const SemanticInstantiationProcedureTable,
-) void {
-    if (!callableBindingInstantiationKeyEql(instance.key, key)) {
-        std.debug.panic("checked artifact invariant violated: callable binding instance {d} payload key does not match row key", .{index});
-    }
-    if (@intFromEnum(instance.dependency_summary) >= comptime_dependencies.summaries.items.len) {
-        std.debug.panic("checked artifact invariant violated: callable binding instance {d} references missing dependency summary", .{index});
-    }
-    if (!std.meta.eql(instance.proc_value.source_fn_ty.bytes, key.requested_source_fn_ty.bytes)) {
-        std.debug.panic("checked artifact invariant violated: callable binding instance {d} proc value type differs from row key", .{index});
-    }
-
-    switch (instance.body) {
-        .direct => |direct| verifyDirectCallableBindingInstance(index, key, instance.proc_value, direct),
-        .evaluated => |evaluated| verifyEvaluatedCallableBindingInstance(
-            index,
-            key,
-            instance.proc_value,
-            evaluated,
-            plans,
-            roots,
-            promoted_procedures,
-        ),
-    }
-
-    for (instance.generated_procedures) |procedure| {
-        const proc_index = @intFromEnum(procedure);
-        if (proc_index >= semantic_instantiation_procedures.procedures.items.len) {
-            std.debug.panic(
-                "checked artifact invariant violated: callable binding instance {d} references missing generated procedure {d}",
-                .{ index, proc_index },
-            );
-        }
-        const record = semantic_instantiation_procedures.procedures.items[proc_index];
-        switch (record.key) {
-            .callable_binding_promoted_leaf => |leaf| {
-                if (!callableBindingInstantiationKeyEql(leaf.instance, key)) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: callable binding instance {d} generated procedure belongs to a different instance",
-                        .{index},
-                    );
-                }
-            },
-            else => std.debug.panic(
-                "checked artifact invariant violated: callable binding instance {d} generated procedure has the wrong key shape",
-                .{index},
-            ),
-        }
-        switch (record.state) {
-            .sealed => {},
-            .reserved => std.debug.panic(
-                "checked artifact invariant violated: callable binding instance {d} references unsealed generated procedure {d}",
-                .{ index, proc_index },
-            ),
-        }
-    }
-}
-
-fn verifyDirectCallableBindingInstance(
-    index: usize,
-    key: CallableBindingInstantiationKey,
-    proc_value: canonical.ProcedureCallableRef,
-    direct: DirectCallableBindingInstance,
-) void {
-    if (!procedureBindingRefEql(direct.binding, key.binding)) {
-        std.debug.panic("checked artifact invariant violated: direct callable binding instance {d} body binding differs from row key", .{index});
-    }
-    if (!canonical.callableProcedureTemplateRefEql(direct.template, proc_value.template)) {
-        std.debug.panic("checked artifact invariant violated: direct callable binding instance {d} body template differs from proc value", .{index});
-    }
-}
-
-fn verifyEvaluatedCallableBindingInstance(
-    index: usize,
-    key: CallableBindingInstantiationKey,
-    proc_value: canonical.ProcedureCallableRef,
-    evaluated: EvaluatedCallableBindingInstance,
-    plans: *const CompileTimePlanStore,
-    roots: *const CompileTimeRootTable,
-    promoted_procedures: *const PromotedProcedureTable,
-) void {
-    verifyCallableResultRef(plans, evaluated.result_plan);
-
-    switch (evaluated.executable_root) {
-        .local_root => |root| {
-            const root_index = @intFromEnum(root);
-            if (root_index >= roots.roots.len) {
-                std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is out of range", .{index});
-            }
-            if (roots.roots[root_index].kind != .callable_binding) {
-                std.debug.panic("checked artifact invariant violated: callable binding instance {d} executable root is not callable", .{index});
-            }
-        },
-        .concrete_request => |request_key| {
-            if (!callableBindingInstantiationKeyEql(request_key, key)) {
-                std.debug.panic("checked artifact invariant violated: callable binding instance {d} concrete executable request key differs from row key", .{index});
-            }
-        },
-    }
-
-    switch (evaluated.promotion_output) {
-        .existing_procedure => |proc| {
-            if (evaluated.promotion_plan != null) {
-                std.debug.panic("checked artifact invariant violated: existing callable binding instance {d} unexpectedly has a promotion plan", .{index});
-            }
-            if (!canonical.procedureCallableRefEql(proc_value, proc)) {
-                std.debug.panic("checked artifact invariant violated: callable binding instance {d} final proc value differs from existing procedure output", .{index});
-            }
-        },
-        .promoted_procedure => |promoted| {
-            const plan = evaluated.promotion_plan orelse {
-                std.debug.panic("checked artifact invariant violated: promoted callable binding instance {d} has no promotion plan", .{index});
-            };
-            verifyCallablePromotionRef(plans, plan);
-            const promoted_record = promoted_procedures.get(promoted) orelse {
-                std.debug.panic("checked artifact invariant violated: promoted callable binding instance {d} references a missing promoted procedure", .{index});
-            };
-            const expected = canonical.ProcedureCallableRef{
-                .template = .{ .synthetic = .{ .template = promoted_record.template } },
-                .source_fn_ty = key.requested_source_fn_ty,
-            };
-            if (!canonical.procedureCallableRefEql(proc_value, expected)) {
-                std.debug.panic("checked artifact invariant violated: callable binding instance {d} final proc value differs from promoted procedure output", .{index});
-            }
-        },
-    }
-}
-
-/// Public `SemanticInstantiationProcedureKey` declaration.
-pub const SemanticInstantiationProcedureKey = union(enum) {
-    const_instance_callable_leaf: struct {
-        instance: ConstInstantiationKey,
-        value_path: ComptimeValuePathKey,
-        source_fn_ty: canonical.CanonicalTypeKey,
-        source_fn_ty_payload: CheckedTypeId,
-    },
-    callable_binding_promoted_leaf: struct {
-        instance: CallableBindingInstantiationKey,
-        callable_path: PromotedCallablePathKey,
-        source_fn_ty: canonical.CanonicalTypeKey,
-        source_fn_ty_payload: CheckedTypeId,
-    },
-    private_capture_callable_leaf: struct {
-        promoted_proc: PromotedProcedureRef,
-        capture_path: PrivateCapturePathKey,
-        source_fn_ty: canonical.CanonicalTypeKey,
-        source_fn_ty_payload: CheckedTypeId,
-    },
-};
-
-/// Public `SemanticInstantiationProcedure` declaration.
-pub const SemanticInstantiationProcedure = struct {
-    template: canonical.CallableProcedureTemplateRef,
-    proc_value: canonical.ProcedureValueRef,
-    promoted: ?PromotedProcedureRef = null,
-};
-
-/// Public `SemanticInstantiationProcedureState` declaration.
-pub const SemanticInstantiationProcedureState = union(enum) {
-    reserved,
-    sealed: SemanticInstantiationProcedure,
-};
-
-/// Public `SemanticInstantiationProcedureRecord` declaration.
-pub const SemanticInstantiationProcedureRecord = struct {
-    id: SemanticInstantiationProcedureId,
-    key: SemanticInstantiationProcedureKey,
-    state: SemanticInstantiationProcedureState,
-};
-
-/// Public `SemanticInstantiationProcedureTable` declaration.
-pub const SemanticInstantiationProcedureTable = struct {
-    owner: CheckedModuleArtifactKey = .{},
-    procedures: std.ArrayList(SemanticInstantiationProcedureRecord) = .empty,
-    by_key: std.AutoHashMapUnmanaged([32]u8, SemanticInstantiationProcedureId) = .{},
-
-    pub fn init(owner: CheckedModuleArtifactKey) SemanticInstantiationProcedureTable {
-        return .{ .owner = owner };
-    }
-
-    pub fn view(self: *const SemanticInstantiationProcedureTable) SemanticInstantiationProcedureTableView {
-        return .{
-            .owner = self.owner,
-            .procedures = self.procedures.items,
-        };
-    }
-
-    pub fn reserve(
-        self: *SemanticInstantiationProcedureTable,
-        allocator: Allocator,
-        key: SemanticInstantiationProcedureKey,
-    ) Allocator.Error!SemanticInstantiationProcedureId {
-        const key_hash = hashSemanticInstantiationProcedureKey(key);
-        if (self.by_key.get(key_hash)) |existing| return existing;
-
-        const id: SemanticInstantiationProcedureId = @enumFromInt(@as(u32, @intCast(self.procedures.items.len)));
-        try self.procedures.append(allocator, .{
-            .id = id,
-            .key = key,
-            .state = .reserved,
-        });
-        errdefer _ = self.procedures.pop();
-        try self.by_key.put(allocator, key_hash, id);
-        return id;
-    }
-
-    pub fn fill(
-        self: *SemanticInstantiationProcedureTable,
-        id: SemanticInstantiationProcedureId,
-        key: SemanticInstantiationProcedureKey,
-        procedure: SemanticInstantiationProcedure,
-    ) void {
-        const record = self.recordFor(id);
-        if (!semanticInstantiationProcedureKeyEql(record.key, key)) {
-            checkedArtifactInvariant("semantic instantiation procedure key does not match reserved row", .{});
-        }
-        switch (record.state) {
-            .reserved => record.state = .{ .sealed = procedure },
-            .sealed => checkedArtifactInvariant("semantic instantiation procedure was filled twice", .{}),
-        }
-    }
-
-    pub fn publish(
-        self: *SemanticInstantiationProcedureTable,
-        allocator: Allocator,
-        key: SemanticInstantiationProcedureKey,
-        procedure: SemanticInstantiationProcedure,
-    ) Allocator.Error!SemanticInstantiationProcedureId {
-        const id = try self.reserve(allocator, key);
-        const record = self.recordFor(id);
-        if (!semanticInstantiationProcedureKeyEql(record.key, key)) {
-            checkedArtifactInvariant("semantic instantiation procedure key does not match reserved row", .{});
-        }
-        switch (record.state) {
-            .reserved => record.state = .{ .sealed = procedure },
-            .sealed => |existing| if (!semanticInstantiationProcedureEql(existing, procedure)) {
-                checkedArtifactInvariant("semantic instantiation procedure was republished with different data", .{});
-            },
-        }
-        return id;
-    }
-
-    pub fn lookup(self: *const SemanticInstantiationProcedureTable, key: SemanticInstantiationProcedureKey) ?SemanticInstantiationProcedureId {
-        return self.by_key.get(hashSemanticInstantiationProcedureKey(key));
-    }
-
-    pub fn get(self: *const SemanticInstantiationProcedureTable, id: SemanticInstantiationProcedureId) SemanticInstantiationProcedure {
-        const idx = @intFromEnum(id);
-        if (idx >= self.procedures.items.len) {
-            checkedArtifactInvariant("semantic instantiation procedure id is out of range", .{});
-        }
-        return switch (self.procedures.items[idx].state) {
-            .sealed => |procedure| procedure,
-            .reserved => checkedArtifactInvariant("semantic instantiation procedure was consumed before it was sealed", .{}),
-        };
-    }
-
-    pub fn verifySealed(
-        self: *const SemanticInstantiationProcedureTable,
-        checked_types: *const CheckedTypeStore,
-        promoted_procedures: *const PromotedProcedureTable,
-    ) void {
-        if (builtin.mode != .Debug) return;
-
-        std.debug.assert(self.by_key.count() == self.procedures.items.len);
-        for (self.procedures.items, 0..) |record, i| {
-            std.debug.assert(@intFromEnum(record.id) == i);
-            const key_hash = hashSemanticInstantiationProcedureKey(record.key);
-            const indexed = self.by_key.get(key_hash) orelse {
-                std.debug.panic("checked artifact invariant violated: semantic instantiation procedure key was not indexed", .{});
-            };
-            std.debug.assert(indexed == record.id);
-            switch (record.state) {
-                .sealed => |procedure| verifySemanticInstantiationProcedure(
-                    i,
-                    record.key,
-                    procedure,
-                    checked_types,
-                    promoted_procedures,
-                ),
-                .reserved => std.debug.panic(
-                    "checked artifact invariant violated: semantic instantiation procedure {d} was not sealed before publication",
-                    .{i},
-                ),
-            }
-        }
-    }
-
-    fn recordFor(self: *SemanticInstantiationProcedureTable, id: SemanticInstantiationProcedureId) *SemanticInstantiationProcedureRecord {
-        const idx = @intFromEnum(id);
-        if (idx >= self.procedures.items.len) {
-            checkedArtifactInvariant("semantic instantiation procedure id is out of range", .{});
-        }
-        return &self.procedures.items[idx];
-    }
-
-    pub fn deinit(self: *SemanticInstantiationProcedureTable, allocator: Allocator) void {
-        self.by_key.deinit(allocator);
-        self.procedures.deinit(allocator);
-        self.* = .{};
-    }
-};
-
-fn verifySemanticInstantiationProcedure(
-    index: usize,
-    key: SemanticInstantiationProcedureKey,
-    procedure: SemanticInstantiationProcedure,
-    checked_types: *const CheckedTypeStore,
-    promoted_procedures: *const PromotedProcedureTable,
-) void {
-    verifyCheckedTypePayloadKey(
-        checked_types,
-        semanticInstantiationProcedureKeySourceTyPayload(key),
-        semanticInstantiationProcedureKeySourceTy(key),
-        "semantic instantiation procedure source type payload differs from key source type",
-    );
-
-    if (procedure.promoted) |promoted| {
-        const promoted_record = promoted_procedures.get(promoted) orelse {
-            std.debug.panic(
-                "checked artifact invariant violated: semantic instantiation procedure {d} references a missing promoted procedure",
-                .{index},
-            );
-        };
-        if (!canonical.procedureValueRefEql(procedure.proc_value, promoted_record.proc)) {
-            std.debug.panic(
-                "checked artifact invariant violated: semantic instantiation procedure {d} proc value differs from promoted procedure",
-                .{index},
-            );
-        }
-        switch (procedure.template) {
-            .synthetic => |synthetic| {
-                if (!canonical.procedureTemplateRefEql(synthetic.template, promoted_record.template)) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: semantic instantiation procedure {d} template differs from promoted procedure",
-                        .{index},
-                    );
-                }
-            },
-            .checked,
-            .lifted,
-            => std.debug.panic(
-                "checked artifact invariant violated: promoted semantic instantiation procedure {d} did not use a synthetic template",
-                .{index},
-            ),
-        }
-        if (!std.meta.eql(semanticInstantiationProcedureKeySourceTy(key).bytes, promoted_record.source_fn_ty.bytes)) {
-            std.debug.panic(
-                "checked artifact invariant violated: semantic instantiation procedure {d} source type differs from promoted procedure",
-                .{index},
-            );
-        }
-    }
-
-    switch (key) {
-        .private_capture_callable_leaf => |private| {
-            _ = promoted_procedures.get(private.promoted_proc) orelse {
-                std.debug.panic(
-                    "checked artifact invariant violated: private-capture semantic instantiation procedure {d} references a missing owner promoted procedure",
-                    .{index},
-                );
-            };
-        },
-        .const_instance_callable_leaf,
-        .callable_binding_promoted_leaf,
-        => {},
-    }
-}
-
-fn semanticInstantiationProcedureKeySourceTy(key: SemanticInstantiationProcedureKey) canonical.CanonicalTypeKey {
-    return switch (key) {
-        .const_instance_callable_leaf => |leaf| leaf.source_fn_ty,
-        .callable_binding_promoted_leaf => |leaf| leaf.source_fn_ty,
-        .private_capture_callable_leaf => |leaf| leaf.source_fn_ty,
-    };
-}
-
-fn semanticInstantiationProcedureKeySourceTyPayload(key: SemanticInstantiationProcedureKey) CheckedTypeId {
-    return switch (key) {
-        .const_instance_callable_leaf => |leaf| leaf.source_fn_ty_payload,
-        .callable_binding_promoted_leaf => |leaf| leaf.source_fn_ty_payload,
-        .private_capture_callable_leaf => |leaf| leaf.source_fn_ty_payload,
-    };
-}
 
 fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
     if (builtin.mode == .Debug) {
@@ -17300,177 +12561,11 @@ fn closureArtifactRefIsLocal(
     return checkedArtifactKeyEql(referenced, artifact.key);
 }
 
-fn hashEnumValue(hasher: *std.crypto.hash.sha2.Sha256, value: anytype) void {
-    hashU32(hasher, @as(u32, @intCast(@intFromEnum(value))));
-}
-
-fn hashCheckedModuleArtifactKey(hasher: *std.crypto.hash.sha2.Sha256, key: CheckedModuleArtifactKey) void {
-    hasher.update(&key.bytes);
-}
-
-fn hashArtifactRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.ArtifactRef) void {
-    hasher.update(&ref.bytes);
-}
-
-fn hashCanonicalTypeKey(hasher: *std.crypto.hash.sha2.Sha256, key: canonical.CanonicalTypeKey) void {
-    hasher.update(&key.bytes);
-}
-
-fn hashCanonicalTypeSchemeKey(hasher: *std.crypto.hash.sha2.Sha256, key: canonical.CanonicalTypeSchemeKey) void {
-    hasher.update(&key.bytes);
-}
-
-fn hashProcedureValueRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.ProcedureValueRef) void {
-    hashArtifactRef(hasher, ref.artifact);
-    hashEnumValue(hasher, ref.proc_base);
-}
-
-fn hashProcedureTemplateRef(hasher: *std.crypto.hash.sha2.Sha256, ref: canonical.ProcedureTemplateRef) void {
-    hashArtifactRef(hasher, ref.artifact);
-    hashEnumValue(hasher, ref.proc_base);
-    hashEnumValue(hasher, ref.template);
-}
-
-fn hashTopLevelValueRef(hasher: *std.crypto.hash.sha2.Sha256, ref: TopLevelValueRef) void {
-    hashCheckedModuleArtifactKey(hasher, ref.artifact);
-    hashEnumValue(hasher, ref.pattern);
-}
-
-fn hashHostedProcRef(hasher: *std.crypto.hash.sha2.Sha256, ref: HostedProcRef) void {
-    hashU32(hasher, ref.module_idx);
-    hashEnumValue(hasher, ref.def);
-    hashProcedureValueRef(hasher, ref.proc);
-    hashProcedureTemplateRef(hasher, ref.template);
-}
-
-fn hashImportedProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ImportedProcedureBindingRef) void {
-    hashCheckedModuleArtifactKey(hasher, ref.artifact);
-    hashEnumValue(hasher, ref.def);
-    hashEnumValue(hasher, ref.pattern);
-}
-
-fn hashArtifactTopLevelProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ArtifactTopLevelProcedureBindingRef) void {
-    hashCheckedModuleArtifactKey(hasher, ref.artifact);
-    hashEnumValue(hasher, ref.binding);
-}
-
-fn hashRequiredAppProcedureRef(hasher: *std.crypto.hash.sha2.Sha256, ref: RequiredAppProcedureRef) void {
-    hashCheckedModuleArtifactKey(hasher, ref.artifact);
-    hashTopLevelValueRef(hasher, ref.app_value);
-    hashEnumValue(hasher, ref.procedure_binding);
-}
-
-fn hashPromotedProcedureRef(hasher: *std.crypto.hash.sha2.Sha256, ref: PromotedProcedureRef) void {
-    hashU32(hasher, ref.module_idx);
-    hashProcedureValueRef(hasher, ref.proc);
-}
-
-fn hashPromotedCaptureId(hasher: *std.crypto.hash.sha2.Sha256, capture: PromotedCaptureId) void {
-    hashPromotedProcedureRef(hasher, capture.promoted_proc);
-    hashU32(hasher, capture.capture_index);
-}
-
-fn hashConstOwner(hasher: *std.crypto.hash.sha2.Sha256, owner: ConstOwner) void {
-    switch (owner) {
-        .top_level_binding => |top_level| {
-            hasher.update(&[_]u8{0});
-            hashU32(hasher, top_level.module_idx);
-            hashEnumValue(hasher, top_level.pattern);
-        },
-        .promoted_capture => |capture| {
-            hasher.update(&[_]u8{1});
-            hashPromotedCaptureId(hasher, capture);
-        },
-    }
-}
-
-fn hashProcedureBindingRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ProcedureBindingRef) void {
-    switch (ref) {
-        .top_level => |binding| {
-            hasher.update(&[_]u8{0});
-            hashArtifactTopLevelProcedureBindingRef(hasher, binding);
-        },
-        .imported => |imported| {
-            hasher.update(&[_]u8{1});
-            hashImportedProcedureBindingRef(hasher, imported);
-        },
-        .hosted => |hosted| {
-            hasher.update(&[_]u8{2});
-            hashHostedProcRef(hasher, hosted);
-        },
-        .platform_required => |required| {
-            hasher.update(&[_]u8{3});
-            hashRequiredAppProcedureRef(hasher, required);
-        },
-        .promoted => |promoted| {
-            hasher.update(&[_]u8{4});
-            hashPromotedProcedureRef(hasher, promoted);
-        },
-    }
-}
-
-fn hashConstRef(hasher: *std.crypto.hash.sha2.Sha256, ref: ConstRef) void {
-    hashCheckedModuleArtifactKey(hasher, ref.artifact);
-    hashConstOwner(hasher, ref.owner);
-    hashEnumValue(hasher, ref.template);
-    hashCanonicalTypeSchemeKey(hasher, ref.source_scheme);
-}
-
-fn hashConstInstantiationKey(key: ConstInstantiationKey) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hashConstRef(&hasher, key.const_ref);
-    hashCanonicalTypeKey(&hasher, key.requested_source_ty);
-    return hasher.finalResult();
-}
-
-fn hashCallableBindingInstantiationKey(key: CallableBindingInstantiationKey) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hashProcedureBindingRef(&hasher, key.binding);
-    hashCanonicalTypeKey(&hasher, key.requested_source_fn_ty);
-    return hasher.finalResult();
-}
-
-fn hashSemanticInstantiationProcedureKey(key: SemanticInstantiationProcedureKey) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    switch (key) {
-        .const_instance_callable_leaf => |leaf| {
-            hasher.update(&[_]u8{0});
-            const instance_key = hashConstInstantiationKey(leaf.instance);
-            hasher.update(&instance_key);
-            hasher.update(&leaf.value_path.bytes);
-            hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
-            hashEnumValue(&hasher, leaf.source_fn_ty_payload);
-        },
-        .callable_binding_promoted_leaf => |leaf| {
-            hasher.update(&[_]u8{1});
-            const instance_key = hashCallableBindingInstantiationKey(leaf.instance);
-            hasher.update(&instance_key);
-            hasher.update(&leaf.callable_path.bytes);
-            hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
-            hashEnumValue(&hasher, leaf.source_fn_ty_payload);
-        },
-        .private_capture_callable_leaf => |leaf| {
-            hasher.update(&[_]u8{2});
-            hashPromotedProcedureRef(&hasher, leaf.promoted_proc);
-            hasher.update(&leaf.capture_path.bytes);
-            hashCanonicalTypeKey(&hasher, leaf.source_fn_ty);
-            hashEnumValue(&hasher, leaf.source_fn_ty_payload);
-        },
-    }
-    return hasher.finalResult();
-}
-
 fn constRefEql(a: ConstRef, b: ConstRef) bool {
     return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         constOwnerEql(a.owner, b.owner) and
         a.template == b.template and
         std.meta.eql(a.source_scheme.bytes, b.source_scheme.bytes);
-}
-
-/// Public `constInstantiationKeyEql` function.
-pub fn constInstantiationKeyEql(a: ConstInstantiationKey, b: ConstInstantiationKey) bool {
-    return constRefEql(a.const_ref, b.const_ref) and
-        std.meta.eql(a.requested_source_ty.bytes, b.requested_source_ty.bytes);
 }
 
 fn importedProcedureBindingRefEql(a: ImportedProcedureBindingRef, b: ImportedProcedureBindingRef) bool {
@@ -17500,56 +12595,10 @@ fn requiredAppProcedureRefEql(a: RequiredAppProcedureRef, b: RequiredAppProcedur
         a.procedure_binding == b.procedure_binding;
 }
 
-fn promotedProcedureRefEql(a: PromotedProcedureRef, b: PromotedProcedureRef) bool {
-    return a.module_idx == b.module_idx and canonical.procedureValueRefEql(a.proc, b.proc);
-}
-
 fn optionalCheckedPatternIdEql(a: ?CheckedPatternId, b: ?CheckedPatternId) bool {
     if (a == null and b == null) return true;
     if (a == null or b == null) return false;
     return a.? == b.?;
-}
-
-fn promotedProcedureProvenanceEql(
-    a: PromotedProcedureProvenance,
-    b: PromotedProcedureProvenance,
-) bool {
-    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .local_callable_root_result => |left| blk: {
-            const right = b.local_callable_root_result;
-            break :blk left.root == right.root and left.result_plan == right.result_plan;
-        },
-        .local_const_root_callable_leaf => |left| blk: {
-            const right = b.local_const_root_callable_leaf;
-            break :blk left.root == right.root and
-                constInstantiationKeyEql(left.instance, right.instance) and
-                left.result_plan == right.result_plan and
-                std.meta.eql(left.value_path.bytes, right.value_path.bytes);
-        },
-        .callable_binding_instance_result => |left| blk: {
-            const right = b.callable_binding_instance_result;
-            break :blk callableBindingInstantiationKeyEql(left.instance, right.instance) and
-                left.result_plan == right.result_plan and
-                std.meta.eql(left.callable_path.bytes, right.callable_path.bytes);
-        },
-        .const_instance_callable_leaf => |left| blk: {
-            const right = b.const_instance_callable_leaf;
-            break :blk constInstantiationKeyEql(left.instance, right.instance) and
-                left.result_plan == right.result_plan and
-                std.meta.eql(left.value_path.bytes, right.value_path.bytes);
-        },
-        .private_capture_callable_leaf => |left| blk: {
-            const right = b.private_capture_callable_leaf;
-            break :blk promotedProcedureRefEql(left.promoted_proc, right.promoted_proc) and
-                left.result_plan == right.result_plan and
-                std.meta.eql(left.capture_path.bytes, right.capture_path.bytes);
-        },
-    };
-}
-
-fn promotedCaptureIdEql(a: PromotedCaptureId, b: PromotedCaptureId) bool {
-    return promotedProcedureRefEql(a.promoted_proc, b.promoted_proc) and a.capture_index == b.capture_index;
 }
 
 fn constOwnerEql(a: ConstOwner, b: ConstOwner) bool {
@@ -17559,14 +12608,12 @@ fn constOwnerEql(a: ConstOwner, b: ConstOwner) bool {
             const right = b.top_level_binding;
             break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
         },
-        .promoted_capture => |left| promotedCaptureIdEql(left, b.promoted_capture),
     };
 }
 
 fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
     return switch (ref.owner) {
         .top_level_binding => |owner| owner,
-        .promoted_capture => null,
     };
 }
 
@@ -17578,54 +12625,7 @@ pub fn procedureBindingRefEql(a: ProcedureBindingRef, b: ProcedureBindingRef) bo
         .imported => |left| importedProcedureBindingRefEql(left, b.imported),
         .hosted => |left| hostedProcRefEql(left, b.hosted),
         .platform_required => |left| requiredAppProcedureRefEql(left, b.platform_required),
-        .promoted => |left| promotedProcedureRefEql(left, b.promoted),
     };
-}
-
-/// Public `callableBindingInstantiationKeyEql` function.
-pub fn callableBindingInstantiationKeyEql(a: CallableBindingInstantiationKey, b: CallableBindingInstantiationKey) bool {
-    return procedureBindingRefEql(a.binding, b.binding) and
-        std.meta.eql(a.requested_source_fn_ty.bytes, b.requested_source_fn_ty.bytes);
-}
-
-fn semanticInstantiationProcedureKeyEql(a: SemanticInstantiationProcedureKey, b: SemanticInstantiationProcedureKey) bool {
-    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .const_instance_callable_leaf => |left| blk: {
-            const right = b.const_instance_callable_leaf;
-            break :blk constInstantiationKeyEql(left.instance, right.instance) and
-                std.meta.eql(left.value_path.bytes, right.value_path.bytes) and
-                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes) and
-                left.source_fn_ty_payload == right.source_fn_ty_payload;
-        },
-        .callable_binding_promoted_leaf => |left| blk: {
-            const right = b.callable_binding_promoted_leaf;
-            break :blk callableBindingInstantiationKeyEql(left.instance, right.instance) and
-                std.meta.eql(left.callable_path.bytes, right.callable_path.bytes) and
-                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes) and
-                left.source_fn_ty_payload == right.source_fn_ty_payload;
-        },
-        .private_capture_callable_leaf => |left| blk: {
-            const right = b.private_capture_callable_leaf;
-            break :blk promotedProcedureRefEql(left.promoted_proc, right.promoted_proc) and
-                std.meta.eql(left.capture_path.bytes, right.capture_path.bytes) and
-                std.meta.eql(left.source_fn_ty.bytes, right.source_fn_ty.bytes) and
-                left.source_fn_ty_payload == right.source_fn_ty_payload;
-        },
-    };
-}
-
-fn semanticInstantiationProcedureEql(a: SemanticInstantiationProcedure, b: SemanticInstantiationProcedure) bool {
-    const promoted_matches = if (a.promoted == null and b.promoted == null)
-        true
-    else if (a.promoted == null or b.promoted == null)
-        false
-    else
-        promotedProcedureRefEql(a.promoted.?, b.promoted.?);
-
-    return canonical.callableProcedureTemplateRefEql(a.template, b.template) and
-        canonical.procedureValueRefEql(a.proc_value, b.proc_value) and
-        promoted_matches;
 }
 
 /// Public `CheckedModuleArtifact` declaration.
@@ -17653,12 +12653,6 @@ pub const CheckedModuleArtifact = struct {
     checked_procedure_templates: CheckedProcedureTemplateTable,
     entry_wrappers: EntryWrapperTable = .{},
     intrinsic_wrappers: IntrinsicWrapperTable = .{},
-    promoted_callable_wrappers: PromotedCallableWrapperTable = .{},
-    promoted_callable_body_plans: PromotedCallableBodyPlanTable = .{},
-    executable_type_payloads: ExecutableTypePayloadStore,
-    executable_value_transforms: ExecutableValueTransformPlanStore = .{},
-    callable_set_descriptors: CallableSetDescriptorStore = .{},
-    erased_fn_abis: canonical.ErasedFnAbiStore = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
     root_requests: RootRequestTable,
@@ -17669,14 +12663,8 @@ pub const CheckedModuleArtifact = struct {
     interface_capabilities: ModuleInterfaceCapabilities,
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
-    comptime_plans: CompileTimePlanStore = .{},
-    comptime_dependencies: ComptimeDependencySummaryStore = .{},
-    promoted_procedures: PromotedProcedureTable,
     const_templates: ConstTemplateTable,
-    comptime_values: CompileTimeValueStore,
-    const_instances: ConstInstantiationStore,
-    callable_binding_instances: CallableBindingInstantiationStore,
-    semantic_instantiation_procedures: SemanticInstantiationProcedureTable,
+    const_store: ConstStore,
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
         return self.module_env.env();
@@ -17738,136 +12726,6 @@ pub const CheckedModuleArtifact = struct {
         };
     }
 
-    pub fn appendPromotedCallableWrapper(
-        self: *CheckedModuleArtifact,
-        allocator: Allocator,
-        source_binding: ?CheckedPatternId,
-        checked_fn_root: CheckedTypeId,
-        checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
-        provenance: PromotedProcedureProvenance,
-        body_plan: PromotedCallableBodyPlan,
-    ) Allocator.Error!PromotedProcedureRef {
-        const reserved = try self.reservePromotedCallableWrapper(
-            allocator,
-            source_binding,
-            checked_fn_root,
-            checked_fn_scheme,
-            provenance,
-        );
-        self.promoted_callable_body_plans.fill(reserved.body_plan, body_plan);
-        try self.publishPromotedCallableWrapper(allocator, reserved);
-        return reserved.promoted_ref;
-    }
-
-    pub fn reservePromotedCallableWrapper(
-        self: *CheckedModuleArtifact,
-        allocator: Allocator,
-        source_binding: ?CheckedPatternId,
-        checked_fn_root: CheckedTypeId,
-        checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
-        provenance: PromotedProcedureProvenance,
-    ) Allocator.Error!ReservedPromotedCallableWrapper {
-        const body_plan_id = try self.promoted_callable_body_plans.reserve(allocator);
-        const wrapper_id: canonical.PromotedCallableWrapperId = @enumFromInt(@as(u32, @intCast(self.promoted_callable_wrappers.wrappers.len)));
-        const proc_base = try self.canonical_names.internProcBase(.{
-            .module_name = self.module_identity.module_name,
-            .export_name = null,
-            .kind = .promoted_callable_wrapper,
-            .ordinal = @intFromEnum(wrapper_id),
-            .source_def_idx = null,
-        });
-        const owner_artifact = artifactRef(self.key);
-        const proc_value = canonical.ProcedureValueRef{
-            .artifact = owner_artifact,
-            .proc_base = proc_base,
-        };
-        const template_id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(self.checked_procedure_templates.templates.len)));
-        const template_ref = canonical.ProcedureTemplateRef{
-            .artifact = owner_artifact,
-            .proc_base = proc_base,
-            .template = template_id,
-        };
-        const source_fn_ty = self.checked_types.roots[@intFromEnum(checked_fn_root)].key;
-
-        const appended_wrapper = try self.promoted_callable_wrappers.append(allocator, .{
-            .id = wrapper_id,
-            .promoted_proc = proc_value,
-            .proc_base_key = proc_base,
-            .callable_node = @enumFromInt(@intFromEnum(wrapper_id)),
-            .source_binding = source_binding,
-            .source_fn_ty = source_fn_ty,
-            .provenance = provenance,
-            .checked_fn_root = checked_fn_root,
-            .body_plan = body_plan_id,
-        });
-        if (appended_wrapper != wrapper_id) {
-            checkedArtifactInvariant("promoted callable wrapper append returned the wrong id", .{});
-        }
-
-        try self.checked_procedure_templates.appendTemplate(allocator, .{
-            .proc_base = proc_base,
-            .template_id = template_id,
-            .body = .{ .promoted_callable_wrapper = wrapper_id },
-            .checked_fn_scheme = checked_fn_scheme,
-            .checked_fn_root = checked_fn_root,
-            .static_dispatch_plans = .{},
-            .resolved_value_refs = .{},
-            .top_level_value_uses = .{},
-            .nested_proc_sites = .{},
-            .target = .promoted_callable,
-        });
-
-        return .{
-            .promoted_ref = .{
-                .module_idx = self.module_identity.module_idx,
-                .proc = proc_value,
-            },
-            .proc_value = proc_value,
-            .template = template_ref,
-            .wrapper = wrapper_id,
-            .body_plan = body_plan_id,
-            .source_fn_ty = source_fn_ty,
-            .provenance = provenance,
-        };
-    }
-
-    pub fn fillPromotedCallableWrapperBody(
-        self: *CheckedModuleArtifact,
-        reserved: ReservedPromotedCallableWrapper,
-        body_plan: PromotedCallableBodyPlan,
-    ) void {
-        const wrapper = self.promoted_callable_wrappers.get(reserved.wrapper);
-        if (!canonical.procedureValueRefEql(wrapper.promoted_proc, reserved.proc_value) or
-            wrapper.body_plan != reserved.body_plan)
-        {
-            checkedArtifactInvariant("reserved promoted callable wrapper does not match artifact tables", .{});
-        }
-        self.promoted_callable_body_plans.fill(reserved.body_plan, body_plan);
-    }
-
-    pub fn publishPromotedCallableWrapper(
-        self: *CheckedModuleArtifact,
-        allocator: Allocator,
-        reserved: ReservedPromotedCallableWrapper,
-    ) Allocator.Error!void {
-        const wrapper = self.promoted_callable_wrappers.get(reserved.wrapper);
-        if (!canonical.procedureValueRefEql(wrapper.promoted_proc, reserved.proc_value) or
-            wrapper.body_plan != reserved.body_plan)
-        {
-            checkedArtifactInvariant("reserved promoted callable wrapper does not match artifact tables", .{});
-        }
-        const published = try self.promoted_procedures.append(allocator, self.module_identity.module_idx, .{
-            .proc = reserved.proc_value,
-            .template = reserved.template,
-            .source_binding = wrapper.source_binding,
-            .source_fn_ty = reserved.source_fn_ty,
-            .provenance = reserved.provenance,
-        });
-        if (!promotedProcedureRefEql(published, reserved.promoted_ref)) {
-            checkedArtifactInvariant("published promoted procedure ref differed from reserved ref", .{});
-        }
-    }
-
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
         self.deinitInternal(allocator, true);
     }
@@ -17877,14 +12735,8 @@ pub const CheckedModuleArtifact = struct {
     }
 
     fn deinitInternal(self: *CheckedModuleArtifact, allocator: Allocator, comptime deinit_module_env: bool) void {
-        self.comptime_values.deinit(allocator);
-        self.semantic_instantiation_procedures.deinit(allocator);
-        self.callable_binding_instances.deinit(allocator);
-        self.const_instances.deinit(allocator);
+        self.const_store.deinit();
         self.const_templates.deinit(allocator);
-        self.promoted_procedures.deinit(allocator);
-        self.comptime_dependencies.deinit(allocator);
-        self.comptime_plans.deinit(allocator);
         self.top_level_values.deinit(allocator);
         self.compile_time_roots.deinit(allocator);
         self.interface_capabilities.deinit(allocator);
@@ -17895,12 +12747,6 @@ pub const CheckedModuleArtifact = struct {
         self.root_requests.deinit(allocator);
         self.callable_eval_templates.deinit(allocator);
         self.top_level_procedure_bindings.deinit(allocator);
-        self.erased_fn_abis.deinit(allocator);
-        self.callable_set_descriptors.deinit(allocator);
-        self.executable_value_transforms.deinit(allocator);
-        self.executable_type_payloads.deinit(allocator);
-        self.promoted_callable_body_plans.deinit(allocator);
-        self.promoted_callable_wrappers.deinit(allocator);
         self.intrinsic_wrappers.deinit(allocator);
         self.entry_wrappers.deinit(allocator);
         self.checked_procedure_templates.deinit(allocator);
@@ -18026,9 +12872,6 @@ pub const CheckedModuleArtifact = struct {
                 continue;
             }
             const has_request = compileTimeRootHasRootRequest(self.root_requests.requests, root);
-            if (has_request) {
-                _ = self.comptime_dependencies.summaryIdForRootRequest(root.dependency_summary_request);
-            }
             switch (root.payload) {
                 .pending => {
                     if (has_request) {
@@ -18109,14 +12952,6 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(checked_body.owner_template.template == template.template_id);
                     std.debug.assert(checked_body.owner_template.proc_base == template.proc_base);
                     std.debug.assert(@intFromEnum(checked_body.root_expr) < self.checked_bodies.exprs.len);
-                },
-                .promoted_callable_wrapper => |wrapper_id| {
-                    const wrapper = self.promoted_callable_wrappers.get(wrapper_id);
-                    std.debug.assert(wrapper.proc_base_key == template.proc_base);
-                    std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
-                    std.debug.assert(wrapper.promoted_proc.proc_base == template.proc_base);
-                    std.debug.assert(std.meta.eql(wrapper.promoted_proc.artifact.bytes, self.key.bytes));
-                    std.debug.assert(@intFromEnum(wrapper.body_plan) < self.promoted_callable_body_plans.plans.len);
                 },
                 .intrinsic_wrapper => |wrapper_id| {
                     const wrapper = self.intrinsic_wrappers.get(wrapper_id);
@@ -18211,9 +13046,8 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(exported.template_closure.checked_const_bodies.len > 0);
                     std.debug.assert(exported.template_closure.checked_procedure_templates.len > 0);
                 },
-                .value_graph_template => |graph| {
-                    std.debug.assert(@intFromEnum(graph.schema) < self.comptime_values.schemas.items.len);
-                    std.debug.assert(@intFromEnum(graph.value) < self.comptime_values.values.items.len);
+                .stored_const => |stored| {
+                    std.debug.assert(@intFromEnum(stored.node) < self.const_store.values.items.len);
                 },
                 .reserved => std.debug.panic(
                     "checked artifact invariant violated: exported const template was not sealed",
@@ -18403,48 +13237,8 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
-        self.executable_type_payloads.verifyPublished(self.key, &self.erased_fn_abis);
-        self.executable_value_transforms.verifyPublished(&self.executable_type_payloads, self.key);
-        self.callable_set_descriptors.verifyPublished();
-        self.erased_fn_abis.verifyPublished();
+        self.const_store.verifyPublished();
         self.interface_capabilities.verifyPublished();
-        self.promoted_callable_body_plans.verifyPublished(
-            &self.comptime_plans,
-            &self.checked_types,
-            &self.executable_type_payloads,
-            &self.executable_value_transforms,
-            &self.erased_fn_abis,
-            self.key,
-        );
-        self.promoted_callable_wrappers.verifyPublished(
-            self.key,
-            &self.checked_types,
-            &self.checked_bodies,
-            &self.promoted_callable_body_plans,
-        );
-        self.promoted_procedures.verifyPublished(
-            self.key,
-            &self.checked_procedure_templates,
-            &self.checked_bodies,
-            &self.promoted_callable_wrappers,
-        );
-        self.comptime_plans.verifySealed(&self.checked_types, &self.callable_set_descriptors);
-        self.comptime_dependencies.verifySealed();
-        self.comptime_values.verifySealed();
-        self.const_instances.verifySealed(
-            &self.const_templates,
-            &self.comptime_dependencies,
-            &self.semantic_instantiation_procedures,
-        );
-        self.callable_binding_instances.verifySealed(
-            &self.comptime_dependencies,
-            &self.comptime_plans,
-            &self.compile_time_roots,
-            &self.promoted_procedures,
-            &self.semantic_instantiation_procedures,
-        );
-        self.semantic_instantiation_procedures.verifySealed(&self.checked_types, &self.promoted_procedures);
-
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);
             if (self.platform_required_bindings.bindings.len > 0) {
@@ -18461,6 +13255,7 @@ pub const CheckedModuleArtifact = struct {
         verifyLoweringVisibleNamesInterned(self.moduleEnvConst(), &self.canonical_names);
     }
 };
+pub const Module = CheckedModuleArtifact;
 
 fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
     if (builtin.mode != .Debug) return;
@@ -18487,7 +13282,6 @@ fn verifyPlatformRequiredValueUse(binding: PlatformRequiredBinding) void {
             .top_level,
             .imported,
             .hosted,
-            .promoted,
             => std.debug.panic(
                 "checked artifact invariant violated: platform-required procedure use must reference the app requirement binding explicitly",
                 .{},
@@ -18515,35 +13309,24 @@ pub const ImportedModuleView = struct {
     nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     hosted_procs: *const HostedProcTable,
-    promoted_callable_wrappers: *const PromotedCallableWrapperTable,
-    promoted_callable_body_plans: *const PromotedCallableBodyPlanTable,
-    executable_type_payloads: *const ExecutableTypePayloadStore,
-    executable_value_transforms: *const ExecutableValueTransformPlanStore,
-    callable_set_descriptors: *const CallableSetDescriptorStore,
-    erased_fn_abis: *const canonical.ErasedFnAbiStore,
     exported_procedure_templates: ExportedProcedureTemplateView,
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
     provided_exports: *const ProvidedExportTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
     callable_eval_templates: CallableEvalTemplateTableView,
     const_templates: *const ConstTemplateTable,
-    promoted_procedures: *const PromotedProcedureTable,
     method_registry: *const static_dispatch.MethodRegistry,
     interface_capabilities: *const ModuleInterfaceCapabilities,
-    comptime_values: *const CompileTimeValueStore,
-    comptime_plans: *const CompileTimePlanStore,
-    comptime_dependencies: ComptimeDependencySummaryStoreView,
-    const_instances: ConstInstantiationStoreView,
-    callable_binding_instances: CallableBindingInstantiationStoreView,
-    semantic_instantiation_procedures: SemanticInstantiationProcedureTableView,
+    const_store: *const ConstStore,
 };
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
-    artifact: *const CheckedModuleArtifact,
+    module: *const CheckedModuleArtifact,
     roots: *const RootRequestTable,
-    relation_artifacts: []const ImportedModuleView = &.{},
+    relation_modules: []const ImportedModuleView = &.{},
 };
 
 /// Public `importedView` function.
@@ -18566,29 +13349,22 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .hosted_procs = &artifact.hosted_procs,
-        .promoted_callable_wrappers = &artifact.promoted_callable_wrappers,
-        .promoted_callable_body_plans = &artifact.promoted_callable_body_plans,
-        .executable_type_payloads = &artifact.executable_type_payloads,
-        .executable_value_transforms = &artifact.executable_value_transforms,
-        .callable_set_descriptors = &artifact.callable_set_descriptors,
-        .erased_fn_abis = &artifact.erased_fn_abis,
         .exported_procedure_templates = artifact.exported_procedure_templates.view(),
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
         .provided_exports = &artifact.provided_exports,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
+        .platform_required_bindings = &artifact.platform_required_bindings,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .const_templates = &artifact.const_templates,
-        .promoted_procedures = &artifact.promoted_procedures,
         .method_registry = &artifact.method_registry,
         .interface_capabilities = &artifact.interface_capabilities,
-        .comptime_values = &artifact.comptime_values,
-        .comptime_plans = &artifact.comptime_plans,
-        .comptime_dependencies = artifact.comptime_dependencies.view(),
-        .const_instances = artifact.const_instances.view(),
-        .callable_binding_instances = artifact.callable_binding_instances.view(),
-        .semantic_instantiation_procedures = artifact.semantic_instantiation_procedures.view(),
+        .const_store = &artifact.const_store,
     };
+}
+
+pub fn importedNames(view: ImportedModuleView) *const canonical.NameStore {
+    return view.canonical_names;
 }
 
 const ProjectedCheckedTypeKey = struct {
@@ -18598,10 +13374,10 @@ const ProjectedCheckedTypeKey = struct {
 
 /// Public `ArtifactNamePublisher` declaration.
 ///
-/// Checking finalization uses this boundary when artifact-owned data must record
-/// canonical names that came from a MIR-family lowering run. The caller stores
-/// only ids owned by `target`; no lowering-run label id may cross this boundary
-/// into checked artifact data.
+/// Checking finalization uses this boundary when checked module data must record
+/// names that came from post-check lowering. The caller stores only ids owned by
+/// `target`; no lowering-run label id may cross this boundary into checked
+/// module data.
 pub const ArtifactNamePublisher = struct {
     target: *CheckedModuleArtifact,
 
@@ -18656,7 +13432,7 @@ pub const ArtifactNamePublisher = struct {
 /// owns the current checked-finalization result. This is semantic publication
 /// work, not target/layout caching, and it is the only checked-artifact boundary
 /// that may clone imported checked type payloads for compile-time constant and
-/// capture reification plans.
+/// capture resolution plans.
 pub const CheckedTypeProjector = struct {
     allocator: Allocator,
     target: *CheckedModuleArtifact,
@@ -19727,9 +14503,9 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
 /// Public `loweringView` function.
 pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
     return .{
-        .artifact = artifact,
+        .module = artifact,
         .roots = &artifact.root_requests,
-        .relation_artifacts = &.{},
+        .relation_modules = &.{},
     };
 }
 
@@ -19739,9 +14515,9 @@ pub fn loweringViewWithRelations(
     relation_artifacts: []const ImportedModuleView,
 ) LoweringModuleView {
     return .{
-        .artifact = artifact,
+        .module = artifact,
         .roots = &artifact.root_requests,
-        .relation_artifacts = relation_artifacts,
+        .relation_modules = relation_artifacts,
     };
 }
 
@@ -19887,21 +14663,8 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
     );
 
-    var comptime_values = CompileTimeValueStore.init(allocator);
-    errdefer comptime_values.deinit(allocator);
-
-    var const_instances = ConstInstantiationStore.init(artifact_key);
-    errdefer const_instances.deinit(allocator);
-
-    var callable_binding_instances = CallableBindingInstantiationStore.init(artifact_key);
-    errdefer callable_binding_instances.deinit(allocator);
-
-    var semantic_instantiation_procedures = SemanticInstantiationProcedureTable.init(artifact_key);
-    errdefer semantic_instantiation_procedures.deinit(allocator);
-
-    var comptime_dependencies = ComptimeDependencySummaryStore.init(artifact_key);
-    errdefer comptime_dependencies.deinit(allocator);
-    try comptime_dependencies.reserveRootRequests(allocator, compile_time_roots.roots.len);
+    var checked_const_store = ConstStore.init(allocator);
+    errdefer checked_const_store.deinit();
 
     var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
     errdefer top_level_procedure_bindings.deinit(allocator);
@@ -19925,8 +14688,6 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
     );
     errdefer top_level_values.deinit(allocator);
-    try comptime_values.sealBindings();
-
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
         modules,
@@ -20096,9 +14857,6 @@ pub fn publishFromTypedModule(
         .checked_procedure_templates = checked_procedure_templates,
         .entry_wrappers = entry_wrappers,
         .intrinsic_wrappers = intrinsic_wrappers,
-        .promoted_callable_wrappers = .{},
-        .promoted_callable_body_plans = .{},
-        .executable_type_payloads = ExecutableTypePayloadStore.init(allocator),
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
         .root_requests = root_requests,
@@ -20109,13 +14867,8 @@ pub fn publishFromTypedModule(
         .interface_capabilities = interface_capabilities,
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
-        .comptime_dependencies = comptime_dependencies,
-        .promoted_procedures = .{},
         .const_templates = const_templates,
-        .comptime_values = comptime_values,
-        .const_instances = const_instances,
-        .callable_binding_instances = callable_binding_instances,
-        .semantic_instantiation_procedures = semantic_instantiation_procedures,
+        .const_store = checked_const_store,
     };
     try inputs.compile_time_finalizer.run(
         allocator,
@@ -20345,12 +15098,6 @@ test "compile-time finalization route is explicit and non-optional" {
     try std.testing.expect(std.meta.stringToEnum(RootAbi, "compile_time") != null);
 
     try std.testing.expect(@hasField(CompileTimeEvaluationRequest, "local_root"));
-    try std.testing.expect(@hasField(CompileTimeEvaluationRequest, "const_instance"));
-    try std.testing.expect(@hasField(CompileTimeEvaluationRequest, "callable_binding_instance"));
-
-    try std.testing.expect(@hasField(CompileTimeEvaluationPayload, "local_root"));
-    try std.testing.expect(@hasField(CompileTimeEvaluationPayload, "const_instance"));
-    try std.testing.expect(@hasField(CompileTimeEvaluationPayload, "callable_binding_instance"));
 }
 
 test "compile-time roots and top-level values publish final artifacts only" {
@@ -20359,8 +15106,8 @@ test "compile-time roots and top-level values publish final artifacts only" {
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "expect") != null);
 
     try std.testing.expect(@hasField(CompileTimeRootPayload, "pending"));
-    try std.testing.expect(@hasField(CompileTimeRootPayload, "const_graph"));
-    try std.testing.expect(@hasField(CompileTimeRootPayload, "callable_result"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "const_node"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "fn_value"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "expect"));
 
     try std.testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
@@ -20375,7 +15122,7 @@ test "constant template states contain sealed value data but no runtime initiali
     try std.testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
     try std.testing.expect(@hasField(ConstTemplateState, "reserved"));
     try std.testing.expect(@hasField(ConstTemplateState, "eval_template"));
-    try std.testing.expect(@hasField(ConstTemplateState, "value_graph_template"));
+    try std.testing.expect(@hasField(ConstTemplateState, "stored_const"));
 
     try std.testing.expect(!@hasField(ConstTemplateState, "runtime_thunk"));
     try std.testing.expect(!@hasField(ConstTemplateState, "global_initializer"));
@@ -20383,17 +15130,11 @@ test "constant template states contain sealed value data but no runtime initiali
     try std.testing.expect(!@hasField(ConstTemplateState, "top_level_closure_object"));
 }
 
-test "checked artifact owns compile-time specialization caches for reuse" {
+test "checked module owns compile-time constants at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "comptime_plans"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "comptime_dependencies"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "promoted_procedures"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "const_templates"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "comptime_values"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "const_instances"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_binding_instances"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "semantic_instantiation_procedures"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "const_store"));
 }
 
 test "provided primitive constant is a data export, not a runtime root" {
@@ -20555,10 +15296,7 @@ test "artifact views are read-only projections" {
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
-        .promoted_callable_wrappers = .{},
-        .promoted_callable_body_plans = .{},
         .intrinsic_wrappers = .{},
-        .executable_type_payloads = ExecutableTypePayloadStore.init(std.testing.allocator),
         .top_level_procedure_bindings = .{},
         .root_requests = .{},
         .hosted_procs = .{},
@@ -20567,22 +15305,12 @@ test "artifact views are read-only projections" {
         .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
-        .comptime_dependencies = ComptimeDependencySummaryStore.init(.{}),
-        .promoted_procedures = .{},
         .const_templates = .{},
-        .comptime_values = CompileTimeValueStore.init(std.testing.allocator),
-        .const_instances = ConstInstantiationStore.init(.{}),
-        .callable_binding_instances = CallableBindingInstantiationStore.init(.{}),
-        .semantic_instantiation_procedures = SemanticInstantiationProcedureTable.init(.{}),
+        .const_store = ConstStore.init(std.testing.allocator),
     };
     defer {
-        artifact.semantic_instantiation_procedures.deinit(std.testing.allocator);
-        artifact.callable_binding_instances.deinit(std.testing.allocator);
-        artifact.const_instances.deinit(std.testing.allocator);
         artifact.const_templates.deinit(std.testing.allocator);
-        artifact.comptime_dependencies.deinit(std.testing.allocator);
-        artifact.comptime_values.deinit(std.testing.allocator);
-        artifact.executable_type_payloads.deinit(std.testing.allocator);
+        artifact.const_store.deinit();
         artifact.canonical_names.deinit();
     }
 

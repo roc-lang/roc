@@ -227,7 +227,7 @@ pub const Interpreter = struct {
         interpreter: *LirInterpreter,
         proc_id: u32,
         capture_layout_plus_one: u32,
-        semantic_capture_offset: u32,
+        capture_value_offset: u32,
         padding: u32,
     };
 
@@ -546,12 +546,12 @@ pub const Interpreter = struct {
     /// Other errors come from `eval`.
     pub fn runEntrypoint(
         self: *LirInterpreter,
-        view: *const lir.RuntimeImage.ProgramView,
+        view: *const lir.LirImage.ProgramView,
         ordinal: u32,
         arg_ptr: ?*anyopaque,
         ret_ptr: ?*anyopaque,
     ) (Error || error{EntrypointNotFound})!EvalResult {
-        var entrypoint: ?lir.RuntimeImage.PlatformEntrypoint = null;
+        var entrypoint: ?lir.LirImage.PlatformEntrypoint = null;
         for (view.platform_entrypoints) |candidate| {
             if (candidate.ordinal == ordinal) {
                 entrypoint = candidate;
@@ -1696,7 +1696,7 @@ pub const Interpreter = struct {
                                 actual_layout != expected_layout)
                             {
                                 debugPrint(
-                                    "LIR/interpreter jump bridge proc={d} stmt={d} join={d} arg_local={d} actual={d} ({s}) param={d} expected={d} ({s})\n",
+                                    "LIR/interpreter jump arg layout mismatch proc={d} stmt={d} join={d} arg_local={d} actual={d} ({s}) param={d} expected={d} ({s})\n",
                                     .{
                                         @intFromEnum(frame.proc_id),
                                         @intFromEnum(current),
@@ -2178,21 +2178,21 @@ pub const Interpreter = struct {
                 const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
                 break :blk try self.materializeLocalValue(payload_value, target_layout);
             },
-            .list_reinterpret => |list_bridge| blk: {
-                const bridged = try self.coerceExplicitListValueToLayout(
-                    try self.getLocalChecked(frame, list_bridge.backing_ref),
-                    self.store.getLocal(list_bridge.backing_ref).layout_idx,
+            .list_reinterpret => |list_reinterpret| blk: {
+                const reinterpreted = try self.coerceExplicitListValueToLayout(
+                    try self.getLocalChecked(frame, list_reinterpret.backing_ref),
+                    self.store.getLocal(list_reinterpret.backing_ref).layout_idx,
                     target_layout,
                 );
-                break :blk try self.materializeLocalValue(bridged, target_layout);
+                break :blk try self.materializeLocalValue(reinterpreted, target_layout);
             },
             .nominal => |nominal| blk: {
-                const bridged = try self.coerceExplicitNominalValueToLayout(
+                const reinterpreted = try self.coerceExplicitNominalValueToLayout(
                     try self.getLocalChecked(frame, nominal.backing_ref),
                     self.store.getLocal(nominal.backing_ref).layout_idx,
                     target_layout,
                 );
-                break :blk try self.materializeLocalValue(bridged, target_layout);
+                break :blk try self.materializeLocalValue(reinterpreted, target_layout);
             },
             .discriminant => |discriminant| blk: {
                 const source_val = try self.getLocalChecked(frame, discriminant.source);
@@ -2262,9 +2262,9 @@ pub const Interpreter = struct {
         return @enumFromInt(context.proc_id);
     }
 
-    pub fn erasedCallableInterpreterSemanticCapturePtr(data_ptr: [*]u8) [*]u8 {
+    pub fn erasedCallableInterpreterCaptureValuePtr(data_ptr: [*]u8) [*]u8 {
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
-        return builtins.erased_callable.capturePtr(data_ptr) + context.semantic_capture_offset;
+        return builtins.erased_callable.capturePtr(data_ptr) + context.capture_value_offset;
     }
 
     fn argsStructSizeAlign(self: *LirInterpreter, arg_layouts: []const layout_mod.Idx) layout_mod.SizeAlign {
@@ -2314,10 +2314,10 @@ pub const Interpreter = struct {
         else
             @enumFromInt(context.capture_layout_plus_one - 1);
         if (capture_layout == .zst) return;
-        const semantic_capture_ptr = (capture orelse unreachable) + context.semantic_capture_offset;
+        const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
         context.interpreter.performRawRcPlan(
             context.interpreter.layout_store.rcHelperPlan(.{ .op = .decref, .layout_idx = capture_layout }),
-            .{ .ptr = semantic_capture_ptr },
+            .{ .ptr = capture_value_ptr },
             1,
         );
     }
@@ -2360,8 +2360,8 @@ pub const Interpreter = struct {
             }
         }
 
-        const semantic_capture_ptr: [*]u8 = @ptrCast(@as([*]u8, @ptrCast(context)) + context.semantic_capture_offset);
-        proc_args[explicit_arg_count] = .{ .ptr = semantic_capture_ptr };
+        const capture_value_ptr: [*]u8 = @ptrCast(@as([*]u8, @ptrCast(context)) + context.capture_value_offset);
+        proc_args[explicit_arg_count] = .{ .ptr = capture_value_ptr };
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
         const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
@@ -2463,7 +2463,7 @@ pub const Interpreter = struct {
             );
         }
 
-        const semantic_capture_size: usize = if (assign.capture_layout) |capture_layout|
+        const capture_value_size: usize = if (assign.capture_layout) |capture_layout|
             self.helper.sizeOf(capture_layout)
         else
             0;
@@ -2476,7 +2476,7 @@ pub const Interpreter = struct {
                 );
             }
         }
-        const capture_size = erased_callable_context_capture_offset + semantic_capture_size;
+        const capture_size = erased_callable_context_capture_offset + capture_value_size;
         const data_ptr = try self.allocRocDataWithRc(
             builtins.erased_callable.payloadSize(capture_size),
             builtins.erased_callable.payload_alignment,
@@ -2499,14 +2499,14 @@ pub const Interpreter = struct {
             .interpreter = self,
             .proc_id = @intFromEnum(assign.proc),
             .capture_layout_plus_one = if (assign.capture_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
-            .semantic_capture_offset = @intCast(erased_callable_context_capture_offset),
+            .capture_value_offset = @intCast(erased_callable_context_capture_offset),
             .padding = 0,
         };
 
         if (assign.capture) |capture_local| {
             const capture_layout = assign.capture_layout orelse unreachable;
             const capture_value = try self.getLocalChecked(frame, capture_local);
-            const capture_ptr = erasedCallableInterpreterSemanticCapturePtr(data_ptr);
+            const capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr);
             const size = self.helper.sizeOf(capture_layout);
             if (size > 0) {
                 @memcpy(capture_ptr[0..size], capture_value.ptr[0..size]);
@@ -5526,7 +5526,7 @@ pub const Interpreter = struct {
             const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
             if (!actual_is_list or !expected_is_list) {
                 self.invariantFailed(
-                    "LIR/interpreter invariant violated: explicit list bridge expected list layouts, got actual={d} expected={d}",
+                    "LIR/interpreter invariant violated: explicit list reinterpret expected list layouts, got actual={d} expected={d}",
                     .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
                 );
             }
@@ -5556,7 +5556,7 @@ pub const Interpreter = struct {
                 (expected_is_box and actual_is_erased_ptr);
             if (!boxing_compatible or actual_is_list or expected_is_list) {
                 self.invariantFailed(
-                    "LIR/interpreter invariant violated: explicit nominal bridge expected non-list layouts on the same side of physical boxing, got actual={d} ({s}) expected={d} ({s})",
+                    "LIR/interpreter invariant violated: explicit nominal reinterpret expected non-list layouts on the same side of layout boxing, got actual={d} ({s}) expected={d} ({s})",
                     .{
                         @intFromEnum(actual_layout),
                         @tagName(actual_layout_val.tag),
@@ -5600,7 +5600,7 @@ pub const Interpreter = struct {
                 actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union))
         {
             self.invariantFailed(
-                "LIR/interpreter invariant violated: explicit ref bridge reached aggregate coercion path actual={d} ({s}) expected={d} ({s})",
+                "LIR/interpreter invariant violated: explicit ref reinterpret reached aggregate coercion path actual={d} ({s}) expected={d} ({s})",
                 .{
                     @intFromEnum(actual_layout),
                     @tagName(actual_layout_val.tag),

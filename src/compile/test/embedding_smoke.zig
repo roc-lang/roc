@@ -2,9 +2,9 @@
 //!
 //! Drives a minimal compile + execute through every method an embedder is
 //! expected to call (`Coordinator.discoverAppFromPath` → `coordinatorLoop`
-//! → `iterReports` → `finalizeExecutableArtifacts` → `lowerArtifactsToLir`
-//! → `LoweredProgram.platformEntrypoints` → `RuntimeImage.fillHeaderInBuffer`
-//! → `RuntimeImage.viewMappedImage` → `LirInterpreter.runEntrypoint`).
+//! → `iterReports` → `finalizeExecutableArtifacts` → `lowerCheckedModulesToLir`
+//! → `LoweredProgram.platformEntrypoints` → `LirImage.fillHeaderInBuffer`
+//! → `LirImage.viewMappedImage` → `LirInterpreter.runEntrypoint`).
 //!
 //! If this test breaks, the public surface changed in a way that will break
 //! external embedders. The test itself is documentation: the canonical
@@ -105,7 +105,7 @@ test "embedding API: full canonical sequence on simple_success app" {
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
 
-    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         runtime_alloc,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
@@ -122,10 +122,10 @@ test "embedding API: full canonical sequence on simple_success app" {
     try std.testing.expect(entrypoints.len > 0);
     try std.testing.expectEqual(entrypoints.len, entrypoint_names.len);
 
-    // 7. Fill the runtime image header in the contiguous buffer.
-    const runtime_header = try runtime_alloc.create(lir.RuntimeImage.Header);
-    try lir.RuntimeImage.fillHeaderInBuffer(
-        runtime_header,
+    // 7. Fill the LIR image header in the contiguous buffer.
+    const image_header = try runtime_alloc.create(lir.LirImage.Header);
+    try lir.LirImage.fillHeaderInBuffer(
+        image_header,
         runtime_buffer.ptr,
         runtime_fba.end_index,
         &lowered.lir_result,
@@ -136,8 +136,8 @@ test "embedding API: full canonical sequence on simple_success app" {
     // 8. View the image. With the const-correctness fix from this branch,
     //    viewMappedImage now accepts `[*]align(1) const u8` so no
     //    @constCast is needed on the buffer pointer.
-    const view = try lir.RuntimeImage.viewMappedImage(
-        runtime_header,
+    const view = try lir.LirImage.viewMappedImage(
+        image_header,
         runtime_buffer.ptr,
         runtime_fba.end_index,
     );

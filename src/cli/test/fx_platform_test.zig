@@ -1014,7 +1014,7 @@ test "run aborts on parse errors by default" {
 
 test "run with --allow-errors attempts execution despite type errors" {
     // Tests that roc run --allow-errors attempts to execute even with type errors.
-    // TODO: remove Windows workaround once the shared LIR runtime-image path
+    // TODO: remove Windows workaround once the shared LIR image path
     // handles crash-on-type-error consistently on Windows.
     const opt_flag: []const u8 = if (@import("builtin").os.tag == .windows) "--opt=interpreter" else "--opt=dev";
     const allocator = testing.allocator;
