@@ -21,23 +21,7 @@ pub const Span = extern struct {
     }
 };
 
-pub const Primitive = enum {
-    bool,
-    str,
-    u8,
-    i8,
-    u16,
-    i16,
-    u32,
-    i32,
-    u64,
-    i64,
-    u128,
-    i128,
-    f32,
-    f64,
-    dec,
-};
+pub const Primitive = checked.CheckedPrimitive;
 
 pub const OwnerHead = union(enum) {
     none,
@@ -67,7 +51,7 @@ pub const NamedBacking = struct {
 
 pub const NamedKind = enum {
     nominal,
-    opaque,
+    @"opaque",
     alias,
 };
 
@@ -96,7 +80,7 @@ pub const Content = union(enum) {
     tag_union: Span,
     list: TypeId,
     box: TypeId,
-    fn: struct {
+    func: struct {
         args: Span,
         ret: TypeId,
     },

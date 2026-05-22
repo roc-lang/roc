@@ -20,6 +20,7 @@ pub const LocalId = enum(u32) { _ };
 pub const StringLiteralId = enum(u32) { _ };
 
 pub fn Span(comptime T: type) type {
+    _ = T;
     return extern struct {
         start: u32,
         len: u32,
@@ -241,7 +242,7 @@ pub const Root = struct {
 
 pub const Program = struct {
     allocator: std.mem.Allocator,
-    names: *const names.NameStore,
+    names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
     defs: std.ArrayList(Def),
@@ -260,10 +261,10 @@ pub const Program = struct {
     string_literals: std.ArrayList([]const u8),
     roots: std.ArrayList(Root),
 
-    pub fn init(allocator: std.mem.Allocator, names: *const names.NameStore) Program {
+    pub fn init(allocator: std.mem.Allocator) Program {
         return .{
             .allocator = allocator,
-            .names = names,
+            .names = names.NameStore.init(allocator),
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .defs = .empty,
@@ -302,6 +303,7 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.defs.deinit(self.allocator);
         self.types.deinit();
+        self.names.deinit();
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {

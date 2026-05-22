@@ -29,8 +29,7 @@ fn finalize(
 ) anyerror!void {
     _ = imports;
 
-    const requests = try compileTimeRootRequests(allocator, module);
-    defer allocator.free(requests);
+    const requests = module.root_requests.compile_time_requests;
 
     if (requests.len != 0) {
         var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -39,11 +38,7 @@ fn finalize(
                 .root = checked.loweringViewWithRelations(module, relation_modules),
                 .imports = available_modules,
             },
-            .{
-                .requests = requests,
-                .purpose = .compile_time,
-                .compile_time_module_sink = module,
-            },
+            .{ .requests = requests },
             .{
                 .target_usize = base.target.TargetUsize.native,
                 .checked_state = .checking_finalization,
@@ -82,21 +77,6 @@ fn finalize(
     }
 
     module.const_store.verifyPublished();
-}
-
-fn compileTimeRootRequests(
-    allocator: Allocator,
-    module: *const checked.CheckedModuleArtifact,
-) Allocator.Error![]checked.RootRequest {
-    var requests = std.ArrayList(checked.RootRequest).empty;
-    errdefer requests.deinit(allocator);
-
-    for (module.root_requests.requests) |request| {
-        if (request.abi != .compile_time) continue;
-        try requests.append(allocator, request);
-    }
-
-    return try requests.toOwnedSlice(allocator);
 }
 
 fn compileTimeRootForRequest(

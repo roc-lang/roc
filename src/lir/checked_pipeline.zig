@@ -8,12 +8,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const check = @import("check");
+const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
-const LIR = @import("LIR.zig");
+const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
-const LirProgram = @import("program.zig");
-const postcheck = @import("../postcheck/mod.zig");
+const LirProgram = core.Program;
+const postcheck = @import("postcheck");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -27,14 +28,6 @@ pub const CheckedModuleSet = struct {
 
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
-    compile_time_requests: []const checked.CompileTimeEvaluationRequest = &.{},
-    purpose: RootPurpose = .runtime,
-    compile_time_module_sink: ?*checked.Module = null,
-};
-
-pub const RootPurpose = enum {
-    runtime,
-    compile_time,
 };
 
 pub const TargetConfig = struct {
@@ -242,12 +235,6 @@ fn checkedModules(modules: CheckedModuleSet) postcheck.Common.CheckedModules {
 fn rootRequests(roots: RootRequestSet) postcheck.Common.RootRequests {
     return .{
         .requests = roots.requests,
-        .compile_time_requests = roots.compile_time_requests,
-        .purpose = switch (roots.purpose) {
-            .runtime => .runtime,
-            .compile_time => .compile_time,
-        },
-        .compile_time_module_sink = roots.compile_time_module_sink,
     };
 }
 

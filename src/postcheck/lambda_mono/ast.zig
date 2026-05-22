@@ -24,6 +24,7 @@ pub const LocalId = enum(u32) { _ };
 pub const StringLiteralId = Lifted.StringLiteralId;
 
 pub fn Span(comptime T: type) type {
+    _ = T;
     return extern struct {
         start: u32,
         len: u32,
@@ -226,7 +227,7 @@ pub const Root = struct {
 
 pub const Program = struct {
     allocator: std.mem.Allocator,
-    names: *const names.NameStore,
+    names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
     fns: std.ArrayList(Fn),
@@ -247,12 +248,12 @@ pub const Program = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        names: *const names.NameStore,
+        name_store: names.NameStore,
         string_literals: std.ArrayList([]const u8),
     ) Program {
         return .{
             .allocator = allocator,
-            .names = names,
+            .names = name_store,
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .fns = .empty,
@@ -291,6 +292,7 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.types.deinit();
+        self.names.deinit();
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {

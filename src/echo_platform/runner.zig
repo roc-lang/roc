@@ -187,7 +187,7 @@ pub fn runEcho(opts: RunOptions) !u8 {
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
             .imports = import_views,
         },
-        .{ .requests = root_artifact.root_requests.requests },
+        .{ .requests = root_artifact.root_requests.runtime_requests },
         .{ .target_usize = opts.target_usize },
     ) catch |err| {
         diag.step("lowerCheckedModulesToLir", err);

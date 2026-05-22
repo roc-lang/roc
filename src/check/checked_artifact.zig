@@ -572,20 +572,18 @@ pub const LoweringEntrypointRequest = union(enum) {
     root: RootRequest,
 };
 
-/// Public `CompileTimeEvaluationRequest` declaration.
-pub const CompileTimeEvaluationRequest = union(enum) {
-    local_root: RootRequest,
-};
-
 /// Public `RootRequestTable` declaration.
 pub const RootRequestTable = struct {
     requests: []RootRequest = &.{},
+    runtime_requests: []RootRequest = &.{},
+    compile_time_requests: []RootRequest = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
         checked_types: *const CheckedTypePublication,
         compile_time_roots: *const CompileTimeRootTable,
+        procedure_templates: *const CheckedProcedureTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         provided_exports: *const ProvidedExportTable,
@@ -608,10 +606,11 @@ pub const RootRequestTable = struct {
                 .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, root.source),
                 .abi = root.abi,
                 .exposure = root.exposure,
+                .procedure_template = procedureTemplateForRootSource(procedure_templates, root.source),
             });
         }
 
-        try appendPublishedEntrypointRoots(&requests, allocator, module, checked_types, provided_exports);
+        try appendPublishedEntrypointRoots(&requests, allocator, module, checked_types, procedure_templates, provided_exports);
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
             try appendRoot(&requests, allocator, .{
@@ -654,14 +653,58 @@ pub const RootRequestTable = struct {
             });
         }
 
-        return .{ .requests = try requests.toOwnedSlice(allocator) };
+        const all_requests = try requests.toOwnedSlice(allocator);
+        errdefer allocator.free(all_requests);
+
+        const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
+        errdefer allocator.free(runtime_requests);
+
+        const compile_time_requests = try collectCompileTimeRootRequests(allocator, all_requests);
+
+        return .{
+            .requests = all_requests,
+            .runtime_requests = runtime_requests,
+            .compile_time_requests = compile_time_requests,
+        };
     }
 
     pub fn deinit(self: *RootRequestTable, allocator: Allocator) void {
+        allocator.free(self.compile_time_requests);
+        allocator.free(self.runtime_requests);
         allocator.free(self.requests);
         self.* = .{};
     }
 };
+
+fn collectRuntimeRootRequests(
+    allocator: Allocator,
+    requests: []const RootRequest,
+) Allocator.Error![]RootRequest {
+    var runtime_requests = std.ArrayList(RootRequest).empty;
+    errdefer runtime_requests.deinit(allocator);
+
+    for (requests) |request| {
+        if (request.abi == .compile_time) continue;
+        try runtime_requests.append(allocator, request);
+    }
+
+    return try runtime_requests.toOwnedSlice(allocator);
+}
+
+fn collectCompileTimeRootRequests(
+    allocator: Allocator,
+    requests: []const RootRequest,
+) Allocator.Error![]RootRequest {
+    var compile_time_requests = std.ArrayList(RootRequest).empty;
+    errdefer compile_time_requests.deinit(allocator);
+
+    for (requests) |request| {
+        if (request.abi != .compile_time) continue;
+        try compile_time_requests.append(allocator, request);
+    }
+
+    return try compile_time_requests.toOwnedSlice(allocator);
+}
 
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
@@ -763,6 +806,40 @@ fn compileTimeRootKindMatchesRequest(
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
     };
+}
+
+fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
+    if (builtin.mode != .Debug) return;
+
+    var runtime_index: usize = 0;
+    var compile_time_index: usize = 0;
+
+    for (root_requests.requests) |request| {
+        if (request.abi == .compile_time) {
+            if (compile_time_index >= root_requests.compile_time_requests.len) {
+                std.debug.panic("checked artifact invariant violated: compile-time root request subset is missing an entry", .{});
+            }
+            if (!std.meta.eql(root_requests.compile_time_requests[compile_time_index], request)) {
+                std.debug.panic("checked artifact invariant violated: compile-time root request subset is out of order", .{});
+            }
+            compile_time_index += 1;
+        } else {
+            if (runtime_index >= root_requests.runtime_requests.len) {
+                std.debug.panic("checked artifact invariant violated: runtime root request subset is missing an entry", .{});
+            }
+            if (!std.meta.eql(root_requests.runtime_requests[runtime_index], request)) {
+                std.debug.panic("checked artifact invariant violated: runtime root request subset is out of order", .{});
+            }
+            runtime_index += 1;
+        }
+    }
+
+    if (runtime_index != root_requests.runtime_requests.len) {
+        std.debug.panic("checked artifact invariant violated: runtime root request subset has extra entries", .{});
+    }
+    if (compile_time_index != root_requests.compile_time_requests.len) {
+        std.debug.panic("checked artifact invariant violated: compile-time root request subset has extra entries", .{});
+    }
 }
 
 fn rootSourceMatches(a: RootSource, b: RootSource) bool {
@@ -958,6 +1035,7 @@ fn appendPublishedEntrypointRoots(
     allocator: Allocator,
     module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
+    procedure_templates: *const CheckedProcedureTemplateTable,
     provided_exports: *const ProvidedExportTable,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
@@ -971,6 +1049,7 @@ fn appendPublishedEntrypointRoots(
                 .checked_type = procedure.checked_type,
                 .abi = .platform,
                 .exposure = .exported,
+                .procedure_template = requiredProcedureTemplateForRootSource(procedure_templates, .{ .def = procedure.def }),
             }),
             .data => {},
         }
@@ -996,10 +1075,33 @@ fn appendPublishedEntrypointRoots(
                 .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = main_def }),
                 .abi = .roc,
                 .exposure = .exported,
+                .procedure_template = requiredProcedureTemplateForRootSource(procedure_templates, .{ .def = main_def }),
             });
         },
         else => {},
     }
+}
+
+fn procedureTemplateForRootSource(
+    procedure_templates: *const CheckedProcedureTemplateTable,
+    source: RootSource,
+) ?canonical.ProcedureTemplateRef {
+    return switch (source) {
+        .def => |def_idx| procedure_templates.lookupByDef(def_idx),
+        else => null,
+    };
+}
+
+fn requiredProcedureTemplateForRootSource(
+    procedure_templates: *const CheckedProcedureTemplateTable,
+    source: RootSource,
+) canonical.ProcedureTemplateRef {
+    return procedureTemplateForRootSource(procedure_templates, source) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: root procedure source has no checked procedure template", .{});
+        }
+        unreachable;
+    };
 }
 
 fn checkedTypeIdForRootSource(
@@ -1284,6 +1386,56 @@ pub const CheckedBuiltinNominal = enum {
     list,
     box,
 };
+
+/// Public `CheckedPrimitive` declaration.
+pub const CheckedPrimitive = enum {
+    bool,
+    str,
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+    f32,
+    f64,
+    dec,
+};
+
+/// Public `CheckedBuiltinRuntimeEncoding` declaration.
+pub const CheckedBuiltinRuntimeEncoding = union(enum) {
+    primitive: CheckedPrimitive,
+    bool_tag_union,
+    list,
+    box,
+};
+
+/// Public `builtinRuntimeEncoding` function.
+pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBuiltinRuntimeEncoding {
+    return switch (builtin_nominal) {
+        .bool => .bool_tag_union,
+        .str => .{ .primitive = .str },
+        .u8 => .{ .primitive = .u8 },
+        .i8 => .{ .primitive = .i8 },
+        .u16 => .{ .primitive = .u16 },
+        .i16 => .{ .primitive = .i16 },
+        .u32 => .{ .primitive = .u32 },
+        .i32 => .{ .primitive = .i32 },
+        .u64 => .{ .primitive = .u64 },
+        .i64 => .{ .primitive = .i64 },
+        .u128 => .{ .primitive = .u128 },
+        .i128 => .{ .primitive = .i128 },
+        .f32 => .{ .primitive = .f32 },
+        .f64 => .{ .primitive = .f64 },
+        .dec => .{ .primitive = .dec },
+        .list => .list,
+        .box => .box,
+    };
+}
 
 /// Public `CheckedAliasType` declaration.
 pub const CheckedAliasType = struct {
@@ -3859,29 +4011,32 @@ fn copyCheckedStaticDispatchConstraints(
 
 fn categorizeBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
     const common = module.moduleEnvConst().idents;
-    const is_builtin_origin = nominal.origin_module.eql(common.builtin_module) or
-        module.identStoreConst().idxTextEql(nominal.origin_module, common.builtin_module);
+    const is_builtin_origin = checkedIdentTextEql(module, nominal.origin_module, common.builtin_module);
     if (!is_builtin_origin) return null;
 
     const ident = nominal.ident.ident_idx;
-    if (ident.eql(common.bool) or ident.eql(common.bool_type)) return .bool;
-    if (ident.eql(common.str) or ident.eql(common.builtin_str)) return .str;
-    if (ident.eql(common.u8) or ident.eql(common.u8_type)) return .u8;
-    if (ident.eql(common.i8) or ident.eql(common.i8_type)) return .i8;
-    if (ident.eql(common.u16) or ident.eql(common.u16_type)) return .u16;
-    if (ident.eql(common.i16) or ident.eql(common.i16_type)) return .i16;
-    if (ident.eql(common.u32) or ident.eql(common.u32_type)) return .u32;
-    if (ident.eql(common.i32) or ident.eql(common.i32_type)) return .i32;
-    if (ident.eql(common.u64) or ident.eql(common.u64_type)) return .u64;
-    if (ident.eql(common.i64) or ident.eql(common.i64_type)) return .i64;
-    if (ident.eql(common.u128) or ident.eql(common.u128_type)) return .u128;
-    if (ident.eql(common.i128) or ident.eql(common.i128_type)) return .i128;
-    if (ident.eql(common.f32) or ident.eql(common.f32_type)) return .f32;
-    if (ident.eql(common.f64) or ident.eql(common.f64_type)) return .f64;
-    if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
-    if (ident.eql(common.list)) return .list;
-    if (ident.eql(common.box)) return .box;
+    if (checkedIdentTextEql(module, ident, common.bool) or checkedIdentTextEql(module, ident, common.bool_type)) return .bool;
+    if (checkedIdentTextEql(module, ident, common.str) or checkedIdentTextEql(module, ident, common.builtin_str)) return .str;
+    if (checkedIdentTextEql(module, ident, common.u8) or checkedIdentTextEql(module, ident, common.u8_type)) return .u8;
+    if (checkedIdentTextEql(module, ident, common.i8) or checkedIdentTextEql(module, ident, common.i8_type)) return .i8;
+    if (checkedIdentTextEql(module, ident, common.u16) or checkedIdentTextEql(module, ident, common.u16_type)) return .u16;
+    if (checkedIdentTextEql(module, ident, common.i16) or checkedIdentTextEql(module, ident, common.i16_type)) return .i16;
+    if (checkedIdentTextEql(module, ident, common.u32) or checkedIdentTextEql(module, ident, common.u32_type)) return .u32;
+    if (checkedIdentTextEql(module, ident, common.i32) or checkedIdentTextEql(module, ident, common.i32_type)) return .i32;
+    if (checkedIdentTextEql(module, ident, common.u64) or checkedIdentTextEql(module, ident, common.u64_type)) return .u64;
+    if (checkedIdentTextEql(module, ident, common.i64) or checkedIdentTextEql(module, ident, common.i64_type)) return .i64;
+    if (checkedIdentTextEql(module, ident, common.u128) or checkedIdentTextEql(module, ident, common.u128_type)) return .u128;
+    if (checkedIdentTextEql(module, ident, common.i128) or checkedIdentTextEql(module, ident, common.i128_type)) return .i128;
+    if (checkedIdentTextEql(module, ident, common.f32) or checkedIdentTextEql(module, ident, common.f32_type)) return .f32;
+    if (checkedIdentTextEql(module, ident, common.f64) or checkedIdentTextEql(module, ident, common.f64_type)) return .f64;
+    if (checkedIdentTextEql(module, ident, common.dec) or checkedIdentTextEql(module, ident, common.dec_type)) return .dec;
+    if (checkedIdentTextEql(module, ident, common.list)) return .list;
+    if (checkedIdentTextEql(module, ident, common.box)) return .box;
     return null;
+}
+
+fn checkedIdentTextEql(module: TypedCIR.Module, a: base.Ident.Idx, b: base.Ident.Idx) bool {
+    return a.eql(b) or module.identStoreConst().idxTextEql(a, b);
 }
 
 fn checkedNominalRepresentationForSourceNominal(
@@ -4761,19 +4916,13 @@ const CheckedBodyPayloadCopier = struct {
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
         return switch (expr) {
-            .e_num => |num| .{ .num = .{ .value = num.value, .kind = num.kind } },
-            .e_frac_f32 => |frac| .{ .frac_f32 = .{ .value = frac.value, .has_suffix = frac.has_suffix } },
-            .e_frac_f64 => |frac| .{ .frac_f64 = .{ .value = frac.value, .has_suffix = frac.has_suffix } },
-            .e_dec => |dec| .{ .dec = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
-            .e_dec_small => |dec| .{ .dec_small = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
-            .e_typed_int => |typed| .{ .typed_int = .{
-                .value = typed.value,
-                .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), typed.type_name),
-            } },
-            .e_typed_frac => |typed| .{ .typed_frac = .{
-                .value = typed.value,
-                .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), typed.type_name),
-            } },
+            .e_num => |num| self.copyIntLiteral(expr_idx, num.value, num.kind),
+            .e_frac_f32 => |frac| self.copyFracLiteral(expr_idx, .{ .f32 = frac.value }, frac.has_suffix),
+            .e_frac_f64 => |frac| self.copyFracLiteral(expr_idx, .{ .f64 = frac.value }, frac.has_suffix),
+            .e_dec => |dec| self.copyFracLiteral(expr_idx, .{ .dec = dec.value }, dec.has_suffix),
+            .e_dec_small => |dec| self.copyFracLiteral(expr_idx, .{ .small = dec.value }, dec.has_suffix),
+            .e_typed_int => |typed| try self.copyTypedIntLiteral(expr_idx, typed.value, typed.type_name),
+            .e_typed_frac => |typed| try self.copyTypedFracLiteral(expr_idx, typed.value, typed.type_name),
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
@@ -4898,6 +5047,65 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    fn copyTypedIntLiteral(
+        self: *@This(),
+        expr_idx: CIR.Expr.Idx,
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    ) Allocator.Error!CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_int = .{
+            .value = value,
+            .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
+        } };
+        return intLiteralForBuiltin(value, builtin_nominal, .num_unbound) orelse .{ .typed_int = .{
+            .value = value,
+            .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
+        } };
+    }
+
+    fn copyTypedFracLiteral(
+        self: *@This(),
+        expr_idx: CIR.Expr.Idx,
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    ) Allocator.Error!CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_frac = .{
+            .value = value,
+            .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
+        } };
+        return fracLiteralForBuiltin(.{ .scaled_dec = value }, builtin_nominal, true) orelse .{ .typed_frac = .{
+            .value = value,
+            .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
+        } };
+    }
+
+    fn copyIntLiteral(
+        self: *@This(),
+        expr_idx: CIR.Expr.Idx,
+        value: CIR.IntValue,
+        kind: CIR.NumKind,
+    ) CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .num = .{ .value = value, .kind = kind } };
+        return intLiteralForBuiltin(value, builtin_nominal, kind) orelse .{ .num = .{ .value = value, .kind = kind } };
+    }
+
+    fn copyFracLiteral(
+        self: *@This(),
+        expr_idx: CIR.Expr.Idx,
+        literal: FracLit,
+        has_suffix: bool,
+    ) CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return originalFracLiteral(literal, has_suffix);
+        return fracLiteralForBuiltin(literal, builtin_nominal, has_suffix) orelse originalFracLiteral(literal, has_suffix);
+    }
+
+    fn checkedBuiltinForExpr(self: *@This(), expr_idx: CIR.Expr.Idx) ?CheckedBuiltinNominal {
+        const checked_ty = self.checked_types.rootForSourceVar(self.module, self.module.exprType(expr_idx)) orelse {
+            checkedArtifactInvariant("checked numeric expression type root was not published", .{});
+        };
+        return checkedBuiltinForType(self.checked_types.store.view(), checked_ty);
     }
 
     fn copyPatternData(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!CheckedPatternData {
@@ -5287,6 +5495,120 @@ const CheckedBodyPayloadCopier = struct {
         unreachable;
     }
 };
+
+const FracLit = union(enum) {
+    f32: f32,
+    f64: f64,
+    dec: builtins.dec.RocDec,
+    small: CIR.SmallDecValue,
+    scaled_dec: CIR.IntValue,
+};
+
+fn intLiteralForBuiltin(value: CIR.IntValue, builtin_nominal: CheckedBuiltinNominal, kind: CIR.NumKind) ?CheckedExprData {
+    return switch (builtin_nominal) {
+        .u8,
+        .i8,
+        .u16,
+        .i16,
+        .u32,
+        .i32,
+        .u64,
+        .i64,
+        .u128,
+        .i128,
+        => .{ .num = .{ .value = value, .kind = kind } },
+        .f32 => .{ .frac_f32 = .{ .value = @floatCast(intValueToF64(value)), .has_suffix = true } },
+        .f64 => .{ .frac_f64 = .{ .value = intValueToF64(value), .has_suffix = true } },
+        .dec => .{ .dec = .{ .value = intValueToDec(value), .has_suffix = true } },
+        else => null,
+    };
+}
+
+fn fracLiteralForBuiltin(literal: FracLit, builtin_nominal: CheckedBuiltinNominal, has_suffix: bool) ?CheckedExprData {
+    return switch (builtin_nominal) {
+        .f32 => .{ .frac_f32 = .{ .value = @floatCast(fracLitToF64(literal)), .has_suffix = has_suffix } },
+        .f64 => .{ .frac_f64 = .{ .value = fracLitToF64(literal), .has_suffix = has_suffix } },
+        .dec => .{ .dec = .{ .value = fracLitToDec(literal), .has_suffix = has_suffix } },
+        else => null,
+    };
+}
+
+fn originalFracLiteral(literal: FracLit, has_suffix: bool) CheckedExprData {
+    return switch (literal) {
+        .f32 => |value| .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } },
+        .f64 => |value| .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } },
+        .dec => |value| .{ .dec = .{ .value = value, .has_suffix = has_suffix } },
+        .small => |value| .{ .dec_small = .{ .value = value, .has_suffix = has_suffix } },
+        .scaled_dec => |value| .{ .dec = .{ .value = scaledDecToDec(value), .has_suffix = has_suffix } },
+    };
+}
+
+fn checkedBuiltinForType(view: CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
+    var current = root;
+    while (true) {
+        const index: usize = @intFromEnum(current);
+        if (index >= view.payloads.len) {
+            checkedArtifactInvariant("checked builtin lookup referenced a missing type root", .{});
+        }
+        switch (view.payloads[index]) {
+            .alias => |alias| current = alias.backing,
+            .nominal => |nominal| return nominal.builtin,
+            .pending => checkedArtifactInvariant("checked builtin lookup reached a pending type payload", .{}),
+            else => return null,
+        }
+    }
+}
+
+fn intValueToF64(value: CIR.IntValue) f64 {
+    return switch (value.kind) {
+        .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(value.bytes))),
+        .u128 => builtins.compiler_rt_128.u128_to_f64(@as(u128, @bitCast(value.bytes))),
+    };
+}
+
+fn intValueToDec(value: CIR.IntValue) builtins.dec.RocDec {
+    const whole = switch (value.kind) {
+        .i128 => @as(i128, @bitCast(value.bytes)),
+        .u128 => blk: {
+            const unsigned = @as(u128, @bitCast(value.bytes));
+            if (unsigned > @as(u128, @intCast(std.math.maxInt(i128)))) {
+                checkedArtifactInvariant("integer literal solved as Dec exceeded Dec whole-number range", .{});
+            }
+            break :blk @as(i128, @intCast(unsigned));
+        },
+    };
+    return builtins.dec.RocDec.fromWholeInt(whole) orelse {
+        checkedArtifactInvariant("integer literal solved as Dec exceeded Dec range", .{});
+    };
+}
+
+fn fracLitToF64(literal: FracLit) f64 {
+    return switch (literal) {
+        .f32 => |value| @floatCast(value),
+        .f64 => |value| value,
+        .dec => |value| value.toF64(),
+        .small => |value| value.toF64(),
+        .scaled_dec => |value| scaledDecToDec(value).toF64(),
+    };
+}
+
+fn fracLitToDec(literal: FracLit) builtins.dec.RocDec {
+    return switch (literal) {
+        .f32 => |value| builtins.dec.RocDec.fromF64(@as(f64, @floatCast(value))) orelse {
+            checkedArtifactInvariant("F32 literal solved as Dec exceeded Dec range", .{});
+        },
+        .f64 => |value| builtins.dec.RocDec.fromF64(value) orelse {
+            checkedArtifactInvariant("F64 literal solved as Dec exceeded Dec range", .{});
+        },
+        .dec => |value| value,
+        .small => |value| value.toRocDec(),
+        .scaled_dec => |value| scaledDecToDec(value),
+    };
+}
+
+fn scaledDecToDec(value: CIR.IntValue) builtins.dec.RocDec {
+    return .{ .num = value.toI128() };
+}
 
 fn deinitCheckedExprList(allocator: Allocator, exprs: []CheckedExpr) void {
     for (exprs) |*expr| deinitCheckedExprData(allocator, &expr.data);
@@ -9950,7 +10272,6 @@ pub const OpaqueAtomicProofEntry = struct {
     source_ty_payload: CheckedTypeId,
     source_ty: canonical.CanonicalTypeKey,
     instantiated_args: []const canonical.CanonicalTypeKey = &.{},
-    proof: NoReachableCallableSlotsProof,
 };
 
 /// Public `HostedRepresentationCapability` declaration.
@@ -10080,7 +10401,6 @@ pub const ModuleInterfaceCapabilities = struct {
                     .source_ty_payload = checked_types.roots[i].id,
                     .source_ty = source_key,
                     .instantiated_args = owned_args,
-                    .proof = .checked_artifact_verified,
                 });
                 owned_args = &.{};
                 break :blk id;
@@ -12779,6 +13099,7 @@ pub const CheckedModuleArtifact = struct {
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         std.debug.assert(self.checked_types.roots.len == self.checked_types.payloads.len);
+        verifyRootRequestSubsets(self.root_requests);
 
         for (self.checked_types.payloads, 0..) |payload, i| {
             switch (payload) {
@@ -12843,6 +13164,7 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
+        verifyRootRequestSubsets(self.root_requests);
 
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
@@ -14719,6 +15041,7 @@ pub fn publishFromTypedModule(
         module,
         &checked_type_publication,
         &compile_time_roots,
+        &checked_procedure_templates,
         &entry_wrappers,
         &platform_required_bindings,
         &provided_exports,
@@ -15055,6 +15378,7 @@ fn expectProvidedExportKind(
         module,
         &checked_type_publication,
         &compile_time_roots,
+        &checked_procedure_templates,
         &entry_wrappers,
         &platform_required_bindings,
         &provided_exports,
@@ -15097,7 +15421,8 @@ test "compile-time finalization route is explicit and non-optional" {
     try std.testing.expect(std.meta.stringToEnum(RootRequestKind, "compile_time_callable") != null);
     try std.testing.expect(std.meta.stringToEnum(RootAbi, "compile_time") != null);
 
-    try std.testing.expect(@hasField(CompileTimeEvaluationRequest, "local_root"));
+    try std.testing.expect(@hasField(RootRequestTable, "runtime_requests"));
+    try std.testing.expect(@hasField(RootRequestTable, "compile_time_requests"));
 }
 
 test "compile-time roots and top-level values publish final artifacts only" {

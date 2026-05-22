@@ -3960,7 +3960,7 @@ fn processDevObjectSnapshot(
                 .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                 .imports = imported_artifacts,
             },
-            .{ .requests = root_artifact.root_requests.requests },
+            .{ .requests = root_artifact.root_requests.runtime_requests },
             .{
                 .target_usize = base.target.TargetUsize.native,
             },

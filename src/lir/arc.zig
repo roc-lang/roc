@@ -6,10 +6,11 @@
 //! reference-counting analysis.
 
 const std = @import("std");
+const core = @import("lir_core");
 const layout_mod = @import("layout");
 
-const LIR = @import("LIR.zig");
-const LirStore = @import("LirStore.zig");
+const LIR = core.LIR;
+const LirStore = core.LirStore;
 
 pub const ResourceError = std.mem.Allocator.Error;
 

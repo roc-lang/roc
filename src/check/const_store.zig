@@ -76,6 +76,8 @@ pub const ConstValue = union(enum) {
 };
 
 pub const ConstStore = struct {
+    const VisitState = enum { unseen, active, done };
+
     allocator: Allocator,
     values: std.ArrayList(ConstValue),
     fns: std.ArrayList(ConstFn),
@@ -127,13 +129,13 @@ pub const ConstStore = struct {
                 else => {},
             }
         }
-        var value_state = self.allocator.alloc(enum { unseen, active, done }, self.values.items.len) catch |err| switch (err) {
+        const value_state = self.allocator.alloc(VisitState, self.values.items.len) catch |err| switch (err) {
             error.OutOfMemory => @panic("OOM"),
         };
         defer self.allocator.free(value_state);
         @memset(value_state, .unseen);
 
-        var fn_state = self.allocator.alloc(enum { unseen, active, done }, self.fns.items.len) catch |err| switch (err) {
+        const fn_state = self.allocator.alloc(VisitState, self.fns.items.len) catch |err| switch (err) {
             error.OutOfMemory => @panic("OOM"),
         };
         defer self.allocator.free(fn_state);
@@ -175,8 +177,8 @@ pub const ConstStore = struct {
     fn verifyAcyclic(
         self: *const ConstStore,
         id: ConstNodeId,
-        value_state: []enum { unseen, active, done },
-        fn_state: []enum { unseen, active, done },
+        value_state: []VisitState,
+        fn_state: []VisitState,
     ) void {
         const index = @intFromEnum(id);
         if (index >= self.values.items.len) constStoreInvariant("published store contains an out-of-range value id");
@@ -212,8 +214,8 @@ pub const ConstStore = struct {
     fn verifyFnAcyclic(
         self: *const ConstStore,
         id: ConstFnId,
-        value_state: []enum { unseen, active, done },
-        fn_state: []enum { unseen, active, done },
+        value_state: []VisitState,
+        fn_state: []VisitState,
     ) void {
         const index = @intFromEnum(id);
         if (index >= self.fns.items.len) constStoreInvariant("published store contains an out-of-range function id");

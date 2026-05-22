@@ -6386,6 +6386,7 @@ pub fn canonicalizeExpr(
                     });
                     return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
                 };
+                self.scratch_captures.clearFrom(captures_top);
 
                 // Determine captures: free variables in body minus variables bound by args.
                 // Exclude globally resolvable defs (top-level and associated items), which
@@ -11661,6 +11662,8 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const captures_top = self.scratch_captures.top();
     defer self.scratch_captures.clearFrom(captures_top);
 
+    const free_vars_top = self.scratch_free_vars.top();
+
     // Canonicalize all statements in the block
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(e.statements);
 
@@ -11834,6 +11837,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
     // Get a slice of the captured vars in the block
     const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+    self.scratch_free_vars.clearFrom(free_vars_top);
 
     // Add the actual free variables (captures) to the parent's scratch space
     const block_captures_start = self.scratch_free_vars.top();

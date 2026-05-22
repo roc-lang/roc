@@ -176,7 +176,7 @@ pub const Root = struct {
 
 pub const Program = struct {
     allocator: std.mem.Allocator,
-    names: *const names.NameStore,
+    names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
     fns: std.ArrayList(Fn),
@@ -197,14 +197,14 @@ pub const Program = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        names: *const names.NameStore,
+        name_store: names.NameStore,
         types: Type.Store,
         string_literals: std.ArrayList([]const u8),
         next_symbol: u32,
     ) Program {
         return .{
             .allocator = allocator,
-            .names = names,
+            .names = name_store,
             .next_symbol = next_symbol,
             .types = types,
             .fns = .empty,
@@ -243,6 +243,7 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.types.deinit();
+        self.names.deinit();
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
@@ -315,6 +316,38 @@ pub const Program = struct {
         const start: u32 = @intCast(self.if_branches.items.len);
         try self.if_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn exprSpan(self: *const Program, span_: Span(ExprId)) []const ExprId {
+        return self.expr_ids.items[span_.start..][0..span_.len];
+    }
+
+    pub fn patSpan(self: *const Program, span_: Span(PatId)) []const PatId {
+        return self.pat_ids.items[span_.start..][0..span_.len];
+    }
+
+    pub fn typedLocalSpan(self: *const Program, span_: Span(TypedLocal)) []const TypedLocal {
+        return self.typed_locals.items[span_.start..][0..span_.len];
+    }
+
+    pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) []const StmtId {
+        return self.stmt_ids.items[span_.start..][0..span_.len];
+    }
+
+    pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) []const FieldExpr {
+        return self.field_exprs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
+        return self.record_destructs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {
+        return self.branches.items[span_.start..][0..span_.len];
+    }
+
+    pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
+        return self.if_branches.items[span_.start..][0..span_.len];
     }
 };
 

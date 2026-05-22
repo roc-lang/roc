@@ -111,7 +111,7 @@ test "embedding API: full canonical sequence on simple_success app" {
             .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
-        .{ .requests = root.root_requests.requests },
+        .{ .requests = root.root_requests.runtime_requests },
         .{ .target_usize = base.target.TargetUsize.native },
     );
 

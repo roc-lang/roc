@@ -3121,6 +3121,15 @@ pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) Allocator.Error!void
     try store.addScratch("exprs", idx);
 }
 
+/// Appends a persistent expression span directly to index storage.
+pub fn appendExprSpan(store: *NodeStore, exprs: []const CIR.Expr.Idx) Allocator.Error!CIR.Expr.Span {
+    const index_start = store.index_data.len();
+    for (exprs) |expr| {
+        _ = try store.index_data.append(store.gpa, @intFromEnum(expr));
+    }
+    return .{ .span = .{ .start = @intCast(index_start), .len = @intCast(exprs.len) } };
+}
+
 /// Adds a capture index to the scratch captures list for building spans.
 pub fn addScratchCapture(store: *NodeStore, idx: CIR.Expr.Capture.Idx) Allocator.Error!void {
     try store.addScratch("captures", idx);

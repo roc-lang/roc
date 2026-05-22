@@ -33,6 +33,8 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .check => &.{"check tests"},
         .parse => &.{"parser tests"},
         .layout => &.{"layout tests"},
+        .lir_core => &.{"lir core declarations are referenced"},
+        .postcheck => &.{"postcheck declarations are referenced"},
         .values => &.{"values tests"},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
@@ -302,6 +304,8 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
+    lir_core,
+    postcheck,
     lir,
     symbol,
     roc_target,
@@ -338,7 +342,9 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
-            .lir => &.{ .base, .collections, .layout, .types, .can, .check },
+            .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
+            .postcheck => &.{ .base, .builtins, .can, .check, .layout, .lir_core },
+            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .lir_core, .postcheck },
             .symbol => &.{.base},
             .roc_target => &.{.base},
             .sljmp => &.{},
@@ -376,6 +382,8 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
+    lir_core: *Module,
+    postcheck: *Module,
     lir: *Module,
     symbol: *Module,
     roc_target: *Module,
@@ -417,6 +425,8 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
+            .lir_core = b.addModule("lir_core", .{ .root_source_file = b.path("src/lir/core.zig") }),
+            .postcheck = b.addModule("postcheck", .{ .root_source_file = b.path("src/postcheck/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
             .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
@@ -464,6 +474,8 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .lir_core,
+            .postcheck,
             .lir,
             .symbol,
             .roc_target,
@@ -507,6 +519,8 @@ pub const RocModules = struct {
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
+        step.root_module.addImport("lir_core", self.lir_core);
+        step.root_module.addImport("postcheck", self.postcheck);
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("symbol", self.symbol);
         step.root_module.addImport("sljmp", self.sljmp);
@@ -557,6 +571,8 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
+            .lir_core => self.lir_core,
+            .postcheck => self.postcheck,
             .lir => self.lir,
             .symbol => self.symbol,
             .roc_target => self.roc_target,
@@ -606,6 +622,8 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .lir_core,
+            .postcheck,
             .lir,
             .symbol,
             .sljmp,

@@ -19,12 +19,11 @@ pub fn run(
     modules: Common.CheckedModules,
     roots: Common.RootRequests,
 ) Common.LowerError!Ast.Program {
-    if (roots.requests.len == 0 and roots.compile_time_requests.len == 0) {
+    if (roots.requests.len == 0) {
         Common.invariant("Monotype lowering requires explicit roots");
     }
 
-    const root_view = checked.importedView(modules.root.module);
-    var program = Ast.Program.init(allocator, checked.importedNames(root_view));
+    var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
     var builder = Builder.init(allocator, modules, &program);
@@ -32,12 +31,6 @@ pub fn run(
 
     for (roots.requests) |request| {
         try builder.lowerRoot(request);
-    }
-
-    for (roots.compile_time_requests) |request| {
-        switch (request) {
-            .local_root => |root| try builder.lowerRoot(root),
-        }
     }
 
     program.next_symbol = builder.symbols.next;
@@ -62,6 +55,11 @@ const ModuleView = struct {
     platform_required_bindings: *const checked.PlatformRequiredBindingTable,
     const_templates: *const checked.ConstTemplateTable,
     const_store: *const checked.ConstStore,
+};
+
+const MethodLookup = struct {
+    view: ModuleView,
+    target: static_dispatch.MethodTarget,
 };
 
 const BinderMap = std.AutoHashMap(checked.PatternBinderId, Ast.LocalId);
@@ -103,36 +101,65 @@ const Builder = struct {
         self.type_cache.deinit();
     }
 
+    fn moduleName(self: *Builder, view: ModuleView, id: names.ModuleNameId) Allocator.Error!names.ModuleNameId {
+        return self.program.names.internModuleName(view.names.moduleNameText(id));
+    }
+
+    fn typeName(self: *Builder, view: ModuleView, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
+        return self.program.names.internTypeName(view.names.typeNameText(id));
+    }
+
+    fn recordFieldName(self: *Builder, view: ModuleView, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
+        return self.program.names.internRecordFieldLabel(view.names.recordFieldLabelText(id));
+    }
+
+    fn tagName(self: *Builder, view: ModuleView, id: names.TagNameId) Allocator.Error!names.TagNameId {
+        return self.program.names.internTagLabel(view.names.tagLabelText(id));
+    }
+
+    fn typeDef(self: *Builder, view: ModuleView, module_name: names.ModuleNameId, type_name: names.TypeNameId) Allocator.Error!Type.TypeDef {
+        return .{
+            .module_name = try self.moduleName(view, module_name),
+            .type_name = try self.typeName(view, type_name),
+        };
+    }
+
     fn lowerRoot(self: *Builder, request: checked.RootRequest) Allocator.Error!void {
         const template = request.procedure_template orelse
             Common.invariant("root request reached Monotype without a checked procedure template");
-        const def = try self.lowerTemplate(template);
+        const def = try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type);
         try self.program.roots.append(self.allocator, .{ .def = def, .request = request });
     }
 
-    fn lowerTemplate(self: *Builder, template_ref: names.ProcTemplate) Allocator.Error!Ast.DefId {
-        const address = TemplateAddress.from(template_ref);
+    fn lowerTemplate(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        source_ty_view: ModuleView,
+        source_fn_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Ast.DefId {
+        const address = TemplateAddress.from(template_ref, source_ty_view.key, source_fn_ty);
         if (self.lowered_templates.get(address)) |existing| return existing;
 
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        const fn_ty = try self.lowerType(view, template.checked_fn_root);
+        const fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
         const symbol = self.symbols.fresh();
 
         const reserved: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
+        try self.program.defs.append(self.allocator, undefined);
         try self.lowered_templates.put(address, reserved);
 
         var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref);
         defer body_ctx.deinit();
 
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, fn_ty);
-        try self.program.defs.append(self.allocator, .{
+        self.program.defs.items[@intFromEnum(reserved)] = .{
             .symbol = symbol,
-            .fn_def = fnDefForTemplate(view, template_ref),
+            .fn_def = fnDefForTemplate(view, template_ref, source_fn_ty),
             .args = lowered.args,
             .body = lowered.body,
             .ret = lowered.ret,
-        });
+        };
         return reserved;
     }
 
@@ -148,7 +175,8 @@ const Builder = struct {
 
         const reserved = try self.program.types.add(.zst);
         try self.type_cache.put(address, reserved);
-        self.program.types.types.items[@intFromEnum(reserved)] = try self.lowerTypePayload(view, checked_ty, view.types.payloads[raw]);
+        const lowered = try self.lowerTypePayload(view, checked_ty, view.types.payloads[raw]);
+        self.program.types.types.items[@intFromEnum(reserved)] = lowered;
         return reserved;
     }
 
@@ -171,7 +199,7 @@ const Builder = struct {
             .function => |fn_ty| blk: {
                 const args = try self.lowerTypeSlice(view, fn_ty.args);
                 defer self.allocator.free(args);
-                break :blk .{ .fn = .{
+                break :blk .{ .func = .{
                     .args = try self.program.types.addSpan(args),
                     .ret = try self.lowerType(view, fn_ty.ret),
                 } };
@@ -181,7 +209,7 @@ const Builder = struct {
                 defer self.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = .{ .module = moduleDigestFromId(view.key), .ty = checked_ty },
-                    .def = .{ .module_name = alias.origin_module, .type_name = alias.name },
+                    .def = try self.typeDef(view, alias.origin_module, alias.name),
                     .kind = .alias,
                     .args = try self.program.types.addSpan(args),
                     .backing = .{
@@ -191,13 +219,21 @@ const Builder = struct {
                 } };
             },
             .nominal => |nominal| blk: {
+                switch (nominal.representation) {
+                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                        .primitive => |primitive| break :blk .{ .primitive = primitive },
+                        .bool_tag_union, .list, .box => {},
+                    },
+                    else => {},
+                }
+
                 const args = try self.lowerTypeSlice(view, nominal.args);
                 defer self.allocator.free(args);
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 break :blk .{ .named = .{
                     .named_type = .{ .module = moduleDigestFromId(view.key), .ty = checked_ty },
-                    .def = .{ .module_name = nominal.origin_module, .type_name = nominal.name },
-                    .kind = if (nominal.is_opaque) .opaque else .nominal,
+                    .def = try self.typeDef(view, nominal.origin_module, nominal.name),
+                    .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
                     .args = try self.program.types.addSpan(args),
                     .backing = switch (nominal.representation) {
@@ -217,7 +253,7 @@ const Builder = struct {
         defer self.allocator.free(lowered);
         for (fields, 0..) |field, i| {
             lowered[i] = .{
-                .name = field.name,
+                .name = try self.recordFieldName(view, field.name),
                 .ty = try self.lowerType(view, field.ty),
             };
         }
@@ -231,7 +267,7 @@ const Builder = struct {
             const payloads = try self.lowerTypeSlice(view, tag.args);
             defer self.allocator.free(payloads);
             lowered[i] = .{
-                .name = tag.name,
+                .name = try self.tagName(view, tag.name),
                 .payloads = try self.program.types.addSpan(payloads),
             };
         }
@@ -269,33 +305,94 @@ const Builder = struct {
         Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
     }
 
-    fn fnDefForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) Ast.FnTemplate {
-        return switch (proc.binding) {
+    fn lookupMethodTarget(
+        self: *Builder,
+        owner: static_dispatch.MethodOwner,
+        method_view: ModuleView,
+        method: names.MethodNameId,
+    ) ?MethodLookup {
+        var found: ?MethodLookup = null;
+        self.lookupMethodTargetInView(moduleView(self.root_view), owner, method_view, method, &found);
+        for (self.modules.imports) |imported| {
+            self.lookupMethodTargetInView(moduleView(imported), owner, method_view, method, &found);
+        }
+        for (self.modules.root.relation_modules) |relation| {
+            self.lookupMethodTargetInView(moduleView(relation), owner, method_view, method, &found);
+        }
+        return found;
+    }
+
+    fn lookupMethodTargetInView(
+        self: *Builder,
+        view: ModuleView,
+        owner: static_dispatch.MethodOwner,
+        method_view: ModuleView,
+        method: names.MethodNameId,
+        found: *?MethodLookup,
+    ) void {
+        const view_owner = self.methodOwnerForView(owner, view) orelse return;
+        const view_method = view.names.lookupMethodName(method_view.names.methodNameText(method)) orelse return;
+        const target = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return;
+        if (found.* != null) Common.invariant("checked method registries contain duplicate dispatch targets");
+        found.* = .{ .view = view, .target = target };
+    }
+
+    fn methodOwnerForView(self: *Builder, owner: static_dispatch.MethodOwner, view: ModuleView) ?static_dispatch.MethodOwner {
+        return switch (owner) {
+            .builtin => |builtin| .{ .builtin = builtin },
+            .nominal => |nominal| blk: {
+                const module_name = view.names.lookupModuleName(self.program.names.moduleNameText(nominal.module_name)) orelse return null;
+                const type_name = view.names.lookupTypeName(self.program.names.typeNameText(nominal.type_name)) orelse return null;
+                break :blk .{ .nominal = .{ .module_name = module_name, .type_name = type_name } };
+            },
+        };
+    }
+
+    fn fnDefForProcedureUse(self: *Builder, source_ty_view: ModuleView, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
+        const source_fn_ty = proc.source_fn_ty_payload orelse
+            Common.invariant("checked procedure use reached Monotype without a requested function type");
+        const fn_template = switch (proc.binding) {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(checked.topLevelProcedureModuleId(top_level));
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                break :blk fnDefForProcedureBindingBody(view, binding.body);
+                break :blk fnDefForProcedureBindingBody(view, binding.body, source_fn_ty);
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
                 for (view.exported_procedure_bindings.bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        break :blk fnDefForImportedBindingBody(view, binding.body);
+                        break :blk fnDefForImportedBindingBody(view, binding.body, source_fn_ty);
                     }
                 }
                 Common.invariant("imported procedure binding was not exported by its checked module");
             },
-            .hosted => |hosted| fnDefForTemplate(self.moduleForId(moduleIdFromDigest(names.procTemplateModuleDigest(hosted.template))), hosted.template),
+            .hosted => |hosted| blk: {
+                break :blk fnDefForTemplate(self.moduleForId(moduleIdFromDigest(names.procTemplateModuleDigest(hosted.template))), hosted.template, source_fn_ty);
+            },
             .platform_required => |required| blk: {
                 const platform_view = self.moduleForId(checked.requiredProcedureModuleId(required));
                 const binding = platform_view.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
                     Common.invariant("platform required procedure binding id is missing");
                 break :blk switch (binding.value_use) {
-                    .procedure_value => |procedure| self.fnDefForProcedureUse(procedure.procedure),
+                    .procedure_value => |procedure| try self.fnDefForProcedureUse(source_ty_view, procedure.procedure),
                     .const_value => Common.invariant("platform required procedure ref resolved to a const binding"),
                 };
             },
         };
+        try self.lowerFnTemplateDef(source_ty_view, fn_template);
+        return fn_template;
+    }
+
+    fn lowerFnTemplateDef(self: *Builder, source_ty_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!void {
+        switch (fn_template.fn_def) {
+            .local_template,
+            .imported_template,
+            .local_hosted,
+            .imported_hosted,
+            .checked_generated,
+            => |template| _ = try self.lowerTemplate(template, source_ty_view, fn_template.source_fn_ty),
+            .nested => {},
+        }
     }
 
     fn nestedFnForExpr(
@@ -397,7 +494,7 @@ const BodyContext = struct {
         }
         const fn_content = self.builder.program.types.get(fn_ty);
         const ret_ty = switch (fn_content) {
-            .fn => |fn_data| fn_data.ret,
+            .func => |fn_data| fn_data.ret,
             else => Common.invariant("checked procedure template root type was not a function"),
         };
 
@@ -407,6 +504,16 @@ const BodyContext = struct {
                 const root = self.view.bodies.exprs[@intFromEnum(body.root_expr)];
                 return switch (root.data) {
                     .lambda => |lambda| try self.lowerLambdaTemplate(lambda, ret_ty),
+                    .closure => |closure| blk: {
+                        if (closure.captures.len != 0) {
+                            Common.invariant("checked procedure template root closure had captures");
+                        }
+                        const lambda_expr = self.view.bodies.exprs[@intFromEnum(closure.lambda)];
+                        break :blk switch (lambda_expr.data) {
+                            .lambda => |lambda| try self.lowerLambdaTemplate(lambda, ret_ty),
+                            else => Common.invariant("checked procedure template root closure did not point at a lambda"),
+                        };
+                    },
                     .hosted_lambda => Common.invariant("hosted lambda template must lower through hosted metadata, not source lambda body"),
                     else => .{
                         .args = .empty(),
@@ -420,11 +527,45 @@ const BodyContext = struct {
                 return .{
                     .args = .empty(),
                     .body = try self.lowerExpr(wrapper.body_expr),
-                    .ret = try self.builder.lowerType(self.view, wrapper.checked_fn_root),
+                    .ret = ret_ty,
                 };
             },
-            .intrinsic_wrapper => Common.invariant("checked compiler-generated procedure template reached Monotype without a checked body template"),
+            .intrinsic_wrapper => |wrapper_id| {
+                const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
+                return switch (wrapper.intrinsic) {
+                    .str_inspect => try self.lowerStrInspectIntrinsic(fn_ty, ret_ty),
+                    .structural_eq => Common.invariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
+                };
+            },
         }
+    }
+
+    fn lowerStrInspectIntrinsic(self: *BodyContext, fn_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
+        const fn_content = self.builder.program.types.get(fn_ty);
+        const fn_data = switch (fn_content) {
+            .func => |data| data,
+            else => Common.invariant("Str.inspect intrinsic had a non-function type"),
+        };
+        const arg_tys = self.builder.program.types.span(fn_data.args);
+        if (arg_tys.len != 1) Common.invariant("Str.inspect intrinsic requires exactly one argument");
+
+        const arg_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+        const typed_arg = Ast.TypedLocal{ .local = arg_local, .ty = arg_tys[0] };
+        const local_expr = try self.builder.program.addExpr(.{ .ty = arg_tys[0], .data = .{ .local = arg_local } });
+        const args = [_]Ast.ExprId{local_expr};
+        const arg_span = try self.builder.program.addExprSpan(&args);
+        const body = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .low_level = .{
+                .op = strInspectLowLevelOp(self.builder.program.types.get(arg_tys[0])),
+                .args = arg_span,
+            } },
+        });
+        return .{
+            .args = try self.builder.program.addTypedLocalSpan(&.{typed_arg}),
+            .body = body,
+            .ret = ret_ty,
+        };
     }
 
     fn lowerLambdaTemplate(self: *BodyContext, lambda: anytype, ret_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
@@ -473,8 +614,8 @@ const BodyContext = struct {
             .list => |items| .{ .list = try self.lowerExprSpan(items) },
             .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
             .record => |record| try self.lowerRecordExpr(record),
-            .tag => |tag| .{ .tag = .{ .name = tag.name, .payloads = try self.lowerExprSpan(tag.args) } },
-            .zero_argument_tag => |tag| .{ .tag = .{ .name = tag.name, .payloads = .empty() } },
+            .tag => |tag| .{ .tag = .{ .name = try self.builder.tagName(self.view, tag.name), .payloads = try self.lowerExprSpan(tag.args) } },
+            .zero_argument_tag => |tag| .{ .tag = .{ .name = try self.builder.tagName(self.view, tag.name), .payloads = .empty() } },
             .nominal => |nominal| .{ .nominal = try self.lowerExpr(nominal.backing_expr) },
             .closure => |closure| try self.lowerClosure(expr_id, closure),
             .lambda => |lambda| try self.lowerLambdaExpr(
@@ -495,7 +636,7 @@ const BodyContext = struct {
             } },
             .field_access => |field| .{ .field_access = .{
                 .receiver = try self.lowerExpr(field.receiver),
-                .field = field.field_name,
+                .field = try self.builder.recordFieldName(self.view, field.field_name),
             } },
             .tuple_access => |access| .{ .tuple_access = .{
                 .tuple = try self.lowerExpr(access.tuple),
@@ -514,7 +655,7 @@ const BodyContext = struct {
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             .for_ => |for_| try self.lowerIteratorFor(for_),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
-            .run_low_level => |run| .{ .low_level = .{ .op = run.op, .args = try self.lowerExprSpan(run.args) } },
+            .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
         };
         return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
     }
@@ -550,8 +691,8 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| .{ .fn_def = self.builder.fnDefForProcedureUse(proc) },
-            .platform_required_proc => |proc| .{ .fn_def = self.builder.fnDefForProcedureUse(proc.procedure) },
+            => |proc| .{ .fn_def = try self.builder.fnDefForProcedureUse(self.view, proc) },
+            .platform_required_proc => |proc| .{ .fn_def = try self.builder.fnDefForProcedureUse(self.view, proc.procedure) },
             .top_level_const => |const_use| return try self.restoreConstUse(const_use, checked_ty),
             .imported_const => |const_use| return try self.restoreConstUse(const_use, checked_ty),
             .platform_required_const => |required| return try self.restoreConstUse(required.const_use, checked_ty),
@@ -627,7 +768,7 @@ const BodyContext = struct {
             .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, checked_ty, items) },
             .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, checked_ty, items) },
             .tag => |tag| .{ .tag = .{
-                .name = tag.tag_name,
+                .name = try self.builder.tagName(store_view, tag.tag_name),
                 .payloads = try self.restoreConstTagPayloads(store_view, type_view, checked_ty, tag),
             } },
             .nominal => |nominal| .{ .nominal = try self.restoreConstNode(store_view, type_view, nominal.backing, checkedNominalBackingType(type_view, checked_ty, nominal.named_type)) },
@@ -681,7 +822,7 @@ const BodyContext = struct {
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
             lowered[index] = .{
-                .name = fields[index].name,
+                .name = try self.builder.recordFieldName(type_view, fields[index].name),
                 .value = try self.restoreConstNode(store_view, type_view, item, fields[index].ty),
             };
         }
@@ -695,7 +836,7 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         tag: anytype,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const payload_tys = checkedTagPayloadTypes(type_view, checked_ty, tag.tag_name);
+        const payload_tys = checkedTagPayloadTypes(type_view, checked_ty, store_view, tag.tag_name);
         if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
         defer self.allocator.free(lowered);
@@ -714,12 +855,12 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         _ = checked_ty;
-        _ = type_view;
         const raw = @intFromEnum(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.fns.items[raw];
         const template = constFnTemplateToMono(fn_value);
         if (fn_value.captures.len == 0) {
+            try self.builder.lowerFnTemplateDef(type_view, template);
             return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .fn_def = template } });
         }
 
@@ -815,7 +956,7 @@ const BodyContext = struct {
         defer self.allocator.free(lowered);
         for (record.fields, 0..) |field, i| {
             lowered[i] = .{
-                .name = field.label,
+                .name = try self.builder.recordFieldName(self.view, field.label),
                 .value = try self.lowerExpr(field.value),
             };
         }
@@ -878,14 +1019,15 @@ const BodyContext = struct {
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
-        const target = self.view.method_registry.lookup(.{ .owner = owner, .method = plan.method }) orelse
+        const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse
             Common.invariant("checked method registry is missing resolved dispatch target");
-        const template = target.template orelse
+        const template = lookup.target.template orelse
             Common.invariant("checked dispatch target was not backed by a procedure template");
+        _ = try self.builder.lowerTemplate(template, self.view, plan.callable_ty);
 
         const args = try self.lowerExprSpan(plan.args);
         return .{ .call_proc = .{
-            .callee = fnDefForTemplate(self.view, template),
+            .callee = fnDefForTemplate(lookup.view, template, plan.callable_ty),
             .args = args,
         } };
     }
@@ -940,6 +1082,7 @@ const BodyContext = struct {
     }
 
     fn lowerIteratorFor(self: *BodyContext, for_: anytype) Allocator.Error!Ast.ExprData {
+        _ = self;
         _ = for_;
         Common.invariant("iterator for must be lowered by the checked iterator dispatch plan before Monotype expression publication");
     }
@@ -997,7 +1140,7 @@ const BodyContext = struct {
                 } };
             },
             .applied_tag => |tag| .{ .tag = .{
-                .name = tag.name,
+                .name = try self.builder.tagName(self.view, tag.name),
                 .payloads = try self.lowerPatternSpan(tag.args),
             } },
             .nominal => |nominal| .{ .nominal = try self.lowerPattern(nominal.backing_pattern) },
@@ -1034,7 +1177,7 @@ const BodyContext = struct {
                 .rest => |pattern| pattern,
             };
             lowered[i] = .{
-                .name = destruct.label,
+                .name = try self.builder.recordFieldName(self.view, destruct.label),
                 .pattern = try self.lowerPattern(child),
             };
         }
@@ -1064,37 +1207,36 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
     };
 }
 
-fn fnDefForTemplate(view: ModuleView, template: names.ProcTemplate) Ast.FnTemplate {
-    const checked_template = view.templates.get(template.template);
+fn fnDefForTemplate(view: ModuleView, template: names.ProcTemplate, source_fn_ty: checked.CheckedTypeId) Ast.FnTemplate {
     if (moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template).bytes)) {
         return .{
             .fn_def = .{ .local_template = template },
-            .source_fn_ty = checked_template.checked_fn_root,
+            .source_fn_ty = source_fn_ty,
         };
     }
     return .{
         .fn_def = .{ .imported_template = template },
-        .source_fn_ty = checked_template.checked_fn_root,
+        .source_fn_ty = source_fn_ty,
     };
 }
 
-fn fnDefForProcedureBindingBody(view: ModuleView, body: checked.ProcedureBindingBody) Ast.FnTemplate {
+fn fnDefForProcedureBindingBody(view: ModuleView, body: checked.ProcedureBindingBody, source_fn_ty: checked.CheckedTypeId) Ast.FnTemplate {
     return switch (body) {
-        .direct_template => |direct| fnDefForCallableTemplate(view, direct.template),
+        .direct_template => |direct| fnDefForCallableTemplate(view, direct.template, source_fn_ty),
         .callable_eval_template => Common.invariant("callable eval template must be restored through ConstStore before Monotype lowering"),
     };
 }
 
-fn fnDefForImportedBindingBody(view: ModuleView, body: checked.ImportedProcedureBindingBody) Ast.FnTemplate {
+fn fnDefForImportedBindingBody(view: ModuleView, body: checked.ImportedProcedureBindingBody, source_fn_ty: checked.CheckedTypeId) Ast.FnTemplate {
     return switch (body) {
-        .direct_template => |direct| fnDefForCallableTemplate(view, direct.template),
+        .direct_template => |direct| fnDefForCallableTemplate(view, direct.template, source_fn_ty),
         .callable_eval_template => Common.invariant("imported callable eval template must be restored through ConstStore before Monotype lowering"),
     };
 }
 
-fn fnDefForCallableTemplate(view: ModuleView, template: names.CallableProcTemplate) Ast.FnTemplate {
+fn fnDefForCallableTemplate(view: ModuleView, template: names.CallableProcTemplate, source_fn_ty: checked.CheckedTypeId) Ast.FnTemplate {
     return switch (template) {
-        .checked => |checked_template| fnDefForTemplate(view, checked_template),
+        .checked => |checked_template| fnDefForTemplate(view, checked_template, source_fn_ty),
         .lifted,
         .synthetic,
         => Common.invariant("checked procedure binding referenced a post-check function template"),
@@ -1179,17 +1321,19 @@ fn checkedRecordFields(view: ModuleView, checked_ty: checked.CheckedTypeId) []co
 fn checkedTagPayloadTypes(
     view: ModuleView,
     checked_ty: checked.CheckedTypeId,
+    tag_view: ModuleView,
     tag_name: names.TagNameId,
 ) []const checked.CheckedTypeId {
     return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedTagPayloadTypes(view, alias.backing, tag_name),
-        .nominal => |nominal| checkedTagPayloadTypes(view, nominal.backing, tag_name),
+        .alias => |alias| checkedTagPayloadTypes(view, alias.backing, tag_view, tag_name),
+        .nominal => |nominal| checkedTagPayloadTypes(view, nominal.backing, tag_view, tag_name),
         .tag_union => |tag_union| blk: {
             if (!checkedTypeIsEmptyTagUnion(view, tag_union.ext)) {
                 Common.invariant("ConstStore tag restored with an open checked tag union type");
             }
+            const wanted = tag_view.names.tagLabelText(tag_name);
             for (tag_union.tags) |tag| {
-                if (tag.name == tag_name) break :blk tag.args;
+                if (std.mem.eql(u8, view.names.tagLabelText(tag.name), wanted)) break :blk tag.args;
             }
             Common.invariant("ConstStore tag name was not present in checked tag union type");
         },
@@ -1334,6 +1478,29 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
     };
 }
 
+fn strInspectLowLevelOp(content: Type.Content) can.CIR.Expr.LowLevel {
+    return switch (content) {
+        .primitive => |primitive| switch (primitive) {
+            .str => .str_inspect,
+            .u8 => .u8_to_str,
+            .i8 => .i8_to_str,
+            .u16 => .u16_to_str,
+            .i16 => .i16_to_str,
+            .u32 => .u32_to_str,
+            .i32 => .i32_to_str,
+            .u64 => .u64_to_str,
+            .i64 => .i64_to_str,
+            .u128 => .u128_to_str,
+            .i128 => .i128_to_str,
+            .f32 => .f32_to_str,
+            .f64 => .f64_to_str,
+            .dec => .dec_to_str,
+            .bool => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
+        },
+        else => Common.invariant("Str.inspect intrinsic reached Monotype without generated structural inspect lowering"),
+    };
+}
+
 fn branchCount(branches: anytype) usize {
     var count: usize = 0;
     for (branches) |branch| count += branch.patterns.len;
@@ -1353,12 +1520,16 @@ const TemplateAddress = struct {
     module_bytes: [32]u8,
     proc_base: u32,
     template: u32,
+    type_module_bytes: [32]u8,
+    source_fn_ty: u32,
 
-    fn from(template: names.ProcTemplate) TemplateAddress {
+    fn from(template: names.ProcTemplate, type_module: checked.ModuleId, source_fn_ty: checked.CheckedTypeId) TemplateAddress {
         return .{
             .module_bytes = names.procTemplateModuleDigest(template).bytes,
             .proc_base = @intFromEnum(template.proc_base),
             .template = @intFromEnum(template.template),
+            .type_module_bytes = type_module.bytes,
+            .source_fn_ty = @intFromEnum(source_fn_ty),
         };
     }
 };

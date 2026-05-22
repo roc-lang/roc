@@ -9,11 +9,12 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
+const core = @import("lir_core");
 const layout_mod = @import("layout");
 
-const LIR = @import("LIR.zig");
-const LirStore = @import("LirStore.zig");
-const Program = @import("program.zig");
+const LIR = core.LIR;
+const LirStore = core.LirStore;
+const Program = core.Program;
 
 /// Public `MAGIC` declaration.
 pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.

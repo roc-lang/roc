@@ -1,17 +1,18 @@
 //! Statement-only LIR module.
 
 const std = @import("std");
+const core = @import("lir_core");
 
 /// Core statement-only LIR type definitions.
-pub const LIR = @import("LIR.zig");
+pub const LIR = core.LIR;
 /// Flat storage for statement-only LIR nodes and spans.
-pub const LirStore = @import("LirStore.zig");
+pub const LirStore = core.LirStore;
 /// LIR-owned root metadata.
-pub const RootMetadata = @import("root_metadata.zig");
+pub const RootMetadata = core.RootMetadata;
 /// Hosted ABI metadata carried by LIR proc specs.
-pub const Hosted = @import("hosted.zig");
+pub const Hosted = core.Hosted;
 /// LIR program result shared by post-check lowering and consumers.
-pub const Program = @import("program.zig");
+pub const Program = core.Program;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Mechanical ARC insertion over explicit LIR values and control flow.

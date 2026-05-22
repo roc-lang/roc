@@ -6319,6 +6319,7 @@ fn mkBinopConstraint(
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (binop_expr_idx) |expr_idx| {
         try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
+        try self.publishBinopDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
     }
 
     // Create a constrained flex and unify it with the lhs (receiver)
@@ -6329,6 +6330,32 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
+}
+
+fn publishBinopDispatchExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+    region: Region,
+    constraint_fn_var: Var,
+) Allocator.Error!void {
+    switch (self.cir.store.getExpr(expr_idx)) {
+        .e_binop => |binop| switch (binop.op) {
+            .eq, .ne, .@"and", .@"or" => {},
+            else => {
+                const args = try self.cir.store.appendExprSpan(&.{binop.rhs});
+                self.cir.store.replaceExprWithDispatchCall(
+                    expr_idx,
+                    binop.lhs,
+                    method_name,
+                    region,
+                    args,
+                    constraint_fn_var,
+                );
+            },
+        },
+        else => {},
+    }
 }
 
 /// Create a static dispatch fn like: `arg, arg -> ret` and assert the
@@ -6364,6 +6391,7 @@ fn mkUnaryOp(
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (unary_expr_idx) |expr_idx| {
         try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
+        self.publishUnaryDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
     }
 
     // Create a constrained flex and unify it with the arg
@@ -6374,6 +6402,28 @@ fn mkUnaryOp(
     );
 
     _ = try self.unify(constrained_var, arg_var, env);
+}
+
+fn publishUnaryDispatchExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    method_name: Ident.Idx,
+    region: Region,
+    constraint_fn_var: Var,
+) void {
+    const receiver = switch (self.cir.store.getExpr(expr_idx)) {
+        .e_unary_minus => |unary| unary.expr,
+        .e_unary_not => |unary| unary.expr,
+        else => return,
+    };
+    self.cir.store.replaceExprWithDispatchCall(
+        expr_idx,
+        receiver,
+        method_name,
+        region,
+        .{ .span = base.DataSpan.empty() },
+        constraint_fn_var,
+    );
 }
 
 fn checkIteratorForLoop(

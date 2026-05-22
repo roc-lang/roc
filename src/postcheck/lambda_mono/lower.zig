@@ -20,7 +20,10 @@ pub fn run(
 
     var string_literals = owned.lifted.string_literals;
     owned.lifted.string_literals = .empty;
-    var program = Ast.Program.init(allocator, owned.lifted.names, string_literals);
+    var name_store = owned.lifted.names;
+    owned.lifted.names = @import("check").CheckedNames.NameStore.init(allocator);
+    var program = Ast.Program.init(allocator, name_store, string_literals);
+    name_store = undefined;
     string_literals = undefined;
     errdefer program.deinit();
 

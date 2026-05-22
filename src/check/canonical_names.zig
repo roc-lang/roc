@@ -393,6 +393,18 @@ pub const CanonicalNameStore = struct {
         return self.external_symbol_name_by_text.get(idents.getText(ident));
     }
 
+    pub fn lookupModuleName(self: *const CanonicalNameStore, text: []const u8) ?ModuleNameId {
+        return self.module_name_by_text.get(text);
+    }
+
+    pub fn lookupTypeName(self: *const CanonicalNameStore, text: []const u8) ?TypeNameId {
+        return self.type_name_by_text.get(text);
+    }
+
+    pub fn lookupMethodName(self: *const CanonicalNameStore, text: []const u8) ?MethodNameId {
+        return self.method_name_by_text.get(text);
+    }
+
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
         self.scratch_key.clearRetainingCapacity();
         const writer = self.scratch_key.writer(self.allocator);

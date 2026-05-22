@@ -19,7 +19,10 @@ pub fn run(
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
     var string_literals = owned.string_literals;
     owned.string_literals = .empty;
-    var program = Ast.Program.init(allocator, owned.names, types, string_literals, owned.next_symbol);
+    var name_store = owned.names;
+    owned.names = @import("check").CheckedNames.NameStore.init(allocator);
+    var program = Ast.Program.init(allocator, name_store, types, string_literals, owned.next_symbol);
+    name_store = undefined;
     types = undefined;
     string_literals = undefined;
     errdefer program.deinit();
@@ -525,7 +528,7 @@ fn removeBound(bound: *BoundSet, locals: []const Mono.LocalId) void {
 
 fn functionRet(types: *const @import("../monotype/type.zig").Store, ty: @import("../monotype/type.zig").TypeId) @import("../monotype/type.zig").TypeId {
     return switch (types.get(ty)) {
-        .fn => |fn_ty| fn_ty.ret,
+        .func => |fn_ty| fn_ty.ret,
         else => Common.invariant("lifted lambda expression did not have a function type"),
     };
 }

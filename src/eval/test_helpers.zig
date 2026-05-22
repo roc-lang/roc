@@ -865,7 +865,7 @@ pub fn lowerCheckedModuleSetToLir(
             .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
         },
-        .{ .requests = root_module.root_requests.requests },
+        .{ .requests = root_module.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
         },

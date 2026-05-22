@@ -74,7 +74,7 @@ const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
         .imports = imports,
     },
-    .{ .requests = root.root_requests.requests },
+    .{ .requests = root.root_requests.runtime_requests },
     .{ .target_usize = base.target.TargetUsize.native },
 );
 

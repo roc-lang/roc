@@ -11,6 +11,7 @@ const Value = @import("value.zig").Value;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedArtifact;
+const const_store = check.ConstStore;
 const LirProgram = lir.Program;
 const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
@@ -138,6 +139,7 @@ pub const Writer = struct {
                 .f64 => .{ .f64_bits = @bitCast(value.read(f64)) },
                 .dec => .{ .dec_bits = value.read(builtins.dec.RocDec).num },
             },
+            .opaque_ptr => writerInvariant("opaque pointer scalar layout reached scalar const plan"),
         };
     }
 
@@ -333,8 +335,8 @@ pub const Writer = struct {
         slots: []const LirProgram.CaptureSlot,
         payload_layout: layout.Idx,
         payload_value: Value,
-    ) Allocator.Error![]const checked.ConstCapture {
-        const captures = try self.module.const_store.allocator.alloc(checked.ConstCapture, slots.len);
+    ) Allocator.Error![]const const_store.ConstCapture {
+        const captures = try self.module.const_store.allocator.alloc(const_store.ConstCapture, slots.len);
         errdefer self.module.const_store.allocator.free(captures);
         if (slots.len == 0) return captures;
 

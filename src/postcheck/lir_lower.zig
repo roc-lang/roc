@@ -11,9 +11,10 @@ const Mono = @import("monotype/ast.zig");
 const LambdaMono = @import("lambda_mono/ast.zig");
 const MonoType = @import("monotype/type.zig");
 const Type = @import("lambda_mono/type.zig");
-const LIR = @import("../lir/LIR.zig");
-const LirProgram = @import("../lir/program.zig");
-const RootMetadata = @import("../lir/root_metadata.zig").RootMetadata;
+const lir_core = @import("lir_core");
+const LIR = lir_core.LIR;
+const LirProgram = lir_core.Program;
+const RootMetadata = lir_core.RootMetadata.RootMetadata;
 const checked = check.CheckedModule;
 
 pub const RuntimeRecordFieldSchema = struct {
@@ -247,7 +248,8 @@ const Lowerer = struct {
             if (self.const_plan_map[index] == id) self.const_plan_map[index] = null;
         }
 
-        self.result.const_plans.items[@intFromEnum(id)] = try self.buildConstPlan(ty);
+        const plan = try self.buildConstPlan(ty);
+        self.result.const_plans.items[@intFromEnum(id)] = plan;
         return id;
     }
 
@@ -315,7 +317,10 @@ const Lowerer = struct {
             .named => |named| blk: {
                 const backing = named.backing orelse Common.invariant("named type without backing reached ConstStore plan publication");
                 break :blk .{ .named = .{
-                    .named_type = named.named_type,
+                    .named_type = .{
+                        .module = named.named_type.module,
+                        .ty = named.named_type.ty,
+                    },
                     .backing = try self.constPlanOfType(backing.ty),
                 } };
             },
@@ -466,8 +471,8 @@ const Lowerer = struct {
     }
 
     fn lowerExprReturn(self: *Lowerer, expr_id: LambdaMono.ExprId) Common.LowerError!LIR.CFStmtId {
-        const expr = self.expr(expr_id);
-        const ret_local = try self.addTemp(expr.ty);
+        const expr_data = self.expr(expr_id);
+        const ret_local = try self.addTemp(expr_data.ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         return try self.lowerExprInto(ret_local, expr_id, ret_stmt);
     }
@@ -478,8 +483,8 @@ const Lowerer = struct {
         expr_id: LambdaMono.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        const expr = self.expr(expr_id);
-        return switch (expr.data) {
+        const expr_data = self.expr(expr_id);
+        return switch (expr_data.data) {
             .local => |local| try self.assignLocal(target, try self.localFor(local), next),
             .unit => try self.assignZst(target, next),
             .int_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
@@ -512,15 +517,15 @@ const Lowerer = struct {
             } }),
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
-            .record => |fields| try self.lowerRecordInto(target, expr.ty, fields, next),
+            .record => |fields| try self.lowerRecordInto(target, expr_data.ty, fields, next),
             .capture_record => |items| try self.lowerCaptureRecordInto(target, items, next),
-            .tag => |tag| try self.lowerTagInto(target, expr.ty, tag.name, tag.payloads, next),
+            .tag => |tag| try self.lowerTagInto(target, expr_data.ty, tag.name, tag.payloads, next),
             .callable => |callable| try self.lowerCallableInto(target, callable, next),
             .nominal => |backing| try self.lowerNominalInto(target, backing, next),
             .let_ => |let_| try self.lowerLetInto(target, let_, next),
             .direct_call => |call| try self.lowerDirectCallInto(target, call, next),
             .indirect_erased_call => |call| try self.lowerErasedCallInto(target, call, next),
-            .packed_erased_fn => |packed| try self.lowerPackedErasedFnInto(target, packed, next),
+            .packed_erased_fn => |packed_fn| try self.lowerPackedErasedFnInto(target, packed_fn, next),
             .low_level => |call| try self.lowerLowLevelInto(target, call.op, call.args, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
             .capture_access => |slot| try self.lowerCaptureAccessInto(target, slot, next),
@@ -738,8 +743,8 @@ const Lowerer = struct {
         return try self.lowerExprInto(callee, call.callee, current);
     }
 
-    fn lowerPackedErasedFnInto(self: *Lowerer, target: LIR.LocalId, packed: LambdaMono.PackedErasedFn, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const capture = if (packed.capture) |capture_expr| try self.addTemp(self.expr(capture_expr).ty) else null;
+    fn lowerPackedErasedFnInto(self: *Lowerer, target: LIR.LocalId, packed_fn: LambdaMono.PackedErasedFn, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const capture = if (packed_fn.capture) |capture_expr| try self.addTemp(self.expr(capture_expr).ty) else null;
         const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
         const on_drop: LIR.ErasedCallableOnDrop = if (capture_layout) |layout_idx| blk: {
             const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = layout_idx };
@@ -751,13 +756,13 @@ const Lowerer = struct {
 
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = self.fn_map[@intFromEnum(packed.target)],
+            .proc = self.fn_map[@intFromEnum(packed_fn.target)],
             .capture = capture,
             .capture_layout = capture_layout,
             .on_drop = on_drop,
             .next = next,
         } });
-        if (packed.capture) |capture_expr| return try self.lowerExprInto(capture.?, capture_expr, assign);
+        if (packed_fn.capture) |capture_expr| return try self.lowerExprInto(capture.?, capture_expr, assign);
         return assign;
     }
 
@@ -984,23 +989,23 @@ const Lowerer = struct {
     }
 
     fn lowerPatternThen(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId, continuation: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const pat = self.pat(pat_id);
-        return switch (pat.data) {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
             .bind, .wildcard => try self.bindPattern(pat_id, source, on_match),
             .as => |as| blk: {
                 const tested = try self.lowerPatternThen(as.pattern, source, on_match, on_miss, continuation);
                 break :blk try self.assignLocal(try self.localFor(as.local), source, tested);
             },
-            .record => |fields| try self.lowerRecordPatternThen(pat.ty, fields, source, on_match, on_miss, continuation),
+            .record => |fields| try self.lowerRecordPatternThen(pat_data.ty, fields, source, on_match, on_miss, continuation),
             .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, on_miss, continuation),
             .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, on_miss, continuation),
-            .tag => |tag| try self.lowerTagPatternThen(pat.ty, tag.name, tag.payloads, source, on_match, on_miss, continuation),
-            .callable => |callable| try self.lowerCallablePatternThen(pat.ty, callable.variant, callable.payload, source, on_match, on_miss, continuation),
-            .int_lit => |value| try self.lowerLiteralPatternThen(source, pat.ty, .{ .int_lit = value }, on_match, on_miss, continuation),
-            .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat.ty, .{ .dec_lit = value }, on_match, on_miss, continuation),
-            .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat.ty, .{ .frac_f32_lit = value }, on_match, on_miss, continuation),
-            .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat.ty, .{ .frac_f64_lit = value }, on_match, on_miss, continuation),
-            .str_lit => |value| try self.lowerLiteralPatternThen(source, pat.ty, .{ .str_lit = value }, on_match, on_miss, continuation),
+            .tag => |tag| try self.lowerTagPatternThen(pat_data.ty, tag.name, tag.payloads, source, on_match, on_miss, continuation),
+            .callable => |callable| try self.lowerCallablePatternThen(pat_data.ty, callable.variant, callable.payload, source, on_match, on_miss, continuation),
+            .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .int_lit = value }, on_match, on_miss, continuation),
+            .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .dec_lit = value }, on_match, on_miss, continuation),
+            .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f32_lit = value }, on_match, on_miss, continuation),
+            .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f64_lit = value }, on_match, on_miss, continuation),
+            .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .str_lit = value }, on_match, on_miss, continuation),
         };
     }
 
@@ -1160,19 +1165,19 @@ const Lowerer = struct {
     }
 
     fn bindPattern(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const pat = self.pat(pat_id);
-        return switch (pat.data) {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
             .bind => |local| try self.assignLocal(try self.localFor(local), source, next),
             .wildcard => next,
             .as => |as| blk: {
                 const bound = try self.bindPattern(as.pattern, source, next);
                 break :blk try self.assignLocal(try self.localFor(as.local), source, bound);
             },
-            .record => |fields| try self.bindRecordPattern(pat.ty, fields, source, next),
+            .record => |fields| try self.bindRecordPattern(pat_data.ty, fields, source, next),
             .tuple => |items| try self.bindTuplePattern(items, source, next),
-            .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat.ty, tag.name), tag.payloads, source, next),
+            .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_data.ty, tag.name), tag.payloads, source, next),
             .callable => |callable| if (callable.payload) |payload_pat| blk: {
-                const variant_index = self.callableVariantIndex(pat.ty, callable.variant);
+                const variant_index = self.callableVariantIndex(pat_data.ty, callable.variant);
                 const payload_local = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(source).layout_idx, variant_index));
                 const bound = try self.bindPattern(payload_pat, payload_local, next);
                 break :blk if (self.isZstLocal(payload_local))
@@ -1658,7 +1663,7 @@ const Lowerer = struct {
         }
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = layout.localGraphInput(source),
+            .op = .{ .local = source },
             .next = next,
         } });
     }

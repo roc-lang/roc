@@ -13,16 +13,8 @@ pub const CheckedModules = struct {
     imports: []const checked.ImportedModuleView = &.{},
 };
 
-pub const RootPurpose = enum {
-    runtime,
-    compile_time,
-};
-
 pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},
-    compile_time_requests: []const checked.CompileTimeEvaluationRequest = &.{},
-    purpose: RootPurpose = .runtime,
-    compile_time_module_sink: ?*checked.Module = null,
 };
 
 pub const Target = struct {

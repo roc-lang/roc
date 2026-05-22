@@ -1047,14 +1047,20 @@ pub const Interpreter = struct {
                         @intFromEnum(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
-                .assign_literal => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @intFromEnum(current),
-                        stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
+                .assign_literal => |assign| {
+                    const layout_idx = self.store.getLocal(assign.target).layout_idx;
+                    const layout_val = self.layout_store.getLayout(layout_idx);
+                    debugPrint(
+                        "  stmt {d}: {any} target_layout={d} tag={s} size={d}\n",
+                        .{
+                            @intFromEnum(current),
+                            stmt,
+                            @intFromEnum(layout_idx),
+                            @tagName(layout_val.tag),
+                            self.helper.sizeOf(layout_idx),
+                        },
+                    );
+                },
                 .assign_call => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
@@ -1244,12 +1250,13 @@ pub const Interpreter = struct {
         }
 
         trace.log(
-            "enter proc={d} name={d} depth={d} args={d}",
+            "enter proc={d} name={d} depth={d} args={d} ret_layout={d}",
             .{
                 @intFromEnum(proc_id),
                 proc_spec.name.raw(),
                 self.call_depth,
                 args.len,
+                @intFromEnum(proc_spec.ret_layout),
             },
         );
         self.call_depth += 1;
@@ -1327,7 +1334,9 @@ pub const Interpreter = struct {
                 try self.materializeLocalValue(coerced, param_layout),
             );
         }
-        const outcome = try self.execStmtChain(&frame, self.requireProcBody(proc_id, proc_spec));
+        const body = self.requireProcBody(proc_id, proc_spec);
+        if (trace.enabled) self.debugPrintStmtChain(body, 32);
+        const outcome = try self.execStmtChain(&frame, body);
         return switch (outcome) {
             .returned => |ret_local| blk: {
                 trace.log(

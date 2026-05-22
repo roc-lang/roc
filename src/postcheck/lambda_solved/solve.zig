@@ -791,7 +791,7 @@ const TypeCloner = struct {
                     } else null,
                 } };
             },
-            .fn => |fn_ty| blk: {
+            .func => |fn_ty| blk: {
                 const args = try self.lowerTypeSpan(self.solver.program.lifted.types.span(fn_ty.args));
                 defer self.solver.allocator.free(args);
                 break :blk .{ .func = .{
