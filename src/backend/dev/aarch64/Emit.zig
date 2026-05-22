@@ -468,12 +468,18 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// ADD reg, reg, imm12 (add immediate)
         pub fn addRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) !void {
+            try self.addRegRegImm12Shifted(width, dst, src, imm, false);
+        }
+
+        /// ADD reg, reg, imm12 (add immediate, with optional LSL #12)
+        pub fn addRegRegImm12Shifted(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12, lsl_12: bool) !void {
             // ADD <Xd>, <Xn>, #<imm>{, <shift>}
             // sf 0 0 1 0 0 0 1 sh imm12 Rn Rd
             const sf = width.sf();
+            const sh: u32 = if (lsl_12) 1 else 0;
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b0010001 << 24) |
-                (0 << 22) | // sh=0 (no shift)
+                (sh << 22) |
                 (@as(u32, imm) << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();
@@ -482,12 +488,18 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// SUB reg, reg, imm12 (subtract immediate)
         pub fn subRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) !void {
+            try self.subRegRegImm12Shifted(width, dst, src, imm, false);
+        }
+
+        /// SUB reg, reg, imm12 (subtract immediate, with optional LSL #12)
+        pub fn subRegRegImm12Shifted(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12, lsl_12: bool) !void {
             // SUB <Xd>, <Xn>, #<imm>{, <shift>}
             // sf 1 0 1 0 0 0 1 sh imm12 Rn Rd
             const sf = width.sf();
+            const sh: u32 = if (lsl_12) 1 else 0;
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b1010001 << 24) |
-                (0 << 22) |
+                (sh << 22) |
                 (@as(u32, imm) << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();
