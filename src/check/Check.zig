@@ -98,9 +98,6 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
-/// Stack of type variables currently being constraint-checked, used to detect recursive constraints
-/// When a var appears in this stack while we're checking its constraints, we've detected recursion
-constraint_check_stack: std.ArrayList(Var),
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -358,7 +355,6 @@ fn initAssumePrepared(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
-        .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .bool_var = undefined,
         .str_var = undefined,
@@ -456,7 +452,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
-    self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
@@ -8235,14 +8230,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
-        // Verify no recursive constraints - recursion should be handled through
-        // nominal types which break the cycle naturally.
-        for (self.constraint_check_stack.items) |stack_var| {
-            std.debug.assert(stack_var != dispatcher_resolved.var_);
-        }
-
-        try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
-        defer _ = self.constraint_check_stack.pop();
 
         dispatch_resolution: while (true) {
             if (dispatcher_content == .err) {
