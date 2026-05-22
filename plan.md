@@ -859,6 +859,15 @@ rg "@import\\(\"mir\"\\)|@import\\(\"ir\"\\)" src
 If a reference remains, either it is renamed/moved neutral infrastructure or the
 deletion is incomplete.
 
+Done:
+
+- `src/mir`, `src/ir`, and `src/lir/lower_ir.zig` are deleted.
+- Old-middle imports and build references are removed from the checked-module
+  to LIR path.
+- Checked-name callable descriptor and erased ABI store declarations are
+  deleted rather than kept as dormant checked-boundary API.
+- Required old-middle deletion greps return no matches outside deleted paths.
+
 ## Phase 10: Verification
 
 Goal: prove the new middle is the only middle and the compiler still works.
