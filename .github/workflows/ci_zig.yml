@@ -10,7 +10,7 @@ permissions: {}
 jobs:
   # Checks that don't need to run on every OS
   check-once:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
@@ -93,9 +93,6 @@ jobs:
           - os: macos-15
             cpu_flag: ''
             target_flag: ''
-          - os: ubuntu-22.04
-            cpu_flag: -Dcpu=x86_64_v3
-            target_flag: -Dtarget=x86_64-linux-musl
           - os: ubuntu-24.04
             cpu_flag: ''
             target_flag: -Dtarget=x86_64-linux-musl
@@ -264,7 +261,7 @@ jobs:
 
   zig-valgrind:
     needs: check-once
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4

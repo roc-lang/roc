@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         host: [
-            ubuntu-22.04, # Linux x64 host
+            ubuntu-24.04, # Linux x64 host
             macos-15-intel, # macOS x64 host
             macos-15, # macOS ARM64 host
             windows-2022, # Windows x64 host
@@ -87,7 +87,7 @@ jobs:
         include:
           # Test x64musl executables on Linux x64
           - target: x64musl
-            target_os: ubuntu-22.04
+            target_os: ubuntu-24.04
             arch: x64
           # Test arm64musl executables on Linux ARM64
           - target: arm64musl
