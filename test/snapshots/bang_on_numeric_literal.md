@@ -40,7 +40,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "not") (constraint-fn-var 18)
+(e-dispatch-call (method "not") (constraint-fn-var 38)
 	(receiver
 		(e-num (value "3")))
 	(args))

@@ -1,6 +1,6 @@
 //! Root metadata owned by the LIR boundary.
 //!
-//! Checking publishes root requests. Post-check lowering converts those checked
+//! Checking outputs root requests. Post-check lowering converts those checked
 //! requests into this small LIR-facing record when it emits root procedures.
 
 const std = @import("std");

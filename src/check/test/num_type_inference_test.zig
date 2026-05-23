@@ -36,8 +36,10 @@ test "infers type for small nums" {
     }
 }
 
-test "fail to infer num literals outside supported range" {
-    // Test integer literals that are too big to be represented
+test "exact num literals outside compact range still default to Dec" {
+    // Exact integer literals that are too big for the compact payload still
+    // participate in `from_numeral`; without stronger evidence, they default
+    // to Dec like other unannotated numeric literals.
     const test_cases = [_][]const u8{
         // Negative number slightly lower than i128 min
         "-170141183460469231731687303715884105729",
@@ -55,8 +57,7 @@ test "fail to infer num literals outside supported range" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        const typ = (try test_env.getLastExprType()).content;
-        try testing.expect(typ == .err);
+        try test_env.assertLastDefType("Dec");
     }
 }
 

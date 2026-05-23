@@ -46,7 +46,7 @@ pub const FnDef = union(enum) {
     checked_generated: names.ProcTemplate,
 };
 
-/// Hosted function metadata published by checking and carried through lowering.
+/// Hosted function metadata output by checking and carried through lowering.
 pub const HostedFn = struct {
     template: names.ProcTemplate,
     external_symbol_name: names.ExternalSymbolNameId,

@@ -83,7 +83,7 @@ pub const ConstValue = union(enum) {
     fn_value: ConstFnId,
 };
 
-/// Store of compile-time constants published by checking finalization.
+/// Store of compile-time constants completed by checking finalization.
 pub const ConstStore = struct {
     const VisitState = enum { unseen, active, done };
 
@@ -130,11 +130,11 @@ pub const ConstStore = struct {
         return self.values.items[@intFromEnum(id)];
     }
 
-    pub fn verifyPublished(self: *const ConstStore) void {
+    pub fn verifyComplete(self: *const ConstStore) void {
         if (@import("builtin").mode != .Debug) return;
         for (self.values.items) |value| {
             switch (value) {
-                .pending => std.debug.panic("const store invariant violated: published store contains a pending node", .{}),
+                .pending => std.debug.panic("const store invariant violated: completed store contains a pending node", .{}),
                 else => {},
             }
         }
@@ -193,16 +193,16 @@ pub const ConstStore = struct {
         fn_state: []VisitState,
     ) void {
         const index = @intFromEnum(id);
-        if (index >= self.values.items.len) constStoreInvariant("published store contains an out-of-range value id");
+        if (index >= self.values.items.len) constStoreInvariant("completed store contains an out-of-range value id");
         switch (value_state[index]) {
             .done => return,
-            .active => constStoreInvariant("published store contains a cycle in const node edges"),
+            .active => constStoreInvariant("completed store contains a cycle in const node edges"),
             .unseen => {},
         }
 
         value_state[index] = .active;
         switch (self.values.items[index]) {
-            .pending => constStoreInvariant("published store contains a pending node"),
+            .pending => constStoreInvariant("completed store contains a pending node"),
             .zst,
             .scalar,
             .str,
@@ -230,10 +230,10 @@ pub const ConstStore = struct {
         fn_state: []VisitState,
     ) void {
         const index = @intFromEnum(id);
-        if (index >= self.fns.items.len) constStoreInvariant("published store contains an out-of-range function id");
+        if (index >= self.fns.items.len) constStoreInvariant("completed store contains an out-of-range function id");
         switch (fn_state[index]) {
             .done => return,
-            .active => constStoreInvariant("published store contains a recursive function value"),
+            .active => constStoreInvariant("completed store contains a recursive function value"),
             .unseen => {},
         }
 

@@ -726,7 +726,7 @@ const CheckUnusedSuppressionStep = struct {
 /// Build step that checks for deleted post-check architecture APIs being reintroduced.
 ///
 /// This enforces the cor-style lowering contract:
-/// - no publication/canonicalization layer in post-check lowering
+/// - no output/canonicalization layer in post-check lowering
 /// - no workspace/source-var remapping layer in monotype
 /// - no canonical-source specialization lookup in compilation stages
 const CheckPostcheckArchitectureStep = struct {
@@ -2410,7 +2410,7 @@ pub fn build(b: *std.Build) void {
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
-    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check publication/remapping APIs stay gone");
+    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
     const check_semantic_audit_step = b.step("check-semantic-audit", "Check that semantic reconstruction/fallback paths stay gone");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
@@ -3484,12 +3484,12 @@ pub fn build(b: *std.Build) void {
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
 
-    // Add check that deleted post-check publication/remapping APIs do not reappear
+    // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     test_step.dependOn(&check_postcheck_architecture.step);
     check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
 
-    // Add check that semantic compiler stages do not recover missing facts.
+    // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = SemanticAuditStep.create(b);
     check_semantic_audit_step.dependOn(&run_semantic_audit.step);
     test_step.dependOn(&run_semantic_audit.step);
@@ -3530,13 +3530,11 @@ pub fn build(b: *std.Build) void {
     check_fmt_step.dependOn(&check_fmt.step);
 
     // Parser code coverage with kcov.
-    // Supported on Linux ARM64. macOS kcov relies on task_for_pid; on current
-    // macOS releases that can block indefinitely even after ad-hoc codesigning,
-    // so the default coverage step must not enable it there.
+    // Supported on Linux ARM64 and macOS.
     // Linux x86_64 is NOT supported due to Zig 0.15.2 generating invalid DWARF .debug_line
     // sections that cause kcov to fail (see CoverageSummaryStep comments for details)
     const is_linux_x86_64 = target.result.os.tag == .linux and target.result.cpu.arch == .x86_64;
-    const is_coverage_supported = target.result.os.tag == .linux and !is_linux_x86_64;
+    const is_coverage_supported = (target.result.os.tag == .linux or target.result.os.tag == .macos) and !is_linux_x86_64;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
@@ -3730,7 +3728,7 @@ pub fn build(b: *std.Build) void {
                     std.debug.print("=" ** 60 ++ "\n", .{});
                     std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
                     std.debug.print("=" ** 60 ++ "\n\n", .{});
-                    std.debug.print("kcov parser coverage is currently enabled only on Linux targets with supported Zig DWARF.\n", .{});
+                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64 and macOS targets with supported Zig DWARF.\n", .{});
                     std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
                     std.debug.print("=" ** 60 ++ "\n", .{});
                 }

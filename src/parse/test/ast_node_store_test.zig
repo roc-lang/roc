@@ -12,7 +12,21 @@ var rand = std.Random.DefaultPrng.init(1234);
 
 /// Generate a random index of type `T`.
 fn rand_idx(comptime T: type) T {
-    return @enumFromInt(rand.random().int(u32));
+    if (T == base.Ident.Idx) {
+        return .{
+            .attributes = .{
+                .effectful = rand.random().boolean(),
+                .ignored = rand.random().boolean(),
+                .reassignable = rand.random().boolean(),
+            },
+            .idx = rand.random().int(u29),
+        };
+    }
+
+    return switch (@typeInfo(T)) {
+        .@"enum" => @enumFromInt(rand.random().int(u32)),
+        else => @compileError("rand_idx needs an explicit constructor for this index type"),
+    };
 }
 
 /// Generate a random token index.

@@ -1570,6 +1570,22 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "10" },
     },
     .{
+        .name = "inspect: two-arg proc list iterator loop returns full length",
+        .source =
+        \\{
+        \\    count = |items, _ignored| {
+        \\        var $total = 0.U64
+        \\        for _item in items {
+        \\            $total = $total + 1
+        \\        }
+        \\        $total
+        \\    }
+        \\    count([10.I64, 20.I64, 30.I64, 40.I64, 50.I64], 123.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
         .name = "inspect: for loop early return",
         .source =
         \\{

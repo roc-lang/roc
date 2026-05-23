@@ -8128,16 +8128,19 @@ out_of_range_try = |answer|
 
 digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange])
 digits_to_bytes = |digits|
-	List.fold(digits, Ok([]), |state, digit|
-		match state {
-			Err(OutOfRange) => Err(OutOfRange)
-			Ok(bytes) =>
-				if digit > 9 {
-					Err(OutOfRange)
-				} else {
-					Ok(List.append(bytes, digit + 48))
-				}
-		},
+	List.fold(
+		digits,
+		Ok([]),
+		|state, digit|
+			match state {
+				Err(OutOfRange) => Err(OutOfRange)
+				Ok(bytes) =>
+					if digit > 9 {
+						Err(OutOfRange)
+					} else {
+						Ok(List.append(bytes, digit + 48))
+					}
+				},
 	)
 
 int_from_digits : List(U8), (Str -> Try(item, err)) -> Try(item, [OutOfRange])
@@ -8172,7 +8175,7 @@ dec_from_digits = |digits, parse| {
 					}
 				}
 			}
-	}
+		}
 }
 
 digits_to_str : List(U8) -> Try(Str, [OutOfRange])
@@ -8352,36 +8355,69 @@ list_release_excess_capacity : List(item) -> List(item)
 # They are low-level operations that get replaced by the compiler
 # Note: success is U8 (0 = false, 1 = true) since Bool is not available at top level
 u128_to_dec_try_unsafe : U128 -> { success : U8, val_or_memory_garbage : Dec }
+
 i128_to_dec_try_unsafe : I128 -> { success : U8, val_or_memory_garbage : Dec }
+
 dec_to_i8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I8 }
+
 dec_to_i16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I16 }
+
 dec_to_i32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I32 }
+
 dec_to_i64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I64 }
+
 dec_to_i128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I128 }
+
 dec_to_u8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U8 }
+
 dec_to_u16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U16 }
+
 dec_to_u32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U32 }
+
 dec_to_u64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U64 }
+
 dec_to_u128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U128 }
+
 dec_to_f32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : F32 }
+
 f32_to_i8_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I8 }
+
 f32_to_i16_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I16 }
+
 f32_to_i32_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I32 }
+
 f32_to_i64_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I64 }
+
 f32_to_i128_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I128 }
+
 f32_to_u8_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U8 }
+
 f32_to_u16_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U16 }
+
 f32_to_u32_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U32 }
+
 f32_to_u64_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U64 }
+
 f32_to_u128_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U128 }
+
 f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
+
 f64_to_i16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I16 }
+
 f64_to_i32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I32 }
+
 f64_to_i64_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I64 }
+
 f64_to_i128_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I128 }
+
 f64_to_u8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U8 }
+
 f64_to_u16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U16 }
+
 f64_to_u32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U32 }
+
 f64_to_u64_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U64 }
+
 f64_to_u128_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U128 }
+
 f64_to_f32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : F32 }

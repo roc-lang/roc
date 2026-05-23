@@ -2626,6 +2626,64 @@ test "RC join remainder starts from join entry ownership" {
     try f.expectRc(pair, 0, 1, 0);
 }
 
+test "RC join loop jump releases body-only list but keeps carried state" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const state = try f.local(f.list_i64);
+    const scratch = try f.local(f.list_i64);
+    const next_state = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const body_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_next_state = try f.setLocal(state, next_state, .initialize_join_param, body_jump);
+    const next_state_assign = try f.assignList(next_state, &.{}, set_next_state);
+    const body = try f.assignList(scratch, &.{}, next_state_assign);
+
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_state = try f.setLocal(state, source, .initialize_join_param, initial_jump);
+    const remainder = try f.assignList(source, &.{}, initialize_state);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = body,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+    try f.expectRc(scratch, 0, 1, 0);
+    try f.expectRc(state, 0, 0, 0);
+}
+
+test "RC join loop exit releases body-only list and preserves returned state" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const state = try f.local(f.list_i64);
+    const scratch = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(state);
+    const body = try f.assignList(scratch, &.{}, ret);
+
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_state = try f.setLocal(state, source, .initialize_join_param, initial_jump);
+    const remainder = try f.assignList(source, &.{}, initialize_state);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = body,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, join, f.list_i64);
+    try f.run();
+    try f.expectRc(scratch, 0, 1, 0);
+    try testing.expect(f.countRc(state, .incref) >= 1);
+    try testing.expect(f.countRc(state, .decref) >= 1);
+}
+
 test "dev lowering: list rest pattern emits two list decrefs" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

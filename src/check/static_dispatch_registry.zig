@@ -416,10 +416,33 @@ pub const StaticDispatchPlanTable = struct {
         for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
+            const checked_expr = checkedExprIdForSource(checked_bodies, expr_idx);
+            switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .num_from_numeral,
+                .typed_num_from_numeral,
+                => {},
+                .num,
+                .typed_int,
+                .frac_f32,
+                .frac_f64,
+                .dec,
+                .dec_small,
+                .typed_frac,
+                => continue,
+                else => {
+                    if (@import("builtin").mode == .Debug) {
+                        std.debug.panic(
+                            "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression",
+                            .{numeral_plan.node_idx},
+                        );
+                    }
+                    unreachable;
+                },
+            }
             const literal = module_env.numeralLiteralForNode(node) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
-                        "checked static dispatch invariant violated: numeral dispatch plan {d} has no exact literal",
+                        "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
                         .{numeral_plan.node_idx},
                     );
                 }
@@ -431,7 +454,7 @@ pub const StaticDispatchPlanTable = struct {
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             try plans.append(allocator, .{
-                .expr = checkedExprIdForSource(checked_bodies, expr_idx),
+                .expr = checked_expr,
                 .method = try names.internMethodName("from_numeral"),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.target_var)),

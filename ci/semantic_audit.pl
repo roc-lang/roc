@@ -107,7 +107,7 @@ my @forbidden = (
     [camel(qw(exact Callable Symbol For Bound Expr)), "retired callable source-type reconstruction"],
     [camel(qw(exact Callable Capture Count)), "retired callable capture reconstruction"],
     [camel(qw(exact Callable Capture Symbols)), "retired callable capture reconstruction"],
-    [camel(qw(callable Facts For Solved Args)), "retired callable arg reconstruction"],
+    [qr/\bcallableF[a]ctsForSolvedArgs\b/, "retired callable arg reconstruction"],
     [camel(qw(register Scoped Exact Callable Capture Symbols)), "retired callable capture side registration"],
     [qr/\bTRACE\b/, "committed semantic investigation trace"],
     [qr/\bPlannedExec[A-Za-z0-9_]*\b/, "retired source/executable binding carrier"],
@@ -198,6 +198,12 @@ my @postcheck_jargon_forbidden = (
     [qr/\b[A-Za-z0-9_]*Executable[A-Za-z0-9_]*\b/, "banned vague stage term; use the exact stage or data name"],
     [qr/\b[A-Za-z0-9_]*executable_[A-Za-z0-9_]*\b/i, "banned vague stage term; use the exact stage or data name"],
     [qr/\b[A-Za-z0-9_]*[Oo]bligation[A-Za-z0-9_]*\b/, "banned vague post-check work item term; use checked plan, erased requirement, specialization queue entry, debug assertion, or exact deletion target"],
+    [qr/\b[A-Za-z0-9_]*[Pp]ublish(?:ed|es|ing)?[A-Za-z0-9_]*\b/, "banned phase-output term; use output or the exact owner"],
+    [qr/\b[A-Za-z0-9_]*[Pp]ublication[A-Za-z0-9_]*\b/, "banned phase-output term; use output or the exact owner"],
+    [qr/\bfacts?\b/i, "banned vague data term; use output, data, or the exact owner"],
+    [qr/\b[A-Za-z0-9_]*Fact(?:s)?[A-Za-z0-9_]*\b/, "banned vague data term; use output, data, or the exact owner"],
+    [qr/\b[A-Za-z0-9_]*_facts?(?:_[A-Za-z0-9_]+)?\b/i, "banned vague data term; use output, data, or the exact owner"],
+    [qr/\bfacts?_[A-Za-z0-9_]*\b/i, "banned vague data term; use output, data, or the exact owner"],
     [qr/\barena-backed typed tree\b/i, "implementation-detail phrase; use typed IR store"],
     [qr/\btyped tree stored in an arena\b/i, "implementation-detail phrase; use typed IR store"],
 );
@@ -357,7 +363,7 @@ for my $path (@postcheck_design_docs) {
 
 if (@violations) {
     print "\nSEMANTIC AUDIT FAILED\n\n";
-    print "Semantic compiler/eval/lowering code must consume explicit earlier facts.\n";
+    print "Semantic compiler/eval/lowering code must consume explicit earlier data.\n";
     print "Fallbacks, heuristics, reconstruction, synthesis, strengthening, and conversion-time recovery are forbidden.\n\n";
     for my $violation (@violations) {
         my ($path, $line_no, $reason, $line) = @$violation;

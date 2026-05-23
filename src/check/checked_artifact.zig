@@ -5658,6 +5658,11 @@ const CheckedBodyPayloadCopier = struct {
             .value = value,
             .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
         } };
+        switch (builtin_nominal) {
+            .f32 => return .{ .frac_f32 = .{ .value = try self.floatLiteralForExpr(f32, expr_idx), .has_suffix = true } },
+            .f64 => return .{ .frac_f64 = .{ .value = try self.floatLiteralForExpr(f64, expr_idx), .has_suffix = true } },
+            else => {},
+        }
         return fracLiteralForBuiltin(.{ .scaled_dec = value }, builtin_nominal, true) orelse .{ .typed_frac = .{
             .value = value,
             .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
@@ -5690,7 +5695,18 @@ const CheckedBodyPayloadCopier = struct {
         const checked_ty = self.checked_types.rootForSourceVar(self.module, self.module.exprType(expr_idx)) orelse {
             checkedArtifactInvariant("checked numeric expression type root was not published", .{});
         };
-        return checkedFinalBuiltinForType(self.checked_types.store.view(), checked_ty);
+        return checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty);
+    }
+
+    fn floatLiteralForExpr(self: *@This(), comptime Float: type, expr_idx: CIR.Expr.Idx) Allocator.Error!Float {
+        const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+            checkedArtifactInvariant("checked typed float literal had no parser-owned numeral facts", .{});
+        };
+        const text = try numeralLiteralDecimalText(self.allocator, self.module.moduleEnvConst(), literal);
+        defer self.allocator.free(text);
+        return std.fmt.parseFloat(Float, text) catch {
+            checkedArtifactInvariant("checked typed float literal could not be converted from parser-owned numeral facts", .{});
+        };
     }
 
     fn copyPatternData(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!CheckedPatternData {
@@ -6220,7 +6236,7 @@ fn originalFracLiteral(literal: FracLit, has_suffix: bool) CheckedExprData {
     };
 }
 
-fn checkedFinalBuiltinForType(view: CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
+fn checkedBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
     var current = root;
     while (true) {
         const index: usize = @intFromEnum(current);
@@ -6230,13 +6246,103 @@ fn checkedFinalBuiltinForType(view: CheckedTypeStoreView, root: CheckedTypeId) ?
         switch (view.payloads[index]) {
             .alias => |alias| current = alias.backing,
             .nominal => |nominal| return nominal.builtin,
-            .flex,
-            .rigid,
-            => return null,
+            .flex => |variable| return checkedBuiltinForDefaultedNumericVariable(variable),
+            .rigid => |variable| return checkedBuiltinForDefaultedNumericVariable(variable),
             .pending => checkedArtifactInvariant("checked builtin lookup reached a pending type payload", .{}),
             else => return null,
         }
     }
+}
+
+fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?CheckedBuiltinNominal {
+    return switch (variable.numeric_default_phase orelse return null) {
+        .mono_specialization => .dec,
+        .checking_finalized => checkedArtifactInvariant("checking-finalized numeric variable reached checked literal publication", .{}),
+    };
+}
+
+fn numeralLiteralDecimalText(
+    allocator: Allocator,
+    module_env: *const ModuleEnv,
+    literal: ModuleEnv.NumeralLiteral,
+) Allocator.Error![]const u8 {
+    const before = try base256DecimalText(allocator, module_env.numeralDigitsBefore(literal), 1);
+    defer allocator.free(before);
+
+    const after_min_digits: usize = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
+        checkedArtifactInvariant("checked numeral literal decimal digit count exceeded host usize", .{});
+    };
+    const after = if (after_min_digits == 0)
+        try allocator.alloc(u8, 0)
+    else
+        try base256DecimalText(allocator, module_env.numeralDigitsAfter(literal), after_min_digits);
+    defer allocator.free(after);
+
+    const sign_len: usize = @intFromBool(literal.isNegative());
+    const dot_len: usize = @intFromBool(after_min_digits > 0);
+    const total_len = sign_len + before.len + dot_len + after.len;
+    const text = try allocator.alloc(u8, total_len);
+    var offset: usize = 0;
+    if (literal.isNegative()) {
+        text[offset] = '-';
+        offset += 1;
+    }
+    @memcpy(text[offset..][0..before.len], before);
+    offset += before.len;
+    if (after_min_digits > 0) {
+        text[offset] = '.';
+        offset += 1;
+        @memcpy(text[offset..][0..after.len], after);
+    }
+    return text;
+}
+
+fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: usize) Allocator.Error![]const u8 {
+    var first_nonzero: usize = 0;
+    while (first_nonzero < bytes_be.len and bytes_be[first_nonzero] == 0) : (first_nonzero += 1) {}
+
+    if (first_nonzero == bytes_be.len) {
+        const len = @max(min_digits, 1);
+        const out = try allocator.alloc(u8, len);
+        @memset(out, '0');
+        return out;
+    }
+
+    var current_buf = try allocator.dupe(u8, bytes_be[first_nonzero..]);
+    defer allocator.free(current_buf);
+    var current_len = current_buf.len;
+    var digits_rev = std.ArrayList(u8).empty;
+    defer digits_rev.deinit(allocator);
+
+    while (current_len > 0) {
+        const current = current_buf[0..current_len];
+        var quotient = try allocator.alloc(u8, current.len);
+        var quotient_len: usize = 0;
+        var remainder: u16 = 0;
+        for (current) |byte| {
+            const value = remainder * 256 + byte;
+            const digit: u8 = @intCast(value / 10);
+            remainder = value % 10;
+            if (digit != 0 or quotient_len != 0) {
+                quotient[quotient_len] = digit;
+                quotient_len += 1;
+            }
+        }
+        try digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder)));
+        allocator.free(current_buf);
+        current_buf = quotient;
+        current_len = quotient_len;
+    }
+
+    const digit_count = digits_rev.items.len;
+    const total_len = @max(digit_count, min_digits);
+    const out = try allocator.alloc(u8, total_len);
+    const pad = total_len - digit_count;
+    @memset(out[0..pad], '0');
+    for (digits_rev.items, 0..) |digit, i| {
+        out[pad + digit_count - 1 - i] = digit;
+    }
+    return out;
 }
 
 fn fracLitToF64(literal: FracLit) f64 {
@@ -6373,7 +6479,7 @@ fn deinitCheckedStatementData(allocator: Allocator, data: *CheckedStatementData)
     data.* = .pending;
 }
 
-fn verifyCheckedExprDataPublished(data: CheckedExprData) void {
+fn verifyCheckedExprDataComplete(data: CheckedExprData) void {
     switch (data) {
         .pending => std.debug.panic("checked artifact invariant violated: checked expression payload was not filled", .{}),
         .lookup_local => |lookup| std.debug.assert(lookup.resolved != null),
@@ -6389,14 +6495,14 @@ fn verifyCheckedExprDataPublished(data: CheckedExprData) void {
     }
 }
 
-fn verifyCheckedPatternDataPublished(data: CheckedPatternData) void {
+fn verifyCheckedPatternDataComplete(data: CheckedPatternData) void {
     switch (data) {
         .pending => std.debug.panic("checked artifact invariant violated: checked pattern payload was not filled", .{}),
         else => {},
     }
 }
 
-fn verifyCheckedStatementDataPublished(data: CheckedStatementData) void {
+fn verifyCheckedStatementDataComplete(data: CheckedStatementData) void {
     switch (data) {
         .pending => std.debug.panic("checked artifact invariant violated: checked statement payload was not filled", .{}),
         .for_ => |for_| std.debug.assert(for_.plan != null),
@@ -11242,7 +11348,7 @@ pub const ModuleInterfaceCapabilities = struct {
         return self.opaque_atomic_proofs[index];
     }
 
-    pub fn verifyPublished(self: *const ModuleInterfaceCapabilities) void {
+    pub fn verifyComplete(self: *const ModuleInterfaceCapabilities) void {
         if (builtin.mode != .Debug) return;
 
         for (self.boxed_payload_templates, 0..) |entry, i| {
@@ -13849,7 +13955,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_bodies.exprs, 0..) |expr, i| {
             std.debug.assert(@intFromEnum(expr.id) == i);
             std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
-            verifyCheckedExprDataPublished(expr.data);
+            verifyCheckedExprDataComplete(expr.data);
         }
 
         for (self.checked_const_bodies.bodies, 0..) |body, i| {
@@ -13898,7 +14004,7 @@ pub const CheckedModuleArtifact = struct {
         }
     }
 
-    pub fn verifyPublished(self: *const CheckedModuleArtifact) void {
+    pub fn verifyComplete(self: *const CheckedModuleArtifact) void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
@@ -13966,13 +14072,13 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_bodies.exprs, 0..) |expr, i| {
             std.debug.assert(@intFromEnum(expr.id) == i);
             std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
-            verifyCheckedExprDataPublished(expr.data);
+            verifyCheckedExprDataComplete(expr.data);
         }
 
         for (self.checked_bodies.patterns, 0..) |pattern, i| {
             std.debug.assert(@intFromEnum(pattern.id) == i);
             std.debug.assert(@intFromEnum(pattern.ty) < self.checked_types.roots.len);
-            verifyCheckedPatternDataPublished(pattern.data);
+            verifyCheckedPatternDataComplete(pattern.data);
         }
 
         for (self.checked_bodies.pattern_binders, 0..) |binder, i| {
@@ -13986,7 +14092,7 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.checked_bodies.statements, 0..) |statement, i| {
             std.debug.assert(@intFromEnum(statement.id) == i);
-            verifyCheckedStatementDataPublished(statement.data);
+            verifyCheckedStatementDataComplete(statement.data);
         }
 
         for (self.checked_const_bodies.bodies, 0..) |body, i| {
@@ -14297,8 +14403,8 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
-        self.const_store.verifyPublished();
-        self.interface_capabilities.verifyPublished();
+        self.const_store.verifyComplete();
+        self.interface_capabilities.verifyComplete();
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);
             if (self.platform_required_bindings.bindings.len > 0) {
@@ -15959,7 +16065,7 @@ pub fn publishFromTypedModule(
         inputs.available_artifacts,
         inputs.relation_artifacts,
     );
-    artifact.verifyPublished();
+    artifact.verifyComplete();
     return artifact;
 }
 
@@ -15991,6 +16097,87 @@ fn expectProvidedExportKind(
     const module = modules.module(0);
     const module_env = module.moduleEnvConst();
 
+    const builtin_module = modules.module(1);
+    const builtin_env = builtin_module.moduleEnvConst();
+    var builtin_names = canonical.CanonicalNameStore.init(allocator);
+    defer builtin_names.deinit();
+    try internLoweringVisibleNames(builtin_env, &builtin_names);
+    const builtin_module_name = try builtin_names.internModuleName(builtin_env.module_name);
+    const builtin_identity = ModuleIdentity{
+        .stable_hash = computeStableModuleIdentityHash(builtin_env),
+        .module_idx = builtin_module.moduleIndex(),
+        .module_name = builtin_module_name,
+        .display_module_name = builtin_module_name,
+        .qualified_module_name = builtin_module_name,
+        .kind = builtin_env.module_kind,
+    };
+    const builtin_key = CheckedModuleArtifactKey.compute(
+        builtin_env.getSourceAll(),
+        builtin_identity,
+        .{},
+        &.{},
+    );
+    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, &.{}, &.{});
+    defer builtin_checked_type_publication.deinit(allocator);
+    const empty_checked_bodies = CheckedBodyStore{};
+    const empty_checked_const_bodies = CheckedConstBodyTable{};
+    const empty_checked_procedure_templates = CheckedProcedureTemplateTable{};
+    const empty_compile_time_roots = CompileTimeRootTable{};
+    const empty_entry_wrappers = EntryWrapperTable{};
+    const empty_intrinsic_wrappers = IntrinsicWrapperTable{};
+    const empty_resolved_value_refs = ResolvedValueRefTable{};
+    const empty_nested_proc_sites = NestedProcSiteTable{};
+    const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
+    const empty_hosted_procs = HostedProcTable{};
+    const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
+    const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
+    const empty_exported_const_templates = ExportedConstTemplateTable{};
+    const empty_provided_exports = ProvidedExportTable{};
+    const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+    const empty_platform_required_bindings = PlatformRequiredBindingTable{};
+    const empty_callable_eval_templates = CallableEvalTemplateTable{};
+    const empty_const_templates = ConstTemplateTable{};
+    const empty_method_registry = static_dispatch.MethodRegistry{};
+    const empty_interface_capabilities = ModuleInterfaceCapabilities{};
+    var empty_const_store = ConstStore.init(allocator);
+    defer empty_const_store.deinit();
+
+    const builtin_view = ImportedModuleView{
+        .key = builtin_key,
+        .module_env = builtin_env,
+        .canonical_names = &builtin_names,
+        .module_identity = builtin_identity,
+        .exports = .{},
+        .checked_types = builtin_checked_type_publication.store.view(),
+        .checked_bodies = empty_checked_bodies.view(),
+        .checked_const_bodies = &empty_checked_const_bodies,
+        .checked_procedure_templates = &empty_checked_procedure_templates,
+        .compile_time_roots = &empty_compile_time_roots,
+        .entry_wrappers = &empty_entry_wrappers,
+        .intrinsic_wrappers = &empty_intrinsic_wrappers,
+        .resolved_value_refs = &empty_resolved_value_refs,
+        .nested_proc_sites = &empty_nested_proc_sites,
+        .static_dispatch_plans = &empty_static_dispatch_plans,
+        .hosted_procs = &empty_hosted_procs,
+        .exported_procedure_templates = empty_exported_procedure_templates.view(),
+        .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
+        .exported_const_templates = empty_exported_const_templates.view(),
+        .provided_exports = &empty_provided_exports,
+        .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
+        .platform_required_bindings = &empty_platform_required_bindings,
+        .callable_eval_templates = empty_callable_eval_templates.view(),
+        .const_templates = &empty_const_templates,
+        .method_registry = &empty_method_registry,
+        .interface_capabilities = &empty_interface_capabilities,
+        .const_store = &empty_const_store,
+    };
+
+    const builtin_imports = [_]PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = builtin_key,
+        .view = builtin_view,
+    }};
+
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
     defer canonical_names.deinit();
     try internLoweringVisibleNames(module_env, &canonical_names);
@@ -16013,7 +16200,7 @@ fn expectProvidedExportKind(
     var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
     defer platform_required_declarations.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &.{}, &.{});
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &builtin_imports, &.{});
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 
@@ -16117,7 +16304,7 @@ fn expectProvidedExportKind(
         &modules,
         module.moduleIndex(),
         artifact_key,
-        &.{},
+        &builtin_imports,
         &checked_procedure_templates,
         &hosted_procs,
         &platform_required_declarations,
@@ -16220,7 +16407,26 @@ test "constant template states contain sealed value data but no runtime initiali
     try std.testing.expect(!@hasField(ConstTemplateState, "top_level_closure_object"));
 }
 
-test "checked module owns compile-time constants at the checked boundary" {
+test "checked module owns post-check inputs at the checked boundary" {
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_types"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_bodies"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_const_bodies"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "exported_procedure_templates"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "exported_procedure_bindings"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "exported_const_templates"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "method_registry"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "static_dispatch_plans"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "resolved_value_refs"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "nested_proc_sites"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_procedure_templates"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "entry_wrappers"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "intrinsic_wrappers"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_procedure_bindings"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_eval_templates"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "root_requests"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_procs"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_declarations"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "const_templates"));

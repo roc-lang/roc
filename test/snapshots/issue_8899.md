@@ -19,9 +19,67 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+DEPRECATED NUMBER SUFFIX - issue_8899.md:3:22:3:26
+DEPRECATED NUMBER SUFFIX - issue_8899.md:4:21:4:25
+DEPRECATED NUMBER SUFFIX - issue_8899.md:11:20:11:25
+DEPRECATED NUMBER SUFFIX - issue_8899.md:11:27:11:32
+DEPRECATED NUMBER SUFFIX - issue_8899.md:11:34:11:39
 # PROBLEMS
-NIL
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**issue_8899.md:3:22:3:26:**
+```roc
+        var $total = 0i64
+```
+                     ^^^^
+
+The `i64` suffix is deprecated. Use `0.I64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**issue_8899.md:4:21:4:25:**
+```roc
+        var $acc = [0i64]
+```
+                    ^^^^
+
+The `i64` suffix is deprecated. Use `0.I64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**issue_8899.md:11:20:11:25:**
+```roc
+    sum_with_last([10i64, 20i64, 30i64])
+```
+                   ^^^^^
+
+The `i64` suffix is deprecated. Use `10.I64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**issue_8899.md:11:27:11:32:**
+```roc
+    sum_with_last([10i64, 20i64, 30i64])
+```
+                          ^^^^^
+
+The `i64` suffix is deprecated. Use `20.I64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**issue_8899.md:11:34:11:39:**
+```roc
+    sum_with_last([10i64, 20i64, 30i64])
+```
+                                 ^^^^^
+
+The `i64` suffix is deprecated. Use `30.I64` instead.
+
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -50,10 +108,10 @@ EndOfFile,
 				(e-block
 					(statements
 						(s-var (name "$total")
-							(e-int (raw "0i64")))
+							(e-typed-int (raw "0i64") (type "I64")))
 						(s-var (name "$acc")
 							(e-list
-								(e-int (raw "0i64"))))
+								(e-typed-int (raw "0i64") (type "I64"))))
 						(s-for
 							(p-ident (raw "e"))
 							(e-ident (raw "l"))
@@ -86,16 +144,16 @@ EndOfFile,
 		(e-apply
 			(e-ident (raw "sum_with_last"))
 			(e-list
-				(e-int (raw "10i64"))
-				(e-int (raw "20i64"))
-				(e-int (raw "30i64"))))))
+				(e-typed-int (raw "10i64") (type "I64"))
+				(e-typed-int (raw "20i64") (type "I64"))
+				(e-typed-int (raw "30i64") (type "I64"))))))
 ~~~
 # FORMATTED
 ~~~roc
 {
 	sum_with_last = |l| {
-		var $total = 0i64
-		var $acc = [0i64]
+		var $total = 0i64.I64
+		var $acc = [0i64.I64]
 		for e in l {
 			$acc = List.append($acc, e)
 			$total = match List.last($acc) {
@@ -105,7 +163,7 @@ EndOfFile,
 		}
 		$total
 	}
-	sum_with_last([10i64, 20i64, 30i64])
+	sum_with_last([10i64.I64, 20i64.I64, 30i64.I64])
 }
 ~~~
 # CANONICALIZE
@@ -119,12 +177,12 @@ EndOfFile,
 			(e-block
 				(s-var
 					(p-assign (ident "$total"))
-					(e-num (value "0")))
+					(e-typed-int (value "0") (type "I64")))
 				(s-var
 					(p-assign (ident "$acc"))
 					(e-list
 						(elems
-							(e-num (value "0")))))
+							(e-typed-int (value "0") (type "I64")))))
 				(s-for
 					(p-assign (ident "e"))
 					(e-lookup-local
@@ -132,7 +190,7 @@ EndOfFile,
 					(e-block
 						(s-reassign
 							(p-assign (ident "$acc"))
-							(e-call (constraint-fn-var 179)
+							(e-call (constraint-fn-var 234)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local
@@ -144,7 +202,7 @@ EndOfFile,
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 200)
+										(e-call (constraint-fn-var 255)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -155,7 +213,7 @@ EndOfFile,
 												(pattern (degenerate false)
 													(p-applied-tag)))
 											(value
-												(e-dispatch-call (method "plus") (constraint-fn-var 203)
+												(e-dispatch-call (method "plus") (constraint-fn-var 258)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "$total"))))
@@ -172,14 +230,14 @@ EndOfFile,
 						(e-empty_record)))
 				(e-lookup-local
 					(p-assign (ident "$total"))))))
-	(e-call (constraint-fn-var 227)
+	(e-call (constraint-fn-var 372)
 		(e-lookup-local
 			(p-assign (ident "sum_with_last")))
 		(e-list
 			(elems
-				(e-num (value "10"))
-				(e-num (value "20"))
-				(e-num (value "30"))))))
+				(e-typed-int (value "10") (type "I64"))
+				(e-typed-int (value "20") (type "I64"))
+				(e-typed-int (value "30") (type "I64"))))))
 ~~~
 # TYPES
 ~~~clojure

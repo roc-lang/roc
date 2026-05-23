@@ -141,7 +141,7 @@ NO CHANGE
 					(e-num (value "0")))
 				(s-reassign
 					(p-assign (ident "count_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 76)
+					(e-dispatch-call (method "plus") (constraint-fn-var 136)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "count_"))))
@@ -149,7 +149,7 @@ NO CHANGE
 							(e-num (value "1")))))
 				(s-reassign
 					(p-assign (ident "total_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 88)
+					(e-dispatch-call (method "plus") (constraint-fn-var 168)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "total_"))))
@@ -171,11 +171,11 @@ NO CHANGE
 								(p-assign (ident "count_"))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 92)
+					(e-call (constraint-fn-var 172)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))
-				(e-dispatch-call (method "plus") (constraint-fn-var 93)
+				(e-dispatch-call (method "plus") (constraint-fn-var 173)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "total_"))))

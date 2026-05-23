@@ -22,7 +22,7 @@ pub const RootRequests = struct {
     static_data_requests: []const StaticDataRequest = &.{},
 };
 
-/// Checked const data that must publish a runtime layout and callable entries.
+/// Checked const data that must produce a runtime layout and callable entries.
 pub const StaticDataRequest = struct {
     data: checked.ProvidedDataExport,
 };
@@ -30,12 +30,12 @@ pub const StaticDataRequest = struct {
 /// Target settings carried through post-check lowering.
 pub const Target = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
-    checked_state: CheckedState = .published,
+    checked_module_state: CheckedModuleState = .complete,
 };
 
-/// Whether checking is fully published or running compile-time finalization.
-pub const CheckedState = enum {
-    published,
+/// Whether checking is complete or running compile-time finalization.
+pub const CheckedModuleState = enum {
+    complete,
     checking_finalization,
 };
 

@@ -13860,6 +13860,15 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) !lir.L
     });
 }
 
+fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+    return try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(args),
+        .body = body,
+        .ret_layout = ret_layout,
+    });
+}
+
 fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
     const result = try addLocal(store, ret_layout);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
@@ -13991,6 +14000,12 @@ fn stackOffsetOfTestLocation(loc: anytype) i32 {
     };
 }
 
+fn freshTestJoinPointId(next: *u32) lir.LIR.JoinPointId {
+    const id: lir.LIR.JoinPointId = @enumFromInt(next.*);
+    next.* += 1;
+    return id;
+}
+
 test "code generator initialization" {
     if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
         return error.SkipZigTest;
@@ -14067,6 +14082,173 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "two-arg proc list join loop returns full length" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(.i64));
+
+    const list_arg = try addLocal(&store, list_layout);
+    const ignored_arg = try addLocal(&store, .i64);
+    const len = try addLocal(&store, .u64);
+    const index = try addLocal(&store, .u64);
+    const acc = try addLocal(&store, .u64);
+    const zero_index = try addLocal(&store, .u64);
+    const zero_acc = try addLocal(&store, .u64);
+    const one = try addLocal(&store, .u64);
+    const cond = try addLocal(&store, .bool);
+    const next_index = try addLocal(&store, .u64);
+    const next_acc = try addLocal(&store, .u64);
+    var next_join_point: u32 = 0;
+    const join_id = freshTestJoinPointId(&next_join_point);
+
+    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } });
+    const loop_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_acc = try store.addCFStmt(.{ .set_local = .{
+        .target = acc,
+        .value = next_acc,
+        .mode = .initialize_join_param,
+        .next = loop_jump,
+    } });
+    const set_index = try store.addCFStmt(.{ .set_local = .{
+        .target = index,
+        .value = next_index,
+        .mode = .initialize_join_param,
+        .next = set_acc,
+    } });
+    const next_index_args = try store.addLocalSpan(&.{ index, one });
+    const add_next_index = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = next_index,
+        .op = .num_plus,
+        .rc_effect = lir.LowLevel.num_plus.rcEffect(),
+        .args = next_index_args,
+        .next = set_index,
+    } });
+    const next_acc_args = try store.addLocalSpan(&.{ acc, one });
+    const add_next_acc = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = next_acc,
+        .op = .num_plus,
+        .rc_effect = lir.LowLevel.num_plus.rcEffect(),
+        .args = next_acc_args,
+        .next = add_next_index,
+    } });
+    const one_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = add_next_acc,
+    } });
+    const loop_branches = try store.addCFSwitchBranches(&.{.{
+        .value = 1,
+        .body = one_stmt,
+    }});
+    const loop_switch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = loop_branches,
+        .default_branch = ret_acc,
+    } });
+    const cond_args = try store.addLocalSpan(&.{ index, len });
+    const loop_body = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = cond,
+        .op = .num_is_lt,
+        .rc_effect = lir.LowLevel.num_is_lt.rcEffect(),
+        .args = cond_args,
+        .next = loop_switch,
+    } });
+
+    const initial_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const init_acc = try store.addCFStmt(.{ .set_local = .{
+        .target = acc,
+        .value = zero_acc,
+        .mode = .initialize_join_param,
+        .next = initial_jump,
+    } });
+    const init_index = try store.addCFStmt(.{ .set_local = .{
+        .target = index,
+        .value = zero_index,
+        .mode = .initialize_join_param,
+        .next = init_acc,
+    } });
+    const zero_acc_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero_acc,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = init_index,
+    } });
+    const zero_index_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero_index,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = zero_acc_stmt,
+    } });
+    const len_args = try store.addLocalSpan(&.{list_arg});
+    const len_stmt = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = lir.LowLevel.list_len.rcEffect(),
+        .args = len_args,
+        .next = zero_index_stmt,
+    } });
+    const join_params = try store.addLocalSpan(&.{ index, acc });
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = join_params,
+        .body = loop_body,
+        .remainder = len_stmt,
+    } });
+    const len_proc = try addProc(&store, &.{ list_arg, ignored_arg }, join, .u64);
+
+    const root_elems = [_]i64{ 10, 20, 30, 40, 50 };
+    var elem_locals: [root_elems.len]LocalId = undefined;
+    for (&elem_locals) |*local| local.* = try addLocal(&store, .i64);
+
+    const root_list = try addLocal(&store, list_layout);
+    const ignored = try addLocal(&store, .i64);
+    const result = try addLocal(&store, .u64);
+
+    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const drop_list = try store.addCFStmt(.{ .decref = .{
+        .value = root_list,
+        .next = ret_result,
+    } });
+    const call_args = try store.addLocalSpan(&.{ root_list, ignored });
+    const call_len = try store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = len_proc,
+        .args = call_args,
+        .next = drop_list,
+    } });
+    const ignored_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = ignored,
+        .value = .{ .i64_literal = .{ .value = 123, .layout_idx = .i64 } },
+        .next = call_len,
+    } });
+    const list_elems = try store.addLocalSpan(&elem_locals);
+    const list_stmt = try store.addCFStmt(.{ .assign_list = .{
+        .target = root_list,
+        .elems = list_elems,
+        .next = ignored_stmt,
+    } });
+
+    var current = list_stmt;
+    var i: usize = root_elems.len;
+    while (i > 0) {
+        i -= 1;
+        current = try store.addCFStmt(.{ .assign_literal = .{
+            .target = elem_locals[i],
+            .value = .{ .i64_literal = .{ .value = root_elems[i], .layout_idx = .i64 } },
+            .next = current,
+        } });
+    }
+    const root_proc = try addNoArgProc(&store, current, .u64);
+
+    try std.testing.expectEqual(@as(u64, root_elems.len), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
 }
 
 test "generate i64 literal" {

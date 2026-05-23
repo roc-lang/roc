@@ -1247,7 +1247,7 @@ pub const Interpreter = struct {
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
             }
-            return self.callHostedProc(hosted, normalized_args, param_layouts, proc_spec.ret_layout);
+            return self.callHostedProc(proc_id, hosted, normalized_args, param_layouts, proc_spec.ret_layout);
         }
 
         trace.log(
@@ -2734,6 +2734,7 @@ pub const Interpreter = struct {
 
     fn callHostedProc(
         self: *LirInterpreter,
+        proc_id: LirProcSpecId,
         hosted: LIR.HostedProc,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
@@ -2768,6 +2769,13 @@ pub const Interpreter = struct {
         defer crash_boundary.deinit();
         const sj = crash_boundary.set();
         if (sj != 0) return error.Crash;
+
+        if (hosted.dispatch_index >= self.roc_ops.hosted_fns.count) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: hosted call index {d} out of bounds for proc {d}",
+                .{ hosted.dispatch_index, @intFromEnum(proc_id) },
+            );
+        }
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
         const ops_for_host = self.currentRocOps();

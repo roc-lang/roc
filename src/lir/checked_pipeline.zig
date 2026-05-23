@@ -1,7 +1,7 @@
 //! Public checked-module-to-LIR lowering API.
 //!
 //! This is the only public lowering entrance after checking. It consumes
-//! published checked modules, explicit root requests, and target configuration.
+//! complete checked modules, explicit root requests, and target configuration.
 //! It returns LIR or resource failure.
 
 const std = @import("std");
@@ -34,15 +34,15 @@ pub const RootRequestSet = struct {
     layout_requests: []const checked.CheckedTypeId = &.{},
 };
 
-/// Target settings and checked-state mode for the checked-to-LIR pipeline.
+/// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
-    checked_state: CheckedState = .published,
+    checked_module_state: CheckedModuleState = .complete,
 };
 
-/// Whether the root checked module is fully published or inside checking finalization.
-pub const CheckedState = enum {
-    published,
+/// Whether the root checked module is complete or inside checking finalization.
+pub const CheckedModuleState = enum {
+    complete,
     checking_finalization,
 };
 
@@ -175,8 +175,8 @@ pub fn lowerCheckedModulesToLir(
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests);
     defer allocator.free(layout_requests);
-    const static_data_requests = switch (target.checked_state) {
-        .published => try collectStaticDataRequests(allocator, modules.root.module),
+    const static_data_requests = switch (target.checked_module_state) {
+        .complete => try collectStaticDataRequests(allocator, modules.root.module),
         .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
     };
     defer allocator.free(static_data_requests);
@@ -239,8 +239,8 @@ pub fn lowerCheckedModulesToLir(
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) void {
     if (builtin.mode != .Debug) return;
-    switch (target.checked_state) {
-        .published => modules.root.module.verifyPublished(),
+    switch (target.checked_module_state) {
+        .complete => modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
     }
 }

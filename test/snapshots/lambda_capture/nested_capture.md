@@ -80,11 +80,11 @@ EndOfFile,
 								(p-assign (ident "b")))))))))
 	(s-let
 		(p-assign (ident "g"))
-		(e-call (constraint-fn-var 43)
+		(e-call (constraint-fn-var 63)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-num (value "10"))))
-	(e-call (constraint-fn-var 54)
+	(e-call (constraint-fn-var 94)
 		(e-lookup-local
 			(p-assign (ident "g")))
 		(e-num (value "5"))))

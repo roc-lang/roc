@@ -373,7 +373,8 @@ test "canonicalize integer requirements determination" {
 }
 
 test "canonicalize integer literals outside supported range" {
-    // Test integer literals that are too big to be represented
+    // Exact integer literals that do not fit the compact payload stay available
+    // for `from_numeral`; checking decides whether a concrete target accepts them.
     const test_cases = [_][]const u8{
         // Negative number slightly lower than i128 min
         "-170141183460469231731687303715884105729",
@@ -389,7 +390,9 @@ test "canonicalize integer literals outside supported range" {
 
         const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
         const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-        try testing.expect(expr == .e_runtime_error);
+        try testing.expect(expr == .e_num_from_numeral);
+        const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+        try testing.expect(!literal.isFractional());
     }
 }
 
@@ -414,8 +417,9 @@ test "invalid number literal - too large for u128" {
             // If no errors at all, check the expression type
             const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
             const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-            // Large numbers should either fail to parse or produce a runtime error
-            try testing.expect(expr == .e_runtime_error);
+            try testing.expect(expr == .e_num_from_numeral);
+            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+            try testing.expect(!literal.isFractional());
         }
     } else {
         // We have parse/tokenize errors, which is expected for this large number
@@ -444,8 +448,10 @@ test "invalid number literal - negative too large for i128" {
             // If no errors at all, check the expression type
             const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
             const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-            // Large numbers should either fail to parse or produce a runtime error
-            try testing.expect(expr == .e_runtime_error);
+            try testing.expect(expr == .e_num_from_numeral);
+            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+            try testing.expect(!literal.isFractional());
+            try testing.expect(literal.isNegative());
         }
     } else {
         // We have parse/tokenize errors, which is expected for this large number

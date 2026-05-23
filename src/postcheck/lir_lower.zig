@@ -110,7 +110,7 @@ pub fn run(
     try lowerer.registerProcPlaceholders();
     try lowerer.lowerAllFns();
     try lowerer.bindRoots();
-    try lowerer.publishRuntimeSchemas();
+    try lowerer.writeRuntimeSchemas();
 
     owned.deinit();
     return lowerer.finish();
@@ -308,7 +308,7 @@ const Lowerer = struct {
     fn buildConstPlan(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LirProgram.ConstPlan {
         return switch (self.program.types.get(ty)) {
             .primitive => |primitive| switch (primitive) {
-                .bool => Common.invariant("primitive Bool reached ConstStore plan publication; Bool must be a checked named tag union"),
+                .bool => Common.invariant("primitive Bool reached ConstStore plan output; Bool must be a checked named tag union"),
                 .str => .str,
                 .u8,
                 .i8,
@@ -373,7 +373,7 @@ const Lowerer = struct {
                 break :blk .{ .tag_union = variants };
             },
             .named => |named| blk: {
-                const backing = named.backing orelse Common.invariant("named type without backing reached ConstStore plan publication");
+                const backing = named.backing orelse Common.invariant("named type without backing reached ConstStore plan output");
                 break :blk .{ .named = .{
                     .named_type = .{
                         .module = named.named_type.module,
@@ -384,8 +384,8 @@ const Lowerer = struct {
             },
             .callable => |variants| .{ .fn_value = try self.fnSetForType(ty, variants) },
             .erased_fn => |erased| .{ .erased_fn = try self.erasedFnsForType(ty, erased) },
-            .capture_record => Common.invariant("capture record reached root ConstStore plan publication"),
-            .erased_capture_ptr => Common.invariant("erased capture pointer reached root ConstStore plan publication"),
+            .capture_record => Common.invariant("capture record reached root ConstStore plan output"),
+            .erased_capture_ptr => Common.invariant("erased capture pointer reached root ConstStore plan output"),
         };
     }
 
@@ -435,7 +435,7 @@ const Lowerer = struct {
     fn erasedFnsForType(self: *Lowerer, ty: Type.TypeId, erased: anytype) Common.LowerError!LirProgram.ErasedFnsId {
         const members = self.program.types.fnVariantSpan(erased.members);
         if (members.len == 0) {
-            Common.invariant("erased function ConstStore publication requires explicit erased function entries");
+            Common.invariant("erased function ConstStore output requires explicit erased function entries");
         }
 
         const entries = try self.allocator.alloc(LirProgram.ErasedFn, members.len);
@@ -500,7 +500,7 @@ const Lowerer = struct {
     fn captureSlotsForType(self: *Lowerer, ty: Type.TypeId) Common.LowerError![]const LirProgram.CaptureSlot {
         const fields = switch (self.program.types.get(ty)) {
             .capture_record => |fields| self.program.types.captureFieldSpan(fields),
-            else => Common.invariant("function result capture slot publication expected capture record type"),
+            else => Common.invariant("function result capture slot output expected capture record type"),
         };
         const slots = try self.allocator.alloc(LirProgram.CaptureSlot, fields.len);
         errdefer self.allocator.free(slots);
@@ -530,13 +530,13 @@ const Lowerer = struct {
         Common.invariant("erased function entry referenced a missing function symbol");
     }
 
-    fn publishRuntimeSchemas(self: *Lowerer) Common.LowerError!void {
+    fn writeRuntimeSchemas(self: *Lowerer) Common.LowerError!void {
         for (self.program.runtime_schema_requests.items) |request| {
-            try self.publishRuntimeSchema(request);
+            try self.writeRuntimeSchema(request);
         }
     }
 
-    fn publishRuntimeSchema(self: *Lowerer, request: LambdaMono.RuntimeSchemaRequest) Common.LowerError!void {
+    fn writeRuntimeSchema(self: *Lowerer, request: LambdaMono.RuntimeSchemaRequest) Common.LowerError!void {
         const content = self.program.types.get(request.ty);
         const named = switch (content) {
             .named => |named| named,
@@ -554,8 +554,8 @@ const Lowerer = struct {
 
         const type_name = self.program.names.typeNameText(request.def.type_name);
         switch (self.runtimeSchemaShape(backing.ty)) {
-            .record => try self.publishRecordSchema(type_name, request.ty),
-            .tag_union => try self.publishTagUnionSchema(type_name, request.ty),
+            .record => try self.writeRecordSchema(type_name, request.ty),
+            .tag_union => try self.writeTagUnionSchema(type_name, request.ty),
         }
     }
 
@@ -578,7 +578,7 @@ const Lowerer = struct {
         };
     }
 
-    fn publishRecordSchema(self: *Lowerer, type_name: []const u8, ty: Type.TypeId) Common.LowerError!void {
+    fn writeRecordSchema(self: *Lowerer, type_name: []const u8, ty: Type.TypeId) Common.LowerError!void {
         const source = self.recordFields(ty);
         const schema_fields = try self.allocator.alloc(RuntimeRecordFieldSchema, source.len);
         errdefer {
@@ -597,7 +597,7 @@ const Lowerer = struct {
         });
     }
 
-    fn publishTagUnionSchema(self: *Lowerer, type_name: []const u8, ty: Type.TypeId) Common.LowerError!void {
+    fn writeTagUnionSchema(self: *Lowerer, type_name: []const u8, ty: Type.TypeId) Common.LowerError!void {
         const source = self.tagUnionTags(ty);
         const schema_tags = try self.allocator.alloc(RuntimeTagSchema, source.len);
         errdefer {
@@ -804,7 +804,7 @@ const Lowerer = struct {
         for (type_fields, 0..) |field, i| {
             ordered[i] = for (expr_fields) |expr_field| {
                 if (expr_field.name == field.name) break expr_field.value;
-            } else Common.invariant("record expression missing field published by Lambda Mono type");
+            } else Common.invariant("record expression missing field output by Lambda Mono type");
         }
 
         return try self.lowerStructExprsInto(target, ordered, next);

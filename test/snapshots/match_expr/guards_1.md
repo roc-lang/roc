@@ -104,14 +104,14 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "positive: "))
-									(e-dispatch-call (method "to_str") (constraint-fn-var 128)
+									(e-dispatch-call (method "to_str") (constraint-fn-var 188)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 76)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 96)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
@@ -124,14 +124,14 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "negative: "))
-									(e-dispatch-call (method "to_str") (constraint-fn-var 218)
+									(e-dispatch-call (method "to_str") (constraint-fn-var 338)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 166)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 246)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))

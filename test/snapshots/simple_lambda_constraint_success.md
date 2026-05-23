@@ -67,7 +67,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 55)
+			(e-dispatch-call (method "plus") (constraint-fn-var 75)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -82,12 +82,12 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 122)
+			(e-dispatch-call (method "plus") (constraint-fn-var 202)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
 				(args
-					(e-dec-small (numerator "20") (denominator-power-of-ten "1") (value "2")))))
+					(e-dec-small (numerator "2") (denominator-power-of-ten "0") (value "2")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "F64") (builtin))

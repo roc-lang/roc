@@ -32,7 +32,7 @@ foo(x - 1)
 ~~~clojure
 (e-call
 	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-dispatch-call (method "minus") (constraint-fn-var 23)
+	(e-dispatch-call (method "minus") (constraint-fn-var 43)
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(args

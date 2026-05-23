@@ -197,7 +197,7 @@ pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std
 
     const compact = switch (kind) {
         .int => compactInt(split.number_text) orelse .exact,
-        .frac => try compactFrac(allocator, split.number_text, exact.after_decimal_digit_count),
+        .frac => try compactFrac(allocator, split.number_text),
     };
 
     return .{
@@ -535,7 +535,6 @@ fn parseUnsignedMagnitude(digits: []const u8, radix: u8) ?u128 {
 fn compactFrac(
     allocator: std.mem.Allocator,
     text: []const u8,
-    after_decimal_digit_count: u32,
 ) std.mem.Allocator.Error!Compact {
     const parts = decimalParts(allocator, text[@intFromBool(text.len > 0 and text[0] == '-')..]) catch return .invalid;
     defer parts.deinit(allocator);
@@ -543,12 +542,13 @@ fn compactFrac(
     const is_negative = text.len > 0 and text[0] == '-';
     const trimmed_before = trimLeadingZeros(parts.before);
     const trimmed_after = trimTrailingZeros(parts.after);
+    const trimmed_after_count: u32 = @intCast(trimmed_after.len);
 
-    if (smallDecFromParts(trimmed_before, trimmed_after, after_decimal_digit_count, is_negative)) |small| {
+    if (smallDecFromParts(trimmed_before, trimmed_after, trimmed_after_count, is_negative)) |small| {
         return .{ .small_dec = small };
     }
 
-    if (decFromParts(trimmed_before, trimmed_after, after_decimal_digit_count, is_negative)) |dec| {
+    if (decFromParts(trimmed_before, trimmed_after, trimmed_after_count, is_negative)) |dec| {
         return .{ .dec = dec };
     }
 
@@ -754,4 +754,16 @@ test "parse exact fractional chunks retain digits after decimal count" {
     try std.testing.expectEqualSlices(u8, &.{}, literal.before);
     try std.testing.expectEqualSlices(u8, &.{10}, literal.after);
     try std.testing.expectEqual(@as(u32, 4), literal.after_decimal_digit_count);
+}
+
+test "compact fractional literals trim trailing zero scale consistently" {
+    var literal = try parse(std.testing.allocator, "3.0", .frac);
+    defer literal.deinit(std.testing.allocator);
+
+    try std.testing.expect(literal.compact == .small_dec);
+    try std.testing.expectEqual(@as(i16, 3), literal.compact.small_dec.numerator);
+    try std.testing.expectEqual(@as(u8, 0), literal.compact.small_dec.denominator_power_of_ten);
+    try std.testing.expectEqualSlices(u8, &.{3}, literal.before);
+    try std.testing.expectEqualSlices(u8, &.{}, literal.after);
+    try std.testing.expectEqual(@as(u32, 1), literal.after_decimal_digit_count);
 }

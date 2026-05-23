@@ -142,7 +142,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 72)
+		(e-call (constraint-fn-var 112)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -150,7 +150,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 70)
+					(e-dispatch-call (method "plus") (constraint-fn-var 110)
 						(receiver
 							(e-runtime-error (tag "erroneous_value_use")))
 						(args

@@ -91,7 +91,7 @@ pub const Expr = union(enum) {
     /// ```roc
     /// 3.14    # Stored as numerator=314, denominator_power_of_ten=2 (314/100)
     /// 0.5     # Stored as numerator=5, denominator_power_of_ten=1 (5/10)
-    /// 42.0    # Stored as numerator=420, denominator_power_of_ten=1 (420/10)
+    /// 42.0    # Stored as numerator=42, denominator_power_of_ten=0
     /// ```
     e_dec_small: struct {
         value: CIR.SmallDecValue,

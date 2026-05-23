@@ -51,7 +51,7 @@ pub const BackingUse = enum {
     runtime_layout_only,
 };
 
-/// Backing type for a named type when checking published one.
+/// Backing type for a named type when checking output one.
 pub const NamedBacking = struct {
     ty: TypeId,
     use: BackingUse,

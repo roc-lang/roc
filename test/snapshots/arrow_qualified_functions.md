@@ -147,13 +147,13 @@ test7 = 42->Ok()
 				(p-assign (ident "a")))))
 	(d-let
 		(p-assign (ident "test4"))
-		(e-call (constraint-fn-var 129)
+		(e-call (constraint-fn-var 149)
 			(e-lookup-local
 				(p-assign (ident "fn0")))
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "test5"))
-		(e-call (constraint-fn-var 142)
+		(e-call (constraint-fn-var 182)
 			(e-lookup-local
 				(p-assign (ident "fn0")))
 			(e-num (value "10"))))

@@ -51,8 +51,8 @@ incidental data structure shape.
 
 All user-facing failures are reported during checking at the latest. Checking is
 not complete until type checking, static-dispatch finalization, platform/app
-relation publication, compile-time constant evaluation, and checked module
-publication have all completed. After a checked module is published, every
+relation output, compile-time constant evaluation, and checked module
+output have all completed. After a checked module is output, every
 violated assumption is a compiler bug:
 
 ```text
@@ -64,12 +64,12 @@ Post-check stages do not return user-facing checking errors. They do not emit
 fallback code. They do not silently repair missing data. They do not add
 release-build runtime checks for compiler invariants.
 
-Checked identity and runtime encoding are separate facts. A stable id, checked
+Checked identity and runtime encoding are separate data. A stable id, checked
 id, symbol, type variable, procedure reference, callable member, or source row
 id may identify what a value means. It must not also be treated as the integer
 tag, variant slot, byte offset, ABI register class, object symbol, or memory
 layout used to represent that value. The stage that commits a runtime encoding
-publishes the explicit mapping from checked ids to runtime encodings, and all
+outputs the explicit mapping from checked ids to runtime encodings, and all
 later stages consume that mapping.
 
 Backends do not reason about reference counting. They lower and execute the
@@ -139,8 +139,12 @@ The term `runtime image` is banned in new post-check docs and code. Use
 `LirImage` for the contiguous, viewable ARC-inserted LIR image plus layout store
 and entrypoint tables.
 
+The words `publish` and `fact` are banned in new post-check docs and code,
+including their common variants. Use `output` for phase output, or use the
+exact owner/data name.
+
 The word `physical` is banned in new post-check docs and code. Use `layout`
-only for memory shape facts such as size, alignment, field offsets, and payload
+only for memory shape data such as size, alignment, field offsets, and payload
 layout. Use `runtime encoding` for the broader category that includes layouts,
 discriminants, callable variant encodings, erased callable code entries, ABI
 shape, and runtime schemas.
@@ -151,7 +155,7 @@ checked module data, platform relation data, or another exact producer/consumer
 name.
 
 The word `semantic` is banned in new post-check docs and code. Use the precise
-term instead: checked data, checked facts, checked type store, source meaning,
+term instead: checked data, checked type store, source meaning,
 checked identity, source row position, `FnDef` identity, `FnSet` context, or
 another exact stage-owned name.
 
@@ -202,14 +206,14 @@ therefore checked-stage stored constants, not Monotype nodes.
 
 The checked module cache stores checked Roc values only. Roc language values are
 target-independent except for pointer-sized Roc values if the language exposes
-them to compile-time evaluation. Compiler runtime representation facts are not
+them to compile-time evaluation. Compiler runtime representation data are not
 Roc values and must never enter `ConstStore`: runtime addresses, allocation
 identity, layout ids, runtime discriminants, field offsets, LIR proc ids,
 backend symbols, object-format details, and backend state are all outside the
 checked value domain. Host interaction exists only at runtime, so host handles
 and host results cannot be compile-time values. If Roc exposes pointer-sized
 values to compile-time evaluation, their checked cache format must be an explicit
-checked rule before such values may be published.
+checked rule before such values may be output.
 
 ## Checked Boundary
 
@@ -233,20 +237,19 @@ part of the checked source module.
 
 Those forms do not survive Monotype IR lowering.
 
-The checked boundary publishes immutable checked modules. A published checked
-module is complete or it is not published. Later stages may read checked
-modules but may
-not mutate checked source facts, perform additional user-facing checking, or
-derive missing checked facts by scanning source syntax.
+The checked boundary outputs immutable checked modules. A checked module is
+either complete or unavailable to later stages. Later stages may read checked
+modules but may not mutate checked source data, perform additional user-facing
+checking, or derive missing checked data by scanning source syntax.
 
 During checking finalization, compile-time evaluation may need to lower and run
-checked roots before the checked module can be published. That work uses a
-`CheckedModuleBuilder`, not a published checked module. The builder is the only
+checked roots before the checked module can be output. That work uses a
+`CheckedModuleBuilder`, not a complete checked module. The builder is the only
 mutable owner of the in-progress `ConstStore`, dependency summaries, and checked
 root payloads.
 
 Compile-time lowering during checking finalization receives a
-`CheckingFinalizationView`. That view exposes checked facts plus
+`CheckingFinalizationView`. That view exposes checked data plus
 builder-owned checked result sinks. It is not a `CheckedModule`, and it
 is not visible to importers or later post-check stages.
 
@@ -271,11 +274,11 @@ ABI decisions, layout ids, runtime tag discriminants, or backend encodings.
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field whose only purpose is to feed post-check runtime representation is
 not part of the checked boundary. If later lowering needs data, checking must
-publish it as target-independent checked facts such as templates, dispatch
+output it as target-independent checked data such as templates, dispatch
 plans, method registry entries, platform relation data, hosted declarations, or
 `ConstStore` entries. Runtime representation data is produced after checking.
 
-The checked module may publish checked facts that later stages need, such
+The checked module may output checked data that later stages need, such
 as:
 
 - checked procedure templates
@@ -283,9 +286,9 @@ as:
 - checked dispatch plans
 - method registries
 - platform, hosted, and exposed function declarations
-- opaque, nominal, alias, row, and builtin ownership facts
+- opaque, nominal, alias, row, and builtin ownership data
 
-Those facts must remain target-independent and representation-free.
+Those data must remain target-independent and representation-free.
 
 Imported checked modules must contain every checked procedure template and checked
 body that may be instantiated by an importing root. This includes private helper
@@ -359,7 +362,7 @@ flow. It pairs the checked function identity with the checked source function
 type. Later stages must carry it forward instead of recovering the checked
 function type from generated procedures, runtime layouts, or call sites.
 
-Checked module publication assigns a `NestedProcSiteId` to every
+Checked module output assigns a `NestedProcSiteId` to every
 expression-position function inside each checked procedure template. A nested
 function is identified by `(owner template, nested site, context function
 digest)`. The site id is assigned from the checked body traversal before
@@ -367,13 +370,13 @@ post-check lowering starts. The context function digest is assigned by Monotype
 from the `FnTemplate` whose body currently owns the nested function occurrence.
 Monotype lowering carries that checked identity together with the checked source
 function type and the lowered monomorphic function type. Post-check stages must
-consume those checked facts; they must not name nested functions by allocation
+consume those checked data; they must not name nested functions by allocation
 order, generated symbols, source display strings, body shape, capture shape,
 runtime layout, or LIR procedure ids.
 
 Monotype body lowering tracks two function-context digests:
 
-- the owner function digest for local procedure sites published by the checked
+- the owner function digest for local procedure sites output by the checked
   owner template
 - the current function digest for expression-position lambdas and closures
   inside the body currently being lowered
@@ -391,7 +394,7 @@ the body or recalculate captures from the occurrence site.
 
 `local_checked_template` is checked-module-relative while the owning builder/checked module
 is being processed. Importers refer to the same body through
-`imported_checked_template` with an explicit checked module id. Published imported
+`imported_checked_template` with an explicit checked module id. Complete imported
 checked modules must contain the private checked templates reachable through these
 references; consumers never recover imported callable bodies from source text,
 display names, generated callable shapes, or runtime values.
@@ -407,7 +410,7 @@ Checking reports all user-facing static-dispatch errors. This includes missing
 methods, ambiguous constraints, illegal equality use, invalid iterator `for`
 constraints, and any other error that should be shown to the programmer.
 
-The checked module publishes normalized dispatch plans. A dispatch plan is a
+The checked module outputs normalized dispatch plans. A dispatch plan is a
 checked record, not lowered code:
 
 ```zig
@@ -515,15 +518,15 @@ stage owns, such as:
 - Lambda Mono type id to committed LIR layout id
 - Lambda Mono procedure id to LIR procedure id
 
-Those tables are not checked-fact side channels. They must not contain facts that
-are missing from the produced IR. If deleting a table would make it impossible
-to understand what the output means, the table is an illicit representation
-store and the design is wrong.
+Those tables are not hidden checked-data side channels. They must not contain
+data that are missing from the produced IR. If deleting a table would make it
+impossible to understand what the output means, the table is an illicit
+representation store and the design is wrong.
 
 Stage-local algorithmic worklists are allowed for SCC traversal, unification,
 pattern decision construction, layout graph traversal, and similar internal
-algorithms. These worklists do not cross stage boundaries and do not publish
-checked facts.
+algorithms. These worklists do not cross stage boundaries and do not output
+checked data.
 
 The only meaning-producing worklists in post-check compilation are stage-local
 specialization queues. A specialization queue is driven by explicit calls or
@@ -640,7 +643,7 @@ are completed while constructing Monotype types from checked types.
 
 An unconstrained checked type variable that remains open after checking lowers
 to the empty tag union in Monotype. This is not a default choice. It records the
-fact that no runtime value can be constructed at that type. Values such as `[]`
+invariant that no runtime value can be constructed at that type. Values such as `[]`
 can still be represented as `List([ ])` because they contain no elements, and
 code that would need an actual element value must have constrained the element
 type earlier or must be unreachable at runtime.
@@ -650,7 +653,7 @@ stage-local type cell. The cell starts as the empty tag union, and it may be
 completed with a concrete type while the same Monotype body is still being
 constructed if call-site arguments, expected lambda types, numeric literals, or
 checked type relations provide concrete evidence. This is ordinary type solving
-inside one stage. Once Monotype IR is published, no open cell remains and no
+inside one stage. Once Monotype IR is output, no open cell remains and no
 later stage may change a type.
 
 Generated helper code for an empty tag union, such as an inspector requested
@@ -659,30 +662,30 @@ body. Reaching that helper means a runtime value of an uninhabited type existed,
 which is a compiler or unsafe-runtime bug.
 
 If Monotype lowering cannot construct a closed monomorphic type from checked
-facts, that is a compiler bug.
+data, that is a compiler bug.
 
 ### Row, Nominal, Alias, And Opaque Authority
 
-Monotype lowering is the sole owner of turning checked type facts into closed
+Monotype lowering is the sole owner of turning checked type data into closed
 Monotype type nodes.
 
-For records and tag unions, checking publishes the checked row ids and stored
+For records and tag unions, checking outputs the checked row ids and stored
 spans. Record fields and tag variants use lexicographic order by name. Tag
 payloads use payload position order. Monotype lowering copies those spans
 directly. It does not sort by display text, declaration spelling, runtime
 encoding, or incidental map iteration.
 
-For named types, checking publishes:
+For named types, checking outputs:
 
 - the `TypeDef`
 - whether the definition can own methods
 - the checked type parameters
 - the checked backing type and backing authority, when the compiler has a
-  checked representation fact for this definition
-- opacity/interface facts controlling whether the backing may be inspected
+  checked representation entry for this definition
+- opacity/interface data controlling whether the backing may be inspected
   by Monotype or used only for runtime layout
 
-Monotype lowering instantiates those facts. It does not scan declarations to
+Monotype lowering instantiates those data. It does not scan declarations to
 rediscover a backing, owner, or field order. If a named type is opaque at the
 current boundary, Monotype still preserves the named type node and therefore
 the dispatch owner derivable from it. A `runtime_layout_only` backing may be
@@ -693,7 +696,7 @@ separate explicit checked representation authority; it must not rediscover the
 backing by scanning declarations.
 
 This keeps static-dispatch ownership, source row order, and eventual runtime
-layout as three separate facts.
+layout as three separate data.
 
 ### Monotype Expressions
 
@@ -1012,11 +1015,11 @@ The solver:
 
 The solved type graph is the callable representation source of truth. There is
 no descriptor replacement, no callable repointing, no post-demand payload
-publication, and no representation recovery later.
+output, and no representation recovery later.
 
 ### Erased Callable Requirements
 
-`erased` callable requirements are explicit facts entering Lambda Solved IR.
+`erased` callable requirements are explicit data entering Lambda Solved IR.
 They are not inferred from backend needs or recovered from runtime encodings.
 
 The producers are:
@@ -1040,7 +1043,7 @@ slot, finite lambda-set dispatch is used.
 
 No ordinary source expression becomes erased because a later stage finds finite
 dispatch inconvenient. Erasure is introduced only by one of the checked boundary
-facts above.
+data above.
 
 ## Lambda Mono IR
 
@@ -1136,7 +1139,7 @@ erased callable becomes `indirect_erased_call`.
 
 Generated callable variants are stage-local ids created by Lambda Mono. Any
 `display_name` exists only for dumps or diagnostics. The runtime discriminant
-and variant slot are chosen later by LIR layout commitment and then published
+and variant slot are chosen later by LIR layout commitment and then output
 explicitly in the LIR result.
 
 Lambda Mono specialization identity includes the called function symbol, its solved
@@ -1167,7 +1170,7 @@ patterns. They are not modeled as conversion nodes. If the language exposes a
 real runtime operation such as allocating or reading an explicit `Box`, that
 operation must enter Lambda Mono as a named concrete expression or low-level
 operation whose meaning is defined by its producer stage, not as an
-after-the-fact conversion.
+after-the-result conversion.
 
 ## Direct LIR Lowering
 
@@ -1186,14 +1189,14 @@ There is no separate stored layout IR. The Lambda Mono to LIR builder owns:
   tag operations and erased callable values into explicit packed-erased-callable
   statements
 - bool predicate creation from ordinary Bool tag-union layouts
-- runtime value schema publication from committed nominal layouts
-- erased callable code map publication from Lambda Mono callable/procedure data
+- runtime value schema output from committed nominal layouts
+- erased callable code map output from Lambda Mono callable/procedure data
 
 These are builder responsibilities, not a separate meaning-carrying IR.
 
 The builder may maintain temporary maps such as `TypeId -> layout.Idx` and
 `LambdaMonoProcId -> LirProcSpecId`. These maps are caches of work the builder
-owns. They must not contain checked facts that are absent from Lambda Mono IR
+owns. They must not contain checked data that are absent from Lambda Mono IR
 or the LIR result.
 
 ### Direct Builder Internal Contracts
@@ -1213,12 +1216,12 @@ explicit contracts so the stage does not become an implicit reconstruction layer
 - callable lowering consumes generated callable type nodes and committed
   layouts, then emits ordinary tag operations or packed erased callable
   statements
-- schema publication consumes committed nominal layouts and checked
+- schema output consumes committed nominal layouts and checked
   nominal identities
 
 No internal component may inspect source syntax, checked bodies, display names,
 runtime bytes, backend symbols, or any data outside the direct-builder inputs.
-Internal maps are work caches only. If an internal component needs a fact that
+Internal maps are work caches only. If an internal component needs data that
 is not in Lambda Mono IR, committed layouts, checked identities explicitly
 passed to the builder, or the LIR result it is constructing, the earlier stage
 contract is incomplete.
@@ -1244,13 +1247,13 @@ const LirLowerOutput = struct {
 consumed by ARC and then by backends, the interpreter, and LirImage.
 `requested_layouts` is for static data and provided data exports that asked for
 layout decisions during the same lowering. `runtime_schemas` is for glue and
-static data. `fn_sets` and `erased_fns` are temporary compile-time publication
+static data. `fn_sets` and `erased_fns` are temporary compile-time output
 contexts used by `CheckedModuleBuilder` while storing function values in
 `ConstStore`. Capture slots are stored inside the corresponding function
 variant or erased-function entry.
 
 The output owns all of these stores and spans. Consumers borrow the fields they
-need and must not add their own side stores for the same facts. `LirImage`
+need and must not add their own side stores for the same data. `LirImage`
 contains only the ARC-inserted LIR fields: `store`, `layouts`, `root_procs`,
 platform entrypoints, and target usize.
 
@@ -1267,15 +1270,15 @@ Layout selection is the first stage that chooses runtime encodings:
 - ABI-visible procedure argument and result layouts
 
 Layout selection consumes Lambda Mono types and produces LIR layouts plus the
-runtime schemas and function result data that later compile-time publication,
+runtime schemas and function result data that later compile-time output,
 static data export, and glue code need. Later stages consume those explicit
 layouts, schemas, and function result data. They do not rediscover field order,
 tag discriminants, callable member encodings, or erased callable payload shape.
 
 When layout commitment assigns a runtime discriminant or field offset to a
-generated function tag, the builder publishes the mapping from the stage-local
+generated function tag, the builder outputs the mapping from the stage-local
 `FnVariantId`/`FnMember` to the runtime encoding in direct-builder result data
-for `ConstStore` publication and static data export. `LirImage` does not store
+for `ConstStore` output and static data export. `LirImage` does not store
 function runtime data. It contains only ARC-inserted LIR, committed layouts,
 root proc ids, platform entrypoints, and target usize.
 
@@ -1323,8 +1326,8 @@ backend symbols, backend bytes, or host handles.
 duplicating large values. Multiple fields may reference the same `ConstNodeId`.
 Stored constants are acyclic. Roc source cannot define recursive non-function
 values; checking reports those definitions as errors and records `Malformed`
-source nodes instead. `Malformed` source nodes are never published as valid
-`ConstStore` values. A cycle in published `ConstStore` node edges is therefore
+source nodes instead. `Malformed` source nodes are never output as valid
+`ConstStore` values. A cycle in output `ConstStore` node edges is therefore
 a compiler bug, not a supported stored-constant representation.
 
 ```zig
@@ -1381,7 +1384,7 @@ that value kind must be added explicitly here with a checked cache rule.
 - function values
 
 Compile-time evaluation failures are owned by checking finalization because the
-module has not been published yet. User-written compile-time crashes, exhausted
+module has not been output yet. User-written compile-time crashes, exhausted
 compile-time limits, invalid compile-time host interaction, and unsupported
 compile-time operations become checking diagnostics attached to the checked root
 being finalized. OOM remains OOM. A post-check invariant failure while lowering
@@ -1390,7 +1393,7 @@ diagnostic.
 
 While storing an eval result, the builder may reserve a `ConstNodeId` before
 storing its children so repeated references to the same acyclic runtime value
-can reuse the same stored node. Publication verifies that every reserved node
+can reuse the same stored node. The builder verifies that every reserved node
 was filled exactly once and that stored value edges are acyclic. Restoring
 cached consts and dependency summarization must memoize by `ConstNodeId`, so
 sharing is preserved and traversal is linear in the stored node count. A
@@ -1469,7 +1472,7 @@ const CaptureSlot = struct {
 
 `FnSetId` and `ErasedFnsId` are direct-builder result contexts produced while
 lowering the specific value being evaluated. They live only for that lowering
-and const-publication step. They are not stored in `ConstStore`, not serialized
+and const storage step. They are not stored in `ConstStore`, not serialized
 in checked modules, and not stored in `LirImage`. For a finite singleton set,
 storing the result selects the only `FnVariant`. For a finite multi-variant set,
 storing the result reads the runtime discriminant and looks it up inside that
@@ -1478,7 +1481,7 @@ procedure from the runtime value and looks it up inside the explicit
 `ErasedFns` context.
 
 `CaptureSlot` says which committed capture-payload slot contains the value for
-one captured checked binder. The direct LIR builder publishes these slots while
+one captured checked binder. The direct LIR builder outputs these slots while
 lowering the generated function value. The `ConstStore` writer recursively
 stores each captured runtime value, then stores the resulting `ConstFn`.
 
@@ -1512,7 +1515,7 @@ same whole-program callable-flow solving as local callables.
 
 Compile-time dependency summaries are produced from explicit checked root data
 and `ConstStore` dependencies. They are not discovered by a later stage scanning
-bodies for missing facts.
+bodies for missing data.
 
 ## LirImage And Hosted Functions
 
@@ -1534,7 +1537,7 @@ return the same value: move the argument ownership into the return slot, or
 ```
 
 The compiler must not infer different ownership behavior from hosted function
-names, return types, or body absence. Hosted-argument ownership is an ABI fact,
+names, return types, or body absence. Hosted-argument ownership is an ABI rule,
 and generated glue must document it for platform authors.
 
 ## Relationship To Cor LSS
@@ -1561,7 +1564,7 @@ Roc intentionally keeps Cor's post-solve shape:
   ordinary generated tag unions and erased function values into packed erased
   callables.
 
-Roc adds language and implementation facts that Cor's experiment does not need:
+Roc adds language and implementation data that Cor's experiment does not need:
 
 - static dispatch and method registries
 - checked module caches and imported checked bodies
@@ -1571,7 +1574,7 @@ Roc adds language and implementation facts that Cor's experiment does not need:
 
 The main language difference is static dispatch. Roc keeps static dispatch
 separate from checked types. Checking still reports every user-facing
-static-dispatch error and publishes checked dispatch plans. Monotype IR lowering
+static-dispatch error and outputs checked dispatch plans. Monotype IR lowering
 uses those plans plus monomorphic type information to replace static dispatch
 with direct calls before any later callable/lambda stage runs.
 
@@ -1601,7 +1604,7 @@ serialized Layout IR or extra middle layer.
 
 Cor's experiment also performs some final field and tag lookup by source label
 inside its final lowering. Roc does not copy that part. Roc's checked and
-post-check stages publish ordered spans and checked ids before direct LIR
+post-check stages output ordered spans and checked ids before direct LIR
 lowering. Direct LIR lowering consumes those ids and span positions; it does not
 look up record fields or tag variants by display label to recover missing row
 relationships.
@@ -1617,19 +1620,19 @@ The post-check pipeline must not contain:
 - comparing against another lowering path to decide compiler behavior
 - callable descriptor replacement
 - callable value repointing
-- late payload publication
+- late payload output
 - generic conversion expressions, post-hoc conversion plan tables, or mismatch
   patching lowering paths
 - checked-module runtime payloads, value conversion plans, callable-set
   descriptors, or erased ABI decisions
 - owner discovery by method-registry intersection
 - backend reference-counting decisions
-- user-facing errors after checked module publication
+- user-facing errors after checked module output
 - release-build checks whose only purpose is maintaining compiler invariants
 
 The allowed replacement is explicit stage ownership:
 
-- checking owns user-facing diagnostics and checked facts
+- checking owns user-facing diagnostics and checked data
 - Monotype owns monomorphic specialization and static-dispatch elimination
 - Monotype Lifted owns closure lifting
 - Lambda Solved owns callable flow in the type graph

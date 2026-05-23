@@ -28,7 +28,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "negate") (constraint-fn-var 18)
+(e-dispatch-call (method "negate") (constraint-fn-var 38)
 	(receiver
 		(e-num (value "8")))
 	(args))

@@ -278,7 +278,7 @@ const Builder = struct {
                 .dispatch_index = entry.dispatch_index,
             };
         }
-        Common.invariant("hosted procedure template was not published in the hosted catalog");
+        Common.invariant("hosted procedure template was not output in the hosted catalog");
     }
 
     fn moduleName(self: *Builder, view: ModuleView, id: names.ModuleNameId) Allocator.Error!names.ModuleNameId {
@@ -555,7 +555,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (binding.body) {
             .direct_template => blk: {
-                const source_fn_ty = schemeRoot(view, binding.source_scheme, "procedure binding source scheme was not published");
+                const source_fn_ty = schemeRoot(view, binding.source_scheme, "procedure binding source scheme was not output");
                 const fn_template = self.fnDefForProcedureBindingBody(
                     view,
                     binding.body,
@@ -585,7 +585,7 @@ const Builder = struct {
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, view, fn_id, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            else => Common.invariant("callable eval binding root did not publish a callable value"),
+            else => Common.invariant("callable eval binding root did not output a callable value"),
         };
     }
 
@@ -1233,14 +1233,14 @@ const Builder = struct {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(checked.topLevelProcedureModuleId(top_level));
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                const binding_source = schemeRoot(view, binding.source_scheme, "top-level procedure binding source scheme was not published");
+                const binding_source = schemeRoot(view, binding.source_scheme, "top-level procedure binding source scheme was not output");
                 break :blk self.fnDefForProcedureBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
                 for (view.exported_procedure_bindings.bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not published");
+                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not output");
                         break :blk self.fnDefForImportedBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
                     }
                 }
@@ -1252,7 +1252,7 @@ const Builder = struct {
             .platform_required => |required| blk: {
                 const app_view = self.moduleForId(checked.requiredProcedureModuleId(required));
                 const binding = app_view.top_level_procedure_bindings.get(required.procedure_binding);
-                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not published");
+                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not output");
                 break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
             },
         };
@@ -2875,13 +2875,13 @@ const BodyContext = struct {
 
         const payload = checkedPayload(self.view, checked_ty);
         switch (payload) {
-            .function => |function| try self.publishFunctionType(mono_ty, function),
-            .tuple => |items| try self.publishTupleType(mono_ty, items),
-            .record_unbound => |fields| try self.publishRecordType(mono_ty, fields),
-            .record => |record| try self.publishRecordRowType(mono_ty, record.fields, record.ext),
-            .tag_union => |tag_union| try self.publishTagUnionRowType(mono_ty, tag_union.tags, tag_union.ext),
-            .alias => |alias| try self.publishAliasType(checked_ty, mono_ty, alias),
-            .nominal => |nominal| try self.publishNominalType(checked_ty, mono_ty, nominal),
+            .function => |function| try self.fillFunctionType(mono_ty, function),
+            .tuple => |items| try self.fillTupleType(mono_ty, items),
+            .record_unbound => |fields| try self.fillRecordType(mono_ty, fields),
+            .record => |record| try self.fillRecordRowType(mono_ty, record.fields, record.ext),
+            .tag_union => |tag_union| try self.fillTagUnionRowType(mono_ty, tag_union.tags, tag_union.ext),
+            .alias => |alias| try self.fillAliasType(checked_ty, mono_ty, alias),
+            .nominal => |nominal| try self.fillNominalType(checked_ty, mono_ty, nominal),
             else => self.builder.program.types.types.items[@intFromEnum(mono_ty)] = try self.lowerTypePayload(checked_ty, payload),
         }
 
@@ -2892,7 +2892,7 @@ const BodyContext = struct {
         self.type_binding_revision += 1;
     }
 
-    fn publishFunctionType(
+    fn fillFunctionType(
         self: *BodyContext,
         mono_ty: Type.TypeId,
         function: checked.CheckedFunctionType,
@@ -2908,7 +2908,7 @@ const BodyContext = struct {
         _ = try self.lowerType(function.ret);
     }
 
-    fn publishTupleType(
+    fn fillTupleType(
         self: *BodyContext,
         mono_ty: Type.TypeId,
         items: []const checked.CheckedTypeId,
@@ -2921,7 +2921,7 @@ const BodyContext = struct {
         try self.finishTypeSlice(items);
     }
 
-    fn publishRecordType(
+    fn fillRecordType(
         self: *BodyContext,
         mono_ty: Type.TypeId,
         fields: []const checked.CheckedRecordField,
@@ -2938,7 +2938,7 @@ const BodyContext = struct {
         try self.finishTypeList(checked_fields.items);
     }
 
-    fn publishRecordRowType(
+    fn fillRecordRowType(
         self: *BodyContext,
         mono_ty: Type.TypeId,
         head: []const checked.CheckedRecordField,
@@ -3001,7 +3001,7 @@ const BodyContext = struct {
         }
     }
 
-    fn publishTagUnionRowType(
+    fn fillTagUnionRowType(
         self: *BodyContext,
         mono_ty: Type.TypeId,
         head: []const checked.CheckedTag,
@@ -3063,7 +3063,7 @@ const BodyContext = struct {
         }
     }
 
-    fn publishAliasType(
+    fn fillAliasType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         mono_ty: Type.TypeId,
@@ -3086,7 +3086,7 @@ const BodyContext = struct {
         _ = try self.lowerType(alias.backing);
     }
 
-    fn publishNominalType(
+    fn fillNominalType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         mono_ty: Type.TypeId,
@@ -4588,14 +4588,14 @@ const BodyContext = struct {
             .top_level => |top_level| blk: {
                 const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                const binding_source = schemeRoot(view, binding.source_scheme, "top-level procedure binding source scheme was not published");
+                const binding_source = schemeRoot(view, binding.source_scheme, "top-level procedure binding source scheme was not output");
                 break :blk self.builder.fnDefForProcedureBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
             },
             .imported => |imported| blk: {
                 const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
                 for (view.exported_procedure_bindings.bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not published");
+                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not output");
                         break :blk self.builder.fnDefForImportedBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
                     }
                 }
@@ -4613,7 +4613,7 @@ const BodyContext = struct {
             .platform_required => |required| blk: {
                 const app_view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
                 const binding = app_view.top_level_procedure_bindings.get(required.procedure_binding);
-                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not published");
+                const binding_source = schemeRoot(app_view, binding.source_scheme, "platform required procedure binding source scheme was not output");
                 break :blk self.builder.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
             },
         };
@@ -7546,7 +7546,7 @@ const BodyContext = struct {
             .applied_tag => |tag| try self.lowerTagPattern(tag, ty),
             .nominal => |nominal| .{ .nominal = try self.lowerPatternAtType(nominal.backing_pattern, self.builder.namedBackingType(ty) orelse ty) },
             .record_destructure => |destructs| try self.lowerRecordPattern(destructs, ty),
-            .list => Common.invariant("list pattern must be lowered to explicit list operations before Monotype publication"),
+            .list => Common.invariant("list pattern must be lowered to explicit list operations before Monotype output"),
             .tuple => |items| .{ .tuple = try self.lowerTuplePattern(items, ty) },
             .num_literal => |num| self.lowerNumPattern(num.value, ty),
             .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
@@ -7594,7 +7594,7 @@ const BodyContext = struct {
                 .sub_pattern => |pattern| pattern,
                 .rest => |pattern| {
                     if (self.patternIsIgnored(pattern)) continue;
-                    Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype publication");
+                    Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
                 },
             };
             const name = try self.builder.recordFieldName(self.view, destruct.label);

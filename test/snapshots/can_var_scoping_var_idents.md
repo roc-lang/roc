@@ -75,7 +75,7 @@ NO CHANGE
 						(p-assign (ident "input"))))
 				(s-var
 					(p-assign (ident "sum_"))
-					(e-dispatch-call (method "times") (constraint-fn-var 36)
+					(e-dispatch-call (method "times") (constraint-fn-var 56)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "input"))))
@@ -83,14 +83,14 @@ NO CHANGE
 							(e-num (value "2")))))
 				(s-reassign
 					(p-assign (ident "sum_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 38)
+					(e-dispatch-call (method "plus") (constraint-fn-var 58)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "sum_"))))
 						(args
 							(e-lookup-local
 								(p-assign (ident "sum"))))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 40)
+				(e-dispatch-call (method "plus") (constraint-fn-var 60)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "sum"))))

@@ -1144,11 +1144,9 @@ fn unifyTypedLiteralWithExplicitType(
     self: *Self,
     flex_var: Var,
     expr_idx: CIR.Expr.Idx,
-    type_name: Ident.Idx,
     expr_region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    _ = type_name;
     const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("typed numeric literal reached checking without a canonicalized suffix target", .{});
@@ -3305,9 +3303,7 @@ fn checkPatternHelp(
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unannotated decimal literal - create flex var with from_numeral constraint
-                // SmallDecValue stores a numerator (i16) and power of ten
-                // We need to convert this to an i128 scaled by 10^18 for consistency
-                const scaled_value = @as(i128, dec.value.numerator) * std.math.pow(i128, 10, 18 - dec.value.denominator_power_of_ten);
+                const scaled_value = dec.value.toRocDec().num;
                 const num_literal_info = types_mod.NumeralInfo.fromI128(
                     scaled_value,
                     dec.value.numerator < 0,
@@ -3684,8 +3680,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unsuffixed small Dec literal - create constrained flex var
-                // Scale the value to i128 representation
-                const scaled_value = @as(i128, frac.value.numerator) * std.math.pow(i128, 10, 18 - frac.value.denominator_power_of_ten);
+                const scaled_value = frac.value.toRocDec().num;
                 const num_literal_info = types_mod.NumeralInfo.fromI128(
                     scaled_value,
                     scaled_value < 0,
@@ -3710,7 +3705,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyTypedLiteralWithExplicitType(
                 flex_var,
                 expr_idx,
-                typed_num.type_name,
                 expr_region,
                 env,
             );
@@ -3734,7 +3728,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyTypedLiteralWithExplicitType(
                 flex_var,
                 expr_idx,
-                typed_num.type_name,
                 expr_region,
                 env,
             );
@@ -3742,14 +3735,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
             _ = try self.unify(expr_var, flex_var, env);
         },
-        .e_typed_num_from_numeral => |typed_num| {
+        .e_typed_num_from_numeral => {
             const num_literal_info = self.exactNumeralInfoForExpr(expr_idx, expr_region);
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
 
             try self.unifyTypedLiteralWithExplicitType(
                 flex_var,
                 expr_idx,
-                typed_num.type_name,
                 expr_region,
                 env,
             );

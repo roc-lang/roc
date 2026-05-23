@@ -1,7 +1,7 @@
 //! Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 //!
-//! The parent process owns checking and post-check compilation. It publishes
-//! checked modules, lowers directly to LIR, inserts ARC, and then publishes a small
+//! The parent process owns checking and post-check compilation. It completes
+//! checked modules, lowers directly to LIR, inserts ARC, and then writes a small
 //! offset table into the existing shared-memory allocator. The child process maps
 //! the same shared-memory object and views the LIR/layout arrays in place; it
 //! never reconstructs compiler data.
@@ -27,7 +27,7 @@ pub const ImageError = error{
     UnsupportedLirImageVersion,
 };
 
-/// Direct interpreter entrypoint published by the parent.
+/// Direct interpreter entrypoint written by the parent.
 pub const PlatformEntrypoint = extern struct {
     ordinal: u32,
     root_proc: LIR.LirProcSpecId,

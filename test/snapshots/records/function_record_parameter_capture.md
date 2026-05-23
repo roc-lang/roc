@@ -81,7 +81,7 @@ NO CHANGE
 									(rest-pattern
 										(p-assign (ident "a")))))))))
 			(field (name "is_adult")
-				(e-dispatch-call (method "is_gte") (constraint-fn-var 53)
+				(e-dispatch-call (method "is_gte") (constraint-fn-var 73)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "age"))))
