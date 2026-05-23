@@ -970,8 +970,10 @@ fn exprDependsOnUnboundPlatformRequirement(
         .frac_f64,
         .dec,
         .dec_small,
+        .num_from_numeral,
         .typed_int,
         .typed_frac,
+        .typed_num_from_numeral,
         .str_segment,
         .bytes_literal,
         .empty_list,
@@ -3755,6 +3757,11 @@ fn appendStaticDispatchTypeRoots(
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.iter_fn_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.next_fn_var));
     }
+
+    for (module.moduleEnvConst().numeral_dispatch_plans.items.items) |plan| {
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
+    }
 }
 
 fn syntheticFunctionTypeKey(
@@ -4513,6 +4520,7 @@ pub const CheckedExprData = union(enum) {
         value: CIR.SmallDecValue,
         has_suffix: bool,
     },
+    num_from_numeral: ?StaticDispatchPlanId,
     typed_int: struct {
         value: CIR.IntValue,
         type_name: canonical.TypeNameId,
@@ -4521,6 +4529,7 @@ pub const CheckedExprData = union(enum) {
         value: CIR.IntValue,
         type_name: canonical.TypeNameId,
     },
+    typed_num_from_numeral: ?StaticDispatchPlanId,
     str_segment: CheckedStringLiteralId,
     str: []const CheckedExprId,
     bytes_literal: CheckedStringLiteralId,
@@ -4942,6 +4951,45 @@ pub const CheckedBodyStore = struct {
         }
     }
 
+    pub fn attachNumeralPlans(
+        self: *CheckedBodyStore,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) void {
+        var iter = plans.numeral_by_node.iterator();
+        while (iter.next()) |entry| {
+            const raw_node = @intFromEnum(entry.key_ptr.*);
+            if (raw_node >= self.expr_by_node.len) {
+                checkedArtifactInvariant(
+                    "from_numeral plan {d} points at source node {d} outside checked expression table",
+                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                );
+            }
+            const checked_expr = self.expr_by_node[raw_node] orelse {
+                checkedArtifactInvariant(
+                    "from_numeral plan {d} points at source node {d} with no checked expression",
+                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                );
+            };
+            const data = &self.exprs[@intFromEnum(checked_expr)].data;
+            switch (data.*) {
+                .num_from_numeral => data.* = .{ .num_from_numeral = entry.value_ptr.* },
+                .typed_num_from_numeral => data.* = .{ .typed_num_from_numeral = entry.value_ptr.* },
+                .num,
+                .typed_int,
+                .frac_f32,
+                .frac_f64,
+                .dec,
+                .dec_small,
+                .typed_frac,
+                => {},
+                else => checkedArtifactInvariant(
+                    "from_numeral plan {d} points at non-numeral checked expression {d}",
+                    .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                ),
+            }
+        }
+    }
+
     pub fn attachResolvedValueRefs(
         self: *CheckedBodyStore,
         refs: *const ResolvedValueRefTable,
@@ -5177,8 +5225,10 @@ fn checkedExprDataDiverges(
         .frac_f64,
         .dec,
         .dec_small,
+        .num_from_numeral,
         .typed_int,
         .typed_frac,
+        .typed_num_from_numeral,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -5449,13 +5499,15 @@ const CheckedBodyPayloadCopier = struct {
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
         return switch (expr) {
-            .e_num => |num| copyIntLiteral(expr_idx, num.value, num.kind),
+            .e_num => |num| self.copyIntLiteral(expr_idx, num.value, num.kind),
             .e_frac_f32 => |frac| self.copyFracLiteral(expr_idx, .{ .f32 = frac.value }, frac.has_suffix),
             .e_frac_f64 => |frac| self.copyFracLiteral(expr_idx, .{ .f64 = frac.value }, frac.has_suffix),
             .e_dec => |dec| self.copyFracLiteral(expr_idx, .{ .dec = dec.value }, dec.has_suffix),
             .e_dec_small => |dec| self.copyFracLiteral(expr_idx, .{ .small = dec.value }, dec.has_suffix),
+            .e_num_from_numeral => .{ .num_from_numeral = null },
             .e_typed_int => |typed| try self.copyTypedIntLiteral(expr_idx, typed.value, typed.type_name),
             .e_typed_frac => |typed| try self.copyTypedFracLiteral(expr_idx, typed.value, typed.type_name),
+            .e_typed_num_from_numeral => .{ .typed_num_from_numeral = null },
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
@@ -5584,10 +5636,11 @@ const CheckedBodyPayloadCopier = struct {
 
     fn copyTypedIntLiteral(
         self: *@This(),
-        _: CIR.Expr.Idx,
+        expr_idx: CIR.Expr.Idx,
         value: CIR.IntValue,
         type_name: Ident.Idx,
     ) Allocator.Error!CheckedExprData {
+        if (self.checkedBuiltinForExpr(expr_idx) == null) return .{ .typed_num_from_numeral = null };
         return .{ .typed_int = .{
             .value = value,
             .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
@@ -5600,6 +5653,7 @@ const CheckedBodyPayloadCopier = struct {
         value: CIR.IntValue,
         type_name: Ident.Idx,
     ) Allocator.Error!CheckedExprData {
+        if (self.checkedBuiltinForExpr(expr_idx) == null) return .{ .typed_num_from_numeral = null };
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_frac = .{
             .value = value,
             .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
@@ -5611,10 +5665,13 @@ const CheckedBodyPayloadCopier = struct {
     }
 
     fn copyIntLiteral(
-        _: CIR.Expr.Idx,
+        self: *@This(),
+        expr_idx: CIR.Expr.Idx,
         value: CIR.IntValue,
         kind: CIR.NumKind,
     ) CheckedExprData {
+        const literal_builtin = self.checkedBuiltinForExpr(expr_idx);
+        if (literal_builtin == null) return .{ .num_from_numeral = null };
         return .{ .num = .{ .value = value, .kind = kind } };
     }
 
@@ -5624,6 +5681,7 @@ const CheckedBodyPayloadCopier = struct {
         literal: FracLit,
         has_suffix: bool,
     ) CheckedExprData {
+        if (self.checkedBuiltinForExpr(expr_idx) == null) return .{ .num_from_numeral = null };
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return originalFracLiteral(literal, has_suffix);
         return fracLiteralForBuiltin(literal, builtin_nominal, has_suffix) orelse originalFracLiteral(literal, has_suffix);
     }
@@ -5632,7 +5690,7 @@ const CheckedBodyPayloadCopier = struct {
         const checked_ty = self.checked_types.rootForSourceVar(self.module, self.module.exprType(expr_idx)) orelse {
             checkedArtifactInvariant("checked numeric expression type root was not published", .{});
         };
-        return checkedBuiltinForType(self.checked_types.store.view(), checked_ty);
+        return checkedFinalBuiltinForType(self.checked_types.store.view(), checked_ty);
     }
 
     fn copyPatternData(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!CheckedPatternData {
@@ -6162,7 +6220,7 @@ fn originalFracLiteral(literal: FracLit, has_suffix: bool) CheckedExprData {
     };
 }
 
-fn checkedBuiltinForType(view: CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
+fn checkedFinalBuiltinForType(view: CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
     var current = root;
     while (true) {
         const index: usize = @intFromEnum(current);
@@ -6172,19 +6230,13 @@ fn checkedBuiltinForType(view: CheckedTypeStoreView, root: CheckedTypeId) ?Check
         switch (view.payloads[index]) {
             .alias => |alias| current = alias.backing,
             .nominal => |nominal| return nominal.builtin,
-            .flex => |variable| return builtinForNumericDefault(variable),
-            .rigid => |variable| return builtinForNumericDefault(variable),
+            .flex,
+            .rigid,
+            => return null,
             .pending => checkedArtifactInvariant("checked builtin lookup reached a pending type payload", .{}),
             else => return null,
         }
     }
-}
-
-fn builtinForNumericDefault(variable: CheckedTypeVariable) ?CheckedBuiltinNominal {
-    return switch (variable.numeric_default_phase orelse return null) {
-        .mono_specialization => .dec,
-        .checking_finalized => checkedArtifactInvariant("checking-finalized numeric variable reached checked literal publication unresolved", .{}),
-    };
 }
 
 fn fracLitToF64(literal: FracLit) f64 {
@@ -6235,8 +6287,10 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .frac_f64,
         .dec,
         .dec_small,
+        .num_from_numeral,
         .typed_int,
         .typed_frac,
+        .typed_num_from_numeral,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -6328,6 +6382,8 @@ fn verifyCheckedExprDataPublished(data: CheckedExprData) void {
         .dispatch_call => |plan| std.debug.assert(plan != null),
         .method_eq => |plan| std.debug.assert(plan != null),
         .type_dispatch_call => |plan| std.debug.assert(plan != null),
+        .num_from_numeral => |plan| std.debug.assert(plan != null),
+        .typed_num_from_numeral => |plan| std.debug.assert(plan != null),
         .for_ => |for_| std.debug.assert(for_.plan != null),
         else => {},
     }
@@ -7717,6 +7773,13 @@ const CheckedTemplateRefCollector = struct {
                 try self.dispatch_refs.append(self.allocator, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
+            .num_from_numeral,
+            .typed_num_from_numeral,
+            => |plan_id| {
+                const id = plan_id orelse checkedArtifactInvariant("checked from_numeral expression reached template closure collection without a dispatch plan", .{});
+                try self.dispatch_refs.append(self.allocator, id);
+                try self.collectStaticDispatchPlanArgs(id);
+            },
             .str,
             .list,
             .tuple,
@@ -7822,7 +7885,10 @@ const CheckedTemplateRefCollector = struct {
             checkedArtifactInvariant("checked template static-dispatch plan id was outside the plan table", .{});
         }
         const plan = self.static_dispatch_plans.plans[raw];
-        for (plan.args) |arg| try self.collectExpr(arg);
+        for (plan.args) |arg| switch (arg) {
+            .checked_expr => |expr| try self.collectExpr(expr),
+            .generated_numeral => {},
+        };
     }
 
     fn collectIteratorForPlan(
@@ -8402,6 +8468,9 @@ const NestedProcSiteBuilder = struct {
             .method_eq,
             .type_dispatch_call,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
+            .num_from_numeral,
+            .typed_num_from_numeral,
+            => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked from_numeral expression reached nested procedure site collection without a dispatch plan", .{}), owner),
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
@@ -8455,7 +8524,10 @@ const NestedProcSiteBuilder = struct {
             checkedArtifactInvariant("checked template static-dispatch plan id was outside the plan table", .{});
         }
         const plan = self.static_dispatch_plans.plans[raw];
-        for (plan.args) |arg| try self.scanExpr(arg, owner, false);
+        for (plan.args) |arg| switch (arg) {
+            .checked_expr => |expr| try self.scanExpr(expr, owner, false),
+            .generated_numeral => {},
+        };
     }
 
     fn scanPattern(
@@ -15416,6 +15488,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             },
             .expr_typed_int,
             .expr_typed_frac,
+            .expr_typed_num_from_numeral,
             .expr_tag,
             .expr_zero_argument_tag,
             .expr_closure,
@@ -15431,6 +15504,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 switch (expr) {
                     .e_typed_int => |typed| try visitor.typeName(typed.type_name),
                     .e_typed_frac => |typed| try visitor.typeName(typed.type_name),
+                    .e_typed_num_from_numeral => |typed| try visitor.typeName(typed.type_name),
                     .e_tag => |tag_expr| try visitor.tag(tag_expr.name),
                     .e_zero_argument_tag => |tag_expr| {
                         try visitor.tag(tag_expr.name);
@@ -15615,6 +15689,7 @@ pub fn publishFromTypedModule(
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_type_publication, &checked_bodies);
     errdefer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
+    checked_bodies.attachNumeralPlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);

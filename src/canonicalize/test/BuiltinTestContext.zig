@@ -70,6 +70,10 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .import_mapping = @import("types").import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
+        .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
+        .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
+        .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
+        .numeric_suffix_types = serialized_ptr.numeric_suffix_types.deserializeInto(base_ptr),
     };
 
     return .{

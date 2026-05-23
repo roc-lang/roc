@@ -1635,9 +1635,6 @@ const MiniCiStep = struct {
         try runSubBuild(step, &.{"test"}, "zig build test");
         try recordTiming(b.allocator, &timings, "zig build test", &timer);
 
-        try runSubBuild(step, &.{"test-builtin-doc"}, "zig build test-builtin-doc");
-        try recordTiming(b.allocator, &timings, "zig build test-builtin-doc", &timer);
-
         try runSubBuild(
             step,
             &.{ "-Doptimize=ReleaseFast", "test-playground" },
@@ -2407,7 +2404,7 @@ pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
     const roc_step = b.step("roc", "Build the roc compiler without running it");
-    const test_step = b.step("test", "Run all tests included in src/tests.zig");
+    const test_step = b.step("test", "Run all Zig tests");
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
     const tidy_step = b.step("tidy", "Run code tidiness checks (control chars, line length, etc.)");
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
@@ -3407,9 +3404,10 @@ pub fn build(b: *std.Build) void {
             run_builtin_doc_test.addArgs(run_args);
         }
 
-        // Exposed as a dedicated step rather than included in the default
-        // `test` step: this suite currently surfaces unimplemented Builtin.roc
-        // helpers, and we don't want those known issues to block other tests.
+        tests_summary.addRun(&run_builtin_doc_test.step);
+
+        // Also expose this as a focused step for debugging a single doc suite
+        // failure without running the entire default `test` aggregate.
         const builtin_doc_test_step = b.step(
             "test-builtin-doc",
             "Run Builtin.roc doc code-block tests",

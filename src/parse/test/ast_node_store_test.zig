@@ -6,6 +6,7 @@ const base = @import("base");
 
 const NodeStore = @import("../NodeStore.zig");
 const AST = @import("../AST.zig");
+const NumericLiteral = @import("../NumericLiteral.zig");
 
 var rand = std.Random.DefaultPrng.init(1234);
 
@@ -289,12 +290,30 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, AST.Pattern{
         .int = .{
             .number_tok = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
             .region = rand_region(),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .frac = .{
             .number_tok = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
+        .typed_int = .{
+            .number_tok = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
+        .typed_frac = .{
+            .number_tok = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
             .region = rand_region(),
         },
     });
@@ -513,26 +532,30 @@ test "NodeStore round trip - Expr" {
         .int = .{
             .region = rand_region(),
             .token = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .frac = .{
             .region = rand_region(),
             .token = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_int = .{
             .region = rand_region(),
             .token = rand_token_idx(),
-            .type_token = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_frac = .{
             .region = rand_region(),
             .token = rand_token_idx(),
-            .type_token = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{

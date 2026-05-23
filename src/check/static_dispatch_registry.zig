@@ -258,6 +258,12 @@ pub const StaticDispatchDispatcher = union(enum) {
     type_only,
 };
 
+/// Public `StaticDispatchOperand` declaration.
+pub const StaticDispatchOperand = union(enum) {
+    checked_expr: CheckedExprId,
+    generated_numeral: ModuleEnv.NumeralLiteral,
+};
+
 /// Public `StaticDispatchCallPlan` declaration.
 pub const StaticDispatchCallPlan = struct {
     expr: CheckedExprId,
@@ -265,7 +271,7 @@ pub const StaticDispatchCallPlan = struct {
     dispatcher: StaticDispatchDispatcher,
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
-    args: []const CheckedExprId,
+    args: []const StaticDispatchOperand,
     result_mode: StaticDispatchResultMode,
 };
 
@@ -304,6 +310,7 @@ pub const IteratorForPlan = struct {
 pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
     by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{},
+    numeral_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{},
     iterator_for_plans: []IteratorForPlan = &.{},
     iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{},
     template_refs: []StaticDispatchPlanId = &.{},
@@ -322,6 +329,8 @@ pub const StaticDispatchPlanTable = struct {
         }
         var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{};
         errdefer by_expr.deinit(allocator);
+        var numeral_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{};
+        errdefer numeral_by_node.deinit(allocator);
         var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
         errdefer {
             for (iterator_for_plans.items) |plan| {
@@ -352,10 +361,10 @@ pub const StaticDispatchPlanTable = struct {
             switch (expr.data) {
                 .e_dispatch_call => |dispatch_call| {
                     const explicit_args = module.sliceExpr(dispatch_call.args);
-                    const args = try allocator.alloc(CheckedExprId, explicit_args.len + 1);
-                    args[0] = checkedExprIdForSource(checked_bodies, dispatch_call.receiver);
+                    const args = try allocator.alloc(StaticDispatchOperand, explicit_args.len + 1);
+                    args[0] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, dispatch_call.receiver) };
                     for (explicit_args, 0..) |arg, i| {
-                        args[i + 1] = checkedExprIdForSource(checked_bodies, arg);
+                        args[i + 1] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, arg) };
                     }
 
                     try plans.append(allocator, .{
@@ -370,7 +379,7 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 .e_type_dispatch_call => |dispatch_call| {
                     const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
-                    const args = try checkedExprIdsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
+                    const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -383,7 +392,7 @@ pub const StaticDispatchPlanTable = struct {
                     });
                 },
                 .e_method_eq => |eq| {
-                    const args = try checkedExprIdsForSlice(allocator, checked_bodies, &.{ eq.lhs, eq.rhs });
+                    const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ eq.lhs, eq.rhs });
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -404,6 +413,35 @@ pub const StaticDispatchPlanTable = struct {
         }
 
         const module_env = module.moduleEnvConst();
+        for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
+            const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
+            const literal = module_env.numeralLiteralForNode(node) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch invariant violated: numeral dispatch plan {d} has no exact literal",
+                        .{numeral_plan.node_idx},
+                    );
+                }
+                unreachable;
+            };
+            const args = try allocator.alloc(StaticDispatchOperand, 1);
+            errdefer allocator.free(args);
+            args[0] = .{ .generated_numeral = literal };
+
+            const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
+            try plans.append(allocator, .{
+                .expr = checkedExprIdForSource(checked_bodies, expr_idx),
+                .method = try names.internMethodName("from_numeral"),
+                .dispatcher = .type_only,
+                .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.target_var)),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var)),
+                .args = args,
+                .result_mode = .value,
+            });
+            try numeral_by_node.put(allocator, node, plan_id);
+        }
+
         for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
             const for_node_idx: CIR.Node.Idx = @enumFromInt(for_plan.node_idx);
             const pattern_idx: CIR.Pattern.Idx = @enumFromInt(for_plan.pattern_idx);
@@ -453,6 +491,7 @@ pub const StaticDispatchPlanTable = struct {
         return .{
             .plans = try plans.toOwnedSlice(allocator),
             .by_expr = by_expr,
+            .numeral_by_node = numeral_by_node,
             .iterator_for_plans = try iterator_for_plans.toOwnedSlice(allocator),
             .iterator_for_by_node = iterator_for_by_node,
         };
@@ -460,6 +499,10 @@ pub const StaticDispatchPlanTable = struct {
 
     pub fn lookupByExpr(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?StaticDispatchPlanId {
         return self.by_expr.get(expr);
+    }
+
+    pub fn lookupNumeralByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?StaticDispatchPlanId {
+        return self.numeral_by_node.get(node);
     }
 
     pub fn lookupIteratorForByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?IteratorForPlanId {
@@ -485,6 +528,7 @@ pub const StaticDispatchPlanTable = struct {
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
         allocator.free(self.template_refs);
         self.by_expr.deinit(allocator);
+        self.numeral_by_node.deinit(allocator);
         self.iterator_for_by_node.deinit(allocator);
         for (self.plans) |plan| allocator.free(plan.args);
         allocator.free(self.plans);
@@ -606,16 +650,16 @@ fn checkedFunctionReturnTypeId(
     };
 }
 
-fn checkedExprIdsForSlice(
+fn staticDispatchOperandsForSlice(
     allocator: Allocator,
     checked_bodies: anytype,
     exprs: []const CIR.Expr.Idx,
-) Allocator.Error![]const CheckedExprId {
+) Allocator.Error![]const StaticDispatchOperand {
     if (exprs.len == 0) return &.{};
-    const out = try allocator.alloc(CheckedExprId, exprs.len);
+    const out = try allocator.alloc(StaticDispatchOperand, exprs.len);
     errdefer allocator.free(out);
     for (exprs, 0..) |expr, i| {
-        out[i] = checkedExprIdForSource(checked_bodies, expr);
+        out[i] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) };
     }
     return out;
 }

@@ -525,53 +525,6 @@ pub const FracRequirements = struct {
     }
 };
 
-/// Parse a number literal with an optional type suffix (e.g., "123u8", "45.67f64")
-/// Used by Can.zig for canonicalization
-pub fn parseNumeralWithSuffix(text: []const u8) struct { num_text: []const u8, suffix: ?[]const u8 } {
-    var split_index: usize = text.len;
-    var is_hex_or_bin = false;
-    var start_index: usize = 0;
-
-    // Check for negative prefix
-    var prefix_offset: usize = 0;
-    if (text.len > 0 and text[0] == '-') {
-        prefix_offset = 1;
-    }
-
-    if (text.len > prefix_offset + 2 and text[prefix_offset] == '0') {
-        switch (text[prefix_offset + 1]) {
-            'x', 'X', 'b', 'B', 'o', 'O' => {
-                is_hex_or_bin = true;
-                start_index = prefix_offset + 2; // Skip the "0x", "0b", or "0o" prefix
-            },
-            else => {},
-        }
-    }
-
-    for (text[start_index..], start_index..) |char, i| {
-        if (char >= 'a' and char <= 'z') {
-            // If we find a letter, check if it's a valid hex digit in a hex literal.
-            if (is_hex_or_bin and (char >= 'a' and char <= 'f')) {
-                // This is part of the hex number, continue.
-                continue;
-            }
-
-            // This is the start of a suffix.
-            split_index = i;
-            break;
-        }
-    }
-
-    if (split_index == text.len) {
-        return .{ .num_text = text, .suffix = null };
-    } else {
-        return .{
-            .num_text = text[0..split_index],
-            .suffix = text[split_index..],
-        };
-    }
-}
-
 // nominal types //
 
 /// A nominal user-defined type
@@ -755,6 +708,19 @@ pub const NumeralInfo = struct {
             .bytes = @bitCast(val),
             .is_u128 = true,
             .is_negative = false, // u128 values are never negative
+            .is_fractional = is_fractional,
+            .region = region,
+        };
+    }
+
+    /// Create metadata for a literal whose exact digits are stored outside the
+    /// type store. Type checking only needs sign, fractional-ness, and region;
+    /// lowering consumes the recorded digit bytes.
+    pub fn fromExact(is_negative: bool, is_fractional: bool, region: base.Region) NumeralInfo {
+        return .{
+            .bytes = [_]u8{0} ** 16,
+            .is_u128 = false,
+            .is_negative = is_negative,
             .is_fractional = is_fractional,
             .region = region,
         };

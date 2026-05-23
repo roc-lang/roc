@@ -49,6 +49,7 @@ pub fn run(
 
 const ModuleView = struct {
     key: checked.ModuleId,
+    module_env: *const can.ModuleEnv,
     module_identity: checked.ModuleIdentity,
     names: *const names.NameStore,
     types: checked.CheckedTypeStoreView,
@@ -2715,6 +2716,16 @@ const BodyContext = struct {
         return try self.checkedTypeHasNumericDefault(self.view.bodies.exprs[@intFromEnum(expr_id)].ty);
     }
 
+    fn dispatchOperandHasNumericDefault(
+        self: *BodyContext,
+        operand: static_dispatch.StaticDispatchOperand,
+    ) Allocator.Error!bool {
+        return switch (operand) {
+            .checked_expr => |expr_id| try self.exprHasNumericDefault(expr_id),
+            .generated_numeral => false,
+        };
+    }
+
     fn checkedTypeHasNumericDefault(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
         var active = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
         defer active.deinit();
@@ -3627,7 +3638,9 @@ const BodyContext = struct {
             .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
             .dec => |dec| .{ .dec_lit = dec.value },
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
+            .num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
             .typed_frac => Common.invariant("typed fractional integer literal reached Monotype after numeric finalization"),
+            .typed_num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .empty_list => .{ .list = .empty() },
@@ -3881,15 +3894,15 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        checked_args: []const checked.CheckedExprId,
+        operands: []const static_dispatch.StaticDispatchOperand,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != checked_args.len) {
+        if (function.args.len != operands.len) {
             Common.invariant("checked dispatch plan arity differs from its function type");
         }
 
-        try self.bindCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked dispatch plan argument type mapped one checked type to two monotype types");
+        try self.bindDispatchArgTypesFromCallerToFixedPoint(function.args, caller, operands, "checked dispatch plan argument type mapped one checked type to two monotype types");
 
         const ret_ty = if (expected_ret_ty) |expected| ret: {
             try self.bindTypeToMono(function.ret, expected, "checked dispatch plan return type mapped one checked type to two monotype types");
@@ -3903,7 +3916,7 @@ const BodyContext = struct {
             break :ret caller_ret_ty;
         } else Common.invariant("checked dispatch plan return type was not concrete after call-site binding");
 
-        try self.bindCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked dispatch plan argument type mapped one checked type to two monotype types");
+        try self.bindDispatchArgTypesFromCallerToFixedPoint(function.args, caller, operands, "checked dispatch plan argument type mapped one checked type to two monotype types");
 
         const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
         defer self.allocator.free(arg_tys);
@@ -3919,6 +3932,45 @@ const BodyContext = struct {
             .ret = ret_ty,
         } });
         try self.bindTypeToMono(source_fn_ty, mono_fn_ty, "checked dispatch plan function type mapped one checked type to two monotype types");
+        return mono_fn_ty;
+    }
+
+    fn instantiateNumeralPlanCallType(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        caller: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        target_ty: Type.TypeId,
+        operands: []const static_dispatch.StaticDispatchOperand,
+    ) Allocator.Error!Type.TypeId {
+        const function = self.checkedFunctionType(source_fn_ty);
+        if (function.args.len != operands.len) {
+            Common.invariant("checked from_numeral plan arity differs from its function type");
+        }
+
+        try self.bindTypeToMono(checked_ret_ty, target_ty, "checked from_numeral result type mapped one checked type to two monotype types");
+        try caller.bindTypeToMono(checked_ret_ty, target_ty, "checked from_numeral result type mapped one checked type to two monotype types");
+        try self.bindDispatchArgTypesFromCallerToFixedPoint(function.args, caller, operands, "checked from_numeral argument type mapped one checked type to two monotype types");
+
+        const ret_ty = if (try self.checkedTypeCanLower(function.ret))
+            try self.lowerType(function.ret)
+        else
+            Common.invariant("checked from_numeral return type was not concrete after result binding");
+
+        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
+        defer self.allocator.free(arg_tys);
+        for (function.args, 0..) |arg_ty, i| {
+            if (!try self.checkedTypeCanLower(arg_ty)) {
+                Common.invariant("checked from_numeral argument type was not concrete after call-site binding");
+            }
+            arg_tys[i] = try self.lowerType(arg_ty);
+        }
+
+        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(arg_tys),
+            .ret = ret_ty,
+        } });
+        try self.bindTypeToMono(source_fn_ty, mono_fn_ty, "checked from_numeral function type mapped one checked type to two monotype types");
         return mono_fn_ty;
     }
 
@@ -4234,6 +4286,77 @@ const BodyContext = struct {
             const before_caller = caller.type_binding_revision;
             try self.bindCallArgTypesFromCaller(formal_tys, caller, checked_args, false, conflict_message);
             try self.bindCallArgTypesFromCaller(formal_tys, caller, checked_args, true, conflict_message);
+            if (self.type_binding_revision == before_self and caller.type_binding_revision == before_caller) return;
+        }
+    }
+
+    fn bindDispatchArgTypesFromCaller(
+        self: *BodyContext,
+        formal_tys: []const checked.CheckedTypeId,
+        caller: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        comptime numeric_literals: bool,
+        comptime conflict_message: []const u8,
+    ) Allocator.Error!void {
+        for (formal_tys, operands) |formal_ty, operand| {
+            if ((try caller.dispatchOperandHasNumericDefault(operand)) != numeric_literals) continue;
+            if (numeric_literals and try self.checkedTypeHasFixedShape(formal_ty)) continue;
+            switch (operand) {
+                .checked_expr => |checked_arg| {
+                    const actual_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
+                    try self.bindCheckedTypeRelations(
+                        formal_ty,
+                        caller,
+                        actual_ty,
+                        conflict_message,
+                    );
+
+                    if (try self.checkedTypeHasFixedShape(formal_ty)) {
+                        const formal_mono_ty = try self.lowerType(formal_ty);
+                        try caller.bindTypeToMono(actual_ty, formal_mono_ty, conflict_message);
+                        continue;
+                    }
+
+                    if (try caller.checkedTypeHasFixedShape(actual_ty)) {
+                        const actual_mono_ty = try caller.lowerType(actual_ty);
+                        try self.bindTypeToMono(formal_ty, actual_mono_ty, conflict_message);
+                        continue;
+                    }
+
+                    if (checkedPayload(self.view, formal_ty) == .function) {
+                        continue;
+                    }
+
+                    if (try caller.callArgumentMonoType(checked_arg)) |actual_mono_ty| {
+                        try self.bindTypeToMono(
+                            formal_ty,
+                            actual_mono_ty,
+                            conflict_message,
+                        );
+                        try caller.bindTypeToMono(
+                            actual_ty,
+                            actual_mono_ty,
+                            conflict_message,
+                        );
+                    }
+                },
+                .generated_numeral => {},
+            }
+        }
+    }
+
+    fn bindDispatchArgTypesFromCallerToFixedPoint(
+        self: *BodyContext,
+        formal_tys: []const checked.CheckedTypeId,
+        caller: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        comptime conflict_message: []const u8,
+    ) Allocator.Error!void {
+        while (true) {
+            const before_self = self.type_binding_revision;
+            const before_caller = caller.type_binding_revision;
+            try self.bindDispatchArgTypesFromCaller(formal_tys, caller, operands, false, conflict_message);
+            try self.bindDispatchArgTypesFromCaller(formal_tys, caller, operands, true, conflict_message);
             if (self.type_binding_revision == before_self and caller.type_binding_revision == before_caller) return;
         }
     }
@@ -4827,6 +4950,33 @@ const BodyContext = struct {
         return try self.builder.program.addExprSpan(lowered);
     }
 
+    fn lowerDispatchOperandsAtTypes(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        tys: []const Type.TypeId,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        if (operands.len != tys.len) Common.invariant("dispatch argument arity differs from concrete function type");
+        const stable_tys = try self.allocator.dupe(Type.TypeId, tys);
+        defer self.allocator.free(stable_tys);
+        const lowered = try self.allocator.alloc(Ast.ExprId, operands.len);
+        defer self.allocator.free(lowered);
+        for (operands, stable_tys, 0..) |operand, ty, i| {
+            lowered[i] = try self.lowerDispatchOperandAtType(operand, ty);
+        }
+        return try self.builder.program.addExprSpan(lowered);
+    }
+
+    fn lowerDispatchOperandAtType(
+        self: *BodyContext,
+        operand: static_dispatch.StaticDispatchOperand,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (operand) {
+            .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
+            .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
+        };
+    }
+
     fn lowerExprAtType(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -5061,6 +5211,186 @@ const BodyContext = struct {
         };
     }
 
+    fn lowerNumeralCall(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
+
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        defer call_ctx.deinit();
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+
+        const callable_mono_ty = try call_ctx.instantiateNumeralPlanCallType(plan.callable_ty, self, checked_ret_ty, target_ty, plan.args);
+        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked from_numeral plan had a non-function type");
+        const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
+        defer self.allocator.free(plan_arg_tys);
+        const try_ty = plan_fn_data.ret;
+
+        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+        const resolved = self.dispatchTarget(plan, dispatcher_ty) orelse
+            Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
+        const template = resolved.target.template orelse
+            Common.invariant("checked from_numeral target was not backed by a procedure template");
+        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
+        defer target_ctx.deinit();
+
+        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(resolved.target.callable_ty, &call_ctx, plan.callable_ty, try_ty);
+        try call_ctx.bindTypeToMono(plan.callable_ty, target_mono_ty, "checked from_numeral plan callable type differed from resolved target callable type");
+        if (!self.sameType(callable_mono_ty, target_mono_ty)) {
+            Common.invariant("checked from_numeral target callable type differed from dispatch plan callable type");
+        }
+
+        const fn_data = self.builder.functionShape(target_mono_ty, "checked from_numeral target had a non-function type");
+        const call_expr = try self.builder.program.addExpr(.{
+            .ty = fn_data.ret,
+            .data = try target_ctx.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
+        });
+        return try self.unwrapNumeralResult(call_expr, fn_data.ret, target_ty);
+    }
+
+    fn lowerNumeralValue(
+        self: *BodyContext,
+        literal: can.ModuleEnv.NumeralLiteral,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const backing_ty = self.builder.namedBackingType(ty) orelse
+            Common.invariant("checked from_numeral argument was not the Numeral nominal type");
+        const literal_tag = self.monoTagByText(backing_ty, "Literal");
+        const payloads = self.builder.program.types.span(literal_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Numeral Literal tag must have one record payload");
+
+        const record_expr = try self.lowerNumeralRecord(literal, payloads[0]);
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .tag = .{
+                .name = literal_tag.name,
+                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{record_expr}),
+            } },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .nominal = backing_expr },
+        });
+    }
+
+    fn lowerNumeralRecord(
+        self: *BodyContext,
+        literal: can.ModuleEnv.NumeralLiteral,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = switch (self.builder.shapeContent(ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            else => Common.invariant("Numeral Literal payload was not a record"),
+        };
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        const before = self.view.module_env.numeralDigitsBefore(literal);
+        const after = self.view.module_env.numeralDigitsAfter(literal);
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            const value = if (Ident.textEql(label, "is_negative"))
+                try self.boolLiteral(literal.isNegative(), field.ty)
+            else if (Ident.textEql(label, "digits_before_pt"))
+                try self.lowerU8List(before, field.ty)
+            else if (Ident.textEql(label, "digits_after_pt"))
+                try self.lowerU8List(after, field.ty)
+            else if (Ident.textEql(label, "digits_after_pt_count"))
+                try self.builder.intLiteralExpr(literal.after_decimal_digit_count, field.ty)
+            else
+                Common.invariant("Numeral record contained an unexpected field");
+            lowered[i] = .{ .name = field.name, .value = value };
+        }
+
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+    }
+
+    fn lowerU8List(
+        self: *BodyContext,
+        values: []const u8,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const elem_ty = switch (self.builder.shapeContent(ty)) {
+            .list => |elem| elem,
+            else => Common.invariant("Numeral digit field was not a List(U8)"),
+        };
+        const items = try self.allocator.alloc(Ast.ExprId, values.len);
+        defer self.allocator.free(items);
+        for (values, 0..) |value, i| {
+            items[i] = try self.builder.intLiteralExpr(value, elem_ty);
+        }
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .list = try self.builder.program.addExprSpan(items) },
+        });
+    }
+
+    fn unwrapNumeralResult(
+        self: *BodyContext,
+        result: Ast.ExprId,
+        try_ty: Type.TypeId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const ok_tag = self.monoTagByText(try_ty, "Ok");
+        const err_tag = self.monoTagByText(try_ty, "Err");
+        const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
+        const err_payloads = self.builder.program.types.span(err_tag.payloads);
+        if (ok_payloads.len != 1) Common.invariant("Try.Ok from from_numeral did not carry one payload");
+        if (!self.sameType(ok_payloads[0], target_ty)) {
+            Common.invariant("Try.Ok from from_numeral carried a type different from the literal target type");
+        }
+
+        const ok_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), target_ty);
+        const ok_payload_pat = try self.builder.bindPat(ok_local, target_ty);
+        const ok_pat = try self.builder.program.addPat(.{ .ty = try_ty, .data = .{ .tag = .{
+            .name = ok_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{ok_payload_pat}),
+        } } });
+        const ok_body = try self.builder.localExpr(ok_local, target_ty);
+
+        const err_payload_pats = try self.allocator.alloc(Ast.PatId, err_payloads.len);
+        defer self.allocator.free(err_payload_pats);
+        for (err_payloads, 0..) |payload_ty, i| {
+            err_payload_pats[i] = try self.builder.program.addPat(.{ .ty = payload_ty, .data = .wildcard });
+        }
+        const err_pat = try self.builder.program.addPat(.{ .ty = try_ty, .data = .{ .tag = .{
+            .name = err_tag.name,
+            .payloads = try self.builder.program.addPatSpan(err_payload_pats),
+        } } });
+        const msg = try self.builder.program.addStringLiteral("invalid numeric literal");
+        const err_body = try self.builder.program.addExpr(.{ .ty = target_ty, .data = .{ .crash = msg } });
+
+        const branches = [_]Ast.Branch{
+            .{ .pat = ok_pat, .body = ok_body },
+            .{ .pat = err_pat, .body = err_body },
+        };
+        return try self.builder.program.addExpr(.{ .ty = target_ty, .data = .{ .match_ = .{
+            .scrutinee = result,
+            .branches = try self.builder.program.addBranchSpan(&branches),
+        } } });
+    }
+
+    fn monoTagByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Tag {
+        return switch (self.builder.shapeContent(ty)) {
+            .tag_union => |span| {
+                for (self.builder.program.types.tagSpan(span)) |tag| {
+                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), text)) return tag;
+                }
+                Common.invariant("expected tag was absent from monotype tag union");
+            },
+            else => Common.invariant("expected a tag union monotype"),
+        };
+    }
+
     fn typeHasBuiltinOwner(self: *BodyContext, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
         return switch (methodOwnerFromType(&self.builder.program.types, ty) orelse return false) {
             .builtin => |actual| actual == owner,
@@ -5157,7 +5487,7 @@ const BodyContext = struct {
         );
 
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
-        const args = try arg_ctx.lowerExprSpanAtTypes(plan.args, self.builder.program.types.span(fn_data.args));
+        const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args));
         return .{ .call_proc = .{
             .callee = self.builder.fnDefForTemplate(
                 lookup.view,
@@ -5184,8 +5514,8 @@ const BodyContext = struct {
                 const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
                 defer self.allocator.free(arg_tys);
                 if (arg_tys.len != 2) Common.invariant("structural equality callable type must have two operands");
-                const lhs = try arg_ctx.lowerExprAtType(plan.args[0], arg_tys[0]);
-                const rhs = try arg_ctx.lowerExprAtType(plan.args[1], arg_tys[1]);
+                const lhs = try arg_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
+                const rhs = try arg_ctx.lowerDispatchOperandAtType(plan.args[1], arg_tys[1]);
                 var result = try self.lowerEqualityExpr(arg_tys[0], lhs, rhs, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
@@ -6940,8 +7270,10 @@ const BodyContext = struct {
             .frac_f64,
             .dec,
             .dec_small,
+            .num_from_numeral,
             .typed_int,
             .typed_frac,
+            .typed_num_from_numeral,
             .str_segment,
             .bytes_literal,
             .lookup_local,
@@ -7308,6 +7640,7 @@ const BodyContext = struct {
 fn moduleView(view: checked.ImportedModuleView) ModuleView {
     return .{
         .key = view.key,
+        .module_env = view.module_env,
         .module_identity = view.module_identity,
         .names = checked.importedNames(view),
         .types = view.checked_types,

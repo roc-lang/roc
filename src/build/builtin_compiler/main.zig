@@ -299,6 +299,30 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
         }
     }
 
+    const internal_from_str_primitives = [_]struct {
+        name: []const u8,
+        op: CIR.Expr.LowLevel,
+    }{
+        .{ .name = "Builtin.u8_from_str", .op = .u8_from_str },
+        .{ .name = "Builtin.i8_from_str", .op = .i8_from_str },
+        .{ .name = "Builtin.u16_from_str", .op = .u16_from_str },
+        .{ .name = "Builtin.i16_from_str", .op = .i16_from_str },
+        .{ .name = "Builtin.u32_from_str", .op = .u32_from_str },
+        .{ .name = "Builtin.i32_from_str", .op = .i32_from_str },
+        .{ .name = "Builtin.u64_from_str", .op = .u64_from_str },
+        .{ .name = "Builtin.i64_from_str", .op = .i64_from_str },
+        .{ .name = "Builtin.u128_from_str", .op = .u128_from_str },
+        .{ .name = "Builtin.i128_from_str", .op = .i128_from_str },
+        .{ .name = "Builtin.dec_from_str", .op = .dec_from_str },
+        .{ .name = "Builtin.f32_from_str", .op = .f32_from_str },
+        .{ .name = "Builtin.f64_from_str", .op = .f64_from_str },
+    };
+    for (internal_from_str_primitives) |primitive| {
+        if (env.common.findIdent(primitive.name)) |ident| {
+            try low_level_map.put(ident, primitive.op);
+        }
+    }
+
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;

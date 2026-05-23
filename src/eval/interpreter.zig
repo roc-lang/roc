@@ -3993,7 +3993,7 @@ pub const Interpreter = struct {
                 }
                 break :blk result;
             },
-            .num_from_numeral => args[0], // identity
+            .num_from_numeral => try self.evalNumFromNumeral(args[0], arg_layout, ll.ret_layout),
 
             // ── Numeric conversions ──
             .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128 => self.numWiden(u8, args[0], ll.ret_layout),
@@ -4131,7 +4131,7 @@ pub const Interpreter = struct {
             .u128_to_u64_wrap => self.numTruncate(u128, u64, args[0], ll.ret_layout),
             .u128_to_u64_try => self.numTry(u128, u64, args[0], ll.ret_layout),
             .u128_to_f32, .u128_to_f64 => self.intToFloat(u128, args[0], ll.ret_layout),
-            .u128_to_dec_try_unsafe => self.intToDec(u128, args[0], ll.ret_layout),
+            .u128_to_dec_try_unsafe => self.intToDecTry(u128, args[0], ll.ret_layout),
 
             .i128_to_i8_wrap => self.numTruncate(i128, i8, args[0], ll.ret_layout),
             .i128_to_i8_try => self.numTry(i128, i8, args[0], ll.ret_layout),
@@ -4152,7 +4152,7 @@ pub const Interpreter = struct {
             .i128_to_u128_wrap => self.numTruncate(i128, u128, args[0], ll.ret_layout),
             .i128_to_u128_try => self.numTry(i128, u128, args[0], ll.ret_layout),
             .i128_to_f32, .i128_to_f64 => self.intToFloat(i128, args[0], ll.ret_layout),
-            .i128_to_dec_try_unsafe => self.intToDec(i128, args[0], ll.ret_layout),
+            .i128_to_dec_try_unsafe => self.intToDecTry(i128, args[0], ll.ret_layout),
 
             // Float → int (truncating)
             .f32_to_i8_trunc => self.floatToInt(f32, i8, args[0], ll.ret_layout),
@@ -4201,16 +4201,13 @@ pub const Interpreter = struct {
             .f64_to_u128_try_unsafe => self.floatToIntTry(f64, u128, args[0], ll.ret_layout),
             .f64_to_f32_try_unsafe => blk: {
                 const sv = args[0].read(f64);
-                const val = try self.alloc(ll.ret_layout);
                 if (!std.math.isNan(sv) and !std.math.isInf(sv) and
                     sv <= std.math.floatMax(f32) and sv >= -std.math.floatMax(f32))
                 {
-                    val.write(f32, @floatCast(sv));
-                    val.offset(4).write(u8, 1);
+                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, @floatCast(sv));
                 } else {
-                    val.offset(4).write(u8, 0);
+                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, null);
                 }
-                break :blk val;
             },
 
             // Dec → numeric
@@ -4242,15 +4239,11 @@ pub const Interpreter = struct {
             },
             .dec_to_f32_try_unsafe => blk: {
                 const dec = RocDec{ .num = args[0].read(i128) };
-                const val = try self.alloc(ll.ret_layout);
                 if (builtins.dec.toF32Try(dec)) |f| {
-                    val.write(f32, f);
-                    val.offset(4).write(u8, 1); // is_ok
+                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, f);
                 } else {
-                    val.write(f32, 0);
-                    val.offset(4).write(u8, 0);
+                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, null);
                 }
-                break :blk val;
             },
             .dec_to_f64 => blk: {
                 const dec = RocDec{ .num = args[0].read(i128) };
@@ -4848,6 +4841,454 @@ pub const Interpreter = struct {
         return val;
     }
 
+    const LowLevelTryRecord = struct {
+        success_offset: u32,
+        value_offset: u32,
+    };
+
+    const NumeralValue = struct {
+        is_negative: bool,
+        digits_before_pt: []const u8,
+        digits_after_pt: []const u8,
+        digits_after_pt_count: u64,
+    };
+
+    const NumeralResult = struct {
+        ok_discriminant: u16,
+        ok_payload_layout: layout_mod.Idx,
+        err_discriminant: u16,
+        err_payload_layout: layout_mod.Idx,
+        target: NumericOperandKind,
+    };
+
+    fn evalNumFromNumeral(self: *LirInterpreter, numeral_arg: Value, numeral_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
+        const numeral = try self.readNumeralValue(numeral_arg, numeral_layout);
+        const result = try self.numeralResult(ret_layout);
+        const text = try self.numeralDecimalText(numeral);
+
+        const payload = (try self.parseNumeralPayload(text, result.ok_payload_layout, result.target)) orelse
+            return try self.writeNumeralErr(ret_layout, result);
+
+        return try self.writeNumeralOk(ret_layout, result, payload);
+    }
+
+    fn readNumeralValue(self: *LirInterpreter, numeral_arg: Value, numeral_layout: layout_mod.Idx) Error!NumeralValue {
+        const tag_base = self.resolveTagUnionBaseValue(numeral_arg, numeral_layout);
+        const tag_layout = self.layout_store.getLayout(tag_base.layout);
+        if (tag_layout.tag != .tag_union) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: num_from_numeral argument layout {d} was not a tag union",
+                .{@intFromEnum(tag_base.layout)},
+            );
+        }
+
+        const discriminant = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+        const record_layout_idx = self.tagPayloadLayout(tag_base.layout, @intCast(discriminant));
+        const record_base = self.resolveStructBaseValue(tag_base.value, record_layout_idx);
+        const record_layout = self.layout_store.getLayout(record_base.layout);
+        if (record_layout.tag != .struct_) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Numeral payload layout {d} was not a record",
+                .{@intFromEnum(record_base.layout)},
+            );
+        }
+
+        const struct_info = self.layout_store.getStructInfo(record_layout);
+        if (struct_info.fields.len != 4) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Numeral record layout {d} had {d} fields",
+                .{ @intFromEnum(record_base.layout), struct_info.fields.len },
+            );
+        }
+
+        // Numeral record fields are stored in lexicographic order by name:
+        // digits_after_pt, digits_after_pt_count, digits_before_pt, is_negative.
+        const after = try self.readNumeralU8List(record_base.value, record_base.layout, 0);
+        const after_count_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, 1);
+        if (after_count_layout != .u64) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Numeral digits_after_pt_count layout {d} was not U64",
+                .{@intFromEnum(after_count_layout)},
+            );
+        }
+        const after_count_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, 1);
+        const before = try self.readNumeralU8List(record_base.value, record_base.layout, 2);
+        const neg_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, 3);
+        const neg_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, 3);
+
+        return .{
+            .is_negative = try self.readBoolValue(record_base.value.offset(neg_offset), neg_layout),
+            .digits_before_pt = before,
+            .digits_after_pt = after,
+            .digits_after_pt_count = record_base.value.offset(after_count_offset).read(u64),
+        };
+    }
+
+    fn readNumeralU8List(
+        self: *LirInterpreter,
+        record_base: Value,
+        record_layout: layout_mod.Idx,
+        field_index: u32,
+    ) Error![]const u8 {
+        const record_layout_val = self.layout_store.getLayout(record_layout);
+        const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout_val.data.struct_.idx, field_index);
+        const elem = self.listElemLayout(field_layout);
+        if (elem != .u8) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Numeral digit field {d} element layout {d} was not U8",
+                .{ field_index, @intFromEnum(elem) },
+            );
+        }
+        const offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout_val.data.struct_.idx, field_index);
+        const list = self.valueToRocListForLayout(record_base.offset(offset), field_layout);
+        if (list.len() == 0) return &.{};
+        const bytes = list.bytes orelse {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: non-empty Numeral digit list had null bytes",
+                .{},
+            );
+        };
+        return bytes[0..list.len()];
+    }
+
+    fn readBoolValue(self: *LirInterpreter, value: Value, bool_layout: layout_mod.Idx) Error!bool {
+        if (bool_layout == .bool) return value.read(u8) != 0;
+
+        const layout_val = self.layout_store.getLayout(bool_layout);
+        if (layout_val.tag == .tag_union) {
+            return self.helper.readTagDiscriminant(value, bool_layout) != 0;
+        }
+
+        return self.invariantFailedError(
+            "LIR/interpreter invariant violated: Bool value used layout {d} ({s})",
+            .{ @intFromEnum(bool_layout), @tagName(layout_val.tag) },
+        );
+    }
+
+    fn numeralResult(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!NumeralResult {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        if (ret_layout_val.tag != .tag_union) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: num_from_numeral return layout {d} was not Try tag union",
+                .{@intFromEnum(ret_layout)},
+            );
+        }
+
+        const tu_data = self.layout_store.getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const variants = self.layout_store.getTagUnionVariants(tu_data);
+        var ok_discriminant: ?u16 = null;
+        var ok_payload_layout: layout_mod.Idx = .none;
+        var err_discriminant: ?u16 = null;
+        var err_payload_layout: layout_mod.Idx = .none;
+        var target: ?NumericOperandKind = null;
+
+        for (0..variants.len) |i| {
+            const payload_layout = variants.get(@intCast(i)).payload_layout;
+            const candidate = self.unwrapSingleFieldPayloadLayout(payload_layout) orelse payload_layout;
+            if (self.numericOperandKindOrNull(candidate)) |kind| {
+                if (ok_discriminant != null) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: num_from_numeral return layout {d} had multiple numeric payload variants",
+                        .{@intFromEnum(ret_layout)},
+                    );
+                }
+                ok_discriminant = @intCast(i);
+                ok_payload_layout = candidate;
+                target = kind;
+            } else {
+                if (err_discriminant != null) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: num_from_numeral return layout {d} had multiple non-numeric payload variants",
+                        .{@intFromEnum(ret_layout)},
+                    );
+                }
+                err_discriminant = @intCast(i);
+                err_payload_layout = payload_layout;
+            }
+        }
+
+        return .{
+            .ok_discriminant = ok_discriminant orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: num_from_numeral return layout {d} had no numeric Ok payload",
+                .{@intFromEnum(ret_layout)},
+            ),
+            .ok_payload_layout = ok_payload_layout,
+            .err_discriminant = err_discriminant orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: num_from_numeral return layout {d} had no Err payload",
+                .{@intFromEnum(ret_layout)},
+            ),
+            .err_payload_layout = err_payload_layout,
+            .target = target orelse unreachable,
+        };
+    }
+
+    fn numericOperandKindOrNull(_: *LirInterpreter, layout_idx: layout_mod.Idx) ?NumericOperandKind {
+        return switch (layout_idx) {
+            .u8 => .{ .unsigned_int = 8 },
+            .u16 => .{ .unsigned_int = 16 },
+            .u32 => .{ .unsigned_int = 32 },
+            .u64 => .{ .unsigned_int = 64 },
+            .u128 => .{ .unsigned_int = 128 },
+            .i8 => .{ .signed_int = 8 },
+            .i16 => .{ .signed_int = 16 },
+            .i32 => .{ .signed_int = 32 },
+            .i64 => .{ .signed_int = 64 },
+            .i128 => .{ .signed_int = 128 },
+            .f32 => .{ .float = 32 },
+            .f64 => .{ .float = 64 },
+            .dec => .dec,
+            else => null,
+        };
+    }
+
+    fn numeralDecimalText(self: *LirInterpreter, numeral: NumeralValue) Error![]const u8 {
+        const allocator = self.arena.allocator();
+        const before = try self.base256DecimalText(numeral.digits_before_pt, 1);
+        const after_min_digits: usize = std.math.cast(usize, numeral.digits_after_pt_count) orelse
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Numeral digits_after_pt_count exceeded host usize",
+                .{},
+            );
+        const after = if (after_min_digits == 0)
+            &[_]u8{}
+        else
+            try self.base256DecimalText(numeral.digits_after_pt, after_min_digits);
+
+        const sign_len: usize = @intFromBool(numeral.is_negative);
+        const dot_len: usize = @intFromBool(after_min_digits > 0);
+        const total_len = sign_len + before.len + dot_len + after.len;
+        const text = try allocator.alloc(u8, total_len);
+        var offset: usize = 0;
+        if (numeral.is_negative) {
+            text[offset] = '-';
+            offset += 1;
+        }
+        @memcpy(text[offset..][0..before.len], before);
+        offset += before.len;
+        if (after_min_digits > 0) {
+            text[offset] = '.';
+            offset += 1;
+            @memcpy(text[offset..][0..after.len], after);
+        }
+        return text;
+    }
+
+    fn base256DecimalText(self: *LirInterpreter, bytes_be: []const u8, min_digits: usize) Error![]const u8 {
+        const allocator = self.arena.allocator();
+        var first_nonzero: usize = 0;
+        while (first_nonzero < bytes_be.len and bytes_be[first_nonzero] == 0) : (first_nonzero += 1) {}
+
+        if (first_nonzero == bytes_be.len) {
+            const len = @max(min_digits, 1);
+            const out = try allocator.alloc(u8, len);
+            @memset(out, '0');
+            return out;
+        }
+
+        var current = try allocator.dupe(u8, bytes_be[first_nonzero..]);
+        var digits_rev = std.ArrayList(u8).empty;
+        defer digits_rev.deinit(allocator);
+
+        while (current.len > 0) {
+            var quotient = try allocator.alloc(u8, current.len);
+            var quotient_len: usize = 0;
+            var remainder: u16 = 0;
+            for (current) |byte| {
+                const value = remainder * 256 + byte;
+                const digit: u8 = @intCast(value / 10);
+                remainder = value % 10;
+                if (digit != 0 or quotient_len != 0) {
+                    quotient[quotient_len] = digit;
+                    quotient_len += 1;
+                }
+            }
+            try digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder)));
+            current = quotient[0..quotient_len];
+        }
+
+        const digit_count = digits_rev.items.len;
+        const total_len = @max(digit_count, min_digits);
+        const out = try allocator.alloc(u8, total_len);
+        const pad = total_len - digit_count;
+        @memset(out[0..pad], '0');
+        for (digits_rev.items, 0..) |digit, i| {
+            out[pad + digit_count - 1 - i] = digit;
+        }
+        return out;
+    }
+
+    fn parseNumeralPayload(
+        self: *LirInterpreter,
+        text: []const u8,
+        payload_layout: layout_mod.Idx,
+        target: NumericOperandKind,
+    ) Error!?Value {
+        return switch (target) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => try self.parseNumeralIntPayload(u8, text, payload_layout),
+                16 => try self.parseNumeralIntPayload(u16, text, payload_layout),
+                32 => try self.parseNumeralIntPayload(u32, text, payload_layout),
+                64 => try self.parseNumeralIntPayload(u64, text, payload_layout),
+                128 => try self.parseNumeralIntPayload(u128, text, payload_layout),
+                else => self.invariantFailedError("LIR/interpreter invariant violated: unsupported num_from_numeral unsigned width {d}", .{bits}),
+            },
+            .signed_int => |bits| switch (bits) {
+                8 => try self.parseNumeralIntPayload(i8, text, payload_layout),
+                16 => try self.parseNumeralIntPayload(i16, text, payload_layout),
+                32 => try self.parseNumeralIntPayload(i32, text, payload_layout),
+                64 => try self.parseNumeralIntPayload(i64, text, payload_layout),
+                128 => try self.parseNumeralIntPayload(i128, text, payload_layout),
+                else => self.invariantFailedError("LIR/interpreter invariant violated: unsupported num_from_numeral signed width {d}", .{bits}),
+            },
+            .float => |bits| switch (bits) {
+                32 => try self.parseNumeralFloatPayload(f32, text, payload_layout),
+                64 => try self.parseNumeralFloatPayload(f64, text, payload_layout),
+                else => self.invariantFailedError("LIR/interpreter invariant violated: unsupported num_from_numeral float width {d}", .{bits}),
+            },
+            .dec => try self.parseNumeralDecPayload(text, payload_layout),
+        };
+    }
+
+    fn parseNumeralIntPayload(self: *LirInterpreter, comptime T: type, text: []const u8, payload_layout: layout_mod.Idx) Error!?Value {
+        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+        const value = try self.alloc(payload_layout);
+        value.write(T, parsed);
+        return value;
+    }
+
+    fn parseNumeralFloatPayload(self: *LirInterpreter, comptime T: type, text: []const u8, payload_layout: layout_mod.Idx) Error!?Value {
+        const parsed = std.fmt.parseFloat(T, text) catch return null;
+        const value = try self.alloc(payload_layout);
+        value.write(T, parsed);
+        return value;
+    }
+
+    fn parseNumeralDecPayload(self: *LirInterpreter, text: []const u8, payload_layout: layout_mod.Idx) Error!?Value {
+        const parsed = RocDec.fromNonemptySlice(text) orelse return null;
+        const value = try self.alloc(payload_layout);
+        value.write(i128, parsed.num);
+        return value;
+    }
+
+    fn writeNumeralOk(self: *LirInterpreter, ret_layout: layout_mod.Idx, result: NumeralResult, payload: Value) Error!Value {
+        const value = try self.alloc(ret_layout);
+        const size = self.helper.sizeOf(ret_layout);
+        if (size > 0) @memset(value.ptr[0..size], 0);
+        try self.writeVariantPayloadValue(value, self.tagPayloadLayout(ret_layout, result.ok_discriminant), payload, result.ok_payload_layout);
+        self.helper.writeTagDiscriminant(value, ret_layout, result.ok_discriminant);
+        return value;
+    }
+
+    fn writeNumeralErr(self: *LirInterpreter, ret_layout: layout_mod.Idx, result: NumeralResult) Error!Value {
+        const value = try self.alloc(ret_layout);
+        const size = self.helper.sizeOf(ret_layout);
+        if (size > 0) @memset(value.ptr[0..size], 0);
+        const err_value = try self.invalidNumeralValue(result.err_payload_layout);
+        try self.writeVariantPayloadValue(value, result.err_payload_layout, err_value, result.err_payload_layout);
+        self.helper.writeTagDiscriminant(value, ret_layout, result.err_discriminant);
+        return value;
+    }
+
+    fn invalidNumeralValue(self: *LirInterpreter, err_layout: layout_mod.Idx) Error!Value {
+        const err_layout_val = self.layout_store.getLayout(err_layout);
+        switch (err_layout_val.tag) {
+            .tag_union => {
+                const info = self.layout_store.getTagUnionInfo(err_layout_val);
+                if (info.variants.len != 1) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: num_from_numeral Err payload layout {d} had {d} variants without an explicit InvalidNumeral discriminant",
+                        .{ @intFromEnum(err_layout), info.variants.len },
+                    );
+                }
+                const allocated = try self.allocTagValue(err_layout);
+                const payload_layout = self.tagPayloadLayout(err_layout, 0);
+                const message = try self.makeRocStr("invalid numeric literal");
+                try self.writeVariantPayloadValue(allocated.base, payload_layout, message, .str);
+                self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, 0);
+                return allocated.outer;
+            },
+            .struct_ => {
+                const unwrapped = self.unwrapSingleFieldPayloadLayout(err_layout) orelse {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: num_from_numeral Err payload layout {d} was not an error tag union",
+                        .{@intFromEnum(err_layout)},
+                    );
+                };
+                const inner = try self.invalidNumeralValue(unwrapped);
+                const value = try self.alloc(err_layout);
+                const struct_idx = err_layout_val.data.struct_.idx;
+                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+                try self.writeStructFieldValue(value, field_offset, unwrapped, inner, unwrapped);
+                return value;
+            },
+            .scalar => if (err_layout == .str) {
+                return try self.makeRocStr("invalid numeric literal");
+            } else return self.invariantFailedError(
+                "LIR/interpreter invariant violated: num_from_numeral Err payload scalar layout {d} was not Str",
+                .{@intFromEnum(err_layout)},
+            ),
+            else => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: num_from_numeral Err payload layout {d} had unsupported tag {s}",
+                .{ @intFromEnum(err_layout), @tagName(err_layout_val.tag) },
+            ),
+        }
+    }
+
+    fn writeVariantPayloadValue(
+        self: *LirInterpreter,
+        destination: Value,
+        variant_payload_layout: layout_mod.Idx,
+        payload: Value,
+        payload_layout: layout_mod.Idx,
+    ) Error!void {
+        if (self.helper.sizeOf(variant_payload_layout) == 0) return;
+        if (variant_payload_layout == payload_layout) {
+            destination.copyFrom(payload, self.helper.sizeOf(variant_payload_layout));
+            return;
+        }
+        if (self.unwrapSingleFieldPayloadLayout(variant_payload_layout)) |field_layout| {
+            const variant_layout_val = self.layout_store.getLayout(variant_payload_layout);
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(variant_layout_val.data.struct_.idx, 0);
+            return self.writeStructFieldValue(destination, field_offset, field_layout, payload, payload_layout);
+        }
+        const coerced = try self.coerceExplicitRefValueToLayout(payload, payload_layout, variant_payload_layout);
+        destination.copyFrom(coerced, self.helper.sizeOf(variant_payload_layout));
+    }
+
+    fn lowLevelTryRecord(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!LowLevelTryRecord {
+        const layout_val = self.layout_store.getLayout(ret_layout);
+        if (layout_val.tag != .struct_) {
+            return self.runtimeError("low-level try record expected a struct return layout");
+        }
+
+        const struct_idx = layout_val.data.struct_.idx;
+        const struct_info = self.layout_store.getStructInfo(layout_val);
+        if (struct_info.fields.len != 2) {
+            return self.runtimeError("low-level try record expected exactly two fields");
+        }
+
+        return .{
+            .success_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+            .value_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+        };
+    }
+
+    fn writeLowLevelTryRecord(self: *LirInterpreter, comptime Payload: type, ret_layout: layout_mod.Idx, maybe_payload: ?Payload) Error!Value {
+        const val = try self.alloc(ret_layout);
+        const size = self.helper.sizeOf(ret_layout);
+        if (size > 0) {
+            @memset(val.ptr[0..size], 0);
+        }
+        const fields = try self.lowLevelTryRecord(ret_layout);
+        if (maybe_payload) |payload| {
+            val.offset(fields.value_offset).write(Payload, payload);
+            val.offset(fields.success_offset).write(u8, 1);
+        } else {
+            val.offset(fields.success_offset).write(u8, 0);
+        }
+        return val;
+    }
+
     fn intToFloat(self: *LirInterpreter, comptime Src: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         const ret_size = self.helper.sizeOf(ret_layout);
@@ -4879,21 +5320,16 @@ pub const Interpreter = struct {
     }
 
     fn floatToIntTry(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
         const sv = arg.read(Src);
-        const dst_size = @sizeOf(Dst);
         const min_val = comptime @as(Src, @floatFromInt(std.math.minInt(Dst)));
         const max_val = comptime @as(Src, @floatFromInt(std.math.maxInt(Dst)));
         if (!std.math.isNan(sv) and !std.math.isInf(sv)) {
             const truncated: Src = @trunc(sv);
             if (truncated >= min_val and truncated <= max_val) {
-                val.write(Dst, @intFromFloat(truncated));
-                val.offset(dst_size).write(u8, 1);
-                return val;
+                return self.writeLowLevelTryRecord(Dst, ret_layout, @intFromFloat(truncated));
             }
         }
-        val.offset(dst_size).write(u8, 0);
-        return val;
+        return self.writeLowLevelTryRecord(Dst, ret_layout, null);
     }
 
     fn floatWiden(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
@@ -4916,16 +5352,27 @@ pub const Interpreter = struct {
     }
 
     fn decToIntTry(self: *LirInterpreter, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
         const dec = RocDec{ .num = arg.read(i128) };
-        const dst_size = @sizeOf(Dst);
         if (builtins.dec.toIntTry(Dst, dec)) |dv| {
-            val.write(Dst, dv);
-            val.offset(dst_size).write(u8, 1);
+            return self.writeLowLevelTryRecord(Dst, ret_layout, dv);
         } else {
-            val.offset(dst_size).write(u8, 0);
+            return self.writeLowLevelTryRecord(Dst, ret_layout, null);
         }
-        return val;
+    }
+
+    fn intToDecTry(self: *LirInterpreter, comptime Src: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const sv = arg.read(Src);
+        const maybe_dec = switch (@typeInfo(Src).int.signedness) {
+            .signed => RocDec.fromWholeInt(@intCast(sv)),
+            .unsigned => blk: {
+                if (sv > @as(Src, @intCast(std.math.maxInt(i128)))) break :blk null;
+                break :blk RocDec.fromWholeInt(@intCast(sv));
+            },
+        };
+        if (maybe_dec) |dec| {
+            return self.writeLowLevelTryRecord(i128, ret_layout, dec.num);
+        }
+        return self.writeLowLevelTryRecord(i128, ret_layout, null);
     }
 
     fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, _: layout_mod.Idx) Error!Value {
@@ -5247,7 +5694,8 @@ pub const Interpreter = struct {
             .negate => -av,
             .abs => @abs(av),
             .abs_diff => @abs(av - bv),
-            .div, .div_trunc => av / bv,
+            .div => av / bv,
+            .div_trunc => @trunc(av / bv),
             .rem, .mod => @rem(av, bv),
         };
     }

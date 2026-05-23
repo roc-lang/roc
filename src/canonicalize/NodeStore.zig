@@ -305,7 +305,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 49;
+pub const MODULEENV_EXPR_NODE_COUNT = 51;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -705,6 +705,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_num_from_numeral => {
+            return CIR.Expr{ .e_num_from_numeral = .{} };
+        },
         .expr_typed_int => {
             const p = payload.expr_typed_int;
             const value = store.int128_values.items.items[p.int128_idx];
@@ -730,6 +733,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .type_name = @bitCast(p.type_name),
                 },
             };
+        },
+        .expr_typed_num_from_numeral => {
+            const p = payload.expr_typed_num_from_numeral;
+            return CIR.Expr{ .e_typed_num_from_numeral = .{
+                .type_name = @bitCast(p.type_name),
+            } };
         },
         .expr_string_segment => {
             const p = payload.expr_string_segment;
@@ -2066,6 +2075,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .has_suffix = e.has_suffix,
             } });
         },
+        .e_num_from_numeral => |_| {
+            node.tag = .expr_num_from_numeral;
+            node.setPayload(.{ .expr_num_from_numeral = .{} });
+        },
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
             const int128_idx: u32 = @intCast(store.int128_values.len());
@@ -2084,6 +2097,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
                 .int128_idx = int128_idx,
+            } });
+        },
+        .e_typed_num_from_numeral => |e| {
+            node.tag = .expr_typed_num_from_numeral;
+            node.setPayload(.{ .expr_typed_num_from_numeral = .{
+                .type_name = @bitCast(e.type_name),
             } });
         },
         .e_str_segment => |e| {

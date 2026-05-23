@@ -1122,48 +1122,6 @@ fn mkBuiltinNumberTypeContentFromKind(
     };
 }
 
-fn findLocalTypedLiteralTypeDecl(
-    self: *const Self,
-    type_name: Ident.Idx,
-    expr_region: Region,
-) ?CIR.Statement.Idx {
-    const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
-    var best_stmt: ?CIR.Statement.Idx = null;
-    var best_region: ?Region = null;
-
-    for (all_stmts) |stmt_idx| {
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const header_idx = switch (stmt) {
-            .s_alias_decl => |alias| alias.header,
-            .s_nominal_decl => |nominal| nominal.header,
-            else => continue,
-        };
-
-        const header = self.cir.store.getTypeHeader(header_idx);
-        if (!header.relative_name.eql(type_name)) continue;
-
-        const stmt_region = self.cir.store.getStatementRegion(stmt_idx);
-        if (stmt_region.start.offset > expr_region.start.offset or
-            stmt_region.end.offset < expr_region.end.offset)
-        {
-            continue;
-        }
-
-        if (best_region) |current_best| {
-            const is_more_specific = stmt_region.start.offset > current_best.start.offset or
-                (stmt_region.start.offset == current_best.start.offset and
-                    stmt_region.end.offset < current_best.end.offset);
-
-            if (!is_more_specific) continue;
-        }
-
-        best_stmt = stmt_idx;
-        best_region = stmt_region;
-    }
-
-    return best_stmt;
-}
-
 fn findLocalTypeDeclByName(self: *const Self, type_name: Ident.Idx) ?CIR.Statement.Idx {
     const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
 
@@ -1185,46 +1143,45 @@ fn findLocalTypeDeclByName(self: *const Self, type_name: Ident.Idx) ?CIR.Stateme
 fn unifyTypedLiteralWithExplicitType(
     self: *Self,
     flex_var: Var,
+    expr_idx: CIR.Expr.Idx,
     type_name: Ident.Idx,
     expr_region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    if (self.builtinNumKindFromTypeName(type_name)) |num_kind| {
-        try self.unifyWith(flex_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind, env), env);
-        return;
-    }
+    _ = type_name;
+    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("typed numeric literal reached checking without a canonicalized suffix target", .{});
+        }
+        unreachable;
+    };
 
-    if (self.findLocalTypedLiteralTypeDecl(type_name, expr_region)) |stmt_idx| {
-        const local_decl_var = ModuleEnv.varFrom(stmt_idx);
-        const resolved_var = if (self.isForClauseAliasStatement(stmt_idx))
-            local_decl_var
-        else
-            try self.instantiateVar(local_decl_var, env, .{ .explicit = expr_region });
+    switch (suffix_type.target()) {
+        .builtin => |num_kind| {
+            try self.unifyWith(flex_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind, env), env);
+        },
+        .local => |stmt_idx| {
+            const local_decl_var = ModuleEnv.varFrom(stmt_idx);
+            const resolved_var = if (self.isForClauseAliasStatement(stmt_idx))
+                local_decl_var
+            else
+                try self.instantiateVar(local_decl_var, env, .{ .explicit = expr_region });
 
-        _ = try self.unify(flex_var, resolved_var, env);
-        return;
-    }
-
-    if (self.auto_imported_types) |auto_imported_types| {
-        if (auto_imported_types.get(type_name)) |auto_imported_type| {
-            if (auto_imported_type.statement_idx) |stmt_idx| {
-                const copied_var = try self.copyVar(
-                    ModuleEnv.varFrom(stmt_idx),
-                    auto_imported_type.requireEnv(),
-                    expr_region,
-                );
+            _ = try self.unify(flex_var, resolved_var, env);
+        },
+        .external => |external| {
+            if (try self.resolveVarFromExternal(external.import_idx, external.target_node_idx)) |ext_ref| {
                 const instantiated_var = try self.instantiateVar(
-                    copied_var,
+                    ext_ref.local_var,
                     env,
                     .{ .explicit = expr_region },
                 );
                 _ = try self.unify(flex_var, instantiated_var, env);
-                return;
+            } else {
+                try self.unifyWith(flex_var, .err, env);
             }
-        }
+        },
     }
-
-    try self.unifyWith(flex_var, .err, env);
 }
 
 /// Create a Dec nominal type content using the stored ident index rather than
@@ -1266,6 +1223,7 @@ fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
 /// (first arg of from_numeral) is unified with the flex var so they share the same name.
 fn mkFlexWithFromNumeralConstraint(
     self: *Self,
+    source_node: ?CIR.Node.Idx,
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
 ) !Var {
@@ -1313,6 +1271,9 @@ fn mkFlexWithFromNumeralConstraint(
         },
     };
     const fn_var = try self.freshFromContent(func_content, env, num_literal_info.region);
+    if (source_node) |node_idx| {
+        try self.cir.recordNumeralDispatchPlan(node_idx, flex_var, fn_var);
+    }
 
     // Create the constraint with numeric literal info
     const constraint = types_mod.StaticDispatchConstraint{
@@ -1336,6 +1297,16 @@ fn mkFlexWithFromNumeralConstraint(
     self.types.from_numeral_flex_count += 1;
 
     return flex_var;
+}
+
+fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) types_mod.NumeralInfo {
+    const literal = self.cir.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("missing recorded exact numeral for expression {}", .{@intFromEnum(expr_idx)});
+        }
+        unreachable;
+    };
+    return types_mod.NumeralInfo.fromExact(literal.isNegative(), literal.isFractional(), region);
 }
 
 /// Create a nominal Box type with the given element type
@@ -1404,8 +1375,7 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
     );
 }
 
-/// Create a nominal Numeral type (from Builtin.Num.Numeral)
-/// Numeral has no type parameters - it's a concrete record type wrapped in Self tag
+/// Create the transparent builtin Numeral type used by from_numeral.
 fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1423,16 +1393,29 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
         .ident_idx = self.cir.idents.builtin_numeral,
     };
 
-    // The backing var doesn't matter here. Nominal types unify based on their ident
-    // and type args only - the backing is never examined during unification.
-    // Creating the real backing type ([Self({is_negative: Bool, ...})]) would be a waste of time.
-    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
-    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
-    const empty_tag_union = types_mod.TagUnion{
-        .tags = types_mod.Tag.SafeMultiList.Range.empty(),
-        .ext = ext_var,
-    };
-    const backing_content = Content{ .structure = .{ .tag_union = empty_tag_union } };
+    const u8_before = try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, Region.zero());
+    const u8_after = try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, Region.zero());
+    const digits_before = try self.freshFromContent(try self.mkListContent(u8_before, env), env, Region.zero());
+    const digits_after = try self.freshFromContent(try self.mkListContent(u8_after, env), env, Region.zero());
+    const digit_count = try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, Region.zero());
+    const is_negative = try self.freshBool(env, Region.zero());
+
+    const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
+    const fields = try self.types.appendRecordFields(&[_]types_mod.RecordField{
+        .{ .name = self.cir.idents.is_negative, .var_ = is_negative },
+        .{ .name = self.cir.idents.digits_before_pt, .var_ = digits_before },
+        .{ .name = self.cir.idents.digits_after_pt, .var_ = digits_after },
+        .{ .name = self.cir.idents.digits_after_pt_count, .var_ = digit_count },
+    });
+    const record_var = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields,
+        .ext = record_ext,
+    } } }, env, Region.zero());
+
+    const literal_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Literal"));
+    const literal_tag = try self.types.mkTag(literal_ident, &.{record_var});
+    const union_ext = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
+    const backing_content = try self.types.mkTagUnion(&.{literal_tag}, union_ext);
     const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
 
     return try self.types.mkNominal(
@@ -1440,7 +1423,7 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
         backing_var,
         &.{}, // No type args
         origin_module_id,
-        true, // Numeral is opaque (defined with ::)
+        false, // Numeral is transparent so custom from_numeral methods can inspect it.
     );
 }
 
@@ -3272,7 +3255,7 @@ fn checkPatternHelp(
                     };
 
                     // Create flex var with from_numeral constraint
-                    const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
                     _ = try self.unify(pattern_var, flex_var, env);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
@@ -3312,7 +3295,7 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
             }
         },
@@ -3332,7 +3315,7 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
             }
         },
@@ -3628,7 +3611,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     };
 
                     // Create flex var with from_numeral constraint
-                    const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                     _ = try self.unify(expr_var, flex_var, env);
                 },
                 .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U8", env), env),
@@ -3646,6 +3629,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env),
             }
         },
+        .e_num_from_numeral => {
+            const num_literal_info = self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+            _ = try self.unify(expr_var, flex_var, env);
+        },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
@@ -3657,7 +3645,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
         },
@@ -3672,7 +3660,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
         },
@@ -3687,7 +3675,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
         },
@@ -3704,7 +3692,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     true,
                     expr_region,
                 );
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
         },
@@ -3717,10 +3705,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             };
 
             // Create flex var with from_numeral constraint
-            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
 
             try self.unifyTypedLiteralWithExplicitType(
                 flex_var,
+                expr_idx,
                 typed_num.type_name,
                 expr_region,
                 env,
@@ -3740,16 +3729,31 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             );
 
             // Create flex var with from_numeral constraint
-            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
 
             try self.unifyTypedLiteralWithExplicitType(
                 flex_var,
+                expr_idx,
                 typed_num.type_name,
                 expr_region,
                 env,
             );
 
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+            _ = try self.unify(expr_var, flex_var, env);
+        },
+        .e_typed_num_from_numeral => |typed_num| {
+            const num_literal_info = self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+
+            try self.unifyTypedLiteralWithExplicitType(
+                flex_var,
+                expr_idx,
+                typed_num.type_name,
+                expr_region,
+                env,
+            );
+
             _ = try self.unify(expr_var, flex_var, env);
         },
         // list //

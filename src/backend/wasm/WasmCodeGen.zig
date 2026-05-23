@@ -10108,6 +10108,11 @@ fn emitNumericLowLevel(self: *Self, op: anytype, args: []const ProcLocalId, ret_
                 .f64 => Op.f64_div,
             };
             self.body.append(self.allocator, wasm_op) catch return error.OutOfMemory;
+            switch (vt) {
+                .f32 => self.body.append(self.allocator, Op.f32_trunc) catch return error.OutOfMemory,
+                .f64 => self.body.append(self.allocator, Op.f64_trunc) catch return error.OutOfMemory,
+                .i32, .i64 => {},
+            }
         },
         .num_rem_by => {
             try self.emitProcLocal(args[0]);

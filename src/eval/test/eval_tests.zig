@@ -199,6 +199,94 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "42.0" },
     },
     .{
+        .name = "inspect: custom from_numeral receives contextual integer digits",
+        .source_kind = .module,
+        .source =
+        \\Big := [
+        \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
+        \\].{
+        \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Value({
+        \\            is_negative: parts.is_negative,
+        \\            before: parts.digits_before_pt,
+        \\            after: parts.digits_after_pt,
+        \\            count: parts.digits_after_pt_count,
+        \\        }))
+        \\    }
+        \\}
+        \\
+        \\force : Big -> Big
+        \\force = |n| n
+        \\
+        \\main = {
+        \\    value = force(42)
+        \\
+        \\    match value {
+        \\        Value(parts) => (parts.is_negative, parts.before, parts.after, parts.count)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(False, [42], [], 0)" },
+    },
+    .{
+        .name = "inspect: custom from_numeral receives fractional digit count",
+        .source_kind = .module,
+        .source =
+        \\Big := [
+        \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
+        \\].{
+        \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Value({
+        \\            is_negative: parts.is_negative,
+        \\            before: parts.digits_before_pt,
+        \\            after: parts.digits_after_pt,
+        \\            count: parts.digits_after_pt_count,
+        \\        }))
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    value : Big
+        \\    value = 3.14
+        \\
+        \\    match value {
+        \\        Value(parts) => (parts.is_negative, parts.before, parts.after, parts.count)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(False, [3], [14], 2)" },
+    },
+    .{
+        .name = "inspect: custom from_numeral preserves exact huge fractional digits",
+        .source_kind = .module,
+        .source =
+        \\Big := [
+        \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
+        \\].{
+        \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Value({
+        \\            is_negative: parts.is_negative,
+        \\            before: parts.digits_before_pt,
+        \\            after: parts.digits_after_pt,
+        \\            count: parts.digits_after_pt_count,
+        \\        }))
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    value = 340282366920938463463374607431768211456.00000000000000000001.Big
+        \\
+        \\    match value {
+        \\        Value(parts) => (parts.is_negative, parts.before, parts.after, parts.count)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(False, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1], 20)" },
+    },
+    .{
         .name = "inspect: unconstrained empty list specialization remains replaceable until constrained",
         .source_kind = .module,
         .source =
