@@ -160,7 +160,9 @@ const Inserter = struct {
         params: LIR.LocalSpan,
         body: LIR.CFStmtId = undefined,
         remainder: LIR.CFStmtId = undefined,
-        loop_keep: OwnedSet,
+        incoming_owned: OwnedSet,
+        entry_keep: OwnedSet,
+        body_keep: OwnedSet,
         join_keeps: []JoinKeep = &.{},
         frames: std.ArrayList(LinearRewriteFrame),
         result: *LIR.CFStmtId,
@@ -714,15 +716,19 @@ const Inserter = struct {
             .start = start,
             .id = join_stmt.id,
             .params = join_stmt.params,
-            .loop_keep = try self.joinBodyOwnedSet(&path.owned, join_stmt.params, join_stmt.body),
+            .incoming_owned = try path.owned.clone(),
+            .entry_keep = try self.joinEntryOwnedSet(&path.owned, join_stmt.remainder),
+            .body_keep = try self.joinBodyOwnedSet(&path.owned, join_stmt.params, join_stmt.body),
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
-        errdefer if (!queued) state.loop_keep.deinit();
+        errdefer if (!queued) state.incoming_owned.deinit();
+        errdefer if (!queued) state.entry_keep.deinit();
+        errdefer if (!queued) state.body_keep.deinit();
         errdefer if (!queued) state.frames.deinit(self.store.allocator);
         state.join_keeps = try appendJoinKeep(self.store.allocator, path.options.join_keeps, .{
             .target = join_stmt.id,
-            .keep = &state.loop_keep,
+            .keep = &state.body_keep,
         });
         errdefer if (!queued) self.store.allocator.free(state.join_keeps);
 
@@ -730,15 +736,15 @@ const Inserter = struct {
         queued = true;
         const join_options = RewriteOptions{
             .boundaries = path.options.boundaries,
-            .loop_keep = &state.loop_keep,
+            .loop_keep = &state.body_keep,
             .join_keeps = state.join_keeps,
         };
-        try self.pushRewritePath(tasks, join_stmt.remainder, &path.owned, .{
+        try self.pushRewritePath(tasks, join_stmt.remainder, &state.entry_keep, .{
             .boundaries = join_options.boundaries,
             .loop_keep = join_options.loop_keep,
             .join_keeps = join_options.join_keeps,
         }, &state.remainder);
-        try self.pushRewritePath(tasks, join_stmt.body, &state.loop_keep, join_options, &state.body);
+        try self.pushRewritePath(tasks, join_stmt.body, &state.body_keep, join_options, &state.body);
     }
 
     fn finishRewriteJoin(self: *Inserter, state: *RewriteJoinTask) ResourceError!void {
@@ -751,11 +757,12 @@ const Inserter = struct {
         } });
         if (self.rewritten_joins) |rewritten_joins| {
             try rewritten_joins.put(state.start, .{
-                .keep = try state.loop_keep.clone(),
+                .keep = try state.entry_keep.clone(),
                 .stmt = join,
             });
         }
-        state.result.* = try self.finishLinearRewrite(&state.frames, join);
+        const tail = try self.releaseDifference(&state.incoming_owned, &state.entry_keep, join);
+        state.result.* = try self.finishLinearRewrite(&state.frames, tail);
         self.destroyRewriteJoin(state);
     }
 
@@ -1166,7 +1173,9 @@ const Inserter = struct {
     fn destroyRewriteJoin(self: *Inserter, state: *RewriteJoinTask) void {
         state.frames.deinit(self.store.allocator);
         if (state.join_keeps.len != 0) self.store.allocator.free(state.join_keeps);
-        state.loop_keep.deinit();
+        state.incoming_owned.deinit();
+        state.entry_keep.deinit();
+        state.body_keep.deinit();
         self.store.allocator.destroy(state);
     }
 
@@ -1218,12 +1227,29 @@ const Inserter = struct {
         var iter = entry_owned.bits.iterator(.{});
         while (iter.next()) |i| {
             const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
-            if (try self.localUsedInPath(body, local, null)) {
+            if (try self.localValueUsedInPath(body, local, null)) {
                 owned.set(local);
             }
         }
         for (self.store.getLocalSpan(params)) |param| {
             self.addOwnedIfRc(&owned, param);
+        }
+        return owned;
+    }
+
+    fn joinEntryOwnedSet(
+        self: *Inserter,
+        entry_owned: *const OwnedSet,
+        remainder: LIR.CFStmtId,
+    ) ResourceError!OwnedSet {
+        var owned = try OwnedSet.init(self.store.allocator, entry_owned.len());
+        errdefer owned.deinit();
+        var iter = entry_owned.bits.iterator(.{});
+        while (iter.next()) |i| {
+            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
+            if (try self.localValueUsedInPath(remainder, local, null)) {
+                owned.set(local);
+            }
         }
         return owned;
     }
@@ -1243,7 +1269,7 @@ const Inserter = struct {
     ) ResourceError!bool {
         if (!owned.contains(value)) return false;
         if (!self.localContainsRefcounted(value)) return false;
-        return !(try self.localUsedInPath(next, value, loop_keep));
+        return !(try self.localValueUsedInPath(next, value, loop_keep));
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -1274,7 +1300,7 @@ const Inserter = struct {
             const bit = argMaskBit(i);
             if ((mask & bit) == 0) continue;
             if (local == target) continue;
-            if (try self.localUsedInPath(next, local, loop_keep)) {
+            if (try self.localValueUsedInPath(next, local, loop_keep)) {
                 preserve |= bit;
             }
         }
@@ -1298,7 +1324,7 @@ const Inserter = struct {
             if (!self.localContainsRefcounted(local)) continue;
 
             const bit = argMaskBit(i);
-            const used_after_call = local != target and try self.localUsedInPath(next, local, loop_keep);
+            const used_after_call = local != target and try self.localValueUsedInPath(next, local, loop_keep);
             const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
 
             if (can_transfer) {
@@ -1410,7 +1436,7 @@ const Inserter = struct {
         }
     }
 
-    fn localUsedInPath(
+    fn localValueUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
@@ -1430,39 +1456,51 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     if (refOpUsesLocal(assign.op, needle)) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
-                .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_literal => |assign| {
+                    if (assign.target == needle) continue;
+                    try stack.append(self.store.allocator, assign.next);
+                },
                 .assign_call => |assign| {
                     if (self.spanUsesLocal(assign.args, needle)) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
                     if (assign.closure == needle or self.spanUsesLocal(assign.args, needle)) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and assign.capture.? == needle) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
                     if (self.spanUsesLocal(assign.args, needle)) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_list => |assign| {
                     if (self.spanUsesLocal(assign.elems, needle)) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_struct => |assign| {
                     if (self.spanUsesLocal(assign.fields, needle)) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_tag => |assign| {
                     if (assign.payload != null and assign.payload.? == needle) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .set_local => |assign| {
                     if (assign.value == needle) return true;
+                    if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .debug => |debug_stmt| {
@@ -2553,6 +2591,39 @@ test "RC switch continuation analysis stops at join ownership boundary" {
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
     try f.expectRc(source, 0, 0, 0);
+}
+
+test "RC join remainder starts from join entry ownership" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+    });
+    const source = try f.local(f.list_i64);
+    const pair = try f.local(pair_layout);
+    const extracted = try f.local(f.list_i64);
+    const result = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_result = try f.setLocal(result, appended, .initialize_join_param, jump);
+    const append = try f.assignLowLevel(appended, &.{ extracted, elem }, LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 0), initialize_result);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{result}),
+        .body = ret,
+        .remainder = append,
+    } });
+    const extract = try f.assignRefField(extracted, pair, 0, join);
+    const make_pair = try f.assignStruct(pair, &.{source}, extract);
+    const body = try f.assignList(source, &.{}, make_pair);
+
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+    try f.expectRc(pair, 0, 1, 0);
 }
 
 test "dev lowering: list rest pattern emits two list decrefs" {

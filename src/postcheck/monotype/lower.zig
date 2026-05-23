@@ -2165,7 +2165,7 @@ const BodyContext = struct {
             .record_unbound => |fields| try self.bindRecordFieldsToMono(fields, mono_ty, conflict_message),
             .record => |record| try self.bindRecordFieldsToMono(record.fields, mono_ty, conflict_message),
             .tuple => |items| try self.bindTypeSpanToMono(items, self.monoTupleItems(mono_ty), conflict_message),
-            .nominal => |nominal| try self.bindNominalArgsToMono(nominal.args, mono_ty, conflict_message),
+            .nominal => |nominal| try self.bindNominalToMono(nominal, mono_ty, conflict_message),
             .function => |function| {
                 switch (self.builder.shapeContent(mono_ty)) {
                     .func => |mono_fn| {
@@ -2400,21 +2400,21 @@ const BodyContext = struct {
         }
     }
 
-    fn bindNominalArgsToMono(
+    fn bindNominalToMono(
         self: *BodyContext,
-        generic_args: []const checked.CheckedTypeId,
+        nominal: checked.CheckedNominalType,
         mono_ty: Type.TypeId,
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         switch (self.builder.program.types.get(mono_ty)) {
-            .named => |named| try self.bindTypeSpanToMono(generic_args, self.builder.program.types.span(named.args), conflict_message),
+            .named => |named| try self.bindTypeSpanToMono(nominal.args, self.builder.program.types.span(named.args), conflict_message),
             .list => |elem_ty| {
-                if (generic_args.len != 1) Common.invariant("template type substitution List arity mismatch");
-                try self.bindTypeToMono(generic_args[0], elem_ty, conflict_message);
+                if (nominal.args.len != 1) Common.invariant("template type substitution List arity mismatch");
+                try self.bindTypeToMono(nominal.args[0], elem_ty, conflict_message);
             },
             .box => |elem_ty| {
-                if (generic_args.len != 1) Common.invariant("template type substitution Box arity mismatch");
-                try self.bindTypeToMono(generic_args[0], elem_ty, conflict_message);
+                if (nominal.args.len != 1) Common.invariant("template type substitution Box arity mismatch");
+                try self.bindTypeToMono(nominal.args[0], elem_ty, conflict_message);
             },
             .primitive,
             .tag_union,
@@ -2424,7 +2424,11 @@ const BodyContext = struct {
             .erased,
             .zst,
             => {
-                if (generic_args.len != 0) Common.invariant("template type substitution expected a concrete nominal type with arguments");
+                if (nominal.is_opaque or nominal.representation == .opaque_without_backing) {
+                    if (nominal.args.len != 0) Common.invariant("template type substitution expected a concrete nominal type with arguments");
+                    return;
+                }
+                try self.bindTypeToMono(nominal.backing, mono_ty, conflict_message);
             },
         }
     }
@@ -3650,9 +3654,10 @@ const BodyContext = struct {
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
 
-            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);
-            const source_fn_key = call_ctx.view.types.rootKey(call.source_fn_ty_payload);
-            const callee = try self.fnTemplateForDirectCallWithMono(target, call.source_fn_ty_payload, source_fn_key, mono_fn_ty);
+            const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(source_fn_ty, self, checked_ret_ty, call.args);
+            const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
+            const callee = try self.fnTemplateForDirectCallWithMono(target, source_fn_ty, source_fn_key, mono_fn_ty);
             const fn_data = self.builder.functionShape(mono_fn_ty, "checked direct call target had a non-function type");
             try self.bindTypeToMono(checked_ret_ty, fn_data.ret, "checked direct call result type mapped one checked type to two monotype types");
             return .{
@@ -3672,6 +3677,22 @@ const BodyContext = struct {
                 .callee = try self.lowerExprAtType(call.func, fn_ty),
                 .args = try self.lowerExprSpanAtTypes(call.args, self.builder.program.types.span(fn_data.args)),
             } },
+        };
+    }
+
+    fn directCallInstantiationSourceFnType(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+        fallback: checked.CheckedTypeId,
+    ) checked.CheckedTypeId {
+        const raw = @intFromEnum(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        return switch (self.view.resolved_refs.records[raw].ref) {
+            .platform_required_proc => |required| required.procedure.source_fn_ty_payload orelse
+                Common.invariant("platform-required procedure call missing relation-owned requested function type"),
+            else => fallback,
         };
     }
 
@@ -4240,7 +4261,8 @@ const BodyContext = struct {
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
 
-        const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);
+        const source_fn_ty = self.directCallInstantiationSourceFnType(call.direct_target.?, call.source_fn_ty_payload);
+        const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(source_fn_ty, self, checked_ret_ty, call.args);
         return call_ctx.functionReturnType(mono_fn_ty);
     }
 
@@ -5440,21 +5462,40 @@ const BodyContext = struct {
         var index = patterns.len;
         while (index > 0) {
             index -= 1;
-            success = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .let_ = .{
-                .bind = patterns[index],
-                .value = values[index],
-                .rest = success,
-            } } });
+            success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], success, fallback, result_ty);
         }
         if (rest_pat) |pat| {
-            success = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .let_ = .{
-                .bind = pat,
-                .value = rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
-                .rest = success,
-            } } });
+            success = try self.wrapPatternMatch(
+                rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
+                scrutinee_ty,
+                pat,
+                success,
+                fallback,
+                result_ty,
+            );
         }
 
         return success;
+    }
+
+    fn wrapPatternMatch(
+        self: *BodyContext,
+        value: Ast.ExprId,
+        value_ty: Type.TypeId,
+        pattern: Ast.PatId,
+        success: Ast.ExprId,
+        miss: Ast.ExprId,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const wildcard = try self.builder.program.addPat(.{ .ty = value_ty, .data = .wildcard });
+        const branches = [_]Ast.Branch{
+            .{ .pat = pattern, .body = success },
+            .{ .pat = wildcard, .body = miss },
+        };
+        return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .match_ = .{
+            .scrutinee = value,
+            .branches = try self.builder.program.addBranchSpan(&branches),
+        } } });
     }
 
     fn listPatternItemIndex(
