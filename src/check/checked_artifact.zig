@@ -315,6 +315,11 @@ pub const PublishImportArtifact = struct {
     view: ImportedModuleView,
 };
 
+const CheckedImportViews = struct {
+    direct: []const PublishImportArtifact,
+    available: []const ImportedModuleView = &.{},
+};
+
 /// Checked artifacts that must be available to consume this module's public API.
 /// This is semantic visibility, not lexical import visibility.
 pub const PublicApiDependencies = struct {
@@ -1898,7 +1903,12 @@ pub const CheckedTypeStore = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         imports: []const PublishImportArtifact,
+        available: []const ImportedModuleView,
     ) Allocator.Error!CheckedTypePublication {
+        const import_views = CheckedImportViews{
+            .direct = imports,
+            .available = available,
+        };
         var roots = std.ArrayList(CheckedTypeRoot).empty;
         errdefer roots.deinit(allocator);
         var payloads = std.ArrayList(CheckedTypePayload).empty;
@@ -1926,10 +1936,10 @@ pub const CheckedTypeStore = struct {
             const tag = module.nodeTag(node);
             if (isExprNodeTag(tag)) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-                _ = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, module.exprType(expr_idx));
+                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, module.exprType(expr_idx));
                 switch (module.expr(expr_idx).data) {
                     .e_call => |call| if (call.constraint_fn_var) |constraint_fn_var| {
-                        _ = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, constraint_fn_var);
+                        _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, constraint_fn_var);
                     },
                     else => {},
                 }
@@ -1939,7 +1949,7 @@ pub const CheckedTypeStore = struct {
                     allocator,
                     module,
                     names,
-                    imports,
+                    import_views,
                     &roots,
                     &payloads,
                     &active,
@@ -1948,12 +1958,12 @@ pub const CheckedTypeStore = struct {
             } else if (isStatementNodeTag(tag)) {
                 const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
                 switch (module.getStatement(statement_idx)) {
-                    .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
+                    .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
                     .s_nominal_decl => |nominal| try appendCheckedNominalDeclarationFromStatement(
                         allocator,
                         module,
                         names,
-                        imports,
+                        import_views,
                         &nominal_declarations,
                         &roots,
                         &payloads,
@@ -1971,7 +1981,7 @@ pub const CheckedTypeStore = struct {
 
         for (module.requiresTypes()) |required_type| {
             const required_var = ModuleEnv.varFrom(required_type.type_anno);
-            const root = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, required_var);
+            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, required_var);
             const scheme_key = try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
@@ -1989,10 +1999,10 @@ pub const CheckedTypeStore = struct {
             }
         }
 
-        try appendStaticDispatchTypeRoots(allocator, module, names, imports, &roots, &payloads, &active);
+        try appendStaticDispatchTypeRoots(allocator, module, names, import_views, &roots, &payloads, &active);
 
         for (module.allDefs()) |def_idx| {
-            const root = try appendCheckedTypeRoot(allocator, module, names, imports, &roots, &payloads, &active, module.defType(def_idx));
+            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, module.defType(def_idx));
             const scheme_key = try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
@@ -2645,7 +2655,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     declarations: *std.ArrayList(CheckedNominalDeclaration),
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
@@ -2742,7 +2752,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -2936,7 +2946,7 @@ fn checkedTypeIdsFromDeclarationAnnoSpan(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -2957,7 +2967,7 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -2982,7 +2992,7 @@ fn checkedTagsFromDeclarationAnnoSpan(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3706,7 +3716,7 @@ fn appendStaticDispatchTypeRoots(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3776,7 +3786,7 @@ fn appendCheckedTypeRoot(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3789,7 +3799,7 @@ fn appendCheckedTypeRootWithRowDefault(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3895,7 +3905,7 @@ fn copyCheckedTypePayload(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3970,7 +3980,7 @@ fn copyCheckedFlatType(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -4015,7 +4025,7 @@ fn copyCheckedFunctionType(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -4034,7 +4044,7 @@ fn copyCheckedTypeRange(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -4053,7 +4063,7 @@ fn copyCheckedRecordFields(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -4079,7 +4089,7 @@ fn copyCheckedTags(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -4109,7 +4119,7 @@ fn copyCheckedStaticDispatchConstraints(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -4165,7 +4175,7 @@ fn checkedIdentTextEql(module: TypedCIR.Module, a: base.Ident.Idx, b: base.Ident
 fn checkedNominalRepresentationForSourceNominal(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     nominal: types.NominalType,
     builtin_nominal: ?CheckedBuiltinNominal,
 ) Allocator.Error!CheckedNominalRepresentationRef {
@@ -4188,7 +4198,7 @@ fn checkedNominalRepresentationForSourceNominal(
 
 fn importedNominalDeclarationRefForSourceNominal(
     names: *const canonical.CanonicalNameStore,
-    imports: []const PublishImportArtifact,
+    imports: CheckedImportViews,
     origin_module: canonical.ModuleNameId,
     type_name: canonical.TypeNameId,
 ) ImportedNominalDeclarationRef {
@@ -4196,12 +4206,29 @@ fn importedNominalDeclarationRefForSourceNominal(
     const type_text = names.typeNameText(type_name);
     var found: ?ImportedNominalDeclarationRef = null;
 
-    for (imports) |import| {
+    for (imports.direct) |import| {
         if (!importedViewModuleNameMatches(import.view, origin_text)) continue;
         for (import.view.checked_types.nominal_declarations) |declaration| {
             if (!Ident.textEql(import.view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
             const next = ImportedNominalDeclarationRef{
                 .artifact = import.key,
+                .declaration = declaration.id,
+            };
+            if (found) |existing| {
+                if (!checkedArtifactKeyEql(existing.artifact, next.artifact) or existing.declaration != next.declaration) {
+                    checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
+                }
+            } else {
+                found = next;
+            }
+        }
+    }
+    for (imports.available) |view| {
+        if (!importedViewModuleNameMatches(view, origin_text)) continue;
+        for (view.checked_types.nominal_declarations) |declaration| {
+            if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            const next = ImportedNominalDeclarationRef{
+                .artifact = view.key,
                 .declaration = declaration.id,
             };
             if (found) |existing| {
@@ -5422,7 +5449,7 @@ const CheckedBodyPayloadCopier = struct {
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
         return switch (expr) {
-            .e_num => |num| self.copyIntLiteral(expr_idx, num.value, num.kind),
+            .e_num => |num| copyIntLiteral(expr_idx, num.value, num.kind),
             .e_frac_f32 => |frac| self.copyFracLiteral(expr_idx, .{ .f32 = frac.value }, frac.has_suffix),
             .e_frac_f64 => |frac| self.copyFracLiteral(expr_idx, .{ .f64 = frac.value }, frac.has_suffix),
             .e_dec => |dec| self.copyFracLiteral(expr_idx, .{ .dec = dec.value }, dec.has_suffix),
@@ -5584,12 +5611,10 @@ const CheckedBodyPayloadCopier = struct {
     }
 
     fn copyIntLiteral(
-        self: *const @This(),
         _: CIR.Expr.Idx,
         value: CIR.IntValue,
         kind: CIR.NumKind,
     ) CheckedExprData {
-        _ = self;
         return .{ .num = .{ .value = value, .kind = kind } };
     }
 
@@ -15550,7 +15575,7 @@ pub fn publishFromTypedModule(
 
     const owner_artifact = artifactRef(artifact_key);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports);
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports, inputs.available_artifacts);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     try applyPlatformForClauseSubstitutions(
@@ -15913,7 +15938,7 @@ fn expectProvidedExportKind(
     var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
     defer platform_required_declarations.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &.{});
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &.{}, &.{});
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 

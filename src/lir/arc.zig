@@ -1541,6 +1541,7 @@ const ArcTest = struct {
     box_str: layout_mod.Idx,
     pair_str: layout_mod.Idx,
     tag_str: layout_mod.Idx,
+    next_join_point: u32 = 0,
 
     fn init(allocator: std.mem.Allocator) !ArcTest {
         var layouts = try layout_mod.Store.init(allocator, .u64);
@@ -1577,6 +1578,12 @@ const ArcTest = struct {
 
     fn local(self: *ArcTest, layout_idx: layout_mod.Idx) !LIR.LocalId {
         return try self.store.addLocal(.{ .layout_idx = layout_idx });
+    }
+
+    fn freshJoinPointId(self: *ArcTest) LIR.JoinPointId {
+        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        self.next_join_point += 1;
+        return id;
     }
 
     fn span(self: *ArcTest, locals: []const LIR.LocalId) !LIR.LocalSpan {
@@ -2355,7 +2362,7 @@ test "RC join param move excludes old source from loop body ownership" {
     const source = try f.local(f.list_i64);
     const state = try f.local(f.list_i64);
     const result = try f.local(.i64);
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id = f.freshJoinPointId();
 
     const ret = try f.ret(result);
     const body = try f.assignI64(result, 1, ret);
@@ -2381,7 +2388,7 @@ test "RC switch continuation analysis stops at join ownership boundary" {
     const cond = try f.local(.i64);
     const source = try f.local(f.list_i64);
     const state = try f.local(f.list_i64);
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id = f.freshJoinPointId();
 
     const ret = try f.ret(state);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });

@@ -73,10 +73,15 @@ const FnTemplateContext = struct {
         switch (fn_def) {
             .local_template,
             .imported_template,
-            .local_hosted,
-            .imported_hosted,
             .checked_generated,
             => |template| hashProcTemplate(hasher, template),
+            .local_hosted,
+            .imported_hosted,
+            => |hosted| {
+                hashProcTemplate(hasher, hosted.template);
+                std.hash.autoHash(hasher, @intFromEnum(hosted.external_symbol_name));
+                std.hash.autoHash(hasher, hosted.dispatch_index);
+            },
             .nested => |nested| {
                 hashProcTemplate(hasher, nested.owner);
                 std.hash.autoHash(hasher, @intFromEnum(nested.site));
@@ -98,7 +103,7 @@ const NestedDefMap = []?Ast.FnId;
 
 const MonoFnBody = struct {
     args: Mono.Span(Mono.TypedLocal),
-    body: Mono.ExprId,
+    body: Mono.FnBody,
 };
 
 const FunctionMaps = struct {
@@ -172,7 +177,7 @@ const Lifter = struct {
         for (self.input.nested_defs.items, 0..) |def, index| {
             const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.output.fns.items.len)));
             try self.output.fns.append(self.allocator, undefined);
-            try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
+            try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = .{ .roc = def.body } });
             self.nested_def_map[index] = fn_id;
             try self.nested_fn_ids.put(fn_id, {});
             try self.registerFnTemplate(def.fn_def, fn_id);
@@ -208,7 +213,10 @@ const Lifter = struct {
         var bound = BoundSet.init(self.allocator);
         defer bound.deinit();
         try bindTypedLocals(self.input, &bound, self.input.typedLocalSpan(def.args));
-        try captures.collectExpr(def.body, &bound);
+        switch (def.body) {
+            .roc => |body| try captures.collectExpr(body, &bound),
+            .hosted => {},
+        }
 
         if (captures.items.items.len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
@@ -216,7 +224,10 @@ const Lifter = struct {
 
         const saved_maps = self.pushFunctionMaps();
         defer self.popFunctionMaps(saved_maps);
-        const body = try self.lowerExpr(def.body);
+        const body: Ast.FnBody = switch (def.body) {
+            .roc => |body| .{ .roc = try self.lowerExpr(body) },
+            .hosted => .hosted,
+        };
         const args = try self.copyTypedLocalSpan(def.args);
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
@@ -249,7 +260,7 @@ const Lifter = struct {
             .source = def.fn_def,
             .args = args,
             .captures = capture_span,
-            .body = body,
+            .body = .{ .roc = body },
             .ret = def.ret,
         };
         try self.initialized_fns.put(fn_id, {});
@@ -369,7 +380,7 @@ const Lifter = struct {
         if (self.nested_fn_ids.contains(fn_id)) return .{ .fn_ref = fn_id };
         if (self.initialized_fns.contains(fn_id)) return .{ .fn_ref = fn_id };
 
-        try self.setFnBody(fn_id, .{ .args = lambda.args, .body = lambda.body });
+        try self.setFnBody(fn_id, .{ .args = lambda.args, .body = .{ .roc = lambda.body } });
         var active = self.initFnTemplateActiveSet();
         defer active.deinit();
         var captures = CaptureSet.init(self, &active);
@@ -388,7 +399,7 @@ const Lifter = struct {
             .source = lambda.source,
             .args = try self.copyTypedLocalSpan(lambda.args),
             .captures = capture_span,
-            .body = body,
+            .body = .{ .roc = body },
             .ret = functionRet(&self.output.types, ty),
         };
         try self.initialized_fns.put(fn_id, {});
@@ -760,7 +771,10 @@ const CaptureSet = struct {
         var body_bound = BoundSet.init(self.allocator);
         defer body_bound.deinit();
         try bindTypedLocals(self.lifter.input, &body_bound, self.lifter.input.typedLocalSpan(body.args));
-        try local_captures.collectExpr(body.body, &body_bound);
+        switch (body.body) {
+            .roc => |expr| try local_captures.collectExpr(expr, &body_bound),
+            .hosted => {},
+        }
 
         for (local_captures.items.items) |capture| {
             try self.addIfFree(capture.local, caller_bound);

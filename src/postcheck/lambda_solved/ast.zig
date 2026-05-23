@@ -14,7 +14,13 @@ pub const DefId = enum(u32) { _ };
 pub const Def = struct {
     symbol: Common.Symbol,
     ty: Type.TypeVarId,
-    body: Lifted.ExprId,
+    body: FnBody,
+};
+
+/// Body availability for a Lambda Solved function definition.
+pub const FnBody = union(enum) {
+    roc: Lifted.ExprId,
+    hosted,
 };
 
 /// Runtime layout requested for a checked data value.

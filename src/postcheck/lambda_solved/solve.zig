@@ -104,14 +104,16 @@ const Solver = struct {
         try self.program.fn_tys.ensureTotalCapacity(self.allocator, self.program.lifted.fns.items.len);
         try self.program.defs.ensureTotalCapacity(self.allocator, self.program.lifted.fns.items.len);
 
-        for (self.program.lifted.fns.items, 0..) |fn_, index| {
-            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            const fn_ty = try self.functionType(fn_id, fn_);
+        for (self.program.lifted.fns.items) |fn_| {
+            const fn_ty = try self.functionType(fn_);
             try self.program.fn_tys.append(self.allocator, fn_ty);
             try self.program.defs.append(self.allocator, .{
                 .symbol = fn_.symbol,
                 .ty = fn_ty,
-                .body = fn_.body,
+                .body = switch (fn_.body) {
+                    .roc => |body| .{ .roc = body },
+                    .hosted => .hosted,
+                },
             });
         }
 
@@ -154,9 +156,7 @@ const Solver = struct {
         }
     }
 
-    fn functionType(self: *Solver, fn_id: Lifted.FnId, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
-        _ = fn_id;
-
+    fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
         const arg_locals = self.program.lifted.typedLocalSpan(fn_.args);
         const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
         defer self.allocator.free(args);
@@ -209,8 +209,13 @@ const Solver = struct {
         try self.return_tys.append(self.allocator, func.ret);
         defer _ = self.return_tys.pop();
 
-        const body_ty = try self.inferExpr(fn_.body);
-        try self.unify(body_ty, func.ret);
+        switch (fn_.body) {
+            .roc => |body| {
+                const body_ty = try self.inferExpr(body);
+                try self.unify(body_ty, func.ret);
+            },
+            .hosted => {},
+        }
     }
 
     fn closeUnfilledCallableSlots(self: *Solver) Allocator.Error!void {
@@ -723,26 +728,26 @@ const Solver = struct {
     ) Allocator.Error!void {
         switch (op) {
             .box_box => {
-                self.expectLowLevelArity(op, args, 1);
+                expectLowLevelArity(op, args, 1);
                 try self.unify(args[0], try self.boxElem(expected));
                 try self.markErasedCallablesReachedByType(args[0]);
             },
             .box_unbox => {
-                self.expectLowLevelArity(op, args, 1);
+                expectLowLevelArity(op, args, 1);
                 try self.unify(expected, try self.boxElem(args[0]));
                 try self.markErasedCallablesReachedByType(expected);
             },
             .list_get_unsafe => {
-                self.expectLowLevelArity(op, args, 2);
+                expectLowLevelArity(op, args, 2);
                 try self.unify(expected, try self.listElem(args[0]));
             },
             .list_append_unsafe => {
-                self.expectLowLevelArity(op, args, 2);
+                expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
                 try self.unify(args[1], try self.listElem(expected));
             },
             .list_concat => {
-                self.expectLowLevelArity(op, args, 2);
+                expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
                 try self.unify(expected, args[1]);
             },
@@ -754,22 +759,22 @@ const Solver = struct {
             .list_drop_first,
             .list_drop_last,
             => {
-                self.expectLowLevelArity(op, args, 2);
+                expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
             },
             .list_release_excess_capacity,
             .list_reverse,
             => {
-                self.expectLowLevelArity(op, args, 1);
+                expectLowLevelArity(op, args, 1);
                 try self.unify(expected, args[0]);
             },
             .list_set => {
-                self.expectLowLevelArity(op, args, 3);
+                expectLowLevelArity(op, args, 3);
                 try self.unify(expected, args[0]);
                 try self.unify(args[2], try self.listElem(expected));
             },
             .list_prepend => {
-                self.expectLowLevelArity(op, args, 2);
+                expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[1]);
                 try self.unify(args[0], try self.listElem(expected));
             },
@@ -778,12 +783,10 @@ const Solver = struct {
     }
 
     fn expectLowLevelArity(
-        self: *Solver,
         op: can.CIR.Expr.LowLevel,
         args: []const Type.TypeVarId,
         expected: usize,
     ) void {
-        _ = self;
         if (args.len != expected) {
             std.debug.panic(
                 "postcheck invariant violated: low-level op {s} had {d} args, expected {d}",

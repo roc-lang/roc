@@ -3,7 +3,6 @@
 const std = @import("std");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
-const Common = @import("../common.zig");
 
 /// Monotype function template paired with its requested function type.
 pub const Spec = struct {
@@ -26,5 +25,4 @@ pub const Queue = struct {
 
 test "monotype specialize declarations are referenced" {
     std.testing.refAllDecls(@This());
-    _ = Common.Symbol;
 }

@@ -285,34 +285,32 @@ const StaticDataBuilder = struct {
             .opaque_ptr,
             => staticDataInvariant("unsupported scalar layout reached scalar static data export"),
             .int => switch (info.int_precision orelse unreachable) {
-                .u8 => self.writeInt(u8, bytes, base_offset, scalar, .u8),
-                .i8 => self.writeInt(i8, bytes, base_offset, scalar, .i8),
-                .u16 => self.writeInt(u16, bytes, base_offset, scalar, .u16),
-                .i16 => self.writeInt(i16, bytes, base_offset, scalar, .i16),
-                .u32 => self.writeInt(u32, bytes, base_offset, scalar, .u32),
-                .i32 => self.writeInt(i32, bytes, base_offset, scalar, .i32),
-                .u64 => self.writeInt(u64, bytes, base_offset, scalar, .u64),
-                .i64 => self.writeInt(i64, bytes, base_offset, scalar, .i64),
-                .u128 => self.writeInt(u128, bytes, base_offset, scalar, .u128),
-                .i128 => self.writeInt(i128, bytes, base_offset, scalar, .i128),
+                .u8 => writeInt(u8, bytes, base_offset, scalar, .u8),
+                .i8 => writeInt(i8, bytes, base_offset, scalar, .i8),
+                .u16 => writeInt(u16, bytes, base_offset, scalar, .u16),
+                .i16 => writeInt(i16, bytes, base_offset, scalar, .i16),
+                .u32 => writeInt(u32, bytes, base_offset, scalar, .u32),
+                .i32 => writeInt(i32, bytes, base_offset, scalar, .i32),
+                .u64 => writeInt(u64, bytes, base_offset, scalar, .u64),
+                .i64 => writeInt(i64, bytes, base_offset, scalar, .i64),
+                .u128 => writeInt(u128, bytes, base_offset, scalar, .u128),
+                .i128 => writeInt(i128, bytes, base_offset, scalar, .i128),
             },
             .frac => switch (info.frac_precision orelse unreachable) {
-                .f32 => self.writeInt(u32, bytes, base_offset, scalar, .f32_bits),
-                .f64 => self.writeInt(u64, bytes, base_offset, scalar, .f64_bits),
-                .dec => self.writeInt(i128, bytes, base_offset, scalar, .dec_bits),
+                .f32 => writeInt(u32, bytes, base_offset, scalar, .f32_bits),
+                .f64 => writeInt(u64, bytes, base_offset, scalar, .f64_bits),
+                .dec => writeInt(i128, bytes, base_offset, scalar, .dec_bits),
             },
         }
     }
 
     fn writeInt(
-        self: *StaticDataBuilder,
         comptime T: type,
         bytes: []u8,
         base_offset: u32,
         scalar: CheckedModule.ConstScalar,
         comptime field: std.meta.FieldEnum(CheckedModule.ConstScalar),
     ) void {
-        _ = self;
         const value = switch (field) {
             inline else => |tag| switch (scalar) {
                 tag => |value| value,
@@ -520,7 +518,7 @@ const StaticDataBuilder = struct {
             .tag => |tag| tag,
             else => staticDataInvariant("tag-union const plan received non-tag ConstStore node"),
         };
-        const variant_index = self.variantIndexForTag(source, variants, tag.tag_name);
+        const variant_index = variantIndexForTag(source, variants, tag.tag_name);
         const variant = variants[variant_index];
         if (variant.payloads.len != tag.payloads.len) staticDataInvariant("tag const plan payload count differed from ConstStore node");
 
@@ -561,12 +559,10 @@ const StaticDataBuilder = struct {
     }
 
     fn variantIndexForTag(
-        self: *StaticDataBuilder,
         source: ConstModule,
         variants: []const lir.Program.ConstTagVariant,
         tag_name: check.CheckedNames.TagNameId,
     ) usize {
-        _ = self;
         const wanted = source.names.tagLabelText(tag_name);
         for (variants, 0..) |variant, index| {
             if (std.mem.eql(u8, wanted, variant.name)) return index;

@@ -61,7 +61,7 @@ pub const Writer = struct {
             .compile_time_constant => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
-                .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, root.ret_layout, value) },
+                .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
                 else => writerInvariant("compile-time callable root did not have a function const plan"),
             },
             else => writerInvariant("non compile-time root reached ConstStore writer"),
@@ -111,7 +111,7 @@ pub const Writer = struct {
                 break :blk try self.module.const_store.append(.{ .fn_value = fn_id });
             },
             .erased_fn => |set| blk: {
-                const fn_id = try self.storeErasedFn(set, layout_idx, value);
+                const fn_id = try self.storeErasedFn(set, value);
                 break :blk try self.module.const_store.append(.{ .fn_value = fn_id });
             },
         };
@@ -305,6 +305,7 @@ pub const Writer = struct {
         return try self.module.const_store.appendFn(.{
             .fn_def = variant.template.fn_def,
             .source_fn_ty = variant.template.source_fn_ty,
+            .source_fn_key = variant.template.source_fn_key,
             .captures = captures,
         });
     }
@@ -312,10 +313,8 @@ pub const Writer = struct {
     fn storeErasedFn(
         self: *Writer,
         set_id: LirProgram.ErasedFnsId,
-        layout_idx: layout.Idx,
         value: Value,
     ) Allocator.Error!checked.ConstFnId {
-        _ = layout_idx;
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
         const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
@@ -327,6 +326,7 @@ pub const Writer = struct {
             return try self.module.const_store.appendFn(.{
                 .fn_def = entry.template.fn_def,
                 .source_fn_ty = entry.template.source_fn_ty,
+                .source_fn_key = entry.template.source_fn_key,
                 .captures = captures,
             });
         }

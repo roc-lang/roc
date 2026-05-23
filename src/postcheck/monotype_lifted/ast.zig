@@ -184,8 +184,14 @@ pub const Fn = struct {
     source: ?Mono.FnTemplate = null,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
-    body: ExprId,
+    body: FnBody,
     ret: Type.TypeId,
+};
+
+/// Body availability for a lifted function.
+pub const FnBody = union(enum) {
+    roc: ExprId,
+    hosted,
 };
 
 /// Root request bound to a lifted function.

@@ -25,8 +25,7 @@ pub const LocalId = enum(u32) { _ };
 pub const StringLiteralId = enum(u32) { _ };
 
 /// Slice descriptor over one of the program side arrays.
-pub fn Span(comptime T: type) type {
-    _ = T;
+pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
         len: u32,
@@ -42,9 +41,16 @@ pub const FnDef = union(enum) {
     local_template: names.ProcTemplate,
     imported_template: names.ProcTemplate,
     nested: NestedFn,
-    local_hosted: names.ProcTemplate,
-    imported_hosted: names.ProcTemplate,
+    local_hosted: HostedFn,
+    imported_hosted: HostedFn,
     checked_generated: names.ProcTemplate,
+};
+
+/// Hosted function metadata published by checking and carried through lowering.
+pub const HostedFn = struct {
+    template: names.ProcTemplate,
+    external_symbol_name: names.ExternalSymbolNameId,
+    dispatch_index: u32,
 };
 
 /// Nested function site inside an owner function template.
@@ -95,19 +101,25 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
             writeU32(hasher, @intFromEnum(nested.site));
             writeBytes(hasher, &nested.context_fn_key.bytes);
         },
-        .local_hosted => |template| {
+        .local_hosted => |hosted| {
             writeBytes(hasher, "local_hosted");
-            writeProcTemplate(hasher, template);
+            writeHostedFn(hasher, hosted);
         },
-        .imported_hosted => |template| {
+        .imported_hosted => |hosted| {
             writeBytes(hasher, "imported_hosted");
-            writeProcTemplate(hasher, template);
+            writeHostedFn(hasher, hosted);
         },
         .checked_generated => |template| {
             writeBytes(hasher, "checked_generated");
             writeProcTemplate(hasher, template);
         },
     }
+}
+
+fn writeHostedFn(hasher: *std.crypto.hash.sha2.Sha256, hosted: HostedFn) void {
+    writeProcTemplate(hasher, hosted.template);
+    writeU32(hasher, @intFromEnum(hosted.external_symbol_name));
+    writeU32(hasher, hosted.dispatch_index);
 }
 
 fn writeProcTemplate(hasher: *std.crypto.hash.sha2.Sha256, template: names.ProcTemplate) void {
@@ -334,8 +346,14 @@ pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
     args: Span(TypedLocal),
-    body: ExprId,
+    body: FnBody,
     ret: Type.TypeId,
+};
+
+/// Body availability for a top-level or generated Monotype definition.
+pub const FnBody = union(enum) {
+    roc: ExprId,
+    hosted,
 };
 
 /// Nested function definition discovered before lifting.

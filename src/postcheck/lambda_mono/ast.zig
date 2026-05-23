@@ -30,8 +30,7 @@ pub const LocalId = enum(u32) { _ };
 pub const StringLiteralId = Lifted.StringLiteralId;
 
 /// Slice descriptor over one of the program side arrays.
-pub fn Span(comptime T: type) type {
-    _ = T;
+pub fn Span(comptime _: type) type {
     return extern struct {
         start: u32,
         len: u32,
@@ -241,8 +240,14 @@ pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
     args: Span(TypedLocal),
-    body: ExprId,
+    body: FnBody,
     ret: Type.TypeId,
+};
+
+/// Body availability for a Lambda Mono function.
+pub const FnBody = union(enum) {
+    roc: ExprId,
+    hosted,
 };
 
 /// Root request bound to a Lambda Mono function.

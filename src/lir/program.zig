@@ -39,6 +39,7 @@ pub const FnResult = union(enum) {
 pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
 };
 
 /// Capture field copied from a checked binder into a callable payload.

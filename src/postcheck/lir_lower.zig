@@ -215,9 +215,23 @@ const Lowerer = struct {
                 .body = null,
                 .ret_layout = try self.layoutOfType(fn_.ret),
                 .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
+                .hosted = hostedProcForFn(fn_),
             });
             self.fn_map[index] = proc_id;
         }
+    }
+
+    fn hostedProcForFn(fn_: LambdaMono.Fn) ?LIR.HostedProc {
+        const source = fn_.source orelse return null;
+        return switch (source.fn_def) {
+            .local_hosted,
+            .imported_hosted,
+            => |hosted| .{
+                .external_symbol_name = hosted.external_symbol_name,
+                .dispatch_index = hosted.dispatch_index,
+            },
+            else => null,
+        };
     }
 
     fn usesErasedCallableAbi(self: *Lowerer, fn_: LambdaMono.Fn) bool {
@@ -232,11 +246,20 @@ const Lowerer = struct {
     fn lowerAllFns(self: *Lowerer) Common.LowerError!void {
         for (self.program.fns.items, 0..) |fn_, index| {
             const proc_id = self.fn_map[index];
-            const saved_ret_ty = self.current_ret_ty;
-            self.current_ret_ty = fn_.ret;
-            const body = try self.lowerExprReturn(fn_.body, fn_.ret);
-            self.current_ret_ty = saved_ret_ty;
-            self.result.store.getProcSpecPtr(proc_id).body = body;
+            switch (fn_.body) {
+                .roc => |body_expr| {
+                    const saved_ret_ty = self.current_ret_ty;
+                    self.current_ret_ty = fn_.ret;
+                    const body = try self.lowerExprReturn(body_expr, fn_.ret);
+                    self.current_ret_ty = saved_ret_ty;
+                    self.result.store.getProcSpecPtr(proc_id).body = body;
+                },
+                .hosted => {
+                    if (self.result.store.getProcSpec(proc_id).hosted == null) {
+                        Common.invariant("hosted Lambda Mono function reached LIR without hosted metadata");
+                    }
+                },
+            }
         }
     }
 
@@ -845,7 +868,7 @@ const Lowerer = struct {
         const backing_ty = self.nominalBackingType(nominal_ty, backing);
         const backing_layout = try self.layoutOfType(backing_ty);
         const backing_local = try self.addLocalForLayout(backing_layout);
-        const assign = try self.assignNominalBoundary(target, backing_local, backing_ty, backing_layout, next);
+        const assign = try self.assignNominalBoundary(target, backing_local, backing_layout, next);
         return try self.lowerExprInto(backing_local, backing, assign);
     }
 
@@ -861,11 +884,9 @@ const Lowerer = struct {
         self: *Lowerer,
         target: LIR.LocalId,
         backing_local: LIR.LocalId,
-        backing_ty: Type.TypeId,
         backing_layout: layout.Idx,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        _ = backing_ty;
         return try self.assignBoxBoundary(target, backing_local, backing_layout, next);
     }
 
@@ -1245,40 +1266,86 @@ const Lowerer = struct {
         return try self.lowerExprInto(cond, child, expect_stmt);
     }
 
+    const PatternMiss = struct {
+        join_id: LIR.JoinPointId,
+    };
+
     fn lowerBranchChain(self: *Lowerer, scrutinee: LIR.LocalId, branches: []const LambdaMono.Branch, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = branches.len;
         while (i > 0) {
             i -= 1;
+            const next_branch = current;
+            const needs_miss_join = branches[i].guard != null or self.patternCanMiss(branches[i].pat);
+            const miss = if (needs_miss_join)
+                PatternMiss{ .join_id = self.freshJoinPointId() }
+            else
+                null;
             const branch_body = try self.lowerExprInto(target, branches[i].body, next);
             const guarded = if (branches[i].guard) |guard| blk: {
                 const guard_local = try self.addTemp(self.expr(guard).ty);
-                const guard_switch = try self.boolSwitch(guard_local, branch_body, current, next);
+                const guard_switch = try self.boolSwitch(guard_local, branch_body, try self.patternMissJump(miss), next);
                 break :blk try self.lowerExprInto(guard_local, guard, guard_switch);
             } else branch_body;
-            current = try self.lowerPatternThen(branches[i].pat, scrutinee, guarded, current, next);
+            const branch_start = try self.lowerPatternThen(branches[i].pat, scrutinee, guarded, miss, next);
+            current = if (miss) |miss_info|
+                try self.result.store.addCFStmt(.{ .join = .{
+                    .id = miss_info.join_id,
+                    .params = LIR.LocalSpan.empty(),
+                    .body = next_branch,
+                    .remainder = branch_start,
+                } })
+            else
+                branch_start;
         }
         return current;
     }
 
-    fn lowerPatternThen(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId, continuation: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn patternMissJump(self: *Lowerer, miss: ?PatternMiss) Common.LowerError!LIR.CFStmtId {
+        const miss_info = miss orelse Common.invariant("refutable pattern lowering had no miss target");
+        return try self.result.store.addCFStmt(.{ .jump = .{ .target = miss_info.join_id } });
+    }
+
+    fn patternCanMiss(self: *Lowerer, pat_id: LambdaMono.PatId) bool {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
+            .bind, .wildcard => false,
+            .as => |as| self.patternCanMiss(as.pattern),
+            .record => |fields| blk: {
+                for (self.program.recordDestructSpan(fields)) |field| {
+                    if (self.patternCanMiss(field.pattern)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tuple => |items| blk: {
+                for (self.program.patSpan(items)) |item| {
+                    if (self.patternCanMiss(item)) break :blk true;
+                }
+                break :blk false;
+            },
+            .nominal => |inner| self.patternCanMiss(inner),
+            .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => true,
+        };
+    }
+
+    fn lowerPatternThen(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, on_match: LIR.CFStmtId, miss: ?PatternMiss, continuation: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const pat_data = self.pat(pat_id);
         return switch (pat_data.data) {
             .bind, .wildcard => try self.bindPattern(pat_id, source, on_match),
             .as => |as| blk: {
-                const tested = try self.lowerPatternThen(as.pattern, source, on_match, on_miss, continuation);
+                const tested = try self.lowerPatternThen(as.pattern, source, on_match, miss, continuation);
                 break :blk try self.assignLocal(try self.localFor(as.local), source, tested);
             },
-            .record => |fields| try self.lowerRecordPatternThen(pat_data.ty, fields, source, on_match, on_miss, continuation),
-            .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, on_miss, continuation),
-            .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, on_miss, continuation),
-            .tag => |tag| try self.lowerTagPatternThen(pat_data.ty, tag.name, tag.payloads, source, on_match, on_miss, continuation),
-            .callable => |callable| try self.lowerCallablePatternThen(pat_data.ty, callable.variant, callable.payload, source, on_match, on_miss, continuation),
-            .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .int_lit = value }, on_match, on_miss, continuation),
-            .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .dec_lit = value }, on_match, on_miss, continuation),
-            .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f32_lit = value }, on_match, on_miss, continuation),
-            .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f64_lit = value }, on_match, on_miss, continuation),
-            .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .str_lit = value }, on_match, on_miss, continuation),
+            .record => |fields| try self.lowerRecordPatternThen(pat_data.ty, fields, source, on_match, miss, continuation),
+            .tuple => |items| try self.lowerTuplePatternThen(items, source, on_match, miss, continuation),
+            .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, miss, continuation),
+            .tag => |tag| try self.lowerTagPatternThen(pat_data.ty, tag.name, tag.payloads, source, on_match, miss, continuation),
+            .callable => |callable| try self.lowerCallablePatternThen(pat_data.ty, callable.variant, callable.payload, source, on_match, miss, continuation),
+            .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .int_lit = value }, on_match, miss, continuation),
+            .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .dec_lit = value }, on_match, miss, continuation),
+            .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f32_lit = value }, on_match, miss, continuation),
+            .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f64_lit = value }, on_match, miss, continuation),
+            .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .str_lit = value }, on_match, miss, continuation),
         };
     }
 
@@ -1296,12 +1363,12 @@ const Lowerer = struct {
         ty: Type.TypeId,
         literal: LiteralPattern,
         on_match: LIR.CFStmtId,
-        on_miss: LIR.CFStmtId,
+        miss: ?PatternMiss,
         continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const lit_local = try self.addTemp(ty);
         const eq_local = try self.addLocalForLayout(.bool);
-        const switch_stmt = try self.boolSwitch(eq_local, on_match, on_miss, continuation);
+        const switch_stmt = try self.boolSwitch(eq_local, on_match, try self.patternMissJump(miss), continuation);
         const compare = try self.lowerEqLocalsInto(eq_local, source, lit_local, ty, false, switch_stmt);
         return try self.lowerLiteralInto(lit_local, literal, compare);
     }
@@ -1343,12 +1410,12 @@ const Lowerer = struct {
         payloads: LambdaMono.Span(LambdaMono.PatId),
         source: LIR.LocalId,
         on_match: LIR.CFStmtId,
-        on_miss: LIR.CFStmtId,
+        miss: ?PatternMiss,
         continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const variant_index = self.tagIndex(ty, name);
-        const bind_payloads = try self.matchTagPayloadPatterns(variant_index, payloads, source, on_match, on_miss, continuation);
-        return try self.discriminantSwitch(source, variant_index, bind_payloads, on_miss, continuation);
+        const bind_payloads = try self.matchTagPayloadPatterns(variant_index, payloads, source, on_match, miss, continuation);
+        return try self.discriminantSwitch(source, variant_index, bind_payloads, try self.patternMissJump(miss), continuation);
     }
 
     fn lowerCallablePatternThen(
@@ -1358,13 +1425,13 @@ const Lowerer = struct {
         payload: ?LambdaMono.PatId,
         source: LIR.LocalId,
         on_match: LIR.CFStmtId,
-        on_miss: LIR.CFStmtId,
+        miss: ?PatternMiss,
         continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const variant_index = self.callableVariantIndex(ty, variant);
         const bind_payload = if (payload) |payload_pat| blk: {
             const payload_local = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(source).layout_idx, variant_index));
-            const bound = try self.lowerPatternThen(payload_pat, payload_local, on_match, on_miss, continuation);
+            const bound = try self.lowerPatternThen(payload_pat, payload_local, on_match, miss, continuation);
             break :blk if (self.isZstLocal(payload_local))
                 bound
             else
@@ -1376,9 +1443,9 @@ const Lowerer = struct {
                         .tag_discriminant = variant_index,
                     } },
                     .next = bound,
-                } });
+                    } });
         } else on_match;
-        return try self.discriminantSwitch(source, variant_index, bind_payload, on_miss, continuation);
+        return try self.discriminantSwitch(source, variant_index, bind_payload, try self.patternMissJump(miss), continuation);
     }
 
     fn lowerRecordPatternThen(
@@ -1387,7 +1454,7 @@ const Lowerer = struct {
         span: LambdaMono.Span(LambdaMono.RecordDestruct),
         source: LIR.LocalId,
         on_match: LIR.CFStmtId,
-        on_miss: LIR.CFStmtId,
+        miss: ?PatternMiss,
         continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         var current = on_match;
@@ -1398,7 +1465,7 @@ const Lowerer = struct {
             const field_index = self.recordFieldIndex(ty, destructs[i].name);
             const field_ty = self.recordFields(ty)[@as(usize, @intCast(field_index))].ty;
             const field_local = try self.addTemp(field_ty);
-            current = try self.lowerPatternThen(destructs[i].pattern, field_local, current, on_miss, continuation);
+            current = try self.lowerPatternThen(destructs[i].pattern, field_local, current, miss, continuation);
             if (!self.isZstLocal(field_local)) {
                 current = try self.assignRefRead(
                     field_local,
@@ -1416,7 +1483,7 @@ const Lowerer = struct {
         span: LambdaMono.Span(LambdaMono.PatId),
         source: LIR.LocalId,
         on_match: LIR.CFStmtId,
-        on_miss: LIR.CFStmtId,
+        miss: ?PatternMiss,
         continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         var current = on_match;
@@ -1426,7 +1493,7 @@ const Lowerer = struct {
             i -= 1;
             const item_pat = self.pat(items[i]);
             const item_local = try self.addTemp(item_pat.ty);
-            current = try self.lowerPatternThen(items[i], item_local, current, on_miss, continuation);
+            current = try self.lowerPatternThen(items[i], item_local, current, miss, continuation);
             if (!self.isZstLocal(item_local)) {
                 const field_index: u16 = @intCast(i);
                 current = try self.assignRefRead(
@@ -1502,7 +1569,7 @@ const Lowerer = struct {
         payload_span: LambdaMono.Span(LambdaMono.PatId),
         source: LIR.LocalId,
         on_match: LIR.CFStmtId,
-        on_miss: LIR.CFStmtId,
+        miss: ?PatternMiss,
         continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         var current = on_match;
@@ -1512,7 +1579,7 @@ const Lowerer = struct {
             i -= 1;
             const payload_pat = self.pat(payloads[i]);
             const payload_local = try self.addTemp(payload_pat.ty);
-            current = try self.lowerPatternThen(payloads[i], payload_local, current, on_miss, continuation);
+            current = try self.lowerPatternThen(payloads[i], payload_local, current, miss, continuation);
             if (!self.isZstLocal(payload_local)) {
                 if (payloads.len == 1) {
                     current = try self.assignRefRead(
@@ -2367,6 +2434,7 @@ fn constFnTemplateFromMono(template: Mono.FnTemplate) LirProgram.FnTemplate {
     return .{
         .fn_def = constFnDefFromMono(template.fn_def),
         .source_fn_ty = template.source_fn_ty,
+        .source_fn_key = template.source_fn_key,
     };
 }
 
@@ -2378,8 +2446,8 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
             .owner = nested.owner,
             .site = nested.site,
         } },
-        .local_hosted => |template| .{ .local_hosted = template },
-        .imported_hosted => |template| .{ .imported_hosted = template },
+        .local_hosted => |hosted| .{ .local_hosted = hosted.template },
+        .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },
         .checked_generated => |template| .{ .checked_generated = template },
     };
 }

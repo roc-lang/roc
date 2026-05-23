@@ -252,6 +252,7 @@ pub const Interpreter = struct {
     failed_call_stack: std.ArrayList(LirProcSpecId),
 
     const JoinPointMap = std.AutoHashMapUnmanaged(u32, JoinPointInfo);
+    const VisitedStmtSet = std.AutoHashMapUnmanaged(u32, void);
 
     const JoinPointInfo = struct {
         params: LocalSpan,
@@ -1387,7 +1388,9 @@ pub const Interpreter = struct {
             .ret_layout = proc_spec.ret_layout,
             .locals = locals,
         };
-        try self.collectJoinPoints(&frame.join_points, self.requireProcBody(proc_id, proc_spec));
+        var visited_stmts: VisitedStmtSet = .{};
+        defer visited_stmts.deinit(self.evalAllocator());
+        try self.collectJoinPoints(&frame.join_points, &visited_stmts, self.requireProcBody(proc_id, proc_spec));
         return frame;
     }
 
@@ -1398,37 +1401,58 @@ pub const Interpreter = struct {
         );
     }
 
-    fn collectJoinPoints(self: *LirInterpreter, join_points: *JoinPointMap, stmt_id: CFStmtId) Error!void {
+    fn collectJoinPoints(
+        self: *LirInterpreter,
+        join_points: *JoinPointMap,
+        visited_stmts: *VisitedStmtSet,
+        stmt_id: CFStmtId,
+    ) Error!void {
+        const visit = try visited_stmts.getOrPut(self.evalAllocator(), @intFromEnum(stmt_id));
+        if (visit.found_existing) return;
+
         const stmt = self.store.getCFStmt(stmt_id);
         switch (stmt) {
-            .assign_ref => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_literal => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_call => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_call_erased => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_packed_erased_fn => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_low_level => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_list => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_struct => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .assign_tag => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .set_local => |assign| try self.collectJoinPoints(join_points, assign.next),
-            .debug => |debug_stmt| try self.collectJoinPoints(join_points, debug_stmt.next),
-            .expect => |expect_stmt| try self.collectJoinPoints(join_points, expect_stmt.next),
-            .incref => |inc| try self.collectJoinPoints(join_points, inc.next),
-            .decref => |dec| try self.collectJoinPoints(join_points, dec.next),
-            .free => |free_stmt| try self.collectJoinPoints(join_points, free_stmt.next),
+            .assign_ref => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_literal => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_call => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_call_erased => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_packed_erased_fn => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_low_level => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_list => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_struct => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .assign_tag => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .set_local => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
+            .debug => |debug_stmt| try self.collectJoinPoints(join_points, visited_stmts, debug_stmt.next),
+            .expect => |expect_stmt| try self.collectJoinPoints(join_points, visited_stmts, expect_stmt.next),
+            .incref => |inc| try self.collectJoinPoints(join_points, visited_stmts, inc.next),
+            .decref => |dec| try self.collectJoinPoints(join_points, visited_stmts, dec.next),
+            .free => |free_stmt| try self.collectJoinPoints(join_points, visited_stmts, free_stmt.next),
             .switch_stmt => |switch_stmt| {
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                    try self.collectJoinPoints(join_points, branch.body);
+                    try self.collectJoinPoints(join_points, visited_stmts, branch.body);
                 }
-                try self.collectJoinPoints(join_points, switch_stmt.default_branch);
+                try self.collectJoinPoints(join_points, visited_stmts, switch_stmt.default_branch);
             },
             .join => |join_stmt| {
-                try join_points.put(self.evalAllocator(), @intFromEnum(join_stmt.id), .{
-                    .params = join_stmt.params,
-                    .body = join_stmt.body,
-                });
-                try self.collectJoinPoints(join_points, join_stmt.body);
-                try self.collectJoinPoints(join_points, join_stmt.remainder);
+                const join_entry = try join_points.getOrPut(self.evalAllocator(), @intFromEnum(join_stmt.id));
+                if (join_entry.found_existing) {
+                    if (!std.meta.eql(join_entry.value_ptr.*, JoinPointInfo{
+                        .params = join_stmt.params,
+                        .body = join_stmt.body,
+                    })) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: join point {d} has conflicting bodies",
+                            .{@intFromEnum(join_stmt.id)},
+                        );
+                    }
+                } else {
+                    join_entry.value_ptr.* = .{
+                        .params = join_stmt.params,
+                        .body = join_stmt.body,
+                    };
+                }
+                try self.collectJoinPoints(join_points, visited_stmts, join_stmt.body);
+                try self.collectJoinPoints(join_points, visited_stmts, join_stmt.remainder);
             },
             .runtime_error,
             .loop_continue,

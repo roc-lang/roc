@@ -4450,6 +4450,7 @@ fn createFileImportDef(self: *Self, name_ident: base.Ident.Idx, expr_idx: Expr.I
         .kind = .let,
     }, region);
     try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
 }
 
 /// Early registration of import module aliases and import indices.

@@ -354,7 +354,7 @@ fn appendUniqueImport(
     module: checked.ImportedModuleView,
 ) Allocator.Error!void {
     for (out.items) |existing| {
-        if (std.mem.eql(u8, existing.key.bytes[0..], module.key.bytes[0..])) return;
+        if (std.meta.eql(existing.key.bytes, module.key.bytes)) return;
     }
     try out.append(allocator, module);
 }
@@ -409,7 +409,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
 }
 
 fn artifactMatches(a: anytype, b: checked.CheckedModuleArtifactKey) bool {
-    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+    return std.meta.eql(a.bytes, b.bytes);
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {

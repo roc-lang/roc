@@ -214,7 +214,10 @@ const Lowerer = struct {
             },
         }
 
-        const body = try self.lowerExpr(fn_.body);
+        const body: Ast.FnBody = switch (fn_.body) {
+            .roc => |expr| .{ .roc = try self.lowerExpr(expr) },
+            .hosted => .hosted,
+        };
         const ret = try self.lowerType(func.ret);
 
         const out_id = self.fn_map[@intFromEnum(fn_id)];
@@ -657,7 +660,7 @@ const Lowerer = struct {
         for (solved_members, 0..) |member, i| {
             const captures = self.solved.types.captureSpan(member.captures);
             variants[i] = .{
-                .id = @enumFromInt(0),
+                .id = undefined, // assigned by addFnVariants before the variant is stored
                 .lambda = member.lambda,
                 .capture_ty = if (captures.len == 0) null else try self.captureRecordType(member.captures),
             };

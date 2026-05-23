@@ -1,7 +1,6 @@
 //! Checked compile-time constant store.
 
 const std = @import("std");
-const base = @import("base");
 
 const checked_ids = @import("checked_ids.zig");
 const names = @import("canonical_names.zig");
@@ -40,6 +39,7 @@ pub const ConstCapture = struct {
 pub const ConstFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
     captures: []const ConstCapture = &.{},
 };
 
@@ -251,5 +251,4 @@ fn constStoreInvariant(comptime message: []const u8) noreturn {
 
 test "const store declarations are referenced" {
     std.testing.refAllDecls(@This());
-    _ = base;
 }
