@@ -1,9 +1,14 @@
-# Reproduces a former compiler OOM in a cmd-test-shaped program.
+# Reproduces the OOM:
+#
+#   The Roc compiler ran out of memory trying to preallocate virtual
+#   address space for compiling and running this program. Try using
+#   `roc build` to build the executable separately, then run it
+#   manually.
 #
 # Mirrors the structure of basic-cli2's cmd-test.roc: an opaque nominal
-# `MyCmd` type with several static-dispatch methods that each return `Try`
-# with a different open tag-union error type, and a polymorphic `expect_err`
-# helper that calls `Str.inspect(err)` on the result.
+# `MyCmd` type with several static-dispatch methods that each return
+# `Try` with a different open tag-union error type, and a polymorphic
+# `expect_err` helper that calls `Str.inspect(err)` on the result.
 
 IOErr := [
 	AlreadyExists,

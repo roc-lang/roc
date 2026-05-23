@@ -2715,7 +2715,14 @@ pub fn build(b: *std.Build) void {
         }
         run_parallel_cli.step.dependOn(&install.step);
         run_parallel_cli.step.dependOn(build_test_hosts_step);
-        test_platforms_step.dependOn(&run_parallel_cli.step);
+        // When -Dplatform=<name> filters to a single platform, only build the
+        // host libraries for that platform — skip the runner, which expects all
+        // platforms to be available.
+        if (platform_filter == null) {
+            test_platforms_step.dependOn(&run_parallel_cli.step);
+        } else {
+            test_platforms_step.dependOn(build_test_hosts_step);
+        }
 
         // test-subcommands: roc CLI subcommand integration tests
         const roc_subcommands_test = b.addTest(.{

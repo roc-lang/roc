@@ -195,7 +195,7 @@ const ModuleState = struct {
             if (semantic.checked_artifact == null) {
                 if (semantic.module_env) |e| {
                     // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                    // with e.gpa (page_allocator in multi-threaded mode).
+                    // with e.gpa (smp_allocator in multi-threaded mode).
                     const env_alloc = e.gpa;
                     const source = e.common.source;
                     if (comptime trace_build) {
