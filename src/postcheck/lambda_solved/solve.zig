@@ -815,12 +815,15 @@ const Solver = struct {
         args: []const Type.TypeVarId,
         expected: usize,
     ) void {
-        if (args.len != expected) {
+        if (args.len == expected) return;
+
+        if (@import("builtin").mode == .Debug) {
             std.debug.panic(
                 "postcheck invariant violated: low-level op {s} had {d} args, expected {d}",
                 .{ @tagName(op), args.len, expected },
             );
         }
+        unreachable;
     }
 
     fn boxElem(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {

@@ -92,11 +92,11 @@ pub const LirStoreImage = extern struct {
 
     fn view(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!LirStore {
         return .{
-            .cf_stmts = arrayListFromRef(LIR.CFStmt, base_ptr, image_size, self.cf_stmts),
-            .cf_switch_branches = arrayListFromRef(LIR.CFSwitchBranch, base_ptr, image_size, self.cf_switch_branches),
-            .locals = arrayListFromRef(LIR.Local, base_ptr, image_size, self.locals),
-            .local_ids = arrayListFromRef(LIR.LocalId, base_ptr, image_size, self.local_ids),
-            .proc_specs = arrayListFromRef(LIR.LirProcSpec, base_ptr, image_size, self.proc_specs),
+            .cf_stmts = try arrayListFromRef(LIR.CFStmt, base_ptr, image_size, self.cf_stmts),
+            .cf_switch_branches = try arrayListFromRef(LIR.CFSwitchBranch, base_ptr, image_size, self.cf_switch_branches),
+            .locals = try arrayListFromRef(LIR.Local, base_ptr, image_size, self.locals),
+            .local_ids = try arrayListFromRef(LIR.LocalId, base_ptr, image_size, self.local_ids),
+            .proc_specs = try arrayListFromRef(LIR.LirProcSpec, base_ptr, image_size, self.proc_specs),
             .strings = try self.strings.view(base_ptr, image_size),
             .allocator = std.heap.page_allocator,
             .next_synthetic_symbol = self.next_synthetic_symbol,
@@ -116,7 +116,7 @@ pub const StringLiteralStoreImage = extern struct {
 
     fn view(self: StringLiteralStoreImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!base.StringLiteral.Store {
         return .{
-            .buffer = stringLiteralBufferFromRef(base_ptr, image_size, self.buffer),
+            .buffer = try stringLiteralBufferFromRef(base_ptr, image_size, self.buffer),
         };
     }
 };
@@ -151,13 +151,13 @@ pub const LayoutStoreImage = extern struct {
     ) ImageError!layout_mod.Store {
         return .{
             .allocator = std.heap.page_allocator,
-            .layouts = safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts),
-            .resolved_list_layouts = arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
-            .tuple_elems = safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
-            .struct_fields = safeMultiListFromRef(layout_mod.StructField, base_ptr, image_size, self.struct_fields),
-            .struct_data = safeListFromRef(layout_mod.StructData, base_ptr, image_size, self.struct_data),
-            .tag_union_variants = safeMultiListFromRef(layout_mod.TagUnionVariant, base_ptr, image_size, self.tag_union_variants),
-            .tag_union_data = safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
+            .layouts = try safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts),
+            .resolved_list_layouts = try arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
+            .tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
+            .struct_fields = try safeMultiListFromRef(layout_mod.StructField, base_ptr, image_size, self.struct_fields),
+            .struct_data = try safeListFromRef(layout_mod.StructData, base_ptr, image_size, self.struct_data),
+            .tag_union_variants = try safeMultiListFromRef(layout_mod.TagUnionVariant, base_ptr, image_size, self.tag_union_variants),
+            .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
             .interned_layouts = std.StringHashMap(layout_mod.Idx).init(std.heap.page_allocator),
             .scratch_intern_key = .empty,
             .target_usize = target_usize,
@@ -240,8 +240,8 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, ma
     return .{
         .store = try header.store.view(mutable_base, @intCast(header.image_size)),
         .layouts = try header.layouts.view(mutable_base, @intCast(header.image_size), target_usize),
-        .root_procs = sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.root_procs),
-        .platform_entrypoints = sliceFromRef(PlatformEntrypoint, mutable_base, @intCast(header.image_size), header.platform_entrypoints),
+        .root_procs = try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.root_procs),
+        .platform_entrypoints = try sliceFromRef(PlatformEntrypoint, mutable_base, @intCast(header.image_size), header.platform_entrypoints),
         .target_usize = target_usize,
     };
 }
@@ -287,65 +287,88 @@ fn multiArrayRef(
     };
 }
 
-fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) []T {
+fn sliceFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError![]T {
     if (ref.len == 0) return &.{};
-    debugCheckArrayRef(T, image_size, ref);
-    const ptr: [*]T = @ptrCast(@alignCast(base_ptr + @as(usize, @intCast(ref.offset))));
-    return ptr[0..@intCast(ref.len)];
+    const len = try checkSliceRef(T, image_size, ref);
+    const ptr: [*]T = @ptrCast(@alignCast(base_ptr + try checkedOffset(ref)));
+    return ptr[0..len];
 }
 
-fn arrayListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) std.ArrayList(T) {
-    const slice = sliceFromRef(T, base_ptr, image_size, ref);
+fn arrayListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!std.ArrayList(T) {
+    const len, const capacity = try checkListRef(T, image_size, ref);
+    const ptr: [*]T = @ptrCast(@alignCast(base_ptr + try checkedOffset(ref)));
     return .{
-        .items = slice,
-        .capacity = @intCast(ref.capacity),
+        .items = ptr[0..len],
+        .capacity = capacity,
     };
 }
 
-fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) collections.SafeList(T) {
-    const slice = sliceFromRef(T, base_ptr, image_size, ref);
+fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeList(T) {
+    const list = try arrayListFromRef(T, base_ptr, image_size, ref);
     return .{
         .items = .{
-            .items = slice,
-            .capacity = @intCast(ref.capacity),
+            .items = list.items,
+            .capacity = list.capacity,
         },
     };
 }
 
-fn stringLiteralBufferFromRef(base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) base.StringLiteral.Store.Buffer {
-    if (ref.capacity == 0) return .{};
-    debugCheckByteRef(image_size, ref, @as(usize, @intCast(ref.len)));
+fn stringLiteralBufferFromRef(base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!base.StringLiteral.Store.Buffer {
+    const len, const capacity = try checkByteListRef(image_size, ref);
+    if (capacity == 0) return .{};
 
-    const ptr: [*]align(base.StringLiteral.Store.static_refcount_alignment) u8 = @ptrCast(@alignCast(base_ptr + @as(usize, @intCast(ref.offset))));
-    return base.StringLiteral.Store.Buffer.fromMappedSlice(ptr[0..@intCast(ref.len)], @intCast(ref.capacity));
+    const ptr: [*]align(base.StringLiteral.Store.static_refcount_alignment) u8 = @ptrCast(@alignCast(base_ptr + try checkedOffset(ref)));
+    return base.StringLiteral.Store.Buffer.fromMappedSlice(ptr[0..len], capacity);
 }
 
-fn safeMultiListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) collections.SafeMultiList(T) {
-    if (ref.capacity == 0) return .{ .items = .{} };
-    debugCheckByteRef(image_size, ref, std.MultiArrayList(T).capacityInBytes(@intCast(ref.capacity)));
-    const ptr: [*]align(@alignOf(T)) u8 = @ptrCast(@alignCast(base_ptr + @as(usize, @intCast(ref.offset))));
+fn safeMultiListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeMultiList(T) {
+    const len = std.math.cast(usize, ref.len) orelse return error.InvalidLirImage;
+    const capacity = std.math.cast(usize, ref.capacity) orelse return error.InvalidLirImage;
+    if (len > capacity) return error.InvalidLirImage;
+    if (capacity == 0) return .{ .items = .{} };
+    try checkByteRef(image_size, ref, std.MultiArrayList(T).capacityInBytes(capacity));
+    const ptr: [*]align(@alignOf(T)) u8 = @ptrCast(@alignCast(base_ptr + try checkedOffset(ref)));
     return .{
         .items = .{
             .bytes = ptr,
-            .len = @intCast(ref.len),
-            .capacity = @intCast(ref.capacity),
+            .len = len,
+            .capacity = capacity,
         },
     };
 }
 
-fn debugCheckArrayRef(comptime T: type, image_size: usize, ref: ArrayRef) void {
-    debugCheckByteRef(image_size, ref, @as(usize, @intCast(ref.len)) * @sizeOf(T));
+fn checkSliceRef(comptime T: type, image_size: usize, ref: ArrayRef) ImageError!usize {
+    const len = std.math.cast(usize, ref.len) orelse return error.InvalidLirImage;
+    const byte_len = std.math.mul(usize, len, @sizeOf(T)) catch return error.InvalidLirImage;
+    try checkByteRef(image_size, ref, byte_len);
+    return len;
 }
 
-fn debugCheckByteRef(image_size: usize, ref: ArrayRef, byte_len: usize) void {
-    if (@import("builtin").mode == .Debug) {
-        const offset: usize = @intCast(ref.offset);
-        if (offset + byte_len > image_size) {
-            std.debug.panic("LIR image invariant violated: offset={d} byte_len={d} image_size={d}", .{ offset, byte_len, image_size });
-        }
-    } else if (@as(usize, @intCast(ref.offset)) + byte_len > image_size) {
-        unreachable;
-    }
+fn checkListRef(comptime T: type, image_size: usize, ref: ArrayRef) ImageError!struct { usize, usize } {
+    const len = std.math.cast(usize, ref.len) orelse return error.InvalidLirImage;
+    const capacity = std.math.cast(usize, ref.capacity) orelse return error.InvalidLirImage;
+    if (len > capacity) return error.InvalidLirImage;
+    const byte_len = std.math.mul(usize, capacity, @sizeOf(T)) catch return error.InvalidLirImage;
+    try checkByteRef(image_size, ref, byte_len);
+    return .{ len, capacity };
+}
+
+fn checkByteListRef(image_size: usize, ref: ArrayRef) ImageError!struct { usize, usize } {
+    const len = std.math.cast(usize, ref.len) orelse return error.InvalidLirImage;
+    const capacity = std.math.cast(usize, ref.capacity) orelse return error.InvalidLirImage;
+    if (len > capacity) return error.InvalidLirImage;
+    try checkByteRef(image_size, ref, capacity);
+    return .{ len, capacity };
+}
+
+fn checkByteRef(image_size: usize, ref: ArrayRef, byte_len: usize) ImageError!void {
+    const offset = try checkedOffset(ref);
+    if (offset > image_size) return error.InvalidLirImage;
+    if (byte_len > image_size - offset) return error.InvalidLirImage;
+}
+
+fn checkedOffset(ref: ArrayRef) ImageError!usize {
+    return std.math.cast(usize, ref.offset) orelse error.InvalidLirImage;
 }
 
 test "LIR image declarations are referenced" {
