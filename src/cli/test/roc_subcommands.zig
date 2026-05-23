@@ -7,6 +7,25 @@ fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     return util.buildIsolatedTestEnvMap(allocator, null);
 }
 
+test "CLI test cache roots are distinct" {
+    const allocator = std.testing.allocator;
+
+    const first = try util.createIsolatedTestCacheDirs(allocator);
+    defer first.deinit(allocator);
+
+    const second = try util.createIsolatedTestCacheDirs(allocator);
+    defer second.deinit(allocator);
+
+    try std.testing.expect(!std.mem.eql(u8, first.roc_cache_dir, second.roc_cache_dir));
+    try std.testing.expect(!std.mem.eql(u8, first.zig_local_cache_dir, second.zig_local_cache_dir));
+
+    var first_dir = try std.fs.openDirAbsolute(first.roc_cache_dir, .{});
+    first_dir.close();
+
+    var second_dir = try std.fs.openDirAbsolute(second.roc_cache_dir, .{});
+    second_dir.close();
+}
+
 test "roc check writes parse errors to stderr" {
     const testing = std.testing;
     const gpa = testing.allocator;
