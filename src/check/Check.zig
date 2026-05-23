@@ -4829,11 +4829,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_ellipsis => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
-        .e_anno_only => {
-            if (self.builtin_ctx.builtin_module == null) {
-                // Builtin.roc uses annotation-only declarations for compiler-owned
-                // intrinsics whose implementations are supplied below Roc source.
-                if (expected.annotation == null) try self.unifyWith(expr_var, .err, env);
+        .e_anno_only => |anno| {
+            if (expected.annotation != null and
+                can.BuiltinLowLevel.isBuiltinModule(self.cir) and
+                can.BuiltinLowLevel.isIntrinsicAnnotation(self.cir, anno.ident))
+            {
+                // Builtin.roc has a small explicit set of compiler-owned intrinsic
+                // wrappers that post-check lowering handles from checked data.
             } else {
                 _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value = .{
                     .region = if (expected.annotation) |annotation_idx|

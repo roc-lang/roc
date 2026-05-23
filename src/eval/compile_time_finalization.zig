@@ -355,16 +355,15 @@ fn appendUniqueImport(
     out: *std.ArrayList(checked.ImportedModuleView),
     module: checked.ImportedModuleView,
 ) Allocator.Error!void {
-    if (sameLogicalModule(root, module)) return;
+    if (sameModuleIdentity(root, module)) return;
     for (out.items) |existing| {
-        if (std.meta.eql(existing.key.bytes, module.key.bytes) or sameLogicalModule(existing, module)) return;
+        if (sameModuleIdentity(existing, module)) return;
     }
     try out.append(allocator, module);
 }
 
-fn sameLogicalModule(a: checked.ImportedModuleView, b: checked.ImportedModuleView) bool {
-    if (std.meta.eql(a.module_identity.stable_hash, b.module_identity.stable_hash)) return true;
-    return std.mem.eql(u8, a.module_env.module_name, b.module_env.module_name);
+fn sameModuleIdentity(a: checked.ImportedModuleView, b: checked.ImportedModuleView) bool {
+    return std.meta.eql(a.module_identity.stable_hash, b.module_identity.stable_hash);
 }
 
 fn compileTimeRootForRequest(

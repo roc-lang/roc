@@ -1792,17 +1792,13 @@ pub const Coordinator = struct {
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = null; // AST was consumed during canonicalization
 
-        // Run hosted compiler transformation if enabled.
-        // This converts e_anno_only expressions to e_hosted_lambda in platform modules
-        // Must be done AFTER canonicalization but BEFORE type checking
-        if (self.enable_hosted_transform) {
-            if (mod.moduleEnv()) |env| {
+        if (mod.moduleEnv()) |env| {
+            if (can.BuiltinLowLevel.isBuiltinModule(env)) {
+                try can.BuiltinLowLevel.apply(env);
+            } else if (self.enable_hosted_transform) {
                 // Only run for platform modules (packages other than "app")
                 // The app package doesn't need hosted lambdas
                 if (!std.mem.eql(u8, result.package_name, "app")) {
-                    // Perform hosted transform and free the returned list of modified defs
-                    // (we don't need the list, just the side effect of the transform)
-                    // Note: the ArrayList uses env.gpa, not self.gpa
                     if (can.HostedCompiler.replaceAnnoOnlyWithHosted(env)) |modified_defs| {
                         var defs = modified_defs;
                         defs.deinit(env.gpa);
