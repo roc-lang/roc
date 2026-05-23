@@ -87,18 +87,35 @@ const is_freestanding = threading.is_freestanding;
 const threads_available = !is_freestanding;
 const Thread = threading.Thread;
 
+/// Thread-safe allocator used for worker-thread allocations and shared
+/// coordinator buffers (channels, per-package maps) when running multi-threaded.
+///
+/// On platforms with threads, `std.heap.smp_allocator` is used: it maintains
+/// per-thread freelists backed by a shared global pool, avoiding the per-call
+/// `mmap`/`munmap` serialization on the kernel VM lock that `page_allocator`
+/// incurs (the prior cause of the multi-threaded performance cliff).
+///
+/// On wasm/freestanding (no threads), `smp_allocator` is unreachable at
+/// runtime but the constant must still compile, so it resolves to
+/// `page_allocator` (which on wasm is backed by `WasmAllocator`).
+const thread_safe_allocator: Allocator = if (threads_available)
+    std.heap.smp_allocator
+else
+    std.heap.page_allocator;
+
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
 ///
 /// Design rationale:
 /// - `gpa`: For long-lived data (ModuleEnv, source). In MT mode, this is
-///   page_allocator for thread safety. Data allocated here is stored in
-///   ModuleEnv.gpa and freed during module cleanup.
+///   smp_allocator (per-thread freelists backed by a shared global pool).
+///   Data allocated here is stored in ModuleEnv.gpa and freed during module
+///   cleanup.
 /// - `arena`: For temporary allocations within a task (reports, diagnostics).
 ///   Reset between tasks to reduce allocation pressure.
 pub const WorkerAllocators = struct {
     /// General purpose allocator for long-lived data (ModuleEnv, source).
-    /// In multi-threaded mode, this is page_allocator for thread safety.
+    /// In multi-threaded mode, this is smp_allocator for thread safety.
     gpa: Allocator,
 
     /// Arena for temporary allocations within a task.
@@ -291,7 +308,7 @@ pub const ModuleState = struct {
                 const env = semantic.module_env;
                 // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
                 // We must use env.gpa for cleanup, not the passed-in gpa, because in multi-threaded
-                // mode, env.gpa is page_allocator while gpa is the coordinator's allocator.
+                // mode, env.gpa is smp_allocator while gpa is the coordinator's allocator.
                 const env_alloc = env.gpa;
                 const source = env.common.source;
                 if (comptime trace_build) {
@@ -347,10 +364,10 @@ pub const PackageState = struct {
             .name = name,
             .root_dir = root_dir,
             .modules = std.ArrayList(ModuleState).empty,
-            .module_names = std.StringHashMap(ModuleId).init(std.heap.page_allocator),
+            .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
             .remaining_modules = 0,
             .root_module_id = null,
-            .shorthands = std.StringHashMap([]const u8).init(std.heap.page_allocator),
+            .shorthands = std.StringHashMap([]const u8).init(thread_safe_allocator),
         };
     }
 
@@ -554,11 +571,12 @@ pub const Coordinator = struct {
     module_time_sum_ns: u64,
 
     /// Get allocator for worker thread operations.
-    /// In multi-threaded mode, returns page_allocator which is guaranteed thread-safe.
-    /// In single-threaded mode, returns gpa for better performance.
+    /// In multi-threaded mode, returns smp_allocator (per-thread freelists
+    /// backed by a shared global pool, designed for SMP workloads). In
+    /// single-threaded mode, returns gpa for better performance.
     pub fn getWorkerAllocator(self: *const Coordinator) Allocator {
         return if (threads_available and self.mode == .multi_threaded)
-            std.heap.page_allocator
+            thread_safe_allocator
         else
             self.gpa;
     }
@@ -581,10 +599,11 @@ pub const Coordinator = struct {
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
     ) !Coordinator {
-        // Both channels use page_allocator in multi-threaded mode because their
+        // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
-        // page_allocator is guaranteed thread-safe (OS mmap/munmap).
-        const channel_allocator = if (threads_available) std.heap.page_allocator else gpa;
+        // smp_allocator is thread-safe and avoids the per-allocation mmap/munmap
+        // serialization on the kernel VM lock that page_allocator incurs.
+        const channel_allocator = if (threads_available) thread_safe_allocator else gpa;
         const initial_task_capacity = 256;
         return .{
             .gpa = gpa,
@@ -632,7 +651,7 @@ pub const Coordinator = struct {
 
         // Free packages
         // Note: ModuleEnv stores its own allocator (env.gpa), so deinit will use the correct
-        // allocator for each env. In multi-threaded mode, this is page_allocator.
+        // allocator for each env. In multi-threaded mode, this is smp_allocator.
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             if (comptime trace_build) {
@@ -679,11 +698,11 @@ pub const Coordinator = struct {
     }
 
     /// Get the allocator to use for module data.
-    /// - In multi-threaded mode: page_allocator (guaranteed thread-safe)
+    /// - In multi-threaded mode: smp_allocator (per-thread freelists)
     /// - In single-threaded mode: gpa (better performance)
     pub fn getModuleAllocator(self: *Coordinator) std.mem.Allocator {
         return if (threads_available and self.mode == .multi_threaded)
-            std.heap.page_allocator
+            thread_safe_allocator
         else
             self.gpa;
     }
@@ -2770,9 +2789,9 @@ pub const Coordinator = struct {
     /// Worker thread main function
     fn workerThread(self: *Coordinator) void {
         // Each worker has its own allocators for thread safety.
-        // - gpa: page_allocator for long-lived data (ModuleEnv, source)
+        // - gpa: smp_allocator for long-lived data (ModuleEnv, source)
         // - arena: for temporary allocations, reset between tasks
-        const backing = if (threads_available) std.heap.page_allocator else self.gpa;
+        const backing = if (threads_available) thread_safe_allocator else self.gpa;
         var worker_allocs = WorkerAllocators.init(backing);
         defer worker_allocs.deinit();
 
