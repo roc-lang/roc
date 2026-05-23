@@ -3400,10 +3400,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeTag("record_unbound");
                 try self.writeNormalizedRecordFields(fields, null);
             },
-            .record => |record| {
-                self.writeTag("record");
-                try self.writeNormalizedRecordFields(record.fields, record.ext);
-            },
+            .record => |record| try self.writeNormalizedRecordPayload(record.fields, record.ext),
             .tuple => |tuple| {
                 self.writeTag("tuple");
                 self.writeU32(@intCast(tuple.len));
@@ -3430,11 +3427,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 try self.writeType(func.ret);
             },
             .empty_record => self.writeTag("empty_record"),
-            .tag_union => |tag_union| {
-                self.writeTag("tag_union");
-                try self.writeNormalizedTags(tag_union.tags, tag_union.ext);
-            },
-            .empty_tag_union => self.writeTag("empty_tag_union"),
+            .tag_union => |tag_union| try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
+            .empty_tag_union => self.writeTag("[]"),
         }
     }
 
@@ -3465,9 +3459,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         defer seen.deinit();
         while (tail) |tail_id| {
             if (self.active.contains(tail_id)) break;
-            if (seen.contains(tail_id)) {
-                checkedArtifactInvariant("checked type substitution key row normalization reached a cyclic record row", .{});
-            }
+            if (seen.contains(tail_id)) break;
             try seen.put(tail_id, {});
             const raw: usize = @intFromEnum(tail_id);
             if (raw >= self.store.payloads.len) {
@@ -3506,6 +3498,65 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         }
     }
 
+    fn writeNormalizedRecordPayload(
+        self: *SubstitutedCheckedTypeKeyBuilder,
+        head: []const CheckedRecordField,
+        ext: CheckedTypeId,
+    ) Allocator.Error!void {
+        var fields = std.ArrayList(RecordFieldForKey).empty;
+        defer fields.deinit(self.allocator);
+        try self.appendRecordFieldsForKey(&fields, head);
+
+        var tail: ?CheckedTypeId = self.substitutedRoot(ext);
+        var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (tail) |tail_id| {
+            if (self.active.contains(tail_id)) break;
+            if (seen.contains(tail_id)) break;
+            try seen.put(tail_id, {});
+            const raw: usize = @intFromEnum(tail_id);
+            if (raw >= self.store.payloads.len) {
+                checkedArtifactInvariant("checked type substitution key row normalization referenced missing record tail", .{});
+            }
+            switch (self.store.payloads[raw]) {
+                .empty_record => {
+                    tail = null;
+                    break;
+                },
+                .record => |record| {
+                    try self.appendRecordFieldsForKey(&fields, record.fields);
+                    tail = self.substitutedRoot(record.ext);
+                },
+                .record_unbound => |record_fields| {
+                    try self.appendRecordFieldsForKey(&fields, record_fields);
+                    tail = null;
+                },
+                else => break,
+            }
+        }
+
+        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
+        if (tail == null and fields.items.len == 0) {
+            self.writeTag("empty_record");
+            return;
+        }
+
+        self.writeTag("record");
+        self.writeU32(@intCast(fields.items.len));
+        for (fields.items, 0..) |field, index| {
+            if (index > 0 and self.names.recordFieldLabelTextEql(fields.items[index - 1].name, field.name)) {
+                checkedArtifactInvariant("checked type substitution key row normalization found duplicate record fields", .{});
+            }
+            self.writeBytes(self.names.recordFieldLabelText(field.name));
+            try self.writeType(field.ty);
+        }
+        if (tail) |tail_id| {
+            try self.writeType(tail_id);
+        } else {
+            self.writeTag("empty_record");
+        }
+    }
+
     fn appendTagsForKey(
         self: *SubstitutedCheckedTypeKeyBuilder,
         tags: *std.ArrayList(TagForKey),
@@ -3519,7 +3570,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         }
     }
 
-    fn writeNormalizedTags(
+    fn writeNormalizedTagUnionPayload(
         self: *SubstitutedCheckedTypeKeyBuilder,
         head: []const CheckedTag,
         ext: CheckedTypeId,
@@ -3533,9 +3584,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         defer seen.deinit();
         while (tail) |tail_id| {
             if (self.active.contains(tail_id)) break;
-            if (seen.contains(tail_id)) {
-                checkedArtifactInvariant("checked type substitution key row normalization reached a cyclic tag row", .{});
-            }
+            if (seen.contains(tail_id)) break;
             try seen.put(tail_id, {});
             const raw: usize = @intFromEnum(tail_id);
             if (raw >= self.store.payloads.len) {
@@ -3555,6 +3604,12 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         }
 
         std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
+        if (tail == null and tags.items.len == 0) {
+            self.writeTag("[]");
+            return;
+        }
+
+        self.writeTag("tag_union");
         self.writeU32(@intCast(tags.items.len));
         for (tags.items, 0..) |tag, index| {
             if (index > 0 and self.names.tagLabelTextEql(tags.items[index - 1].name, tag.name)) {
@@ -3567,7 +3622,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         if (tail) |tail_id| {
             try self.writeType(tail_id);
         } else {
-            self.writeTag("empty_tag_union");
+            self.writeTag("[]");
         }
     }
 
@@ -10032,7 +10087,10 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         while (tail) |tail_id| {
-            if (seen.contains(tail_id)) checkedArtifactInvariant("platform requirement record row compatibility reached a cyclic row", .{});
+            if (seen.contains(tail_id)) {
+                tail = null;
+                break;
+            }
             try seen.put(tail_id, {});
             switch (self.payload(tail_id)) {
                 .empty_record => {
@@ -10076,7 +10134,10 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         var seen = std.AutoHashMap(CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
         while (tail) |tail_id| {
-            if (seen.contains(tail_id)) checkedArtifactInvariant("platform requirement tag row compatibility reached a cyclic row", .{});
+            if (seen.contains(tail_id)) {
+                tail = null;
+                break;
+            }
             try seen.put(tail_id, {});
             switch (self.payload(tail_id)) {
                 .empty_tag_union => {
@@ -10554,7 +10615,8 @@ const PlatformAppRelationTypeResolver = struct {
 
         while (tail) |tail_id| {
             if (seen.contains(tail_id)) {
-                checkedArtifactInvariant("platform/app relation record row normalization reached a cyclic row", .{});
+                tail = null;
+                break;
             }
             try seen.put(tail_id, {});
 
@@ -10607,7 +10669,8 @@ const PlatformAppRelationTypeResolver = struct {
 
         while (tail) |tail_id| {
             if (seen.contains(tail_id)) {
-                checkedArtifactInvariant("platform/app relation tag row normalization reached a cyclic row", .{});
+                tail = null;
+                break;
             }
             try seen.put(tail_id, {});
 

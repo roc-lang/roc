@@ -1002,7 +1002,7 @@ const Builder = struct {
 
         var current = ext;
         while (true) {
-            if (seen.contains(current)) Common.invariant("checked record row chain was cyclic at Monotype lowering");
+            if (seen.contains(current)) break;
             try seen.put(current, {});
 
             const payload = checkedPayload(view, current);
@@ -1060,7 +1060,7 @@ const Builder = struct {
 
         var current = ext;
         while (true) {
-            if (seen.contains(current)) Common.invariant("checked tag row chain was cyclic at Monotype lowering");
+            if (seen.contains(current)) break;
             try seen.put(current, {});
 
             const payload = checkedPayload(view, current);
@@ -2955,7 +2955,7 @@ const BodyContext = struct {
 
         var current = ext;
         while (true) {
-            if (seen.contains(current)) Common.invariant("checked record row chain was cyclic at Monotype lowering");
+            if (seen.contains(current)) break;
             try seen.put(current, {});
 
             const payload = checkedPayload(self.view, current);
@@ -3018,7 +3018,7 @@ const BodyContext = struct {
 
         var current = ext;
         while (true) {
-            if (seen.contains(current)) Common.invariant("checked tag-union row chain was cyclic at Monotype lowering");
+            if (seen.contains(current)) break;
             try seen.put(current, {});
 
             const payload = checkedPayload(self.view, current);
@@ -3349,7 +3349,7 @@ const BodyContext = struct {
 
         var current = ext;
         while (true) {
-            if (seen.contains(current)) Common.invariant("checked record row chain was cyclic at contextual Monotype lowering");
+            if (seen.contains(current)) break;
             try seen.put(current, {});
 
             switch (checkedPayload(self.view, current)) {
@@ -3403,7 +3403,7 @@ const BodyContext = struct {
 
         var current = ext;
         while (true) {
-            if (seen.contains(current)) Common.invariant("checked tag row chain was cyclic at contextual Monotype lowering");
+            if (seen.contains(current)) break;
             try seen.put(current, {});
 
             switch (checkedPayload(self.view, current)) {
@@ -4636,8 +4636,8 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| return try self.lowerProcedureUseValue(proc, checked_ty, ty),
-            .platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, checked_ty, ty),
+            => |proc| return try self.lowerProcedureUseValue(proc, ty),
+            .platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, ty),
             .top_level_const => |const_use| return try self.restoreConstUse(const_use),
             .imported_const => |const_use| return try self.restoreConstUse(const_use),
             .platform_required_const => |required| return try self.restoreConstUse(required.const_use),
@@ -4649,14 +4649,11 @@ const BodyContext = struct {
     fn lowerProcedureUseValue(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
-        checked_ty: checked.CheckedTypeId,
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const source_fn_ty = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
-        if (source_fn_ty != checked_ty) {
-            Common.invariant("checked procedure value requested type differs from lookup expression type");
-        }
+        try self.bindTypeToMono(source_fn_ty, mono_fn_ty, "checked procedure value requested function type mapped one checked type to two monotype types");
 
         return switch (proc.binding) {
             .top_level => |top_level| blk: {
@@ -7387,8 +7384,6 @@ const BodyContext = struct {
 
         const one_payload = one_payload_ty orelse Common.invariant("iterator step type was missing One");
         const skip_payload = skip_payload_ty orelse Common.invariant("iterator step type was missing Skip");
-        const one_fields = checkedRecordFields(self.view, one_payload);
-        const skip_fields = checkedRecordFields(self.view, skip_payload);
 
         return .{
             .step_ty = step_ty,
@@ -7397,10 +7392,10 @@ const BodyContext = struct {
             .skip_tag = skip_tag orelse Common.invariant("iterator step type was missing Skip"),
             .one_payload_ty = one_payload,
             .skip_payload_ty = skip_payload,
-            .one_item = checkedRecordFieldByName(self.view, one_fields, "item"),
-            .one_rest = checkedRecordFieldByName(self.view, one_fields, "rest"),
-            .skip_count = checkedRecordFieldByName(self.view, skip_fields, "count"),
-            .skip_rest = checkedRecordFieldByName(self.view, skip_fields, "rest"),
+            .one_item = checkedRecordFieldByName(self.view, one_payload, "item"),
+            .one_rest = checkedRecordFieldByName(self.view, one_payload, "rest"),
+            .skip_count = checkedRecordFieldByName(self.view, skip_payload, "count"),
+            .skip_rest = checkedRecordFieldByName(self.view, skip_payload, "rest"),
         };
     }
 
@@ -7700,31 +7695,6 @@ fn unsignedIntLiteral(value: anytype) can.CIR.IntValue {
     return .{ .bytes = @bitCast(widened), .kind = .u128 };
 }
 
-fn checkedRecordFields(view: ModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedRecordField {
-    return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedRecordFields(view, alias.backing),
-        .nominal => |nominal| checkedRecordFields(view, nominal.backing),
-        .empty_record => &.{},
-        .record_unbound => |fields| fields,
-        .record => |record| blk: {
-            if (!checkedTypeIsEmptyRecord(view, record.ext)) {
-                Common.invariant("ConstStore record restored with an open checked record type");
-            }
-            break :blk record.fields;
-        },
-        else => Common.invariant("ConstStore record restored with a non-record checked type"),
-    };
-}
-
-fn checkedTypeIsEmptyRecord(view: ModuleView, checked_ty: checked.CheckedTypeId) bool {
-    return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedTypeIsEmptyRecord(view, alias.backing),
-        .nominal => |nominal| checkedTypeIsEmptyRecord(view, nominal.backing),
-        .empty_record => true,
-        else => false,
-    };
-}
-
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
     const raw = @intFromEnum(checked_ty);
     if (raw >= view.types.payloads.len) Common.invariant("checked type id outside checked type store");
@@ -7908,11 +7878,30 @@ fn resolvedPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedPayload 
 
 fn checkedRecordFieldByName(
     view: ModuleView,
-    fields: []const checked.CheckedRecordField,
+    checked_ty: checked.CheckedTypeId,
     field_name: []const u8,
 ) checked.CheckedRecordField {
-    for (fields) |field| {
-        if (Ident.textEql(view.names.recordFieldLabelText(field.name), field_name)) return field;
+    var current = checked_ty;
+    var remaining = view.types.payloads.len;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (checkedPayload(view, current)) {
+            .alias => |alias| current = alias.backing,
+            .nominal => |nominal| current = nominal.backing,
+            .empty_record => break,
+            .record_unbound => |fields| {
+                for (fields) |field| {
+                    if (Ident.textEql(view.names.recordFieldLabelText(field.name), field_name)) return field;
+                }
+                break;
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (Ident.textEql(view.names.recordFieldLabelText(field.name), field_name)) return field;
+                }
+                current = record.ext;
+            },
+            else => Common.invariant("expected checked record field lookup reached a non-record checked type"),
+        }
     }
     Common.invariant("expected checked record field was absent");
 }

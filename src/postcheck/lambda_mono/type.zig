@@ -131,30 +131,35 @@ pub const Store = struct {
     }
 
     pub fn addSpan(self: *Store, values: []const TypeId) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.spans.items.len);
         try self.spans.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.fields.items.len);
         try self.fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addCaptureFields(self: *Store, values: []const CaptureField) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.capture_fields.items.len);
         try self.capture_fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.tags.items.len);
         try self.tags.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFnVariants(self: *Store, values: []const FnVariant) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.fn_variants.items.len);
         for (values, 0..) |variant, i| {
             var stored = variant;
@@ -338,4 +343,27 @@ test "lambda mono callable variants receive store-local ids" {
     try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(variants.start)), stored_variants[0].id);
     try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(1)), stored_variants[1].id);
     try std.testing.expectEqual(capture_ty, stored_variants[0].capture_ty.?);
+}
+
+test "lambda mono empty spans use shared empty descriptor" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.add(.zst);
+    const nonempty_span = try store.addSpan(&.{unit});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
+    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit }});
+    const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(3), .checked_name = @enumFromInt(3), .payloads = nonempty_span }});
+    const nonempty_variants = try store.addFnVariants(&.{.{ .id = @enumFromInt(99), .lambda = @enumFromInt(4), .capture_ty = unit }});
+    try std.testing.expect(nonempty_span.len == 1);
+    try std.testing.expect(nonempty_fields.len == 1);
+    try std.testing.expect(nonempty_capture_fields.len == 1);
+    try std.testing.expect(nonempty_tags.len == 1);
+    try std.testing.expect(nonempty_variants.len == 1);
+
+    try std.testing.expectEqual(Span.empty(), try store.addSpan(&.{}));
+    try std.testing.expectEqual(Span.empty(), try store.addFields(&.{}));
+    try std.testing.expectEqual(Span.empty(), try store.addCaptureFields(&.{}));
+    try std.testing.expectEqual(Span.empty(), try store.addTags(&.{}));
+    try std.testing.expectEqual(Span.empty(), try store.addFnVariants(&.{}));
 }

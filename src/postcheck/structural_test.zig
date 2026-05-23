@@ -3,6 +3,7 @@
 const std = @import("std");
 const check = @import("check");
 
+const Common = @import("common.zig");
 const Mono = @import("monotype/ast.zig");
 const MonoType = @import("monotype/type.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
@@ -164,4 +165,9 @@ test "post-check stage products do not store expression cache state" {
         try std.testing.expect(!@hasField(T, "expr_map"));
         try std.testing.expect(!@hasField(T, "memoized_exprs"));
     }
+}
+
+test "post-check invariant helper is failure-only" {
+    const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
+    try std.testing.expect(fn_info.return_type.? == noreturn);
 }

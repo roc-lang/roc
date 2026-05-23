@@ -127,18 +127,21 @@ pub const Store = struct {
     }
 
     pub fn addSpan(self: *Store, values: []const TypeId) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.spans.items.len);
         try self.spans.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.fields.items.len);
         try self.fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span {
+        if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.tags.items.len);
         try self.tags.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
@@ -369,4 +372,21 @@ test "monotype row entries retain checked label ids" {
 
     try std.testing.expectEqual(field_name, store.fieldSpan(fields)[0].name);
     try std.testing.expectEqual(tag_name, store.tagSpan(tags)[0].name);
+}
+
+test "monotype empty spans use shared empty descriptor" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.add(.zst);
+    const nonempty_span = try store.addSpan(&.{unit});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
+    const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(2), .checked_name = @enumFromInt(2), .payloads = nonempty_span }});
+    try std.testing.expect(nonempty_span.len == 1);
+    try std.testing.expect(nonempty_fields.len == 1);
+    try std.testing.expect(nonempty_tags.len == 1);
+
+    try std.testing.expectEqual(Span.empty(), try store.addSpan(&.{}));
+    try std.testing.expectEqual(Span.empty(), try store.addFields(&.{}));
+    try std.testing.expectEqual(Span.empty(), try store.addTags(&.{}));
 }
