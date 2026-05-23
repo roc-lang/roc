@@ -1083,26 +1083,8 @@ const TypeTable = struct {
     ) CollectedTypeRepr {
         var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
         defer all_fields.deinit(self.gpa);
-        all_fields.appendSlice(self.gpa, fields) catch return self.oomUnknown("record");
-        if (ext) |ext_id| self.appendRecordExtFields(artifact, ext_id, &all_fields);
+        appendRecordRowFields(self.gpa, artifact, fields, ext, &all_fields) catch return self.oomUnknown("record");
         return self.convertRecordFields(artifact, all_fields.items);
-    }
-
-    fn appendRecordExtFields(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        ext: CheckedArtifact.CheckedTypeId,
-        fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-    ) void {
-        switch (checkedTypePayload(artifact, ext)) {
-            .empty_record => {},
-            .record => |record| {
-                fields.appendSlice(self.gpa, record.fields) catch glueInvariant("could not allocate extended record fields", .{});
-                self.appendRecordExtFields(artifact, record.ext, fields);
-            },
-            .record_unbound => |unbound| fields.appendSlice(self.gpa, unbound) catch glueInvariant("could not allocate unbound record fields", .{}),
-            else => glueInvariant("non-record extension reached glue record conversion", .{}),
-        }
     }
 
     fn convertRecordFields(
@@ -1277,8 +1259,7 @@ const TypeTable = struct {
     ) CollectedTypeRepr {
         var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
         defer all_tags.deinit(self.gpa);
-        all_tags.appendSlice(self.gpa, tags) catch return self.oomUnknown("tag_union");
-        self.appendTagUnionExtTags(artifact, ext, &all_tags);
+        appendTagRowTags(self.gpa, artifact, tags, ext, &all_tags) catch return self.oomUnknown("tag_union");
 
         if (all_tags.items.len == 0) return .unit;
 
@@ -1401,22 +1382,6 @@ const TypeTable = struct {
             .size = total_size,
             .alignment = total_align,
         } };
-    }
-
-    fn appendTagUnionExtTags(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        ext: CheckedArtifact.CheckedTypeId,
-        tags: *std.ArrayList(CheckedArtifact.CheckedTag),
-    ) void {
-        switch (checkedTypePayload(artifact, ext)) {
-            .empty_tag_union => {},
-            .tag_union => |tag_union| {
-                tags.appendSlice(self.gpa, tag_union.tags) catch glueInvariant("could not allocate extended tag-union tags", .{});
-                self.appendTagUnionExtTags(artifact, tag_union.ext, tags);
-            },
-            else => glueInvariant("non-tag-union extension reached glue tag-union conversion", .{}),
-        }
     }
 
     fn convertFunc(
@@ -2051,6 +2016,76 @@ fn checkedTypeRootForScheme(
         glueInvariant("checked type scheme missing from artifact", .{})).root;
 }
 
+fn appendRecordRowFields(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    head: []const CheckedArtifact.CheckedRecordField,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+) Allocator.Error!void {
+    try fields.appendSlice(gpa, head);
+
+    var current = ext;
+    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer seen.deinit();
+
+    while (current) |current_id| {
+        if (seen.contains(current_id)) break;
+        try seen.put(current_id, {});
+
+        switch (checkedTypePayload(artifact, current_id)) {
+            .alias => |alias| current = alias.backing,
+            .empty_record => break,
+            .flex, .rigid => |variable| {
+                if (variable.row_default == .empty_record) break;
+                glueInvariant("open non-record checked row reached glue record conversion", .{});
+            },
+            .record => |record| {
+                try fields.appendSlice(gpa, record.fields);
+                current = record.ext;
+            },
+            .record_unbound => |tail_fields| {
+                try fields.appendSlice(gpa, tail_fields);
+                break;
+            },
+            else => glueInvariant("non-record checked row reached glue record conversion", .{}),
+        }
+    }
+}
+
+fn appendTagRowTags(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    head: []const CheckedArtifact.CheckedTag,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    tags: *std.ArrayList(CheckedArtifact.CheckedTag),
+) Allocator.Error!void {
+    try tags.appendSlice(gpa, head);
+
+    var current = ext;
+    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer seen.deinit();
+
+    while (current) |current_id| {
+        if (seen.contains(current_id)) break;
+        try seen.put(current_id, {});
+
+        switch (checkedTypePayload(artifact, current_id)) {
+            .alias => |alias| current = alias.backing,
+            .empty_tag_union => break,
+            .flex, .rigid => |variable| {
+                if (variable.row_default == .empty_tag_union) break;
+                glueInvariant("open non-tag checked row reached glue tag-union conversion", .{});
+            },
+            .tag_union => |tag_union| {
+                try tags.appendSlice(gpa, tag_union.tags);
+                current = tag_union.ext;
+            },
+            else => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
+        }
+    }
+}
+
 fn typeStringAlloc(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -2143,8 +2178,7 @@ fn writeRecordTypeString(
 ) Allocator.Error!void {
     var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
     defer all_fields.deinit(gpa);
-    try all_fields.appendSlice(gpa, fields);
-    if (ext) |ext_id| appendRecordStringExtFields(gpa, artifact, ext_id, &all_fields);
+    try appendRecordRowFields(gpa, artifact, fields, ext, &all_fields);
 
     if (all_fields.items.len == 0) {
         try buf.appendSlice(gpa, "{}");
@@ -2179,23 +2213,6 @@ fn writeRecordTypeString(
     try buf.appendSlice(gpa, " }");
 }
 
-fn appendRecordStringExtFields(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ext: CheckedArtifact.CheckedTypeId,
-    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-) void {
-    switch (checkedTypePayload(artifact, ext)) {
-        .empty_record => {},
-        .record => |record| {
-            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record type-string extension", .{});
-            appendRecordStringExtFields(gpa, artifact, record.ext, fields);
-        },
-        .record_unbound => |unbound| fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate record type-string unbound fields", .{}),
-        else => glueInvariant("non-record extension reached glue type string", .{}),
-    }
-}
-
 fn writeTupleTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -2221,8 +2238,7 @@ fn writeTagUnionTypeString(
 ) Allocator.Error!void {
     var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
     defer all_tags.deinit(gpa);
-    try all_tags.appendSlice(gpa, tags);
-    appendTagStringExtTags(gpa, artifact, ext, &all_tags);
+    try appendTagRowTags(gpa, artifact, tags, ext, &all_tags);
 
     try buf.append(gpa, '[');
     for (all_tags.items, 0..) |tag, i| {
@@ -2238,22 +2254,6 @@ fn writeTagUnionTypeString(
         }
     }
     try buf.append(gpa, ']');
-}
-
-fn appendTagStringExtTags(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ext: CheckedArtifact.CheckedTypeId,
-    tags: *std.ArrayList(CheckedArtifact.CheckedTag),
-) void {
-    switch (checkedTypePayload(artifact, ext)) {
-        .empty_tag_union => {},
-        .tag_union => |tag_union| {
-            tags.appendSlice(gpa, tag_union.tags) catch glueInvariant("could not allocate tag-union type-string extension", .{});
-            appendTagStringExtTags(gpa, artifact, tag_union.ext, tags);
-        },
-        else => glueInvariant("non-tag-union extension reached glue type string", .{}),
-    }
 }
 
 fn functionPayloadForRoot(
@@ -2276,7 +2276,9 @@ fn extractRecordFields(
 ) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
     var fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
     defer fields.deinit(gpa);
-    if (!collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields)) {
+    if (!(collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields) catch {
+        return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    })) {
         return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
     }
 
@@ -2314,38 +2316,20 @@ fn collectRecordFieldsForRoot(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
     fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-) bool {
+) Allocator.Error!bool {
     switch (checkedTypePayload(artifact, checked_type)) {
-        .alias => |alias| return collectRecordFieldsForRoot(gpa, artifact, alias.backing, fields),
-        .nominal => |nominal| return collectRecordFieldsForRoot(gpa, artifact, nominal.backing, fields),
+        .alias => |alias| return try collectRecordFieldsForRoot(gpa, artifact, alias.backing, fields),
+        .nominal => |nominal| return try collectRecordFieldsForRoot(gpa, artifact, nominal.backing, fields),
         .record => |record| {
-            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record field extraction", .{});
-            collectRecordExtFields(gpa, artifact, record.ext, fields);
+            try appendRecordRowFields(gpa, artifact, record.fields, record.ext, fields);
             return true;
         },
         .record_unbound => |unbound| {
-            fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate unbound record field extraction", .{});
+            try fields.appendSlice(gpa, unbound);
             return true;
         },
         .empty_record => return true,
         else => return false,
-    }
-}
-
-fn collectRecordExtFields(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ext: CheckedArtifact.CheckedTypeId,
-    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-) void {
-    switch (checkedTypePayload(artifact, ext)) {
-        .empty_record => {},
-        .record => |record| {
-            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record extension extraction", .{});
-            collectRecordExtFields(gpa, artifact, record.ext, fields);
-        },
-        .record_unbound => |unbound| fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate unbound record extension extraction", .{}),
-        else => glueInvariant("non-record extension reached record field extraction", .{}),
     }
 }
 
