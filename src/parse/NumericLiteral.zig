@@ -728,7 +728,43 @@ test "deprecated suffix source splits without mistaking hex digits for suffixes"
     }
 }
 
-test "parse normalizes deprecated suffixes to suffix-free numeric facts" {
+test "deprecated suffix text maps only old numeric spellings" {
+    const cases = [_]struct {
+        text: []const u8,
+        suffix: DeprecatedSuffix,
+        type_name: ?[]const u8,
+    }{
+        .{ .text = "u8", .suffix = .u8, .type_name = "U8" },
+        .{ .text = "i8", .suffix = .i8, .type_name = "I8" },
+        .{ .text = "u16", .suffix = .u16, .type_name = "U16" },
+        .{ .text = "i16", .suffix = .i16, .type_name = "I16" },
+        .{ .text = "u32", .suffix = .u32, .type_name = "U32" },
+        .{ .text = "i32", .suffix = .i32, .type_name = "I32" },
+        .{ .text = "u64", .suffix = .u64, .type_name = "U64" },
+        .{ .text = "i64", .suffix = .i64, .type_name = "I64" },
+        .{ .text = "u128", .suffix = .u128, .type_name = "U128" },
+        .{ .text = "i128", .suffix = .i128, .type_name = "I128" },
+        .{ .text = "f32", .suffix = .f32, .type_name = "F32" },
+        .{ .text = "f64", .suffix = .f64, .type_name = "F64" },
+        .{ .text = "dec", .suffix = .dec, .type_name = "Dec" },
+        .{ .text = "U64", .suffix = .none, .type_name = null },
+        .{ .text = "int", .suffix = .none, .type_name = null },
+    };
+
+    for (cases) |case| {
+        const suffix = deprecatedSuffixFromText(case.text);
+        try std.testing.expectEqual(case.suffix, suffix);
+        if (case.type_name) |type_name| {
+            try std.testing.expectEqualStrings(type_name, suffix.newTypeName().?);
+            try std.testing.expectEqualStrings(case.text, suffix.oldText().?);
+        } else {
+            try std.testing.expectEqual(@as(?[]const u8, null), suffix.newTypeName());
+            try std.testing.expectEqual(@as(?[]const u8, null), suffix.oldText());
+        }
+    }
+}
+
+test "parse normalizes deprecated suffixes to suffix-free numeric data" {
     var literal = try parse(std.testing.allocator, "123u64", .int);
     defer literal.deinit(std.testing.allocator);
 
@@ -736,6 +772,20 @@ test "parse normalizes deprecated suffixes to suffix-free numeric facts" {
     try std.testing.expectEqual(@as(i128, 123), literal.compact.int.toI128());
     try std.testing.expectEqualSlices(u8, &.{123}, literal.before);
     try std.testing.expectEqual(@as(usize, 0), literal.after.len);
+}
+
+test "parse exact integers keeps underscore-separated base digits" {
+    var hex = try parse(std.testing.allocator, "0x12_34_56_78", .int);
+    defer hex.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, &.{ 0x12, 0x34, 0x56, 0x78 }, hex.before);
+
+    var binary = try parse(std.testing.allocator, "0b1010_0101", .int);
+    defer binary.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, &.{0xa5}, binary.before);
+
+    var octal = try parse(std.testing.allocator, "0o1_777", .int);
+    defer octal.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, &.{ 0x03, 0xff }, octal.before);
 }
 
 test "parse exact integers stores base-256 chunks" {

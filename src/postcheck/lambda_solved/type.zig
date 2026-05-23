@@ -233,3 +233,28 @@ pub const Store = struct {
 test "lambda solved type declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
+
+test "lambda solved function types carry callable variables" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const arg = try store.add(.unbound);
+    const ret = try store.add(.unbound);
+    const callable = try store.add(.unbound);
+    const args = try store.addSpan(&.{arg});
+    const fn_ty = try store.add(.{ .func = .{
+        .args = args,
+        .callable = callable,
+        .ret = ret,
+    } });
+
+    const function = store.get(fn_ty).func;
+    try std.testing.expectEqual(callable, function.callable);
+    try std.testing.expectEqual(ret, function.ret);
+    try std.testing.expectEqual(arg, store.span(function.args)[0]);
+}
+
+test "lambda solved type variable order uses the typed id helper" {
+    try std.testing.expect(@as(TypeVarId, @enumFromInt(2)).is_gt(@enumFromInt(1)));
+    try std.testing.expect(!@as(TypeVarId, @enumFromInt(1)).is_gt(@enumFromInt(2)));
+}

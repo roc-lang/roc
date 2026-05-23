@@ -16377,7 +16377,7 @@ test "compile-time finalization route is explicit and non-optional" {
     try std.testing.expect(@hasField(RootRequestTable, "compile_time_requests"));
 }
 
-test "compile-time roots and top-level values publish final artifacts only" {
+test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "constant") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "callable_binding") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "expect") != null);
@@ -16431,6 +16431,26 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "const_templates"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "const_store"));
+}
+
+test "checked module keeps current compile-time ownership tables" {
+    try std.testing.expect(@hasField(CallableEvalTemplateTable, "templates"));
+    try std.testing.expect(@hasField(CallableEvalTemplate, "root"));
+    try std.testing.expect(@hasField(CallableEvalTemplate, "checked_fn_root"));
+
+    try std.testing.expect(@hasField(TopLevelProcedureBindingTable, "bindings"));
+    try std.testing.expect(@hasField(ProcedureBindingBody, "direct_template"));
+    try std.testing.expect(@hasField(ProcedureBindingBody, "callable_eval_template"));
+
+    try std.testing.expect(@hasField(RootRequestTable, "requests"));
+    try std.testing.expect(@hasField(RootRequestTable, "runtime_requests"));
+    try std.testing.expect(@hasField(RootRequestTable, "compile_time_requests"));
+
+    try std.testing.expect(@hasField(CompileTimeRootTable, "roots"));
+    try std.testing.expect(@hasField(TopLevelValueTable, "entries"));
+    try std.testing.expect(@hasField(ConstTemplateTable, "templates"));
+    try std.testing.expect(@hasField(ConstStore, "values"));
+    try std.testing.expect(@hasField(ConstStore, "fns"));
 }
 
 test "provided primitive constant is a data export, not a runtime root" {

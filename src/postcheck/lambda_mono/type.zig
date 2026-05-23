@@ -316,3 +316,26 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 test "lambda mono type declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
+
+test "lambda mono type content has callable shapes instead of function types" {
+    try std.testing.expect(@hasField(Content, "callable"));
+    try std.testing.expect(@hasField(Content, "erased_fn"));
+    try std.testing.expect(!@hasField(Content, "func"));
+}
+
+test "lambda mono callable variants receive store-local ids" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const capture_ty = try store.add(.zst);
+    const variants = try store.addFnVariants(&.{
+        .{ .id = @enumFromInt(99), .lambda = @enumFromInt(7), .capture_ty = capture_ty },
+        .{ .id = @enumFromInt(99), .lambda = @enumFromInt(8), .capture_ty = null },
+    });
+    const callable = try store.add(.{ .callable = variants });
+
+    const stored_variants = store.fnVariantSpan(store.get(callable).callable);
+    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(variants.start)), stored_variants[0].id);
+    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(1)), stored_variants[1].id);
+    try std.testing.expectEqual(capture_ty, stored_variants[0].capture_ty.?);
+}

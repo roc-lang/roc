@@ -301,3 +301,72 @@ fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {
 test "monotype type declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
+
+test "monotype named type digest includes generic arguments" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_name = try name_store.internModuleName("Test");
+    const type_name = try name_store.internTypeName("Box");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str = try store.add(.{ .primitive = .str });
+    const i64_args = try store.addSpan(&.{i64_ty});
+    const str_args = try store.addSpan(&.{str});
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const named_i64 = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = i64_args,
+    } });
+    const named_str = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = str_args,
+    } });
+
+    const i64_digest = store.typeDigest(&name_store, named_i64);
+    const str_digest = store.typeDigest(&name_store, named_str);
+    try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
+test "monotype store keeps function-containing shapes distinct" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.add(.zst);
+    const args = try store.addSpan(&.{unit});
+
+    const fn_a = try store.add(.{ .func = .{ .args = args, .ret = unit } });
+    const fn_b = try store.add(.{ .func = .{ .args = args, .ret = unit } });
+    try std.testing.expect(fn_a != fn_b);
+
+    const list_a = try store.add(.{ .list = fn_a });
+    const list_b = try store.add(.{ .list = fn_a });
+    try std.testing.expect(list_a != list_b);
+}
+
+test "monotype row entries retain checked label ids" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("age");
+    const tag_name = try name_store.internTagLabel("Adult");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const fields = try store.addFields(&.{.{ .name = field_name, .ty = i64_ty }});
+    const payloads = try store.addSpan(&.{i64_ty});
+    const tags = try store.addTags(&.{.{ .name = tag_name, .checked_name = tag_name, .payloads = payloads }});
+
+    try std.testing.expectEqual(field_name, store.fieldSpan(fields)[0].name);
+    try std.testing.expectEqual(tag_name, store.tagSpan(tags)[0].name);
+}

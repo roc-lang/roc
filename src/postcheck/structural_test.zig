@@ -1,6 +1,7 @@
 //! Structural assertions for post-check stage boundaries.
 
 const std = @import("std");
+const check = @import("check");
 
 const Mono = @import("monotype/ast.zig");
 const MonoType = @import("monotype/type.zig");
@@ -10,9 +11,24 @@ const LambdaSolvedType = @import("lambda_solved/type.zig");
 const LambdaMono = @import("lambda_mono/ast.zig");
 const LambdaMonoType = @import("lambda_mono/type.zig");
 const LIR = @import("lir_core").LIR;
+const names = check.CheckedNames;
 
 fn unionFieldCount(comptime T: type) comptime_int {
     return @typeInfo(T).@"union".fields.len;
+}
+
+fn structFieldType(comptime T: type, comptime name: []const u8) type {
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return field.type;
+    }
+    @compileError("missing struct field: " ++ name);
+}
+
+fn unionPayloadType(comptime T: type, comptime name: []const u8) type {
+    inline for (@typeInfo(T).@"union".fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return field.type;
+    }
+    @compileError("missing union field: " ++ name);
 }
 
 test "Monotype has direct calls and no checked-only expression forms" {
@@ -41,6 +57,22 @@ test "Monotype types are closed checked types without row tails" {
     try std.testing.expect(!@hasField(MonoType.Content, "empty_tag_union"));
     try std.testing.expect(!@hasField(MonoType.Content, "row_var"));
     try std.testing.expect(!@hasField(MonoType.Content, "lambda_set"));
+}
+
+test "post-check row entries carry checked label ids until LIR indices" {
+    try std.testing.expect(structFieldType(Mono.FieldExpr, "name") == names.RecordFieldNameId);
+    try std.testing.expect(structFieldType(Mono.RecordDestruct, "name") == names.RecordFieldNameId);
+    try std.testing.expect(structFieldType(MonoType.Field, "name") == names.RecordFieldNameId);
+    try std.testing.expect(structFieldType(MonoType.Tag, "name") == names.TagNameId);
+    try std.testing.expect(structFieldType(LambdaMono.FieldExpr, "name") == names.RecordFieldNameId);
+    try std.testing.expect(structFieldType(LambdaMono.RecordDestruct, "name") == names.RecordFieldNameId);
+    try std.testing.expect(structFieldType(LambdaMonoType.Field, "name") == names.RecordFieldNameId);
+    try std.testing.expect(structFieldType(LambdaMonoType.Tag, "name") == names.TagNameId);
+
+    const lir_field = unionPayloadType(LIR.RefOp, "field");
+    const lir_payload = unionPayloadType(LIR.RefOp, "tag_payload");
+    try std.testing.expect(structFieldType(lir_field, "field_idx") == u16);
+    try std.testing.expect(structFieldType(lir_payload, "payload_idx") == u16);
 }
 
 test "Lifted functions own captures and expression lambdas are gone" {
@@ -118,4 +150,18 @@ test "stage expression forms only shrink checked syntax or add runtime encoding 
 
     try std.testing.expect(@hasField(LambdaMono.ExprData, "direct_call"));
     try std.testing.expect(@hasField(LambdaMono.ExprData, "callable"));
+}
+
+test "post-check stage products do not store expression cache state" {
+    const ir_types = .{
+        Mono.Program,
+        Lifted.Program,
+        LambdaSolved.Program,
+        LambdaMono.Program,
+    };
+
+    inline for (ir_types) |T| {
+        try std.testing.expect(!@hasField(T, "expr_map"));
+        try std.testing.expect(!@hasField(T, "memoized_exprs"));
+    }
 }

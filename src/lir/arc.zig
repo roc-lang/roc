@@ -2684,6 +2684,77 @@ test "RC join loop exit releases body-only list and preserves returned state" {
     try testing.expect(f.countRc(state, .decref) >= 1);
 }
 
+test "RC iterator join borrowed element used twice gets increfs and no decref" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const elem = try f.local(.str);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const body = try f.assignCall(result, &.{ elem, elem }, ret);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = body,
+        .remainder = jump,
+    } });
+
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+    try f.expectRc(elem, 2, 0, 0);
+}
+
+test "RC iterator join unused borrowed element has no RC statements" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const elem = try f.local(.str);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const body = try f.assignI64(result, 1, ret);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = body,
+        .remainder = jump,
+    } });
+
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+    try f.expectRc(elem, 0, 0, 0);
+}
+
+test "RC mutable iterator accumulator replace cleans old state" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const acc = try f.local(f.list_i64);
+    const next_acc = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(acc);
+    const replace_acc = try f.setLocal(acc, next_acc, .replace_existing, ret);
+    const body = try f.assignList(next_acc, &.{}, replace_acc);
+
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_acc = try f.setLocal(acc, source, .initialize_join_param, initial_jump);
+    const remainder = try f.assignList(source, &.{}, initialize_acc);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{acc}),
+        .body = body,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, join, f.list_i64);
+    try f.run();
+    try testing.expect(f.countRc(acc, .decref) >= 1);
+}
+
 test "dev lowering: list rest pattern emits two list decrefs" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
