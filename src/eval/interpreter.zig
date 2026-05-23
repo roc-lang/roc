@@ -1288,8 +1288,6 @@ pub const Interpreter = struct {
                         .{@intFromEnum(proc_id)},
                     );
                 }
-                self.setLocalChecked(&frame, null, param, arg);
-                continue;
             }
 
             if (builtin.mode == .Debug and arg_layout != param_layout) {
@@ -1686,55 +1684,6 @@ pub const Interpreter = struct {
                         "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
                         .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
                     );
-                    const arg_locals = self.store.getLocalSpan(jump_stmt.args);
-                    const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const params = self.store.getLocalSpan(join_info.params);
-                    if (params.len != arg_values.len) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: jump to join point {d} passed {d} args but target expects {d}",
-                            .{ @intFromEnum(jump_stmt.target), arg_values.len, params.len },
-                        );
-                    }
-                    for (params, arg_values, arg_locals) |param, arg, arg_local| {
-                        if (builtin.mode == .Debug) {
-                            const actual_layout = self.store.getLocal(arg_local).layout_idx;
-                            const expected_layout = self.store.getLocal(param).layout_idx;
-                            const actual_layout_val = self.layout_store.getLayout(actual_layout);
-                            const expected_layout_val = self.layout_store.getLayout(expected_layout);
-                            if ((actual_layout_val.tag == .struct_ or actual_layout_val.tag == .tag_union) and
-                                actual_layout != expected_layout)
-                            {
-                                debugPrint(
-                                    "LIR/interpreter jump arg layout mismatch proc={d} stmt={d} join={d} arg_local={d} actual={d} ({s}) param={d} expected={d} ({s})\n",
-                                    .{
-                                        @intFromEnum(frame.proc_id),
-                                        @intFromEnum(current),
-                                        @intFromEnum(jump_stmt.target),
-                                        @intFromEnum(arg_local),
-                                        @intFromEnum(actual_layout),
-                                        @tagName(actual_layout_val.tag),
-                                        @intFromEnum(param),
-                                        @intFromEnum(expected_layout),
-                                        @tagName(expected_layout_val.tag),
-                                    },
-                                );
-                                self.debugDumpProc(frame.proc_id);
-                                self.debugPrintStmtChain(current, 24);
-                            }
-                        }
-                        const param_layout = self.store.getLocal(param).layout_idx;
-                        const coerced = try self.coerceExplicitRefValueToLayout(
-                            arg,
-                            self.store.getLocal(arg_local).layout_idx,
-                            param_layout,
-                        );
-                        self.setLocalChecked(
-                            frame,
-                            current,
-                            param,
-                            try self.materializeLocalValue(coerced, param_layout),
-                        );
-                    }
                     current = join_info.body;
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
@@ -1978,14 +1927,10 @@ pub const Interpreter = struct {
                     stack.append(self.evalAllocator(), join.remainder) catch return;
                 },
                 .jump => |jump| {
-                    debugPrint("    {d}: jump target={d} args=", .{
+                    debugPrint("    {d}: jump target={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(jump.target),
                     });
-                    for (self.store.getLocalSpan(jump.args)) |arg_local| {
-                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
-                    }
-                    debugPrint("\n", .{});
                 },
                 .ret => |ret| {
                     debugPrint("    {d}: ret value={d}\n", .{
@@ -2370,7 +2315,7 @@ pub const Interpreter = struct {
         }
 
         const capture_value_ptr: [*]u8 = @ptrCast(@as([*]u8, @ptrCast(context)) + context.capture_value_offset);
-        proc_args[explicit_arg_count] = .{ .ptr = capture_value_ptr };
+        proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
         const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
@@ -5375,12 +5320,30 @@ pub const Interpreter = struct {
 
     // Layout helpers
 
+    fn readPointerInt(self: *const LirInterpreter, value: Value) usize {
+        return switch (self.layout_store.targetUsize().size()) {
+            4 => value.read(u32),
+            8 => value.read(usize),
+            else => unreachable,
+        };
+    }
+
+    fn writePointerInt(self: *const LirInterpreter, value: Value, raw_ptr: usize) void {
+        switch (self.layout_store.targetUsize().size()) {
+            4 => value.write(u32, @intCast(raw_ptr)),
+            8 => value.write(usize, raw_ptr),
+            else => unreachable,
+        }
+    }
+
+    fn allocPointerIntValue(self: *LirInterpreter, raw_ptr: usize) Error!Value {
+        const value = try self.alloc(.opaque_ptr);
+        self.writePointerInt(value, raw_ptr);
+        return value;
+    }
+
     fn readBoxedDataPointer(self: *const LirInterpreter, boxed: Value) ?[*]u8 {
-        const target_usize = self.layout_store.targetUsize();
-        const raw_ptr: usize = if (target_usize.size() == 8)
-            boxed.read(usize)
-        else
-            boxed.read(u32);
+        const raw_ptr = self.readPointerInt(boxed);
 
         if (raw_ptr == 0) return null;
         return @ptrFromInt(raw_ptr);
@@ -5388,11 +5351,7 @@ pub const Interpreter = struct {
 
     fn writeBoxedDataPointer(self: *const LirInterpreter, boxed: Value, data_ptr: ?[*]u8) void {
         const raw_ptr: usize = if (data_ptr) |ptr| @intFromPtr(ptr) else 0;
-        switch (self.layout_store.targetUsize().size()) {
-            4 => boxed.write(u32, @intCast(raw_ptr)),
-            8 => boxed.write(usize, raw_ptr),
-            else => unreachable,
-        }
+        self.writePointerInt(boxed, raw_ptr);
     }
 
     fn allocBoxOfZstValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
@@ -5670,7 +5629,14 @@ pub const Interpreter = struct {
         const result = try self.alloc(ret_layout);
         const size = self.helper.sizeOf(ret_layout);
         if (size > 0) {
-            result.copyFrom(capture_ptr, size);
+            const raw_capture_ptr = self.readPointerInt(capture_ptr);
+            if (builtin.mode == .Debug and raw_capture_ptr == 0) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: erased capture load received a null capture pointer for non-ZST layout {d}",
+                    .{@intFromEnum(ret_layout)},
+                );
+            }
+            result.copyFrom(.{ .ptr = @ptrFromInt(raw_capture_ptr) }, size);
         }
 
         return result;

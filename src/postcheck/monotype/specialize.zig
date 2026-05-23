@@ -5,11 +5,13 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const Common = @import("../common.zig");
 
+/// Monotype function template paired with its requested function type.
 pub const Spec = struct {
     fn_def: Ast.FnTemplate,
     ty: Type.TypeId,
 };
 
+/// Work queue for Monotype specialization.
 pub const Queue = struct {
     entries: std.ArrayList(Spec),
 

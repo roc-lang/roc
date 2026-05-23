@@ -70,7 +70,7 @@ pub fn main() !void {
         return;
     }
 
-    try stdout.print("Step 2: Extracting test references from mod.zig files...\n", .{});
+    try stdout.print("Step 2: Extracting test references from mod.zig files and build roots...\n", .{});
     var referenced = std.StringHashMap(void).init(gpa);
     defer {
         var it = referenced.keyIterator();
@@ -83,13 +83,12 @@ pub fn main() !void {
     for (mod_files.items) |mod_path| {
         try collectModImports(gpa, mod_path, &referenced);
     }
-    // Also treat test roots declared in build.zig (b.addTest root_source_file)
-    // as valid wiring for the corresponding files (e.g. src/cli/main.zig and
-    // src/cli/test/roc_subcommands.zig).
-    try markBuildTestRootsAsReferenced(gpa, &referenced);
+    // Also treat build-registered Zig roots as valid wiring for the
+    // corresponding files, and scan their imports as aggregators.
+    try markBuildRootsAsReferenced(gpa, &referenced);
 
     try stdout.print(
-        "Found {d} file references in mod.zig files and build.zig test roots\n\n",
+        "Found {d} file references in mod.zig files and build roots\n\n",
         .{referenced.count()},
     );
 
@@ -307,19 +306,31 @@ fn resolveImportPath(
     return std.fs.path.resolvePosix(allocator, &.{ mod_dir, import_path });
 }
 
-/// Mark files that are used as test roots in build.zig as "wired".
+/// Mark files that are used as build roots as "wired".
 ///
 /// In addition to mod.zig imports, some tests are hooked up via explicit
-/// `b.addTest` calls in build.zig (for example the CLI tests). Any Zig
-/// file that is used as a `root_source_file = b.path("...")` in such a
-/// test configuration should not be reported as missing wiring.
-fn markBuildTestRootsAsReferenced(
+/// build roots. Any Zig file that is used as a
+/// `root_source_file = b.path("...")` should not be reported as missing
+/// wiring. These roots also act as aggregators for their own imports.
+fn markBuildRootsAsReferenced(
     allocator: Allocator,
     referenced: *std.StringHashMap(void),
 ) !void {
-    const build_path = "build.zig";
-    if (!fileExists(build_path)) return;
+    const build_sources = [_][]const u8{
+        "build.zig",
+        "src/build/modules.zig",
+    };
+    for (build_sources) |build_path| {
+        if (!fileExists(build_path)) continue;
+        try markBuildRootsFromFile(allocator, build_path, referenced);
+    }
+}
 
+fn markBuildRootsFromFile(
+    allocator: Allocator,
+    build_path: []const u8,
+    referenced: *std.StringHashMap(void),
+) !void {
     const source = try readSourceFile(allocator, build_path);
     defer allocator.free(source);
 
@@ -328,32 +339,29 @@ fn markBuildTestRootsAsReferenced(
 
     while (std.mem.indexOfPos(u8, source, search_index, pattern)) |match_pos| {
         const literal_start = match_pos + pattern.len;
-        var cursor = literal_start;
+        const literal_end = std.mem.indexOfScalarPos(u8, source, literal_start, '"') orelse break;
+        const rel_path = source[literal_start..literal_end];
+        search_index = literal_end + 1;
 
-        // Find end of the string literal.
-        while (cursor < source.len and source[cursor] != '"') : (cursor += 1) {}
-        if (cursor >= source.len) break;
+        if (!std.mem.endsWith(u8, rel_path, ".zig")) continue;
+        if (!std.mem.startsWith(u8, rel_path, "src/")) continue;
+        if (!fileExists(rel_path)) continue;
 
-        const rel_path = source[literal_start..cursor];
+        try markReferenced(allocator, referenced, rel_path);
+        try collectModImports(allocator, rel_path, referenced);
+    }
+}
 
-        // Only consider Zig source files under src/ as potential test roots.
-        if (!std.mem.endsWith(u8, rel_path, ".zig")) {
-            search_index = cursor + 1;
-            continue;
-        }
-        if (!std.mem.startsWith(u8, rel_path, "src/")) {
-            search_index = cursor + 1;
-            continue;
-        }
-
-        const key = try allocator.dupe(u8, rel_path);
-        if (referenced.contains(key)) {
-            allocator.free(key);
-        } else {
-            try referenced.put(key, {});
-        }
-
-        search_index = cursor + 1;
+fn markReferenced(
+    allocator: Allocator,
+    referenced: *std.StringHashMap(void),
+    path: []const u8,
+) !void {
+    const key = try allocator.dupe(u8, path);
+    if (referenced.contains(key)) {
+        allocator.free(key);
+    } else {
+        try referenced.put(key, {});
     }
 }
 

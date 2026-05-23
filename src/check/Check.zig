@@ -6341,7 +6341,16 @@ fn publishBinopDispatchExpr(
 ) Allocator.Error!void {
     switch (self.cir.store.getExpr(expr_idx)) {
         .e_binop => |binop| switch (binop.op) {
-            .eq, .ne, .@"and", .@"or" => {},
+            .eq, .ne => {
+                self.cir.store.replaceExprWithMethodEq(
+                    expr_idx,
+                    binop.lhs,
+                    binop.rhs,
+                    binop.op == .ne,
+                    constraint_fn_var,
+                );
+            },
+            .@"and", .@"or" => {},
             else => {
                 const args = try self.cir.store.appendExprSpan(&.{binop.rhs});
                 self.cir.store.replaceExprWithDispatchCall(
@@ -6618,6 +6627,9 @@ fn rewriteImplicitEqMethodCallAsStructuralEq(
             }
 
             self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.binop_negated);
+        },
+        .e_method_eq => |eq| {
+            self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.binop_negated);
         },
         .e_binop => |binop| {
             if (binop.op != .eq and binop.op != .ne) return;

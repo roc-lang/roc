@@ -1208,6 +1208,7 @@ pub fn replaceExprWithTypeDispatchCall(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with an if expression in-place.
 /// Replaces an existing expression with an e_tag expression in-place.
 /// This is used for constant folding tag unions with payloads during compile-time evaluation.
 /// The arg_indices slice contains the indices of the tag argument expressions.

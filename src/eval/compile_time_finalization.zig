@@ -11,10 +11,12 @@ const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedArtifact;
+const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 
+/// Return the checking finalizer that evaluates compile-time roots.
 pub fn finalizer() checked.CompileTimeFinalizer {
     return .{ .finalize = finalize };
 }
@@ -27,56 +29,334 @@ fn finalize(
     available_modules: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
 ) anyerror!void {
-    _ = imports;
-
     const requests = module.root_requests.compile_time_requests;
 
     if (requests.len != 0) {
-        var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-            allocator,
-            .{
-                .root = checked.loweringViewWithRelations(module, relation_modules),
-                .imports = available_modules,
-            },
-            .{ .requests = requests },
-            .{
-                .target_usize = base.target.TargetUsize.native,
-                .checked_state = .checking_finalization,
-            },
-        );
-        defer lowered.deinit();
+        const lowering_imports = try finalizationImports(allocator, imports, available_modules);
+        defer allocator.free(lowering_imports);
 
-        var host = CompilerHost.init(allocator);
-        defer host.deinit();
+        var state = try RootPublishState.init(allocator, module);
+        defer state.deinit();
 
-        var interpreter = try Interpreter.init(
-            allocator,
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            host.ops(),
-        );
-        defer interpreter.deinit();
+        var ready = std.ArrayList(checked.RootRequest).empty;
+        defer ready.deinit(allocator);
 
-        var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
-        defer writer.deinit();
-
-        for (lowered.lir_result.const_roots.items) |root| {
-            const payload = blk: {
-                const eval_result = try interpreter.eval(.{
-                    .proc_id = root.proc,
-                    .ret_layout = root.ret_layout,
-                });
-                defer interpreter.dropValue(eval_result.value, root.ret_layout);
-                break :blk try writer.storeRoot(root, eval_result.value);
-            };
-
-            const root_id = compileTimeRootForRequest(module, root.request);
-            module.compile_time_roots.fillPayload(root_id, payload);
-            publishConstRoot(module, module.compile_time_roots.root(root_id), payload);
+        var pending = requests.len;
+        while (pending > 0) {
+            ready.clearRetainingCapacity();
+            for (requests) |request| {
+                const root_id = compileTimeRootForRequest(module, request);
+                if (state.isDone(root_id)) continue;
+                if (state.dependenciesPublished(request)) {
+                    try ready.append(allocator, request);
+                }
+            }
+            if (ready.items.len == 0) {
+                finalizationInvariant("compile-time roots had a cyclic or unpublished local dependency");
+            }
+            try lowerEvalAndPublishReadyRoots(
+                allocator,
+                module,
+                lowering_imports,
+                relation_modules,
+                ready.items,
+                &state,
+            );
+            pending -= ready.items.len;
         }
     }
 
     module.const_store.verifyPublished();
+}
+
+const RootStatus = enum {
+    pending,
+    done,
+};
+
+const RootPublishState = struct {
+    module: *checked.CheckedModuleArtifact,
+    statuses: []RootStatus,
+    visited_templates: []u32,
+    visit: u32,
+
+    fn init(
+        allocator: Allocator,
+        module: *checked.CheckedModuleArtifact,
+    ) Allocator.Error!RootPublishState {
+        const statuses = try allocator.alloc(RootStatus, module.compile_time_roots.roots.len);
+        errdefer allocator.free(statuses);
+        @memset(statuses, .pending);
+
+        const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.len);
+        errdefer allocator.free(visited_templates);
+        @memset(visited_templates, 0);
+
+        return .{
+            .module = module,
+            .statuses = statuses,
+            .visited_templates = visited_templates,
+            .visit = 0,
+        };
+    }
+
+    fn deinit(self: *RootPublishState) void {
+        const allocator = self.module.const_store.allocator;
+        allocator.free(self.visited_templates);
+        allocator.free(self.statuses);
+        self.* = undefined;
+    }
+
+    fn isDone(self: *const RootPublishState, root_id: checked.ComptimeRootId) bool {
+        return self.statuses[@intFromEnum(root_id)] == .done;
+    }
+
+    fn markDone(self: *RootPublishState, root_id: checked.ComptimeRootId) void {
+        self.statuses[@intFromEnum(root_id)] = .done;
+    }
+
+    fn dependenciesPublished(
+        self: *RootPublishState,
+        request: checked.RootRequest,
+    ) bool {
+        self.visit +%= 1;
+        if (self.visit == 0) {
+            @memset(self.visited_templates, 0);
+            self.visit = 1;
+        }
+        const template_ref = request.procedure_template orelse
+            finalizationInvariant("compile-time root had no checked wrapper template");
+        return self.templateDependenciesPublished(template_ref);
+    }
+
+    fn templateDependenciesPublished(
+        self: *RootPublishState,
+        template_ref: canonical.ProcedureTemplateRef,
+    ) bool {
+        if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
+        const index = @intFromEnum(template_ref.template);
+        if (index >= self.visited_templates.len) {
+            finalizationInvariant("compile-time dependency referenced an unknown local procedure template");
+        }
+        if (self.visited_templates[index] == self.visit) return true;
+        self.visited_templates[index] = self.visit;
+
+        const template = self.module.checked_procedure_templates.get(template_ref.template);
+        return self.resolvedRefsDependenciesPublished(template.resolved_value_refs);
+    }
+
+    fn resolvedRefsDependenciesPublished(
+        self: *RootPublishState,
+        refs: checked.ResolvedValueRefTableRef,
+    ) bool {
+        const start = refs.start;
+        const end = refs.start + refs.len;
+        if (end > self.module.resolved_value_refs.template_refs.len) {
+            finalizationInvariant("compile-time dependency template-ref span was outside the checked table");
+        }
+        for (self.module.resolved_value_refs.template_refs[start..end]) |ref_id| {
+            const raw = @intFromEnum(ref_id);
+            if (raw >= self.module.resolved_value_refs.records.len) {
+                finalizationInvariant("compile-time dependency ref id was outside the checked table");
+            }
+            if (!self.resolvedRefDependenciesPublished(self.module.resolved_value_refs.records[raw].ref)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn resolvedRefDependenciesPublished(
+        self: *RootPublishState,
+        ref: checked.ResolvedValueRef,
+    ) bool {
+        return switch (ref) {
+            .top_level_const => |const_use| self.constUsePublished(const_use),
+            .top_level_proc,
+            .promoted_top_level_proc,
+            => |proc_use| self.procedureUseDependenciesPublished(proc_use),
+            .platform_required_const => |required| self.constUsePublished(required.const_use),
+            .platform_required_proc => |required| self.procedureUseDependenciesPublished(required.procedure),
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .imported_const,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            => true,
+        };
+    }
+
+    fn constUsePublished(
+        self: *RootPublishState,
+        const_use: checked.ConstUseTemplate,
+    ) bool {
+        const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
+        return !self.rootHasCompileTimeRequest(root_id) or self.isDone(root_id);
+    }
+
+    fn rootForConstRef(
+        self: *RootPublishState,
+        const_ref: checked.ConstRef,
+    ) ?checked.ComptimeRootId {
+        if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
+        const owner = switch (const_ref.owner) {
+            .top_level_binding => |top_level| top_level,
+        };
+        return self.module.compile_time_roots.lookupIdByPattern(owner.pattern) orelse
+            finalizationInvariant("local const dependency had no compile-time root");
+    }
+
+    fn procedureUseDependenciesPublished(
+        self: *RootPublishState,
+        proc_use: checked.ProcedureUseTemplate,
+    ) bool {
+        return switch (proc_use.binding) {
+            .top_level => |top_level| self.topLevelProcedureDependenciesPublished(top_level),
+            .imported, .hosted => true,
+            .platform_required => |required| self.platformRequiredProcedureDependenciesPublished(required),
+        };
+    }
+
+    fn topLevelProcedureDependenciesPublished(
+        self: *RootPublishState,
+        top_level: checked.ArtifactTopLevelProcedureBindingRef,
+    ) bool {
+        if (!artifactMatches(top_level.artifact, self.module.key)) return true;
+        const binding = self.module.top_level_procedure_bindings.get(top_level.binding);
+        return self.procedureBindingDependenciesPublished(binding.body);
+    }
+
+    fn procedureBindingDependenciesPublished(
+        self: *RootPublishState,
+        body: checked.ProcedureBindingBody,
+    ) bool {
+        return switch (body) {
+            .direct_template => |direct| self.callableTemplateDependenciesPublished(direct.template),
+            .callable_eval_template => |template_id| blk: {
+                const template = self.module.callable_eval_templates.get(template_id);
+                break :blk !self.rootHasCompileTimeRequest(template.root) or self.isDone(template.root);
+            },
+        };
+    }
+
+    fn rootHasCompileTimeRequest(
+        self: *RootPublishState,
+        root_id: checked.ComptimeRootId,
+    ) bool {
+        for (self.module.root_requests.compile_time_requests) |request| {
+            if (compileTimeRootForRequest(self.module, request) == root_id) return true;
+        }
+        return false;
+    }
+
+    fn callableTemplateDependenciesPublished(
+        self: *RootPublishState,
+        template: canonical.CallableProcedureTemplateRef,
+    ) bool {
+        return switch (template) {
+            .checked => |checked_template| self.templateDependenciesPublished(checked_template),
+            .lifted, .synthetic => finalizationInvariant("checked procedure dependency referenced a post-check template"),
+        };
+    }
+
+    fn platformRequiredProcedureDependenciesPublished(
+        self: *RootPublishState,
+        required: checked.RequiredAppProcedureRef,
+    ) bool {
+        if (!artifactMatches(required.artifact, self.module.key)) return true;
+        const binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
+            finalizationInvariant("platform-required procedure dependency referenced a missing binding");
+        return switch (binding.value_use) {
+            .procedure_value => |procedure| self.procedureUseDependenciesPublished(procedure.procedure),
+            .const_value => |const_value| self.constUsePublished(const_value.const_use),
+        };
+    }
+};
+
+fn lowerEvalAndPublishReadyRoots(
+    allocator: Allocator,
+    module: *checked.CheckedModuleArtifact,
+    lowering_imports: []const checked.ImportedModuleView,
+    relation_modules: []const checked.ImportedModuleView,
+    requests: []const checked.RootRequest,
+    state: *RootPublishState,
+) anyerror!void {
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        .{
+            .root = checked.loweringViewWithRelations(module, relation_modules),
+            .imports = lowering_imports,
+        },
+        .{ .requests = requests },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+            .checked_state = .checking_finalization,
+        },
+    );
+    defer lowered.deinit();
+
+    var host = CompilerHost.init(allocator);
+    defer host.deinit();
+
+    var interpreter = try Interpreter.init(
+        allocator,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        host.ops(),
+    );
+    defer interpreter.deinit();
+
+    var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
+    defer writer.deinit();
+
+    for (lowered.lir_result.const_roots.items) |root| {
+        const payload = blk: {
+            const eval_result = try interpreter.eval(.{
+                .proc_id = root.proc,
+                .ret_layout = root.ret_layout,
+            });
+            defer interpreter.dropValue(eval_result.value, root.ret_layout);
+            break :blk try writer.storeRoot(root, eval_result.value);
+        };
+
+        const root_id = compileTimeRootForRequest(module, root.request);
+        module.compile_time_roots.fillPayload(root_id, payload);
+        publishConstRoot(module, module.compile_time_roots.root(root_id), payload);
+        state.markDone(root_id);
+    }
+}
+
+fn finalizationImports(
+    allocator: Allocator,
+    imports: []const checked.PublishImportArtifact,
+    available_modules: []const checked.ImportedModuleView,
+) Allocator.Error![]checked.ImportedModuleView {
+    var out = std.ArrayList(checked.ImportedModuleView).empty;
+    errdefer out.deinit(allocator);
+
+    for (imports) |import| {
+        try appendUniqueImport(allocator, &out, import.view);
+    }
+    for (available_modules) |module| {
+        try appendUniqueImport(allocator, &out, module);
+    }
+
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendUniqueImport(
+    allocator: Allocator,
+    out: *std.ArrayList(checked.ImportedModuleView),
+    module: checked.ImportedModuleView,
+) Allocator.Error!void {
+    for (out.items) |existing| {
+        if (std.mem.eql(u8, existing.key.bytes[0..], module.key.bytes[0..])) return;
+    }
+    try out.append(allocator, module);
 }
 
 fn compileTimeRootForRequest(
@@ -126,6 +406,10 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
         .statement => |left| left == b.statement,
         .required_binding => |left| left == b.required_binding,
     };
+}
+
+fn artifactMatches(a: anytype, b: checked.CheckedModuleArtifactKey) bool {
+    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {

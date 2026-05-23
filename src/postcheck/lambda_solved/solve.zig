@@ -1,6 +1,7 @@
 //! Lambda solving over lifted Monotype IR.
 
 const std = @import("std");
+const can = @import("can");
 
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
@@ -10,6 +11,19 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 
+const UnifyPair = struct {
+    first: Type.TypeVarId,
+    second: Type.TypeVarId,
+
+    fn init(lhs: Type.TypeVarId, rhs: Type.TypeVarId) UnifyPair {
+        return if (lhs.is_gt(rhs))
+            .{ .first = rhs, .second = lhs }
+        else
+            .{ .first = lhs, .second = rhs };
+    }
+};
+
+/// Solve lambda-set relationships in a lifted Monotype program.
 pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
@@ -38,6 +52,7 @@ const Solver = struct {
     loop_results: std.ArrayList(Type.TypeVarId),
     loop_params: std.ArrayList(Type.Span),
     return_tys: std.ArrayList(Type.TypeVarId),
+    active_unifications: std.AutoHashMap(UnifyPair, void),
 
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Solver {
         const local_tys = try allocator.alloc(?Type.TypeVarId, program.lifted.locals.items.len);
@@ -66,10 +81,12 @@ const Solver = struct {
             .loop_results = .empty,
             .loop_params = .empty,
             .return_tys = .empty,
+            .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        self.active_unifications.deinit();
         self.return_tys.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
@@ -102,6 +119,8 @@ const Solver = struct {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
             try self.solveFn(fn_id, fn_);
         }
+
+        try self.closeUnfilledCallableSlots();
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
@@ -168,11 +187,10 @@ const Solver = struct {
             else => Common.invariant("Lambda Solved function table contains a non-function type"),
         };
 
-        const arg_tys = self.program.types.span(func.args);
         const arg_locals = self.program.lifted.typedLocalSpan(fn_.args);
-        if (arg_tys.len != arg_locals.len) Common.invariant("Lambda Solved function arity changed after registration");
+        if (func.args.count() != arg_locals.len) Common.invariant("Lambda Solved function arity changed after registration");
         for (arg_locals, 0..) |arg, i| {
-            try self.unify(arg_tys[i], self.localTy(arg.local));
+            try self.unify(self.program.types.spanItem(func.args, i), self.localTy(arg.local));
         }
 
         try self.return_tys.append(self.allocator, func.ret);
@@ -180,6 +198,112 @@ const Solver = struct {
 
         const body_ty = try self.inferExpr(fn_.body);
         try self.unify(body_ty, func.ret);
+    }
+
+    fn closeUnfilledCallableSlots(self: *Solver) Allocator.Error!void {
+        const count = self.program.types.vars.items.len;
+        const done = try self.allocator.alloc(bool, count);
+        defer self.allocator.free(done);
+        @memset(done, false);
+
+        const active = try self.allocator.alloc(bool, count);
+        defer self.allocator.free(active);
+        @memset(active, false);
+
+        for (0..count) |index| {
+            try self.closeCallableSlotsInType(@enumFromInt(@as(u32, @intCast(index))), done, active);
+        }
+    }
+
+    fn closeCallableSlotsInType(
+        self: *Solver,
+        ty: Type.TypeVarId,
+        done: []bool,
+        active: []bool,
+    ) Allocator.Error!void {
+        const root = self.program.types.root(ty);
+        const index = @intFromEnum(root);
+        if (done[index] or active[index]) return;
+
+        active[index] = true;
+        defer {
+            active[index] = false;
+            done[index] = true;
+        }
+
+        switch (self.program.types.get(root)) {
+            .link => Common.invariant("Lambda Solved root returned a link"),
+            .unbound,
+            .forall,
+            .primitive,
+            .zst,
+            => {},
+            .func => |func| {
+                try self.closeCallableSlot(func.callable, done, active);
+                for (self.program.types.span(func.args)) |arg| {
+                    try self.closeCallableSlotsInType(arg, done, active);
+                }
+                try self.closeCallableSlotsInType(func.ret, done, active);
+            },
+            .list => |elem| try self.closeCallableSlotsInType(elem, done, active),
+            .box => |elem| try self.closeCallableSlotsInType(elem, done, active),
+            .tuple => |items| {
+                for (self.program.types.span(items)) |item| {
+                    try self.closeCallableSlotsInType(item, done, active);
+                }
+            },
+            .record => |fields| {
+                for (self.program.types.fieldSpan(fields)) |field| {
+                    try self.closeCallableSlotsInType(field.ty, done, active);
+                }
+            },
+            .tag_union => |tags| {
+                for (self.program.types.tagSpan(tags)) |tag| {
+                    for (self.program.types.span(tag.payloads)) |payload| {
+                        try self.closeCallableSlotsInType(payload, done, active);
+                    }
+                }
+            },
+            .named => |named| {
+                for (self.program.types.span(named.args)) |arg| {
+                    try self.closeCallableSlotsInType(arg, done, active);
+                }
+                if (named.backing) |backing| {
+                    try self.closeCallableSlotsInType(backing.ty, done, active);
+                }
+            },
+            .lambda_set => |members| try self.closeCallableSlotsInMembers(members, done, active),
+            .erased => |erased| try self.closeCallableSlotsInMembers(erased.members, done, active),
+        }
+    }
+
+    fn closeCallableSlot(
+        self: *Solver,
+        callable: Type.TypeVarId,
+        done: []bool,
+        active: []bool,
+    ) Allocator.Error!void {
+        const root = self.program.types.root(callable);
+        switch (self.program.types.get(root)) {
+            .unbound => self.program.types.set(root, .{ .lambda_set = .empty() }),
+            .lambda_set,
+            .erased,
+            => try self.closeCallableSlotsInType(root, done, active),
+            else => Common.invariant("function callable slot resolved to a non-callable type"),
+        }
+    }
+
+    fn closeCallableSlotsInMembers(
+        self: *Solver,
+        members: Type.Span,
+        done: []bool,
+        active: []bool,
+    ) Allocator.Error!void {
+        for (self.program.types.memberSpan(members)) |member| {
+            for (self.program.types.captureSpan(member.captures)) |capture| {
+                try self.closeCallableSlotsInType(capture.ty, done, active);
+            }
+        }
     }
 
     fn inferExpr(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
@@ -206,11 +330,12 @@ const Solver = struct {
                 }
             },
             .tuple => |items| {
-                const item_tys = try self.tupleItems(expected);
+                const item_tys = try self.tupleItemsSpan(expected);
                 const children = self.program.lifted.exprSpan(items);
-                if (item_tys.len != children.len) Common.invariant("tuple expression arity differs from its checked type");
+                if (item_tys.count() != children.len) Common.invariant("tuple expression arity differs from its checked type");
                 for (children, 0..) |child, i| {
-                    try self.unify(try self.inferExpr(child), item_tys[i]);
+                    const item_ty = self.program.types.spanItem(item_tys, i);
+                    try self.unify(try self.inferExpr(child), item_ty);
                 }
             },
             .record => |fields| {
@@ -219,11 +344,13 @@ const Solver = struct {
                 }
             },
             .tag => |tag| {
-                const payload_tys = try self.tagPayloads(expected, tag.name);
+                const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
                 const payloads = self.program.lifted.exprSpan(tag.payloads);
-                if (payload_tys.len != payloads.len) Common.invariant("tag expression payload arity differs from its checked type");
+                if (payload_tys.count() != payloads.len) Common.invariant("tag expression payload arity differs from its checked type");
                 for (payloads, 0..) |payload, i| {
-                    try self.unify(try self.inferExpr(payload), payload_tys[i]);
+                    const expected_payload_ty = self.program.types.spanItem(payload_tys, i);
+                    const payload_ty = try self.inferExpr(payload);
+                    try self.unify(payload_ty, expected_payload_ty);
                 }
             },
             .nominal => |backing| {
@@ -239,7 +366,6 @@ const Solver = struct {
                 try self.unify(expected, try self.inferExpr(let_.rest));
             },
             .fn_ref => |fn_id| try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_id)]),
-            .fn_def => |fn_def| try self.unify(expected, self.program.fn_tys.items[@intFromEnum(self.fnIdForSource(fn_def))]),
             .call_value => |call| {
                 const args = try self.inferExprSpan(call.args);
                 defer self.allocator.free(args);
@@ -260,12 +386,16 @@ const Solver = struct {
                     .callable = callable,
                     .ret = expected,
                 } });
-                try self.unify(self.program.fn_tys.items[@intFromEnum(self.fnIdForSource(call.callee))], wanted);
+                try self.unify(self.program.fn_tys.items[@intFromEnum(call.callee)], wanted);
             },
             .low_level => |call| {
-                for (self.program.lifted.exprSpan(call.args)) |arg| {
-                    _ = try self.inferExpr(arg);
+                const args = self.program.lifted.exprSpan(call.args);
+                const arg_tys = try self.allocator.alloc(Type.TypeVarId, args.len);
+                defer self.allocator.free(arg_tys);
+                for (args, 0..) |arg, i| {
+                    arg_tys[i] = try self.inferExpr(arg);
                 }
+                try self.bindLowLevelTypes(call.op, expected, arg_tys);
             },
             .field_access => |field| {
                 const receiver_ty = try self.inferExpr(field.receiver);
@@ -273,9 +403,9 @@ const Solver = struct {
             },
             .tuple_access => |access| {
                 const receiver_ty = try self.inferExpr(access.tuple);
-                const items = try self.tupleItems(receiver_ty);
-                if (access.elem_index >= items.len) Common.invariant("tuple access index exceeds tuple arity");
-                try self.unify(expected, items[access.elem_index]);
+                const items = try self.tupleItemsSpan(receiver_ty);
+                if (access.elem_index >= items.count()) Common.invariant("tuple access index exceeds tuple arity");
+                try self.unify(expected, self.program.types.spanItem(items, access.elem_index));
             },
             .structural_eq => |eq| {
                 const lhs = try self.inferExpr(eq.lhs);
@@ -323,11 +453,12 @@ const Solver = struct {
                 }
             },
             .continue_ => |continue_| {
-                const params = self.program.types.span(self.currentLoopParams());
+                const params = self.currentLoopParams();
                 const values = self.program.lifted.exprSpan(continue_.values);
-                if (params.len != values.len) Common.invariant("continue value count differs from loop parameter count");
+                if (params.count() != values.len) Common.invariant("continue value count differs from loop parameter count");
                 for (values, 0..) |value, i| {
-                    try self.unify(params[i], try self.inferExpr(value));
+                    const param_ty = self.program.types.spanItem(params, i);
+                    try self.unify(param_ty, try self.inferExpr(value));
                 }
             },
             .return_ => |value| try self.unify(self.currentReturnTy(), try self.inferExpr(value)),
@@ -376,16 +507,22 @@ const Solver = struct {
                 }
             },
             .tuple => |items| {
-                const item_tys = try self.tupleItems(pat_ty);
+                const item_tys = try self.tupleItemsSpan(pat_ty);
                 const pats = self.program.lifted.patSpan(items);
-                if (item_tys.len != pats.len) Common.invariant("tuple pattern arity differs from its checked type");
-                for (pats, 0..) |child, i| try self.bindPattern(child, item_tys[i]);
+                if (item_tys.count() != pats.len) Common.invariant("tuple pattern arity differs from its checked type");
+                for (pats, 0..) |child, i| {
+                    const item_ty = self.program.types.spanItem(item_tys, i);
+                    try self.bindPattern(child, item_ty);
+                }
             },
             .tag => |tag| {
-                const payload_tys = try self.tagPayloads(pat_ty, tag.name);
+                const payload_tys = try self.tagPayloadsSpan(pat_ty, tag.name);
                 const payloads = self.program.lifted.patSpan(tag.payloads);
-                if (payload_tys.len != payloads.len) Common.invariant("tag pattern payload arity differs from its checked type");
-                for (payloads, 0..) |child, i| try self.bindPattern(child, payload_tys[i]);
+                if (payload_tys.count() != payloads.len) Common.invariant("tag pattern payload arity differs from its checked type");
+                for (payloads, 0..) |child, i| {
+                    const payload_ty = self.program.types.spanItem(payload_tys, i);
+                    try self.bindPattern(child, payload_ty);
+                }
             },
             .nominal => |backing| {
                 if (try self.namedBacking(pat_ty)) |backing_ty| {
@@ -404,7 +541,6 @@ const Solver = struct {
         const expr = self.program.lifted.exprs.items[index];
         const ty = switch (expr.data) {
             .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
-            .fn_def => |fn_def| self.program.fn_tys.items[@intFromEnum(self.fnIdForSource(fn_def))],
             else => try self.lowerTypeFresh(expr.ty),
         };
         self.expr_tys[index] = ty;
@@ -446,13 +582,71 @@ const Solver = struct {
         return self.loop_params.items[self.loop_params.items.len - 1];
     }
 
-    fn fnIdForSource(self: *Solver, fn_def: @import("../monotype/ast.zig").FnTemplate) Lifted.FnId {
-        for (self.program.lifted.fns.items, 0..) |fn_, index| {
-            if (fn_.source) |source| {
-                if (std.meta.eql(source, fn_def)) return @enumFromInt(@as(u32, @intCast(index)));
-            }
+    fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
+        var active = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        defer active.deinit();
+        try self.markErasedCallablesReachedByTypeInner(ty, &active);
+    }
+
+    fn markErasedCallablesReachedByTypeInner(
+        self: *Solver,
+        ty: Type.TypeVarId,
+        active: *std.AutoHashMap(Type.TypeVarId, void),
+    ) Allocator.Error!void {
+        const root = self.program.types.root(ty);
+        if (active.contains(root)) return;
+        try active.put(root, {});
+        defer _ = active.remove(root);
+
+        switch (self.program.types.get(root)) {
+            .link => Common.invariant("Lambda Solved root returned a link"),
+            .unbound, .forall, .primitive, .zst, .erased => {},
+            .func => |func| {
+                const erased = try self.program.types.add(.{ .erased = .{
+                    .source_fn_ty = try self.solvedTypeDigest(root),
+                    .members = .empty(),
+                } });
+                try self.unify(func.callable, erased);
+                for (self.program.types.span(func.args)) |arg| {
+                    try self.markErasedCallablesReachedByTypeInner(arg, active);
+                }
+                try self.markErasedCallablesReachedByTypeInner(func.ret, active);
+            },
+            .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
+            .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
+            .tuple => |items| {
+                for (self.program.types.span(items)) |item| {
+                    try self.markErasedCallablesReachedByTypeInner(item, active);
+                }
+            },
+            .record => |fields| {
+                for (self.program.types.fieldSpan(fields)) |field| {
+                    try self.markErasedCallablesReachedByTypeInner(field.ty, active);
+                }
+            },
+            .tag_union => |tags| {
+                for (self.program.types.tagSpan(tags)) |tag| {
+                    for (self.program.types.span(tag.payloads)) |payload| {
+                        try self.markErasedCallablesReachedByTypeInner(payload, active);
+                    }
+                }
+            },
+            .named => |named| {
+                for (self.program.types.span(named.args)) |arg| {
+                    try self.markErasedCallablesReachedByTypeInner(arg, active);
+                }
+                if (named.backing) |backing| {
+                    try self.markErasedCallablesReachedByTypeInner(backing.ty, active);
+                }
+            },
+            .lambda_set => |members| {
+                for (self.program.types.memberSpan(members)) |member| {
+                    for (self.program.types.captureSpan(member.captures)) |capture| {
+                        try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
+                    }
+                }
+            },
         }
-        Common.invariant("function value referenced a function definition that was not lifted");
     }
 
     fn lowerTypeFresh(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
@@ -468,9 +662,9 @@ const Solver = struct {
         };
     }
 
-    fn tupleItems(self: *Solver, ty: Type.TypeVarId) Allocator.Error![]const Type.TypeVarId {
+    fn tupleItemsSpan(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.Span {
         return switch (try self.shapeContent(ty)) {
-            .tuple => |items| self.program.types.span(items),
+            .tuple => |items| items,
             else => Common.invariant("tuple expression had a non-tuple checked type"),
         };
     }
@@ -487,11 +681,13 @@ const Solver = struct {
         };
     }
 
-    fn tagPayloads(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error![]const Type.TypeVarId {
+    fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         return switch (try self.shapeContent(ty)) {
             .tag_union => |tags| {
                 for (self.program.types.tagSpan(tags)) |tag| {
-                    if (tag.name == name) return self.program.types.span(tag.payloads);
+                    if (tag.name == name) {
+                        return tag.payloads;
+                    }
                 }
                 Common.invariant("tag was absent from checked tag-union type");
             },
@@ -503,6 +699,90 @@ const Solver = struct {
         return switch (self.program.types.rootContent(ty)) {
             .named => |named| if (named.backing) |backing| backing.ty else null,
             else => null,
+        };
+    }
+
+    fn bindLowLevelTypes(
+        self: *Solver,
+        op: can.CIR.Expr.LowLevel,
+        expected: Type.TypeVarId,
+        args: []const Type.TypeVarId,
+    ) Allocator.Error!void {
+        switch (op) {
+            .box_box => {
+                self.expectLowLevelArity(op, args, 1);
+                try self.unify(args[0], try self.boxElem(expected));
+                try self.markErasedCallablesReachedByType(args[0]);
+            },
+            .box_unbox => {
+                self.expectLowLevelArity(op, args, 1);
+                try self.unify(expected, try self.boxElem(args[0]));
+                try self.markErasedCallablesReachedByType(expected);
+            },
+            .list_get_unsafe => {
+                self.expectLowLevelArity(op, args, 2);
+                try self.unify(expected, try self.listElem(args[0]));
+            },
+            .list_append_unsafe => {
+                self.expectLowLevelArity(op, args, 2);
+                try self.unify(expected, args[0]);
+                try self.unify(args[1], try self.listElem(expected));
+            },
+            .list_concat => {
+                self.expectLowLevelArity(op, args, 2);
+                try self.unify(expected, args[0]);
+                try self.unify(expected, args[1]);
+            },
+            .list_reserve,
+            .list_drop_at,
+            .list_sublist,
+            .list_take_first,
+            .list_take_last,
+            .list_drop_first,
+            .list_drop_last,
+            => {
+                self.expectLowLevelArity(op, args, 2);
+                try self.unify(expected, args[0]);
+            },
+            .list_release_excess_capacity,
+            .list_reverse,
+            => {
+                self.expectLowLevelArity(op, args, 1);
+                try self.unify(expected, args[0]);
+            },
+            .list_set => {
+                self.expectLowLevelArity(op, args, 3);
+                try self.unify(expected, args[0]);
+                try self.unify(args[2], try self.listElem(expected));
+            },
+            .list_prepend => {
+                self.expectLowLevelArity(op, args, 2);
+                try self.unify(expected, args[1]);
+                try self.unify(args[0], try self.listElem(expected));
+            },
+            else => {},
+        }
+    }
+
+    fn expectLowLevelArity(
+        self: *Solver,
+        op: can.CIR.Expr.LowLevel,
+        args: []const Type.TypeVarId,
+        expected: usize,
+    ) void {
+        _ = self;
+        if (args.len != expected) {
+            std.debug.panic(
+                "postcheck invariant violated: low-level op {s} had {d} args, expected {d}",
+                .{ @tagName(op), args.len, expected },
+            );
+        }
+    }
+
+    fn boxElem(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        return switch (try self.shapeContent(ty)) {
+            .box => |elem| elem,
+            else => Common.invariant("box low-level operation had a non-box checked type"),
         };
     }
 
@@ -546,13 +826,22 @@ const Solver = struct {
             else => {},
         }
 
+        const pair = UnifyPair.init(a, b);
+        const active_entry = try self.active_unifications.getOrPut(pair);
+        if (active_entry.found_existing) return;
+        defer _ = self.active_unifications.remove(pair);
+
         switch (left) {
             .primitive => |left_primitive| switch (right) {
                 .primitive => |right_primitive| {
-                    if (left_primitive != right_primitive) Common.invariant("primitive types failed Lambda Solved unification");
+                    if (left_primitive != right_primitive) {
+                        Common.invariant("primitive types failed Lambda Solved unification");
+                    }
                     self.program.types.set(b, .{ .link = a });
                 },
-                else => Common.invariant("primitive type failed Lambda Solved unification"),
+                else => {
+                    Common.invariant("primitive type failed Lambda Solved unification");
+                },
             },
             .zst => switch (right) {
                 .zst => self.program.types.set(b, .{ .link = a }),
@@ -563,18 +852,27 @@ const Solver = struct {
                     if (!std.mem.eql(u8, left_erased.source_fn_ty.bytes[0..], right_erased.source_fn_ty.bytes[0..])) {
                         Common.invariant("erased callable source function types failed Lambda Solved unification");
                     }
-                    self.program.types.set(a, left);
+                    self.program.types.set(a, .{ .erased = .{
+                        .source_fn_ty = left_erased.source_fn_ty,
+                        .members = try self.mergeLambdaSets(left_erased.members, right_erased.members),
+                    } });
                     self.program.types.set(b, .{ .link = a });
                 },
-                .lambda_set => {
-                    self.program.types.set(a, left);
+                .lambda_set => |right_members| {
+                    self.program.types.set(a, .{ .erased = .{
+                        .source_fn_ty = left_erased.source_fn_ty,
+                        .members = try self.mergeLambdaSets(left_erased.members, right_members),
+                    } });
                     self.program.types.set(b, .{ .link = a });
                 },
                 else => Common.invariant("erased callable type failed Lambda Solved unification"),
             },
             .lambda_set => |left_members| switch (right) {
-                .erased => {
-                    self.program.types.set(a, right);
+                .erased => |right_erased| {
+                    self.program.types.set(a, .{ .erased = .{
+                        .source_fn_ty = right_erased.source_fn_ty,
+                        .members = try self.mergeLambdaSets(left_members, right_erased.members),
+                    } });
                     self.program.types.set(b, .{ .link = a });
                 },
                 .lambda_set => |right_members| {
@@ -630,9 +928,9 @@ const Solver = struct {
             },
             .named => |left_named| switch (right) {
                 .named => |right_named| {
-                    if (!std.meta.eql(left_named.named_type, right_named.named_type) or
-                        !std.meta.eql(left_named.def, right_named.def) or
-                        left_named.kind != right_named.kind)
+                    if (!std.meta.eql(left_named.def, right_named.def) or
+                        left_named.kind != right_named.kind or
+                        left_named.builtin_owner != right_named.builtin_owner)
                     {
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
@@ -653,29 +951,29 @@ const Solver = struct {
     }
 
     fn unifySpans(self: *Solver, lhs: Type.Span, rhs: Type.Span, comptime message: []const u8) Allocator.Error!void {
-        const left = self.program.types.span(lhs);
-        const right = self.program.types.span(rhs);
-        if (left.len != right.len) Common.invariant(message);
-        for (left, 0..) |left_ty, i| try self.unify(left_ty, right[i]);
+        if (lhs.count() != rhs.count()) Common.invariant(message);
+        for (0..lhs.count()) |i| {
+            const left_ty = self.program.types.spanItem(lhs, i);
+            const right_ty = self.program.types.spanItem(rhs, i);
+            try self.unify(left_ty, right_ty);
+        }
     }
 
     fn unifyFields(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        const left = self.program.types.fieldSpan(lhs);
-        const right = self.program.types.fieldSpan(rhs);
-        if (left.len != right.len) Common.invariant("record field count failed Lambda Solved unification");
-        for (left, 0..) |left_field, i| {
-            const right_field = right[i];
+        if (lhs.count() != rhs.count()) Common.invariant("record field count failed Lambda Solved unification");
+        for (0..lhs.count()) |i| {
+            const left_field = self.program.types.fieldItem(lhs, i);
+            const right_field = self.program.types.fieldItem(rhs, i);
             if (left_field.name != right_field.name) Common.invariant("record field order failed Lambda Solved unification");
             try self.unify(left_field.ty, right_field.ty);
         }
     }
 
     fn unifyTags(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        const left = self.program.types.tagSpan(lhs);
-        const right = self.program.types.tagSpan(rhs);
-        if (left.len != right.len) Common.invariant("tag count failed Lambda Solved unification");
-        for (left, 0..) |left_tag, i| {
-            const right_tag = right[i];
+        if (lhs.count() != rhs.count()) Common.invariant("tag count failed Lambda Solved unification");
+        for (0..lhs.count()) |i| {
+            const left_tag = self.program.types.tagItem(lhs, i);
+            const right_tag = self.program.types.tagItem(rhs, i);
             if (left_tag.name != right_tag.name) Common.invariant("tag order failed Lambda Solved unification");
             try self.unifySpans(left_tag.payloads, right_tag.payloads, "tag payload count failed Lambda Solved unification");
         }
@@ -685,9 +983,10 @@ const Solver = struct {
         var members = std.ArrayList(Type.FnMember).empty;
         defer members.deinit(self.allocator);
 
-        for (self.program.types.memberSpan(lhs)) |member| try members.append(self.allocator, member);
+        for (0..lhs.count()) |i| try members.append(self.allocator, self.program.types.memberItem(lhs, i));
 
-        for (self.program.types.memberSpan(rhs)) |right_member| {
+        for (0..rhs.count()) |i| {
+            const right_member = self.program.types.memberItem(rhs, i);
             var found = false;
             for (members.items) |left_member| {
                 if (left_member.lambda != right_member.lambda) continue;
@@ -702,11 +1001,10 @@ const Solver = struct {
     }
 
     fn unifyCaptures(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        const left = self.program.types.captureSpan(lhs);
-        const right = self.program.types.captureSpan(rhs);
-        if (left.len != right.len) Common.invariant("capture count failed Lambda Solved unification");
-        for (left, 0..) |left_capture, i| {
-            const right_capture = right[i];
+        if (lhs.count() != rhs.count()) Common.invariant("capture count failed Lambda Solved unification");
+        for (0..lhs.count()) |i| {
+            const left_capture = self.program.types.captureItem(lhs, i);
+            const right_capture = self.program.types.captureItem(rhs, i);
             if (left_capture.local != right_capture.local or
                 left_capture.symbol != right_capture.symbol or
                 left_capture.binder != right_capture.binder)
@@ -716,7 +1014,132 @@ const Solver = struct {
             try self.unify(left_capture.ty, right_capture.ty);
         }
     }
+
+    fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var active = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
+        defer active.deinit();
+        try self.writeSolvedTypeDigest(&hasher, ty, &active);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    fn writeSolvedTypeDigest(
+        self: *Solver,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        ty: Type.TypeVarId,
+        active: *std.AutoHashMap(Type.TypeVarId, void),
+    ) Allocator.Error!void {
+        const root = self.program.types.root(ty);
+        if (active.contains(root)) {
+            writeBytes(hasher, "cycle");
+            writeU32(hasher, @intFromEnum(root));
+            return;
+        }
+        try active.put(root, {});
+        defer _ = active.remove(root);
+
+        switch (self.program.types.get(root)) {
+            .link => Common.invariant("Lambda Solved root returned a link"),
+            .unbound, .forall => Common.invariant("unresolved Lambda Solved type reached erased callable digest"),
+            .primitive => |primitive| {
+                writeBytes(hasher, "primitive");
+                writeBytes(hasher, @tagName(primitive));
+            },
+            .zst => writeBytes(hasher, "zst"),
+            .erased => |erased| {
+                writeBytes(hasher, "erased");
+                hasher.update(&erased.source_fn_ty.bytes);
+            },
+            .func => |func| {
+                writeBytes(hasher, "func");
+                try self.writeSolvedTypeSpanDigest(hasher, func.args, active);
+                try self.writeSolvedTypeDigest(hasher, func.ret, active);
+            },
+            .list => |elem| {
+                writeBytes(hasher, "list");
+                try self.writeSolvedTypeDigest(hasher, elem, active);
+            },
+            .box => |elem| {
+                writeBytes(hasher, "box");
+                try self.writeSolvedTypeDigest(hasher, elem, active);
+            },
+            .tuple => |items| {
+                writeBytes(hasher, "tuple");
+                try self.writeSolvedTypeSpanDigest(hasher, items, active);
+            },
+            .record => |fields| {
+                writeBytes(hasher, "record");
+                const field_slice = self.program.types.fieldSpan(fields);
+                writeU32(hasher, @intCast(field_slice.len));
+                for (field_slice) |field| {
+                    writeBytes(hasher, self.program.lifted.names.recordFieldLabelText(field.name));
+                    try self.writeSolvedTypeDigest(hasher, field.ty, active);
+                }
+            },
+            .tag_union => |tags| {
+                writeBytes(hasher, "tag_union");
+                const tag_slice = self.program.types.tagSpan(tags);
+                writeU32(hasher, @intCast(tag_slice.len));
+                for (tag_slice) |tag| {
+                    writeBytes(hasher, self.program.lifted.names.tagLabelText(tag.name));
+                    try self.writeSolvedTypeSpanDigest(hasher, tag.payloads, active);
+                }
+            },
+            .named => |named| {
+                writeBytes(hasher, "named");
+                hasher.update(&named.named_type.module.bytes);
+                writeBytes(hasher, self.program.lifted.names.moduleNameText(named.def.module_name));
+                writeBytes(hasher, self.program.lifted.names.typeNameText(named.def.type_name));
+                writeBytes(hasher, @tagName(named.kind));
+                if (named.builtin_owner) |owner| {
+                    writeBytes(hasher, "builtin");
+                    writeBytes(hasher, @tagName(owner));
+                } else {
+                    writeBytes(hasher, "not-builtin");
+                }
+                try self.writeSolvedTypeSpanDigest(hasher, named.args, active);
+            },
+            .lambda_set => |members| {
+                writeBytes(hasher, "lambda_set");
+                const member_slice = self.program.types.memberSpan(members);
+                writeU32(hasher, @intCast(member_slice.len));
+                for (member_slice) |member| {
+                    writeU32(hasher, @intFromEnum(member.lambda));
+                    const captures = self.program.types.captureSpan(member.captures);
+                    writeU32(hasher, @intCast(captures.len));
+                    for (captures) |capture| {
+                        writeU32(hasher, @intFromEnum(capture.symbol));
+                        try self.writeSolvedTypeDigest(hasher, capture.ty, active);
+                    }
+                }
+            },
+        }
+    }
+
+    fn writeSolvedTypeSpanDigest(
+        self: *Solver,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        span: Type.Span,
+        active: *std.AutoHashMap(Type.TypeVarId, void),
+    ) Allocator.Error!void {
+        const values = self.program.types.span(span);
+        writeU32(hasher, @intCast(values.len));
+        for (values) |child| {
+            try self.writeSolvedTypeDigest(hasher, child, active);
+        }
+    }
 };
+
+fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+    writeU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, value, .little);
+    hasher.update(&buf);
+}
 
 const TypeCloner = struct {
     solver: *Solver,
@@ -745,7 +1168,7 @@ const TypeCloner = struct {
         return switch (content) {
             .primitive => |primitive| .{ .primitive = primitive },
             .zst => .zst,
-            .erased => |source_fn_ty| .{ .erased = .{ .source_fn_ty = source_fn_ty } },
+            .erased => |source_fn_ty| .{ .erased = .{ .source_fn_ty = source_fn_ty, .members = .empty() } },
             .list => |elem| .{ .list = try self.lower(elem) },
             .box => |elem| .{ .box = try self.lower(elem) },
             .tuple => |items| blk: {
@@ -772,6 +1195,7 @@ const TypeCloner = struct {
                     defer self.solver.allocator.free(payloads);
                     lowered[i] = .{
                         .name = tag.name,
+                        .checked_name = tag.checked_name,
                         .payloads = try self.solver.program.types.addSpan(payloads),
                     };
                 }
@@ -784,6 +1208,7 @@ const TypeCloner = struct {
                     .named_type = named.named_type,
                     .def = named.def,
                     .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
                     .backing = if (named.backing) |backing| .{
                         .ty = try self.lower(backing.ty),

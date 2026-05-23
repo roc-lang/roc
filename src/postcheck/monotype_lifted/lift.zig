@@ -4,10 +4,14 @@ const std = @import("std");
 
 const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
+const MonoType = @import("../monotype/type.zig");
 const Ast = @import("ast.zig");
+const checked = @import("check").CheckedModule;
+const names = @import("check").CheckedNames;
 
 const Allocator = std.mem.Allocator;
 
+/// Lift nested Monotype functions into explicit function bodies.
 pub fn run(
     allocator: Allocator,
     mono: Mono.Program,
@@ -39,7 +43,68 @@ pub fn run(
     return program;
 }
 
+const FnTemplateMap = std.HashMap(Mono.FnTemplate, Ast.FnId, FnTemplateContext, std.hash_map.default_max_load_percentage);
+const FnTemplateActiveSet = std.HashMap(Mono.FnTemplate, void, FnTemplateContext, std.hash_map.default_max_load_percentage);
+
+const FnTemplateContext = struct {
+    types: *const MonoType.Store,
+    names: *const names.NameStore,
+
+    pub fn hash(self: FnTemplateContext, template: Mono.FnTemplate) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hashFnDef(&hasher, template.fn_def);
+        hasher.update(&template.source_fn_key.bytes);
+        const mono_digest = self.types.typeDigest(self.names, template.mono_fn_ty);
+        hasher.update(&mono_digest.bytes);
+        return hasher.final();
+    }
+
+    pub fn eql(self: FnTemplateContext, lhs: Mono.FnTemplate, rhs: Mono.FnTemplate) bool {
+        const lhs_digest = self.types.typeDigest(self.names, lhs.mono_fn_ty);
+        const rhs_digest = self.types.typeDigest(self.names, rhs.mono_fn_ty);
+        return std.meta.eql(lhs.fn_def, rhs.fn_def) and
+            std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]) and
+            std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
+    }
+
+    fn hashFnDef(hasher: *std.hash.Wyhash, fn_def: Mono.FnDef) void {
+        std.hash.autoHash(hasher, std.meta.activeTag(fn_def));
+        switch (fn_def) {
+            .local_template,
+            .imported_template,
+            .local_hosted,
+            .imported_hosted,
+            .checked_generated,
+            => |template| hashProcTemplate(hasher, template),
+            .nested => |nested| {
+                hashProcTemplate(hasher, nested.owner);
+                std.hash.autoHash(hasher, @intFromEnum(nested.site));
+                hasher.update(&nested.context_fn_key.bytes);
+            },
+        }
+    }
+
+    fn hashProcTemplate(hasher: *std.hash.Wyhash, template: names.ProcTemplate) void {
+        const module_digest = names.procTemplateModuleDigest(template);
+        hasher.update(&module_digest.bytes);
+        std.hash.autoHash(hasher, @intFromEnum(template.proc_base));
+        std.hash.autoHash(hasher, @intFromEnum(template.template));
+    }
+};
+
 const DefMap = []?Ast.FnId;
+const NestedDefMap = []?Ast.FnId;
+
+const MonoFnBody = struct {
+    args: Mono.Span(Mono.TypedLocal),
+    body: Mono.ExprId,
+};
+
+const FunctionMaps = struct {
+    expr_map: std.AutoHashMap(Mono.ExprId, Ast.ExprId),
+    pat_map: std.AutoHashMap(Mono.PatId, Ast.PatId),
+    stmt_map: std.AutoHashMap(Mono.StmtId, Ast.StmtId),
+};
 
 const Lifter = struct {
     allocator: Allocator,
@@ -49,6 +114,11 @@ const Lifter = struct {
     pat_map: std.AutoHashMap(Mono.PatId, Ast.PatId),
     stmt_map: std.AutoHashMap(Mono.StmtId, Ast.StmtId),
     def_map: DefMap,
+    nested_def_map: NestedDefMap,
+    fn_templates: FnTemplateMap,
+    fn_bodies: std.ArrayList(?MonoFnBody),
+    nested_fn_ids: std.AutoHashMap(Ast.FnId, void),
+    initialized_fns: std.AutoHashMap(Ast.FnId, void),
     symbols: Common.SymbolGen,
 
     fn init(allocator: Allocator, input: *const Mono.Program, output: *Ast.Program) Lifter {
@@ -60,11 +130,24 @@ const Lifter = struct {
             .pat_map = std.AutoHashMap(Mono.PatId, Ast.PatId).init(allocator),
             .stmt_map = std.AutoHashMap(Mono.StmtId, Ast.StmtId).init(allocator),
             .def_map = &.{},
+            .nested_def_map = &.{},
+            .fn_templates = FnTemplateMap.initContext(allocator, .{
+                .types = &output.types,
+                .names = &output.names,
+            }),
+            .fn_bodies = .empty,
+            .nested_fn_ids = std.AutoHashMap(Ast.FnId, void).init(allocator),
+            .initialized_fns = std.AutoHashMap(Ast.FnId, void).init(allocator),
             .symbols = .{ .next = input.next_symbol },
         };
     }
 
     fn deinit(self: *Lifter) void {
+        self.initialized_fns.deinit();
+        self.nested_fn_ids.deinit();
+        self.fn_bodies.deinit(self.allocator);
+        self.fn_templates.deinit();
+        if (self.nested_def_map.len > 0) self.allocator.free(self.nested_def_map);
         if (self.def_map.len > 0) self.allocator.free(self.def_map);
         self.stmt_map.deinit();
         self.pat_map.deinit();
@@ -76,8 +159,32 @@ const Lifter = struct {
         @memset(self.def_map, null);
 
         for (self.input.defs.items, 0..) |def, index| {
-            const fn_id = try self.lowerTopLevelDef(def);
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.output.fns.items.len)));
+            try self.output.fns.append(self.allocator, undefined);
+            try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
             self.def_map[index] = fn_id;
+            if (def.fn_def) |source| try self.registerFnTemplate(source, fn_id);
+        }
+
+        self.nested_def_map = try self.allocator.alloc(?Ast.FnId, self.input.nested_defs.items.len);
+        @memset(self.nested_def_map, null);
+        for (self.input.nested_defs.items, 0..) |def, index| {
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.output.fns.items.len)));
+            try self.output.fns.append(self.allocator, undefined);
+            try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
+            self.nested_def_map[index] = fn_id;
+            try self.nested_fn_ids.put(fn_id, {});
+            try self.registerFnTemplate(def.fn_def, fn_id);
+        }
+
+        for (self.input.defs.items, 0..) |def, index| {
+            try self.lowerTopLevelDef(self.def_map[index] orelse
+                Common.invariant("Monotype definition was not reserved before lifting"), def);
+        }
+
+        for (self.input.nested_defs.items, 0..) |def, index| {
+            try self.lowerNestedDef(self.nested_def_map[index] orelse
+                Common.invariant("Monotype nested definition was not reserved before lifting"), def);
         }
 
         for (self.input.roots.items) |root| {
@@ -92,28 +199,80 @@ const Lifter = struct {
         }
     }
 
-    fn lowerTopLevelDef(self: *Lifter, def: Mono.Def) Allocator.Error!Ast.FnId {
-        var captures = CaptureSet.init(self.allocator);
+    fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
+        var active = self.initFnTemplateActiveSet();
+        defer active.deinit();
+        var captures = CaptureSet.init(self, &active);
         defer captures.deinit();
         var bound = BoundSet.init(self.allocator);
         defer bound.deinit();
-        try bindTypedLocals(&bound, self.input.typedLocalSpan(def.args));
-        try captures.collectExpr(self.input, def.body, &bound);
+        try bindTypedLocals(self.input, &bound, self.input.typedLocalSpan(def.args));
+        try captures.collectExpr(def.body, &bound);
 
         if (captures.items.items.len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
+        const saved_maps = self.pushFunctionMaps();
+        defer self.popFunctionMaps(saved_maps);
         const body = try self.lowerExpr(def.body);
         const args = try self.copyTypedLocalSpan(def.args);
-        return try self.output.addFn(.{
+        self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
             .source = def.fn_def,
             .args = args,
             .captures = .empty(),
             .body = body,
             .ret = def.ret,
-        });
+        };
+        try self.initialized_fns.put(fn_id, {});
+    }
+
+    fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
+        var active = self.initFnTemplateActiveSet();
+        defer active.deinit();
+        var captures = CaptureSet.init(self, &active);
+        defer captures.deinit();
+        var bound = BoundSet.init(self.allocator);
+        defer bound.deinit();
+        try bindTypedLocals(self.input, &bound, self.input.typedLocalSpan(def.args));
+        try captures.collectExpr(def.body, &bound);
+
+        const saved_maps = self.pushFunctionMaps();
+        defer self.popFunctionMaps(saved_maps);
+        const body = try self.lowerExpr(def.body);
+        const args = try self.copyTypedLocalSpan(def.args);
+        const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        self.output.fns.items[@intFromEnum(fn_id)] = .{
+            .symbol = def.symbol,
+            .source = def.fn_def,
+            .args = args,
+            .captures = capture_span,
+            .body = body,
+            .ret = def.ret,
+        };
+        try self.initialized_fns.put(fn_id, {});
+    }
+
+    fn pushFunctionMaps(self: *Lifter) FunctionMaps {
+        const saved = FunctionMaps{
+            .expr_map = self.expr_map,
+            .pat_map = self.pat_map,
+            .stmt_map = self.stmt_map,
+        };
+        self.expr_map = std.AutoHashMap(Mono.ExprId, Ast.ExprId).init(self.allocator);
+        self.pat_map = std.AutoHashMap(Mono.PatId, Ast.PatId).init(self.allocator);
+        self.stmt_map = std.AutoHashMap(Mono.StmtId, Ast.StmtId).init(self.allocator);
+        return saved;
+    }
+
+    fn popFunctionMaps(self: *Lifter, saved: FunctionMaps) void {
+        self.stmt_map.deinit();
+        self.pat_map.deinit();
+        self.expr_map.deinit();
+        self.expr_map = saved.expr_map;
+        self.pat_map = saved.pat_map;
+        self.stmt_map = saved.stmt_map;
     }
 
     fn lowerExpr(self: *Lifter, expr_id: Mono.ExprId) Allocator.Error!Ast.ExprId {
@@ -142,13 +301,19 @@ const Lifter = struct {
                 .rest = try self.lowerExpr(let_.rest),
             } },
             .lambda => |lambda| try self.liftLambda(expr.ty, lambda),
-            .fn_def => |fn_def| .{ .fn_def = fn_def },
+            .def_ref => |def_id| blk: {
+                const raw = @intFromEnum(def_id);
+                if (raw >= self.def_map.len) Common.invariant("Monotype definition reference was outside the definition table");
+                break :blk .{ .fn_ref = self.def_map[raw] orelse
+                    Common.invariant("Monotype definition reference reached lifting before its function was registered") };
+            },
+            .fn_def => |fn_def| .{ .fn_ref = self.fnIdForTemplate(fn_def) },
             .call_value => |call| .{ .call_value = .{
                 .callee = try self.lowerExpr(call.callee),
                 .args = try self.lowerExprSpan(call.args),
             } },
             .call_proc => |call| .{ .call_proc = .{
-                .callee = call.callee,
+                .callee = self.fnIdForTemplate(call.callee),
                 .args = try self.lowerExprSpan(call.args),
             } },
             .low_level => |call| .{ .low_level = .{
@@ -199,24 +364,80 @@ const Lifter = struct {
     }
 
     fn liftLambda(self: *Lifter, ty: @import("../monotype/type.zig").TypeId, lambda: Mono.LambdaExpr) Allocator.Error!Ast.ExprData {
-        var captures = CaptureSet.init(self.allocator);
+        const fn_id = try self.reserveFnTemplate(lambda.source);
+        if (self.nested_fn_ids.contains(fn_id)) return .{ .fn_ref = fn_id };
+        if (self.initialized_fns.contains(fn_id)) return .{ .fn_ref = fn_id };
+
+        try self.setFnBody(fn_id, .{ .args = lambda.args, .body = lambda.body });
+        var active = self.initFnTemplateActiveSet();
+        defer active.deinit();
+        var captures = CaptureSet.init(self, &active);
         defer captures.deinit();
         var bound = BoundSet.init(self.allocator);
         defer bound.deinit();
-        try bindTypedLocals(&bound, self.input.typedLocalSpan(lambda.args));
-        try captures.collectExpr(self.input, lambda.body, &bound);
+        try bindTypedLocals(self.input, &bound, self.input.typedLocalSpan(lambda.args));
+        try captures.collectExpr(lambda.body, &bound);
 
+        const saved_maps = self.pushFunctionMaps();
+        defer self.popFunctionMaps(saved_maps);
         const body = try self.lowerExpr(lambda.body);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
-        const fn_id = try self.output.addFn(.{
+        self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = self.symbols.fresh(),
             .source = lambda.source,
             .args = try self.copyTypedLocalSpan(lambda.args),
             .captures = capture_span,
             .body = body,
             .ret = functionRet(&self.output.types, ty),
-        });
+        };
+        try self.initialized_fns.put(fn_id, {});
         return .{ .fn_ref = fn_id };
+    }
+
+    fn reserveFnTemplate(self: *Lifter, template: Mono.FnTemplate) Allocator.Error!Ast.FnId {
+        if (self.fn_templates.get(template)) |existing| return existing;
+
+        const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.output.fns.items.len)));
+        try self.output.fns.append(self.allocator, undefined);
+        try self.fn_bodies.append(self.allocator, null);
+        try self.registerFnTemplate(template, fn_id);
+        return fn_id;
+    }
+
+    fn setFnBody(self: *Lifter, fn_id: Ast.FnId, body: MonoFnBody) Allocator.Error!void {
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.fn_bodies.items.len) Common.invariant("lifted function body id was outside body table");
+        self.fn_bodies.items[raw] = body;
+    }
+
+    fn fnBodyForTemplate(self: *Lifter, template: Mono.FnTemplate) ?MonoFnBody {
+        const fn_id = self.fnIdForTemplate(template);
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.fn_bodies.items.len) Common.invariant("function template body id was outside body table");
+        return self.fn_bodies.items[raw];
+    }
+
+    fn initFnTemplateActiveSet(self: *Lifter) FnTemplateActiveSet {
+        return FnTemplateActiveSet.initContext(self.allocator, .{
+            .types = &self.output.types,
+            .names = &self.output.names,
+        });
+    }
+
+    fn registerFnTemplate(self: *Lifter, template: Mono.FnTemplate, fn_id: Ast.FnId) Allocator.Error!void {
+        const result = try self.fn_templates.getOrPut(template);
+        if (result.found_existing) {
+            if (result.value_ptr.* != fn_id) {
+                Common.invariant("Monotype function template was assigned two lifted function ids");
+            }
+            return;
+        }
+        result.value_ptr.* = fn_id;
+    }
+
+    fn fnIdForTemplate(self: *Lifter, template: Mono.FnTemplate) Ast.FnId {
+        return self.fn_templates.get(template) orelse
+            Common.invariant("Monotype function template reached lifting before its function was registered");
     }
 
     fn lowerPat(self: *Lifter, pat_id: Mono.PatId) Allocator.Error!Ast.PatId {
@@ -254,6 +475,7 @@ const Lifter = struct {
             .let_ => |let_| .{ .let_ = .{
                 .pat = try self.lowerPat(let_.pat),
                 .value = try self.lowerExpr(let_.value),
+                .recursive = let_.recursive,
             } },
             .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
             .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
@@ -348,18 +570,72 @@ const Lifter = struct {
     }
 };
 
-const BoundSet = std.AutoHashMap(Mono.LocalId, void);
+const BoundSet = struct {
+    locals: std.AutoHashMap(Mono.LocalId, void),
+    binders: std.AutoHashMap(checked.PatternBinderId, u32),
+
+    fn init(allocator: Allocator) BoundSet {
+        return .{
+            .locals = std.AutoHashMap(Mono.LocalId, void).init(allocator),
+            .binders = std.AutoHashMap(checked.PatternBinderId, u32).init(allocator),
+        };
+    }
+
+    fn deinit(self: *BoundSet) void {
+        self.binders.deinit();
+        self.locals.deinit();
+    }
+
+    fn contains(self: *const BoundSet, input: *const Mono.Program, local: Mono.LocalId) bool {
+        if (self.locals.contains(local)) return true;
+        const binder = input.locals.items[@intFromEnum(local)].binder orelse return false;
+        return self.binders.contains(binder);
+    }
+
+    fn put(self: *BoundSet, input: *const Mono.Program, local: Mono.LocalId) Allocator.Error!void {
+        try self.locals.put(local, {});
+        if (input.locals.items[@intFromEnum(local)].binder) |binder| try self.putBinder(binder);
+    }
+
+    fn remove(self: *BoundSet, input: *const Mono.Program, local: Mono.LocalId) void {
+        _ = self.locals.remove(local);
+        if (input.locals.items[@intFromEnum(local)].binder) |binder| self.removeBinder(binder);
+    }
+
+    fn putBinder(self: *BoundSet, binder: checked.PatternBinderId) Allocator.Error!void {
+        const entry = try self.binders.getOrPut(binder);
+        if (entry.found_existing) {
+            entry.value_ptr.* += 1;
+        } else {
+            entry.value_ptr.* = 1;
+        }
+    }
+
+    fn removeBinder(self: *BoundSet, binder: checked.PatternBinderId) void {
+        const count = self.binders.getPtr(binder) orelse
+            Common.invariant("capture collection removed an unbound checked binder");
+        if (count.* > 1) {
+            count.* -= 1;
+        } else {
+            _ = self.binders.remove(binder);
+        }
+    }
+};
 
 const CaptureSet = struct {
     allocator: Allocator,
+    lifter: *Lifter,
     items: std.ArrayList(Ast.TypedLocal),
     seen: std.AutoHashMap(Mono.LocalId, void),
+    active: *FnTemplateActiveSet,
 
-    fn init(allocator: Allocator) CaptureSet {
+    fn init(lifter: *Lifter, active: *FnTemplateActiveSet) CaptureSet {
         return .{
-            .allocator = allocator,
+            .allocator = lifter.allocator,
+            .lifter = lifter,
             .items = .empty,
-            .seen = std.AutoHashMap(Mono.LocalId, void).init(allocator),
+            .seen = std.AutoHashMap(Mono.LocalId, void).init(lifter.allocator),
+            .active = active,
         };
     }
 
@@ -368,127 +644,156 @@ const CaptureSet = struct {
         self.items.deinit(self.allocator);
     }
 
-    fn addIfFree(self: *CaptureSet, input: *const Mono.Program, local: Mono.LocalId, bound: *const BoundSet) Allocator.Error!void {
-        if (bound.contains(local) or self.seen.contains(local)) return;
+    fn addIfFree(self: *CaptureSet, local: Mono.LocalId, bound: *const BoundSet) Allocator.Error!void {
+        if (bound.contains(self.lifter.input, local) or self.seen.contains(local)) return;
+        const local_data = self.lifter.input.locals.items[@intFromEnum(local)];
         try self.seen.put(local, {});
-        const local_data = input.locals.items[@intFromEnum(local)];
         try self.items.append(self.allocator, .{
             .local = local,
             .ty = local_data.ty,
         });
     }
 
-    fn collectExpr(self: *CaptureSet, input: *const Mono.Program, expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
+    fn collectExpr(self: *CaptureSet, expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
+        const input = self.lifter.input;
         const expr = input.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
-            .local => |local| try self.addIfFree(input, local, bound),
+            .local => |local| try self.addIfFree(local, bound),
             .unit,
             .int_lit,
             .frac_f32_lit,
             .frac_f64_lit,
             .dec_lit,
             .str_lit,
+            .def_ref,
             .fn_def,
             .crash,
             => {},
             .list,
             .tuple,
-            => |items| for (input.exprSpan(items)) |child| try self.collectExpr(input, child, bound),
-            .record => |fields| for (input.fieldExprSpan(fields)) |field| try self.collectExpr(input, field.value, bound),
-            .tag => |tag| for (input.exprSpan(tag.payloads)) |child| try self.collectExpr(input, child, bound),
+            => |items| for (input.exprSpan(items)) |child| try self.collectExpr(child, bound),
+            .record => |fields| for (input.fieldExprSpan(fields)) |field| try self.collectExpr(field.value, bound),
+            .tag => |tag| for (input.exprSpan(tag.payloads)) |child| try self.collectExpr(child, bound),
             .nominal,
             .return_,
             .dbg,
             .expect,
-            => |child| try self.collectExpr(input, child, bound),
+            => |child| try self.collectExpr(child, bound),
             .let_ => |let_| {
-                try self.collectExpr(input, let_.value, bound);
+                try self.collectExpr(let_.value, bound);
                 var added = std.ArrayList(Mono.LocalId).empty;
                 defer added.deinit(self.allocator);
                 try bindPat(self.allocator, input, let_.bind, bound, &added);
-                try self.collectExpr(input, let_.rest, bound);
-                removeBound(bound, added.items);
+                try self.collectExpr(let_.rest, bound);
+                removeBound(input, bound, added.items);
             },
             .lambda => |lambda| {
                 var added = std.ArrayList(Mono.LocalId).empty;
                 defer added.deinit(self.allocator);
-                try bindTypedLocalsTracked(self.allocator, bound, input.typedLocalSpan(lambda.args), &added);
-                try self.collectExpr(input, lambda.body, bound);
-                removeBound(bound, added.items);
+                try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(lambda.args), &added);
+                try self.collectExpr(lambda.body, bound);
+                removeBound(input, bound, added.items);
             },
             .call_value => |call| {
-                try self.collectExpr(input, call.callee, bound);
-                for (input.exprSpan(call.args)) |arg| try self.collectExpr(input, arg, bound);
+                try self.collectExpr(call.callee, bound);
+                for (input.exprSpan(call.args)) |arg| try self.collectExpr(arg, bound);
             },
-            .call_proc => |call| for (input.exprSpan(call.args)) |arg| try self.collectExpr(input, arg, bound),
-            .low_level => |call| for (input.exprSpan(call.args)) |arg| try self.collectExpr(input, arg, bound),
-            .field_access => |field| try self.collectExpr(input, field.receiver, bound),
-            .tuple_access => |access| try self.collectExpr(input, access.tuple, bound),
+            .call_proc => |call| {
+                try self.collectTemplateCaptures(call.callee, bound);
+                for (input.exprSpan(call.args)) |arg| try self.collectExpr(arg, bound);
+            },
+            .low_level => |call| for (input.exprSpan(call.args)) |arg| try self.collectExpr(arg, bound),
+            .field_access => |field| try self.collectExpr(field.receiver, bound),
+            .tuple_access => |access| try self.collectExpr(access.tuple, bound),
             .structural_eq => |eq| {
-                try self.collectExpr(input, eq.lhs, bound);
-                try self.collectExpr(input, eq.rhs, bound);
+                try self.collectExpr(eq.lhs, bound);
+                try self.collectExpr(eq.rhs, bound);
             },
             .match_ => |match| {
-                try self.collectExpr(input, match.scrutinee, bound);
+                try self.collectExpr(match.scrutinee, bound);
                 for (input.branchSpan(match.branches)) |branch| {
                     var added = std.ArrayList(Mono.LocalId).empty;
                     defer added.deinit(self.allocator);
                     try bindPat(self.allocator, input, branch.pat, bound, &added);
-                    if (branch.guard) |guard| try self.collectExpr(input, guard, bound);
-                    try self.collectExpr(input, branch.body, bound);
-                    removeBound(bound, added.items);
+                    if (branch.guard) |guard| try self.collectExpr(guard, bound);
+                    try self.collectExpr(branch.body, bound);
+                    removeBound(input, bound, added.items);
                 }
             },
             .if_ => |if_| {
                 for (input.ifBranchSpan(if_.branches)) |branch| {
-                    try self.collectExpr(input, branch.cond, bound);
-                    try self.collectExpr(input, branch.body, bound);
+                    try self.collectExpr(branch.cond, bound);
+                    try self.collectExpr(branch.body, bound);
                 }
-                try self.collectExpr(input, if_.final_else, bound);
+                try self.collectExpr(if_.final_else, bound);
             },
             .block => |block| {
                 var added = std.ArrayList(Mono.LocalId).empty;
                 defer added.deinit(self.allocator);
                 for (input.stmtSpan(block.statements)) |stmt| try self.collectStmt(input, stmt, bound, &added);
-                try self.collectExpr(input, block.final_expr, bound);
-                removeBound(bound, added.items);
+                try self.collectExpr(block.final_expr, bound);
+                removeBound(input, bound, added.items);
             },
             .loop_ => |loop| {
-                for (input.exprSpan(loop.initial_values)) |initial| try self.collectExpr(input, initial, bound);
+                for (input.exprSpan(loop.initial_values)) |initial| try self.collectExpr(initial, bound);
                 var added = std.ArrayList(Mono.LocalId).empty;
                 defer added.deinit(self.allocator);
-                try bindTypedLocalsTracked(self.allocator, bound, input.typedLocalSpan(loop.params), &added);
-                try self.collectExpr(input, loop.body, bound);
-                removeBound(bound, added.items);
+                try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(loop.params), &added);
+                try self.collectExpr(loop.body, bound);
+                removeBound(input, bound, added.items);
             },
-            .break_ => |maybe| if (maybe) |value| try self.collectExpr(input, value, bound),
-            .continue_ => |continue_| for (input.exprSpan(continue_.values)) |value| try self.collectExpr(input, value, bound),
+            .break_ => |maybe| if (maybe) |value| try self.collectExpr(value, bound),
+            .continue_ => |continue_| for (input.exprSpan(continue_.values)) |value| try self.collectExpr(value, bound),
+        }
+    }
+
+    fn collectTemplateCaptures(self: *CaptureSet, template: Mono.FnTemplate, caller_bound: *BoundSet) Allocator.Error!void {
+        const body = self.lifter.fnBodyForTemplate(template) orelse return;
+        const entry = try self.active.getOrPut(template);
+        if (entry.found_existing) return;
+        defer _ = self.active.remove(template);
+
+        var local_captures = CaptureSet.init(self.lifter, self.active);
+        defer local_captures.deinit();
+
+        var body_bound = BoundSet.init(self.allocator);
+        defer body_bound.deinit();
+        try bindTypedLocals(self.lifter.input, &body_bound, self.lifter.input.typedLocalSpan(body.args));
+        try local_captures.collectExpr(body.body, &body_bound);
+
+        for (local_captures.items.items) |capture| {
+            try self.addIfFree(capture.local, caller_bound);
         }
     }
 
     fn collectStmt(self: *CaptureSet, input: *const Mono.Program, stmt_id: Mono.StmtId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
         switch (input.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| {
-                try self.collectExpr(input, let_.value, bound);
-                try bindPat(self.allocator, input, let_.pat, bound, added);
+                if (let_.recursive) {
+                    try bindPat(self.allocator, input, let_.pat, bound, added);
+                    try self.collectExpr(let_.value, bound);
+                } else {
+                    try self.collectExpr(let_.value, bound);
+                    try bindPat(self.allocator, input, let_.pat, bound, added);
+                }
             },
             .expr,
             .expect,
             .dbg,
             .return_,
-            => |expr| try self.collectExpr(input, expr, bound),
+            => |expr| try self.collectExpr(expr, bound),
             .crash => {},
         }
     }
 };
 
-fn bindTypedLocals(bound: *BoundSet, locals: []const Mono.TypedLocal) Allocator.Error!void {
-    for (locals) |local| try bound.put(local.local, {});
+fn bindTypedLocals(input: *const Mono.Program, bound: *BoundSet, locals: []const Mono.TypedLocal) Allocator.Error!void {
+    for (locals) |local| try bound.put(input, local.local);
 }
 
-fn bindTypedLocalsTracked(allocator: Allocator, bound: *BoundSet, locals: []const Mono.TypedLocal, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
+fn bindTypedLocalsTracked(allocator: Allocator, input: *const Mono.Program, bound: *BoundSet, locals: []const Mono.TypedLocal, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
     for (locals) |local| {
-        try bound.put(local.local, {});
+        try bound.put(input, local.local);
         try added.append(allocator, local.local);
     }
 }
@@ -496,7 +801,7 @@ fn bindTypedLocalsTracked(allocator: Allocator, bound: *BoundSet, locals: []cons
 fn bindPat(allocator: Allocator, input: *const Mono.Program, pat_id: Mono.PatId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
     switch (input.pats.items[@intFromEnum(pat_id)].data) {
         .bind => |local| {
-            try bound.put(local, {});
+            try bound.put(input, local);
             try added.append(allocator, local);
         },
         .wildcard,
@@ -508,7 +813,7 @@ fn bindPat(allocator: Allocator, input: *const Mono.Program, pat_id: Mono.PatId,
         => {},
         .as => |as| {
             try bindPat(allocator, input, as.pattern, bound, added);
-            try bound.put(as.local, {});
+            try bound.put(input, as.local);
             try added.append(allocator, as.local);
         },
         .record => |fields| for (input.recordDestructSpan(fields)) |field| try bindPat(allocator, input, field.pattern, bound, added),
@@ -518,11 +823,11 @@ fn bindPat(allocator: Allocator, input: *const Mono.Program, pat_id: Mono.PatId,
     }
 }
 
-fn removeBound(bound: *BoundSet, locals: []const Mono.LocalId) void {
+fn removeBound(input: *const Mono.Program, bound: *BoundSet, locals: []const Mono.LocalId) void {
     var index = locals.len;
     while (index > 0) {
         index -= 1;
-        _ = bound.remove(locals[index]);
+        bound.remove(input, locals[index]);
     }
 }
 

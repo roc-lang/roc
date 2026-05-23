@@ -8,6 +8,7 @@ const check = @import("check");
 
 const names = check.CheckedNames;
 
+/// Hosted procedure entry recorded at the LIR boundary.
 pub const Proc = struct {
     external_symbol_name: names.ExternalSymbolNameId,
     dispatch_index: u32,

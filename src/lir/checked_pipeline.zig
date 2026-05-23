@@ -19,22 +19,27 @@ const postcheck = @import("postcheck");
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
 
+/// Resource failure while lowering checked modules to LIR.
 pub const LowerResourceError = Allocator.Error;
 
+/// Root checked module plus the checked imports visible to post-check lowering.
 pub const CheckedModuleSet = struct {
     root: checked.LoweringModuleView,
     imports: []const checked.ImportedModuleView = &.{},
 };
 
+/// Root requests that determine which checked definitions become LIR roots.
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
 };
 
+/// Target settings and checked-state mode for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_state: CheckedState = .published,
 };
 
+/// Whether the root checked module is fully published or inside checking finalization.
 pub const CheckedState = enum {
     published,
     checking_finalization,
@@ -45,6 +50,7 @@ pub const RuntimeRecordSchema = postcheck.LirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.LirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.LirLower.RuntimeTagUnionSchema;
 
+/// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
     allocator: Allocator,
     records: std.ArrayList(RuntimeRecordSchema),
@@ -95,6 +101,7 @@ pub const RuntimeValueSchemaStore = struct {
     }
 };
 
+/// Fully lowered LIR program plus root and runtime schema metadata.
 pub const LoweredProgram = struct {
     lir_result: LirProgram.Result,
     main_proc: LIR.LirProcSpecId,
@@ -156,6 +163,7 @@ pub const LoweredProgram = struct {
     }
 };
 
+/// Lower checked modules and explicit roots directly into an ARC-ready LIR program.
 pub fn lowerCheckedModulesToLir(
     allocator: Allocator,
     modules: CheckedModuleSet,

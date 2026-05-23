@@ -11,6 +11,7 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Lower Lambda Solved IR into Lambda Mono IR.
 pub fn run(
     allocator: Allocator,
     solved: Solved.Program,
@@ -42,6 +43,17 @@ const CaptureBinding = struct {
     ty: Type.TypeId,
 };
 
+const FnCaptureParam = union(enum) {
+    none,
+    finite: CaptureRecord,
+    erased: ?CaptureRecord,
+};
+
+const CaptureRecord = struct {
+    ty: Type.TypeId,
+    captures: []const SolvedType.Capture,
+};
+
 const Lowerer = struct {
     allocator: Allocator,
     solved: *const Solved.Program,
@@ -55,6 +67,7 @@ const Lowerer = struct {
     fn_written: []bool,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
+    erased_capture_ptr_ty: ?Type.TypeId = null,
 
     fn init(allocator: Allocator, solved: *const Solved.Program, program: *Ast.Program) Allocator.Error!Lowerer {
         const local_map = try allocator.alloc(?Ast.LocalId, solved.lifted.locals.items.len);
@@ -137,6 +150,9 @@ const Lowerer = struct {
 
     fn lowerFn(self: *Lowerer, fn_id: Lifted.FnId, fn_: Lifted.Fn) Allocator.Error!void {
         self.captures.clearRetainingCapacity();
+        @memset(self.expr_map, null);
+        @memset(self.pat_map, null);
+        @memset(self.stmt_map, null);
 
         const solved_fn_ty = self.solved.fn_tys.items[@intFromEnum(fn_id)];
         const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
@@ -157,21 +173,37 @@ const Lowerer = struct {
             try args.append(self.allocator, .{ .local = local, .ty = arg_ty });
         }
 
-        const maybe_capture_record = try self.captureRecordForFn(fn_id);
-        if (maybe_capture_record) |capture_record| {
-            const capture_local = try self.program.addLocal(self.symbols.fresh(), capture_record.ty);
-            const capture_expr = try self.program.addExpr(.{
-                .ty = capture_record.ty,
-                .data = .{ .local = capture_local },
-            });
-            try args.append(self.allocator, .{ .local = capture_local, .ty = capture_record.ty });
-            for (capture_record.captures) |capture| {
-                try self.captures.put(capture.local, .{
-                    .record = capture_expr,
-                    .symbol = capture.symbol,
-                    .ty = try self.lowerType(capture.ty),
+        switch (try self.captureParamForFn(fn_id)) {
+            .none => {},
+            .finite => |capture_record| {
+                const capture_local = try self.program.addLocal(self.symbols.fresh(), capture_record.ty);
+                const capture_expr = try self.program.addExpr(.{
+                    .ty = capture_record.ty,
+                    .data = .{ .local = capture_local },
                 });
-            }
+                try args.append(self.allocator, .{ .local = capture_local, .ty = capture_record.ty });
+                try self.bindCaptureRecord(capture_record, capture_expr);
+            },
+            .erased => |maybe_capture_record| {
+                const capture_ptr_ty = try self.erasedCapturePtrType();
+                const capture_ptr_local = try self.program.addLocal(self.symbols.fresh(), capture_ptr_ty);
+                const capture_ptr_expr = try self.program.addExpr(.{
+                    .ty = capture_ptr_ty,
+                    .data = .{ .local = capture_ptr_local },
+                });
+                try args.append(self.allocator, .{ .local = capture_ptr_local, .ty = capture_ptr_ty });
+
+                if (maybe_capture_record) |capture_record| {
+                    const capture_expr = try self.program.addExpr(.{
+                        .ty = capture_record.ty,
+                        .data = .{ .low_level = .{
+                            .op = .erased_capture_load,
+                            .args = try self.program.addExprSpan(&.{capture_ptr_expr}),
+                        } },
+                    });
+                    try self.bindCaptureRecord(capture_record, capture_expr);
+                }
+            },
         }
 
         const body = try self.lowerExpr(fn_.body);
@@ -188,12 +220,7 @@ const Lowerer = struct {
         self.fn_written[@intFromEnum(fn_id)] = true;
     }
 
-    const CaptureRecord = struct {
-        ty: Type.TypeId,
-        captures: []const SolvedType.Capture,
-    };
-
-    fn captureRecordForFn(self: *Lowerer, fn_id: Lifted.FnId) Allocator.Error!?CaptureRecord {
+    fn captureParamForFn(self: *Lowerer, fn_id: Lifted.FnId) Allocator.Error!FnCaptureParam {
         const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
         const func = switch (self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)])) {
             .func => |func| func,
@@ -204,17 +231,45 @@ const Lowerer = struct {
                 for (self.solved.types.memberSpan(members)) |member| {
                     if (member.lambda != fn_symbol) continue;
                     const captures = self.solved.types.captureSpan(member.captures);
-                    if (captures.len == 0) return null;
-                    return .{
+                    if (captures.len == 0) return .none;
+                    return .{ .finite = .{
                         .ty = try self.captureRecordType(member.captures),
                         .captures = captures,
-                    };
+                    } };
                 }
                 Common.invariant("function callable slot did not contain its own lambda member");
             },
-            .erased => return null,
+            .erased => |erased| {
+                for (self.solved.types.memberSpan(erased.members)) |member| {
+                    if (member.lambda != fn_symbol) continue;
+                    const captures = self.solved.types.captureSpan(member.captures);
+                    if (captures.len == 0) return .{ .erased = null };
+                    return .{ .erased = .{
+                        .ty = try self.captureRecordType(member.captures),
+                        .captures = captures,
+                    } };
+                }
+                return .{ .erased = null };
+            },
             else => Common.invariant("function callable slot was unresolved before Lambda Mono"),
         };
+    }
+
+    fn bindCaptureRecord(self: *Lowerer, capture_record: CaptureRecord, capture_expr: Ast.ExprId) Allocator.Error!void {
+        for (capture_record.captures) |capture| {
+            try self.captures.put(capture.local, .{
+                .record = capture_expr,
+                .symbol = capture.symbol,
+                .ty = try self.lowerType(capture.ty),
+            });
+        }
+    }
+
+    fn erasedCapturePtrType(self: *Lowerer) Allocator.Error!Type.TypeId {
+        if (self.erased_capture_ptr_ty) |ty| return ty;
+        const ty = try self.program.types.add(.erased_capture_ptr);
+        self.erased_capture_ptr_ty = ty;
+        return ty;
     }
 
     fn lowerExpr(self: *Lowerer, expr_id: Lifted.ExprId) Allocator.Error!Ast.ExprId {
@@ -245,11 +300,10 @@ const Lowerer = struct {
                 .rest = try self.lowerExpr(let_.rest),
             } },
             .fn_ref => |target| try self.lowerCallableValue(target, ty),
-            .fn_def => |fn_def| try self.lowerCallableValue(self.fnIdForSource(fn_def), ty),
             .call_value => |call| try self.lowerValueCall(ty, call),
             .call_proc => |call| .{ .direct_call = .{
-                .target = self.fn_map[@intFromEnum(self.fnIdForSource(call.callee))],
-                .args = try self.lowerExprSpan(call.args),
+                .target = self.fn_map[@intFromEnum(call.callee)],
+                .args = try self.lowerDirectCallArgs(call.callee, call.args),
             } },
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
@@ -322,12 +376,38 @@ const Lowerer = struct {
                 }
                 Common.invariant("finite callable type did not contain referenced function");
             },
-            .erased_fn => .{ .packed_erased_fn = .{
-                .target = self.fn_map[@intFromEnum(fn_id)],
-                .capture = null,
-            } },
+            .erased_fn => |erased| blk: {
+                const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
+                for (self.program.types.fnVariantSpan(erased.members)) |variant| {
+                    if (variant.lambda != fn_symbol) continue;
+                    break :blk .{ .packed_erased_fn = .{
+                        .target = self.fn_map[@intFromEnum(fn_id)],
+                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecord(fn_id, capture_ty) else null,
+                    } };
+                }
+                Common.invariant("erased callable type did not contain referenced function");
+            },
             else => Common.invariant("function value lowered to non-callable Lambda Mono type"),
         };
+    }
+
+    fn lowerDirectCallArgs(self: *Lowerer, fn_id: Lifted.FnId, args_span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
+        const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
+        defer self.allocator.free(args);
+
+        switch (try self.captureParamForFn(fn_id)) {
+            .none => {},
+            .finite => |capture_record| {
+                const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
+                defer self.allocator.free(call_args);
+                @memcpy(call_args[0..args.len], args);
+                call_args[args.len] = try self.buildCaptureRecord(fn_id, capture_record.ty);
+                return try self.program.addExprSpan(call_args);
+            },
+            .erased => Common.invariant("direct call targeted an erased-callable ABI function"),
+        }
+
+        return try self.program.addExprSpan(args);
     }
 
     fn lowerValueCall(self: *Lowerer, ty: Type.TypeId, call: anytype) Allocator.Error!Ast.ExprData {
@@ -400,7 +480,8 @@ const Lowerer = struct {
         };
         const callable = switch (self.solved.types.rootContent(func.callable)) {
             .lambda_set => |members| members,
-            else => Common.invariant("finite callable value did not have a finite callable slot"),
+            .erased => |erased| erased.members,
+            else => Common.invariant("callable value did not have a resolved callable slot"),
         };
         const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
         for (self.solved.types.memberSpan(callable)) |member| {
@@ -462,6 +543,7 @@ const Lowerer = struct {
             .let_ => |let_| .{ .let_ = .{
                 .pat = try self.lowerPat(let_.pat),
                 .value = try self.lowerExpr(let_.value),
+                .recursive = let_.recursive,
             } },
             .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
             .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
@@ -486,14 +568,16 @@ const Lowerer = struct {
         const root = self.solved.types.root(solved_ty);
         if (self.type_map.get(root)) |cached| return cached;
 
-        switch (self.solved.types.get(root)) {
+        const content = self.solved.types.get(root);
+
+        switch (content) {
             .func => |func| return try self.lowerType(func.callable),
             else => {},
         }
 
         const reserved = try self.program.types.add(.zst);
         try self.type_map.put(root, reserved);
-        self.program.types.set(reserved, try self.lowerTypeContent(self.solved.types.get(root)));
+        self.program.types.set(reserved, try self.lowerTypeContent(content));
         return reserved;
     }
 
@@ -503,7 +587,10 @@ const Lowerer = struct {
             .unbound, .forall => Common.invariant("Lambda Mono type lowering saw an unresolved Lambda Solved type"),
             .primitive => |primitive| .{ .primitive = primitive },
             .zst => .zst,
-            .erased => |erased| .{ .erased_fn = .{ .source_fn_ty = erased.source_fn_ty } },
+            .erased => |erased| .{ .erased_fn = .{
+                .source_fn_ty = erased.source_fn_ty,
+                .members = try self.lowerFnMembers(erased.members),
+            } },
             .func => |func| return self.program.types.get(try self.lowerType(func.callable)),
             .list => |elem| .{ .list = try self.lowerType(elem) },
             .box => |elem| .{ .box = try self.lowerType(elem) },
@@ -526,7 +613,11 @@ const Lowerer = struct {
                 for (self.solved.types.tagSpan(tags), 0..) |tag, i| {
                     const payloads = try self.lowerTypeSpan(self.solved.types.span(tag.payloads));
                     defer self.allocator.free(payloads);
-                    lowered[i] = .{ .name = tag.name, .payloads = try self.program.types.addSpan(payloads) };
+                    lowered[i] = .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = try self.program.types.addSpan(payloads),
+                    };
                 }
                 break :blk .{ .tag_union = try self.program.types.addTags(lowered) };
             },
@@ -537,6 +628,7 @@ const Lowerer = struct {
                     .named_type = named.named_type,
                     .def = named.def,
                     .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
                     .args = try self.program.types.addSpan(args),
                     .backing = if (named.backing) |backing| .{
                         .ty = try self.lowerType(backing.ty),
@@ -545,20 +637,24 @@ const Lowerer = struct {
                 } };
             },
             .lambda_set => |members| blk: {
-                const solved_members = self.solved.types.memberSpan(members);
-                const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
-                defer self.allocator.free(variants);
-                for (solved_members, 0..) |member, i| {
-                    const captures = self.solved.types.captureSpan(member.captures);
-                    variants[i] = .{
-                        .id = @enumFromInt(0),
-                        .lambda = member.lambda,
-                        .capture_ty = if (captures.len == 0) null else try self.captureRecordType(member.captures),
-                    };
-                }
-                break :blk .{ .callable = try self.program.types.addFnVariants(variants) };
+                break :blk .{ .callable = try self.lowerFnMembers(members) };
             },
         };
+    }
+
+    fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span) Allocator.Error!Type.Span {
+        const solved_members = self.solved.types.memberSpan(members);
+        const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
+        defer self.allocator.free(variants);
+        for (solved_members, 0..) |member, i| {
+            const captures = self.solved.types.captureSpan(member.captures);
+            variants[i] = .{
+                .id = @enumFromInt(0),
+                .lambda = member.lambda,
+                .capture_ty = if (captures.len == 0) null else try self.captureRecordType(member.captures),
+            };
+        }
+        return try self.program.types.addFnVariants(variants);
     }
 
     fn captureRecordType(self: *Lowerer, captures: SolvedType.Span) Allocator.Error!Type.TypeId {
@@ -690,15 +786,6 @@ const Lowerer = struct {
             };
         }
         return try self.program.addIfBranchSpan(lowered);
-    }
-
-    fn fnIdForSource(self: *Lowerer, fn_def: @import("../monotype/ast.zig").FnTemplate) Lifted.FnId {
-        for (self.solved.lifted.fns.items, 0..) |fn_, index| {
-            if (fn_.source) |source| {
-                if (std.meta.eql(source, fn_def)) return @enumFromInt(@as(u32, @intCast(index)));
-            }
-        }
-        Common.invariant("Lambda Mono referenced a function definition that was not lifted");
     }
 
     fn fnIdForSymbol(self: *Lowerer, symbol: Common.Symbol) Ast.FnId {

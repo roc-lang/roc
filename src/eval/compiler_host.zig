@@ -39,6 +39,7 @@ pub fn deinit(self: *CompilerHost) void {
     self.* = CompilerHost.init(self.allocator);
 }
 
+/// Return the RocOps table used by compiler-owned evaluation.
 pub fn ops(self: *CompilerHost) *RocOps {
     if (self.roc_ops == null) {
         self.roc_ops = .{

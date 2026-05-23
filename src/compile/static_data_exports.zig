@@ -15,6 +15,7 @@ const Checked = check.CheckedArtifact;
 const StaticDataExport = backend.StaticDataExport;
 const StaticDataRelocation = backend.StaticDataRelocation;
 
+/// Checked modules whose provided data exports can become static data.
 pub const ModuleViews = struct {
     root: ?Checked.LoweringModuleView = null,
     imports: []const Checked.ImportedModuleView = &.{},
@@ -24,6 +25,7 @@ const MaterializationError = Allocator.Error || error{
     UnsupportedTarget,
 };
 
+/// Build readonly data exports for provided constants.
 pub fn buildProvidedDataExports(
     allocator: Allocator,
     modules: ModuleViews,
@@ -52,7 +54,7 @@ pub fn deinitProvidedDataExports(allocator: Allocator, exports: []StaticDataExpo
 
 fn hasProvidedData(modules: ModuleViews) bool {
     if (modules.root) |root| {
-        if (moduleHasProvidedData(root.artifact)) return true;
+        if (moduleHasProvidedData(root.module)) return true;
     }
     for (modules.imports) |imported| {
         for (imported.provided_exports.exports) |provided| {

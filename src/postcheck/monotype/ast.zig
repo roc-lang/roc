@@ -13,12 +13,18 @@ const Type = @import("type.zig");
 const checked = check.CheckedModule;
 const names = check.CheckedNames;
 
+/// Identifier for an expression in Monotype IR.
 pub const ExprId = enum(u32) { _ };
+/// Identifier for a pattern in Monotype IR.
 pub const PatId = enum(u32) { _ };
+/// Identifier for a definition in Monotype IR.
 pub const DefId = enum(u32) { _ };
+/// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
+/// Identifier for an owned string literal.
 pub const StringLiteralId = enum(u32) { _ };
 
+/// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime T: type) type {
     _ = T;
     return extern struct {
@@ -31,6 +37,7 @@ pub fn Span(comptime T: type) type {
     };
 }
 
+/// Checked function definition used by a Monotype function template.
 pub const FnDef = union(enum) {
     local_template: names.ProcTemplate,
     imported_template: names.ProcTemplate,
@@ -40,16 +47,88 @@ pub const FnDef = union(enum) {
     checked_generated: names.ProcTemplate,
 };
 
+/// Nested function site inside an owner function template.
 pub const NestedFn = struct {
     owner: names.ProcTemplate,
     site: names.ProcSiteId,
+    context_fn_key: names.TypeDigest,
 };
 
+/// Function template plus source and monomorphic type identities.
 pub const FnTemplate = struct {
     fn_def: FnDef,
     source_fn_ty: checked.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
+    mono_fn_ty: Type.TypeId,
 };
 
+/// Compare the fields that make two function templates identical for Monotype.
+pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
+    return std.meta.eql(lhs.fn_def, rhs.fn_def) and
+        std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]) and
+        lhs.mono_fn_ty == rhs.mono_fn_ty;
+}
+
+/// Compute a digest for a Monotype function template.
+pub fn fnTemplateDigest(template: FnTemplate, types: *const Type.Store, name_store: *const names.NameStore) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeFnDef(&hasher, template.fn_def);
+    writeBytes(&hasher, &template.source_fn_key.bytes);
+    const mono_digest = types.typeDigest(name_store, template.mono_fn_ty);
+    writeBytes(&hasher, &mono_digest.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
+    switch (fn_def) {
+        .local_template => |template| {
+            writeBytes(hasher, "local_template");
+            writeProcTemplate(hasher, template);
+        },
+        .imported_template => |template| {
+            writeBytes(hasher, "imported_template");
+            writeProcTemplate(hasher, template);
+        },
+        .nested => |nested| {
+            writeBytes(hasher, "nested");
+            writeProcTemplate(hasher, nested.owner);
+            writeU32(hasher, @intFromEnum(nested.site));
+            writeBytes(hasher, &nested.context_fn_key.bytes);
+        },
+        .local_hosted => |template| {
+            writeBytes(hasher, "local_hosted");
+            writeProcTemplate(hasher, template);
+        },
+        .imported_hosted => |template| {
+            writeBytes(hasher, "imported_hosted");
+            writeProcTemplate(hasher, template);
+        },
+        .checked_generated => |template| {
+            writeBytes(hasher, "checked_generated");
+            writeProcTemplate(hasher, template);
+        },
+    }
+}
+
+fn writeProcTemplate(hasher: *std.crypto.hash.sha2.Sha256, template: names.ProcTemplate) void {
+    const module_digest = names.procTemplateModuleDigest(template);
+    hasher.update(&module_digest.bytes);
+    writeU32(hasher, @intFromEnum(template.proc_base));
+    writeU32(hasher, @intFromEnum(template.template));
+}
+
+fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+    writeU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, value, .little);
+    hasher.update(&buf);
+}
+
+/// Local binding with its symbol, type, and optional checked binder.
 pub const Local = struct {
     id: LocalId,
     symbol: Common.Symbol,
@@ -57,72 +136,86 @@ pub const Local = struct {
     binder: ?checked.PatternBinderId = null,
 };
 
+/// Local id paired with its monomorphic type.
 pub const TypedLocal = struct {
     local: LocalId,
     ty: Type.TypeId,
 };
 
+/// Record field expression entry.
 pub const FieldExpr = struct {
     name: names.RecordFieldNameId,
     value: ExprId,
 };
 
+/// Tag expression entry.
 pub const TagExpr = struct {
     name: names.TagNameId,
     payloads: Span(ExprId),
 };
 
+/// Lambda expression before lifting.
 pub const LambdaExpr = struct {
     args: Span(TypedLocal),
     body: ExprId,
     source: FnTemplate,
 };
 
+/// Call through a function value before lambda solving.
 pub const CallValue = struct {
     callee: ExprId,
     args: Span(ExprId),
 };
 
+/// Direct call to a known function template.
 pub const CallProc = struct {
     callee: FnTemplate,
     args: Span(ExprId),
 };
 
+/// Low-level builtin call.
 pub const LowLevelCall = struct {
     op: can.CIR.Expr.LowLevel,
     args: Span(ExprId),
 };
 
+/// Match expression with pattern branches.
 pub const MatchExpr = struct {
     scrutinee: ExprId,
     branches: Span(Branch),
 };
 
+/// If expression with one or more conditional branches.
 pub const IfExpr = struct {
     branches: Span(IfBranch),
     final_else: ExprId,
 };
 
+/// Block expression with statements and a final expression.
 pub const BlockExpr = struct {
     statements: Span(StmtId),
     final_expr: ExprId,
 };
 
+/// Loop expression with loop parameters and initial values.
 pub const LoopExpr = struct {
     params: Span(TypedLocal),
     initial_values: Span(ExprId),
     body: ExprId,
 };
 
+/// Continue expression carrying next loop values.
 pub const ContinueExpr = struct {
     values: Span(ExprId),
 };
 
+/// Typed Monotype expression.
 pub const Expr = struct {
     ty: Type.TypeId,
     data: ExprData,
 };
 
+/// Monotype expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
     unit,
@@ -142,6 +235,7 @@ pub const ExprData = union(enum) {
         rest: ExprId,
     },
     lambda: LambdaExpr,
+    def_ref: DefId,
     fn_def: FnTemplate,
     call_value: CallValue,
     call_proc: CallProc,
@@ -171,11 +265,13 @@ pub const ExprData = union(enum) {
     expect: ExprId,
 };
 
+/// Typed Monotype pattern.
 pub const Pat = struct {
     ty: Type.TypeId,
     data: PatData,
 };
 
+/// Monotype pattern forms.
 pub const PatData = union(enum) {
     bind: LocalId,
     wildcard,
@@ -197,28 +293,34 @@ pub const PatData = union(enum) {
     str_lit: StringLiteralId,
 };
 
+/// Record destructuring field pattern.
 pub const RecordDestruct = struct {
     name: names.RecordFieldNameId,
     pattern: PatId,
 };
 
+/// Match branch.
 pub const Branch = struct {
     pat: PatId,
     guard: ?ExprId = null,
     body: ExprId,
 };
 
+/// Conditional branch in an if expression.
 pub const IfBranch = struct {
     cond: ExprId,
     body: ExprId,
 };
 
+/// Identifier for a statement in Monotype IR.
 pub const StmtId = enum(u32) { _ };
 
+/// Monotype statement forms.
 pub const Stmt = union(enum) {
     let_: struct {
         pat: PatId,
         value: ExprId,
+        recursive: bool = false,
     },
     expr: ExprId,
     expect: ExprId,
@@ -227,7 +329,17 @@ pub const Stmt = union(enum) {
     crash: StringLiteralId,
 };
 
+/// Top-level or generated Monotype definition.
 pub const Def = struct {
+    symbol: Common.Symbol,
+    fn_def: ?FnTemplate = null,
+    args: Span(TypedLocal),
+    body: ExprId,
+    ret: Type.TypeId,
+};
+
+/// Nested function definition discovered before lifting.
+pub const NestedDef = struct {
     symbol: Common.Symbol,
     fn_def: FnTemplate,
     args: Span(TypedLocal),
@@ -235,17 +347,20 @@ pub const Def = struct {
     ret: Type.TypeId,
 };
 
+/// Root request bound to a Monotype definition.
 pub const Root = struct {
     def: DefId,
     request: checked.RootRequest,
 };
 
+/// Complete Monotype program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
     defs: std.ArrayList(Def),
+    nested_defs: std.ArrayList(NestedDef),
     exprs: std.ArrayList(Expr),
     pats: std.ArrayList(Pat),
     stmts: std.ArrayList(Stmt),
@@ -268,6 +383,7 @@ pub const Program = struct {
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
             .defs = .empty,
+            .nested_defs = .empty,
             .exprs = .empty,
             .pats = .empty,
             .stmts = .empty,
@@ -301,6 +417,7 @@ pub const Program = struct {
         self.stmts.deinit(self.allocator);
         self.pats.deinit(self.allocator);
         self.exprs.deinit(self.allocator);
+        self.nested_defs.deinit(self.allocator);
         self.defs.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();

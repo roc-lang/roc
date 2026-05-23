@@ -27,6 +27,7 @@ const TagBase = struct {
     layout_idx: layout.Idx,
 };
 
+/// Stores interpreted compile-time roots into a checked ConstStore.
 pub const Writer = struct {
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
@@ -255,7 +256,7 @@ pub const Writer = struct {
         const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
         const payload_nodes = try self.storeTagPayloads(selected.payloads, payload_layout, tag_base.value);
         return try self.module.const_store.append(.{ .tag = .{
-            .tag_name = selected.name,
+            .tag_name = selected.checked_name,
             .payloads = payload_nodes,
         } });
     }
@@ -269,6 +270,10 @@ pub const Writer = struct {
         const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
         errdefer self.module.const_store.allocator.free(nodes);
         if (plans.len == 0) return nodes;
+        if (plans.len == 1) {
+            nodes[0] = try self.storeValue(plans[0], payload_layout, value);
+            return nodes;
+        }
         const layout_value = self.program.layouts.getLayout(payload_layout);
         if (layout_value.tag == .zst) {
             for (nodes, 0..) |*node, index| {
@@ -280,8 +285,6 @@ pub const Writer = struct {
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
                 node.* = try self.storeValue(plans[index], field_layout, value.offset(offset));
             }
-        } else if (plans.len == 1) {
-            nodes[0] = try self.storeValue(plans[0], payload_layout, value);
         } else {
             writerInvariant("multi-payload tag did not use a struct payload layout");
         }
@@ -319,7 +322,7 @@ pub const Writer = struct {
         for (set.entries) |entry| {
             if (entry.entry != proc) continue;
             const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
-            const captures = try self.storeCaptures(entry.captures, set.layout, .{ .ptr = capture_ptr });
+            const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
             errdefer if (captures.len > 0) self.module.const_store.allocator.free(captures);
             return try self.module.const_store.appendFn(.{
                 .fn_def = entry.template.fn_def,

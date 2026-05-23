@@ -429,10 +429,7 @@ const Inserter = struct {
                     self.destroyRewritePath(path);
                     return;
                 },
-                .jump => |jump_stmt| {
-                    if (self.store.getLocalSpan(jump_stmt.args).len != 0) {
-                        arcInvariant("ARC insertion reached join arguments before explicit join-parameter ARC lowering");
-                    }
+                .jump => {
                     const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep, path.cursor) else path.cursor;
                     path.result.* = try self.finishLinearRewrite(&path.frames, tail);
                     self.destroyRewritePath(path);
@@ -635,7 +632,7 @@ const Inserter = struct {
             .start = start,
             .id = join_stmt.id,
             .params = join_stmt.params,
-            .loop_keep = try path.owned.clone(),
+            .loop_keep = try self.joinBodyOwnedSet(&path.owned, join_stmt.params, join_stmt.body),
             .frames = takeRewriteFrames(path),
             .result = path.result,
         };
@@ -644,11 +641,11 @@ const Inserter = struct {
 
         try tasks.append(self.store.allocator, .{ .join = state });
         queued = true;
-        try self.pushRewritePath(tasks, join_stmt.remainder, &state.loop_keep, .{
+        try self.pushRewritePath(tasks, join_stmt.remainder, &path.owned, .{
             .boundaries = path.options.boundaries,
             .loop_keep = &state.loop_keep,
         }, &state.remainder);
-        try self.pushRewritePath(tasks, join_stmt.body, &path.owned, .{
+        try self.pushRewritePath(tasks, join_stmt.body, &state.loop_keep, .{
             .boundaries = path.options.boundaries,
             .loop_keep = &state.loop_keep,
         }, &state.body);
@@ -1009,7 +1006,12 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
-                .join => |join_stmt| path.cursor = join_stmt.body,
+                .join => |join_stmt| {
+                    for (self.store.getLocalSpan(join_stmt.params)) |param| {
+                        self.addOwnedIfRc(&path.owned, param);
+                    }
+                    path.cursor = join_stmt.body;
+                },
                 .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash => {
                     self.destroyAnalysisPath(path);
                     return;
@@ -1094,6 +1096,27 @@ const Inserter = struct {
 
     fn addOwnedIfRc(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
         if (self.localContainsRefcounted(local)) owned.set(local);
+    }
+
+    fn joinBodyOwnedSet(
+        self: *Inserter,
+        entry_owned: *const OwnedSet,
+        params: LIR.LocalSpan,
+        body: LIR.CFStmtId,
+    ) ResourceError!OwnedSet {
+        var owned = try OwnedSet.init(self.store.allocator, entry_owned.len());
+        errdefer owned.deinit();
+        var iter = entry_owned.bits.iterator(.{});
+        while (iter.next()) |i| {
+            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
+            if (try self.localUsedInPath(body, local, null)) {
+                owned.set(local);
+            }
+        }
+        for (self.store.getLocalSpan(params)) |param| {
+            self.addOwnedIfRc(&owned, param);
+        }
+        return owned;
     }
 
     fn releaseOldTargetIfNeeded(self: *Inserter, target: LIR.LocalId, owned: *OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -1356,7 +1379,6 @@ const Inserter = struct {
                     try stack.append(self.store.allocator, join_stmt.body);
                 },
                 .jump => |jump_stmt| {
-                    if (self.spanUsesLocal(jump_stmt.args, needle)) return true;
                     const join_bodies = self.join_bodies orelse arcInvariant("ARC liveness reached jump without collected join bodies");
                     const target_body = join_bodies.get(jump_stmt.target) orelse arcInvariant("ARC liveness reached jump to unknown join point");
                     try stack.append(self.store.allocator, target_body);
@@ -2324,6 +2346,32 @@ test "RC early_return nested in call arguments gets cleanup decrefs" {
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
     try f.expectReachableRcBefore(f.procBody(), .decref, value, .crash);
+}
+
+test "RC join param move excludes old source from loop body ownership" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const state = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id: LIR.JoinPointId = @enumFromInt(0);
+
+    const ret = try f.ret(result);
+    const body = try f.assignI64(result, 1, ret);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_state = try f.setLocal(state, source, .initialize_join_param, jump);
+    const remainder = try f.assignList(source, &.{}, initialize_state);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = body,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+    try f.expectRc(source, 0, 0, 0);
+    try f.expectRc(state, 0, 1, 0);
 }
 
 test "dev lowering: list rest pattern emits two list decrefs" {

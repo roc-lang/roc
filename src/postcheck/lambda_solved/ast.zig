@@ -5,15 +5,19 @@ const Common = @import("../common.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Type = @import("type.zig");
 
+/// Identifier for an expression type entry.
 pub const ExprId = enum(u32) { _ };
+/// Identifier for a solved function definition.
 pub const DefId = enum(u32) { _ };
 
+/// Lambda Solved function definition.
 pub const Def = struct {
     symbol: Common.Symbol,
     ty: Type.TypeVarId,
     body: Lifted.ExprId,
 };
 
+/// Lambda Solved program plus the solved type store.
 pub const Program = struct {
     allocator: std.mem.Allocator,
     lifted: Lifted.Program,

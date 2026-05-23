@@ -136,9 +136,16 @@ scratch_free_vars: base.Scratch(Pattern.Idx),
 scratch_captures: base.Scratch(Pattern.Idx),
 /// Scratch bound variables (for filtering out locally-bound vars from captures)
 scratch_bound_vars: base.Scratch(Pattern.Idx),
+/// Local function declaration patterns that are visible as direct local
+/// procedures in the current canonicalization context.
+scratch_local_function_patterns: base.Scratch(Pattern.Idx),
 /// Local type declarations found inside function bodies.
 /// Collected during canonicalization, then added to all_statements at the end.
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
+/// Module-global value definitions produced by canonicalization.
+/// This includes top-level values, associated items, and compiler-created
+/// hosted globals. Local block definitions are deliberately excluded.
+scratch_global_value_defs: std.ArrayList(CIR.Def.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
 /// Counter for generating unique anonymous open extension rigid var names
@@ -284,7 +291,9 @@ pub fn deinit(
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
+    self.scratch_local_function_patterns.deinit();
     self.scratch_local_type_decls.deinit(gpa);
+    self.scratch_global_value_defs.deinit(gpa);
 }
 
 /// Initialize the canonicalizer.
@@ -342,7 +351,9 @@ fn initInternal(
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_local_function_patterns = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
+        .scratch_global_value_defs = try std.ArrayList(CIR.Def.Idx).initCapacity(gpa, 0),
     };
 
     // Top-level scope is not a function boundary
@@ -405,6 +416,10 @@ fn recordExplicitRootDef(self: *Self, ident: Ident.Idx, def_idx: CIR.Def.Idx) st
         });
         return;
     }
+}
+
+fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    try self.scratch_global_value_defs.append(self.env.gpa, def_idx);
 }
 
 fn populateBuiltinAutoImportedTypes(
@@ -1816,6 +1831,7 @@ fn processAssociatedItemsSecondPass(
                                         where_clauses,
                                     );
                                     try self.env.store.addScratchDef(def_idx);
+                                    try self.recordGlobalValueDef(def_idx);
 
                                     // Register this associated item by its qualified name
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
@@ -1877,6 +1893,7 @@ fn processAssociatedItemsSecondPass(
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
+                    try self.recordGlobalValueDef(def_idx);
 
                     // Register this associated item by its qualified name
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
@@ -1905,6 +1922,7 @@ fn processAssociatedItemsSecondPass(
                         // Canonicalize with the qualified name
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
+                        try self.recordGlobalValueDef(def_idx);
 
                         // Register this associated item by its qualified name
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
@@ -2576,6 +2594,7 @@ pub fn canonicalizeFile(
                     // Create the anno-only def immediately
                     const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                     try self.env.store.addScratchDef(def_idx);
+                    try self.recordGlobalValueDef(def_idx);
 
                     // If exposed, register it
                     const ident_text = self.env.getIdent(name_ident);
@@ -3121,6 +3140,7 @@ pub fn canonicalizeFile(
                                 // and let the next iteration handle the decl normally
                                 const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                                 try self.env.store.addScratchDef(def_idx);
+                                try self.recordGlobalValueDef(def_idx);
 
                                 // If this identifier should be exposed, register it
                                 const ident_text = self.env.getIdent(name_ident);
@@ -3135,6 +3155,7 @@ pub fn canonicalizeFile(
                             // create a Def with an e_anno_only body
                             const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                             try self.env.store.addScratchDef(def_idx);
+                            try self.recordGlobalValueDef(def_idx);
 
                             // If this identifier should be exposed, register it
                             const ident_text = self.env.getIdent(name_ident);
@@ -3152,6 +3173,7 @@ pub fn canonicalizeFile(
                 if (next_i >= ast_stmt_idxs.len) {
                     const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                     try self.env.store.addScratchDef(def_idx);
+                    try self.recordGlobalValueDef(def_idx);
 
                     // If this identifier should be exposed, register it
                     const ident_text = self.env.getIdent(name_ident);
@@ -3193,6 +3215,12 @@ pub fn canonicalizeFile(
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
+
+    const global_value_defs_start = self.env.store.scratchDefTop();
+    for (self.scratch_global_value_defs.items) |def_idx| {
+        try self.env.store.addScratchDef(def_idx);
+    }
+    self.env.global_value_defs = try self.env.store.defSpanFrom(global_value_defs_start);
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
@@ -3523,6 +3551,7 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
     // Canonicalize the decl (with the validated anno)
     const def_idx = try self.canonicalizeDeclWithAnnotation(decl, mb_validated_anno);
     try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
 
     // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
     // and add the node index to exposed_items
@@ -3626,6 +3655,10 @@ fn boundPatternIdent(self: *Self, pattern_idx: Pattern.Idx) ?base.Ident.Idx {
         .as => |as_pat| as_pat.ident,
         else => null,
     };
+}
+
+fn isLocalFunctionPattern(self: *Self, pattern_idx: Pattern.Idx) bool {
+    return self.scratch_local_function_patterns.contains(pattern_idx);
 }
 
 fn alternativePatternBindingsMatch(
@@ -6389,8 +6422,9 @@ pub fn canonicalizeExpr(
                 self.scratch_captures.clearFrom(captures_top);
 
                 // Determine captures: free variables in body minus variables bound by args.
-                // Exclude globally resolvable defs (top-level and associated items), which
-                // should be looked up directly rather than closure-captured.
+                // Exclude globally resolvable defs (top-level and associated
+                // items) and same-block function declarations, which should be
+                // looked up directly rather than closure-captured.
                 const bound_vars_top = self.scratch_bound_vars.top();
                 defer self.scratch_bound_vars.clearFrom(bound_vars_top);
 
@@ -6402,7 +6436,11 @@ pub fn canonicalizeExpr(
                 var bound_vars_view = self.scratch_bound_vars.setViewFrom(bound_vars_top);
                 defer bound_vars_view.deinit();
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.containsFrom(captures_top, fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
+                    if (!self.scratch_captures.containsFrom(captures_top, fv) and
+                        !bound_vars_view.contains(fv) and
+                        !self.isGloballyResolvablePattern(fv) and
+                        !self.isLocalFunctionPattern(fv))
+                    {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -6759,6 +6797,31 @@ pub fn canonicalizeExpr(
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
                 },
             };
+
+            if (op == .@"and" or op == .@"or") {
+                const bool_tag = try self.addBoolTagExpr(
+                    if (op == .@"and") self.env.idents.false_tag else self.env.idents.true_tag,
+                    region,
+                );
+
+                const if_branch_idx = try self.env.addIfBranch(.{
+                    .cond = can_lhs.idx,
+                    .body = if (op == .@"and") can_rhs.idx else bool_tag,
+                }, region);
+                const scratch_top = self.env.store.scratchIfBranchTop();
+                try self.env.store.addScratchIfBranch(if_branch_idx);
+                const branches_span = try self.env.store.ifBranchSpanFrom(scratch_top);
+
+                const expr_idx = try self.env.addExpr(CIR.Expr{
+                    .e_if = .{
+                        .branches = branches_span,
+                        .final_else = if (op == .@"and") bool_tag else can_rhs.idx,
+                    },
+                }, region);
+
+                const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
+            }
 
             const expr_idx = try self.env.addExpr(Expr{
                 .e_binop = Expr.Binop.init(op, can_lhs.idx, can_rhs.idx),
@@ -7511,6 +7574,46 @@ pub fn canonicalizeExpr(
             return null;
         },
     }
+}
+
+fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const tag_expr_idx = try self.env.addExpr(CIR.Expr{
+        .e_tag = .{
+            .name = tag_name,
+            .args = Expr.Span{ .span = DataSpan.empty() },
+        },
+    }, region);
+
+    const binding_location = self.scopeLookupTypeBinding(self.env.idents.bool) orelse {
+        @panic("Bool type binding was absent during boolean operator canonicalization");
+    };
+
+    return switch (binding_location.binding.*) {
+        .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
+            .e_nominal = .{
+                .nominal_type_decl = stmt,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, region),
+        .external_nominal => |external| blk: {
+            const import_idx = external.import_idx orelse {
+                @panic("Bool type binding had no import during boolean operator canonicalization");
+            };
+            const target_node_idx = external.target_node_idx orelse {
+                @panic("Bool type binding had no target node during boolean operator canonicalization");
+            };
+            break :blk try self.env.addExpr(CIR.Expr{
+                .e_nominal_external = .{
+                    .module_idx = import_idx,
+                    .target_node_idx = target_node_idx,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, region);
+        },
+        .local_alias => @panic("Bool type binding was not a nominal type during boolean operator canonicalization"),
+    };
 }
 
 /// Canonicalize an expr. If it fails, convert it to a malormed expr node
@@ -9877,6 +9980,18 @@ pub fn canonicalizePattern(
                 const field = self.parse_ir.store.getPatternRecordField(field_idx);
                 const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
 
+                if (field.rest and field.name == 0) {
+                    const underscore_pattern_idx = try self.env.addPattern(Pattern{ .underscore = {} }, field_region);
+                    const record_destruct = CIR.Pattern.RecordDestruct{
+                        .label = self.env.idents.open_ext,
+                        .ident = self.env.idents.open_ext,
+                        .kind = .{ .Rest = underscore_pattern_idx },
+                    };
+                    const destruct_idx = try self.env.addRecordDestruct(record_destruct, field_region);
+                    try self.env.store.addScratchRecordDestruct(destruct_idx);
+                    continue;
+                }
+
                 // Resolve the field name
                 if (self.parse_ir.tokens.resolveIdentifier(field.name)) |field_name_ident| {
                     // For simple destructuring like `{ name, age }`, both label and ident are the same
@@ -11662,6 +11777,9 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const captures_top = self.scratch_captures.top();
     defer self.scratch_captures.clearFrom(captures_top);
 
+    const local_functions_top = self.scratch_local_function_patterns.top();
+    defer self.scratch_local_function_patterns.clearFrom(local_functions_top);
+
     const free_vars_top = self.scratch_free_vars.top();
 
     // Canonicalize all statements in the block
@@ -11691,6 +11809,8 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             .reference_regions = std.ArrayList(Region){},
         });
         try current_scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
+        try self.scratch_local_function_patterns.append(pattern_idx);
+        try self.scratch_bound_vars.append(pattern_idx);
     }
 
     var last_expr: ?CanonicalizedExpr = null;
@@ -11794,6 +11914,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 switch (cir_stmt) {
                     .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
                     .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
+                    .s_reassign => |reassign| try self.collectBoundVarsToScratch(reassign.pattern_idx),
                     else => {},
                 }
 
@@ -14561,6 +14682,7 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
 
     // Add the def to scratch so it's included in all_defs
     try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
 
     // Mark the synthetic binding as used so it doesn't trigger unused-variable diagnostics.
     try self.used_patterns.put(self.env.gpa, pattern_idx, {});

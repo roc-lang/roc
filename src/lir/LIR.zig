@@ -288,7 +288,6 @@ pub const CFStmt = union(enum) {
     },
     jump: struct {
         target: JoinPointId,
-        args: LocalSpan,
     },
     ret: struct {
         value: LocalId,

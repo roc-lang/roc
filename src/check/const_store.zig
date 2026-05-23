@@ -8,9 +8,12 @@ const names = @import("canonical_names.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Identifier for a node in the checked const store.
 pub const ConstNodeId = enum(u32) { _ };
+/// Identifier for a function value in the checked const store.
 pub const ConstFnId = enum(u32) { _ };
 
+/// Scalar value stored by compile-time evaluation.
 pub const ConstScalar = union(enum) {
     i8: i8,
     i16: i16,
@@ -27,22 +30,26 @@ pub const ConstScalar = union(enum) {
     dec_bits: i128,
 };
 
+/// Captured checked value inside a compile-time function value.
 pub const ConstCapture = struct {
     binder: checked_ids.PatternBinderId,
     value: ConstNodeId,
 };
 
+/// Function value stored by compile-time evaluation.
 pub const ConstFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     captures: []const ConstCapture = &.{},
 };
 
+/// Named type owner for a stored nominal constant.
 pub const NamedType = struct {
     module: names.CheckedModuleDigest,
     ty: checked_ids.CheckedTypeId,
 };
 
+/// Checked function definition referenced by a stored function value.
 pub const FnDef = union(enum) {
     local_template: names.ProcTemplate,
     imported_template: names.ProcTemplate,
@@ -55,6 +62,7 @@ pub const FnDef = union(enum) {
     checked_generated: names.ProcTemplate,
 };
 
+/// Compile-time constant stored in checked module data.
 pub const ConstValue = union(enum) {
     pending,
     zst,
@@ -75,6 +83,7 @@ pub const ConstValue = union(enum) {
     fn_value: ConstFnId,
 };
 
+/// Store of compile-time constants published by checking finalization.
 pub const ConstStore = struct {
     const VisitState = enum { unseen, active, done };
 

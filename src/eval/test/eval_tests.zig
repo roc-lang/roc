@@ -170,6 +170,68 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "42.0" },
     },
     .{
+        .name = "inspect: numeric default specialization remains replaceable until constrained",
+        .source_kind = .module,
+        .source =
+        \\add_one = |x| x + 1
+        \\
+        \\force_u8 : U8 -> U8
+        \\force_u8 = |n| n
+        \\
+        \\main = {
+        \\    defaulted = add_one(41)
+        \\    constrained = force_u8(add_one(41))
+        \\
+        \\    (defaulted, constrained)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(42.0, 42)" },
+    },
+    .{
+        .name = "inspect: annotated Dec specialization is final evidence",
+        .source_kind = .module,
+        .source =
+        \\add_one_dec : Dec -> Dec
+        \\add_one_dec = |x| x + 1
+        \\
+        \\main = add_one_dec(41)
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: unconstrained empty list specialization remains replaceable until constrained",
+        .source_kind = .module,
+        .source =
+        \\empty = || []
+        \\
+        \\force_strings : List(Str) -> List(Str)
+        \\force_strings = |xs| xs
+        \\
+        \\main = {
+        \\    unconstrained_len = empty().len()
+        \\    strings = force_strings(empty())
+        \\
+        \\    (unconstrained_len, strings)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, [])" },
+    },
+    .{
+        .name = "inspect: explicit empty and zero-sized types are final evidence",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    impossible_items : List([])
+        \\    impossible_items = []
+        \\
+        \\    markers = [{}, {}, {}]
+        \\
+        \\    (impossible_items.len(), markers.len())
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, 3)" },
+    },
+    .{
         .name = "inspect: Bool stored boxed tagged and passed as ordinary Roc value",
         .source_kind = .module,
         .source =

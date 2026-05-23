@@ -8,6 +8,7 @@ const check = @import("check");
 
 const checked = check.CheckedArtifact;
 
+/// Source role for a root procedure emitted into LIR.
 pub const RootKind = enum {
     runtime_entrypoint,
     provided_export,
@@ -20,6 +21,7 @@ pub const RootKind = enum {
     compile_time_callable,
 };
 
+/// Calling convention category for a root procedure.
 pub const RootAbi = enum {
     roc,
     platform,
@@ -28,6 +30,7 @@ pub const RootAbi = enum {
     compile_time,
 };
 
+/// Visibility category for a root procedure.
 pub const RootExposure = enum {
     private,
     exported,
@@ -35,6 +38,7 @@ pub const RootExposure = enum {
     hosted,
 };
 
+/// LIR-owned copy of checked root request metadata.
 pub const RootMetadata = struct {
     order: u32,
     kind: RootKind,

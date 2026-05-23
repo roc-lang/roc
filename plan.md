@@ -234,10 +234,10 @@ Checked module boundary checklist:
 - `erased_fn_abis`: pre-existing code scheduled for deletion; replace with
   checked erased callable requirements and direct-builder `erased_fns`; delete
   in Phase 4/7; verification grep `erased_fn_abi`.
-- compile-time plan stores and compile-time value stores: replace with
+- old compile-time plan data and old const storage data: replace with
   `ConstStore`, `ConstNodeId`, `ConstFn`, `FnResult`, `FnSet`, `ErasedFns`, and
   `CaptureSlot`; delete old graph/plan stores in Phase 6; verification grep for
-  old const graph and old compile-time value store names in pre-existing code scheduled for deletion.
+  old const graph and old const storage names in pre-existing code scheduled for deletion.
 - compile-time dependency summaries and const/callable instances: keep only as
   checked dependency and root publication facts; remove any field that mentions
   old middle runtime payloads, old value conversion, callable descriptors, or

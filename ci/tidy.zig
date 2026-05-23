@@ -509,10 +509,10 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
 // Zig's lazy compilation model makes it too easy to forget to include a file into the build --- if
 // nothing imports a file, compiler just doesn't see it and can't flag it as unused.
 //
-// DeadFilesDetector implements heuristic detection of unused files, by "grepping" for import
-// statements and flagging file which are never imported. This gives false negatives for unreachable
-// cycles of files, as well as for identically-named files, but it should be good enough in
-// practice.
+// DeadFilesDetector implements textual detection of unused files by scanning for
+// import statements and build-registered Zig roots. This gives false negatives
+// for unreachable cycles of files, as well as for identically-named files, but
+// it should be good enough in practice.
 const DeadFilesDetector = struct {
     const FileName = [64]u8;
     const FileState = struct {
@@ -554,19 +554,8 @@ const DeadFilesDetector = struct {
             std.mem.startsWith(u8, file.path, "ci/");
         if (!should_scan) return;
 
-        var rest: []const u8 = file.text;
-        for (0..1024) |_| {
-            const result = cut(rest, "@import(\"") orelse break;
-            rest = result[1];
-            const result2 = cut(rest, "\")") orelse break;
-            const import_path = result2[0];
-            rest = result2[1];
-            if (std.mem.endsWith(u8, import_path, ".zig")) {
-                (try detector.fileState(import_path)).import_count += 1;
-            }
-        } else {
-            std.debug.panic("file with more than 1024 imports: {s}", .{file.path});
-        }
+        try detector.recordQuotedZigPaths(file.path, file.text, "@import(\"", false);
+        try detector.recordQuotedZigPaths(file.path, file.text, "b.path(\"", true);
     }
 
     fn finish(detector: *DeadFilesDetector, errors: *Errors) void {
@@ -592,6 +581,33 @@ const DeadFilesDetector = struct {
             };
         }
         return gop.value_ptr;
+    }
+
+    fn recordQuotedZigPaths(
+        detector: *DeadFilesDetector,
+        file_path: []const u8,
+        text: []const u8,
+        marker: []const u8,
+        require_repo_path: bool,
+    ) Allocator.Error!void {
+        var rest: []const u8 = text;
+        for (0..4096) |_| {
+            const result = cut(rest, marker) orelse break;
+            rest = result[1];
+            const result2 = cut(rest, "\")") orelse break;
+            const path = result2[0];
+            rest = result2[1];
+            if (!std.mem.endsWith(u8, path, ".zig")) continue;
+            if (require_repo_path and
+                !std.mem.startsWith(u8, path, "src/") and
+                !std.mem.startsWith(u8, path, "test/"))
+            {
+                continue;
+            }
+            (try detector.fileState(path)).import_count += 1;
+        } else {
+            std.debug.panic("file with too many quoted Zig paths: {s}", .{file_path});
+        }
     }
 
     fn pathToName(path: []const u8) FileName {

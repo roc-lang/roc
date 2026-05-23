@@ -252,10 +252,17 @@ pub const StaticDispatchResultMode = union(enum) {
     },
 };
 
+/// Public `StaticDispatchDispatcher` declaration.
+pub const StaticDispatchDispatcher = union(enum) {
+    arg: u32,
+    type_only,
+};
+
 /// Public `StaticDispatchCallPlan` declaration.
 pub const StaticDispatchCallPlan = struct {
     expr: CheckedExprId,
     method: canonical.MethodNameId,
+    dispatcher: StaticDispatchDispatcher,
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
     args: []const CheckedExprId,
@@ -354,6 +361,7 @@ pub const StaticDispatchPlanTable = struct {
                     try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
+                        .dispatcher = .{ .arg = 0 },
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(dispatch_call.receiver)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
@@ -367,6 +375,7 @@ pub const StaticDispatchPlanTable = struct {
                     try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
+                        .dispatcher = .type_only,
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
@@ -379,6 +388,7 @@ pub const StaticDispatchPlanTable = struct {
                     try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, module.commonIdents().is_eq),
+                        .dispatcher = .{ .arg = 0 },
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(eq.lhs)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, eq.constraint_fn_var),
                         .args = args,

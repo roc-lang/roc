@@ -16,13 +16,20 @@ const names = check.CheckedNames;
 
 const checked = check.CheckedModule;
 
+/// Identifier for an expression in Lambda Mono IR.
 pub const ExprId = enum(u32) { _ };
+/// Identifier for a pattern in Lambda Mono IR.
 pub const PatId = enum(u32) { _ };
+/// Identifier for a statement in Lambda Mono IR.
 pub const StmtId = enum(u32) { _ };
+/// Identifier for a function body in Lambda Mono IR.
 pub const FnId = enum(u32) { _ };
+/// Identifier for a local binding in Lambda Mono IR.
 pub const LocalId = enum(u32) { _ };
+/// Owned string literal id shared with the lifted stage.
 pub const StringLiteralId = Lifted.StringLiteralId;
 
+/// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime T: type) type {
     _ = T;
     return extern struct {
@@ -35,6 +42,7 @@ pub fn Span(comptime T: type) type {
     };
 }
 
+/// Local binding with its symbol, type, and optional checked binder.
 pub const Local = struct {
     id: LocalId,
     symbol: Common.Symbol,
@@ -42,52 +50,62 @@ pub const Local = struct {
     binder: ?checked.PatternBinderId = null,
 };
 
+/// Local id paired with its Lambda Mono type.
 pub const TypedLocal = struct {
     local: LocalId,
     ty: Type.TypeId,
 };
 
+/// Record field expression entry.
 pub const FieldExpr = struct {
     name: Type.names.RecordFieldNameId,
     value: ExprId,
 };
 
+/// Record destructuring field pattern.
 pub const RecordDestruct = struct {
     name: Type.names.RecordFieldNameId,
     pattern: PatId,
 };
 
+/// Read of one capture from a capture record.
 pub const CaptureSlot = struct {
     record: ExprId,
     symbol: Common.Symbol,
 };
 
+/// Direct call to a known Lambda Mono function.
 pub const DirectCall = struct {
     target: FnId,
     args: Span(ExprId),
 };
 
+/// Indirect call through an erased callable value.
 pub const ErasedCall = struct {
     callee: ExprId,
     args: Span(ExprId),
 };
 
+/// Erased callable value packed with an optional capture payload.
 pub const PackedErasedFn = struct {
     target: FnId,
     capture: ?ExprId,
 };
 
+/// Finite callable value with variant id and optional payload.
 pub const CallableValue = struct {
     ty: Type.TypeId,
     variant: Type.FnVariantId,
     payload: ?ExprId,
 };
 
+/// Typed Lambda Mono expression.
 pub const Expr = struct {
     ty: Type.TypeId,
     data: ExprData,
 };
 
+/// Lambda Mono expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
     unit,
@@ -159,11 +177,13 @@ pub const ExprData = union(enum) {
     expect: ExprId,
 };
 
+/// Typed Lambda Mono pattern.
 pub const Pat = struct {
     ty: Type.TypeId,
     data: PatData,
 };
 
+/// Lambda Mono pattern forms.
 pub const PatData = union(enum) {
     bind: LocalId,
     wildcard,
@@ -189,21 +209,25 @@ pub const PatData = union(enum) {
     str_lit: StringLiteralId,
 };
 
+/// Match branch.
 pub const Branch = struct {
     pat: PatId,
     guard: ?ExprId = null,
     body: ExprId,
 };
 
+/// Conditional branch in an if expression.
 pub const IfBranch = struct {
     cond: ExprId,
     body: ExprId,
 };
 
+/// Lambda Mono statement forms.
 pub const Stmt = union(enum) {
     let_: struct {
         pat: PatId,
         value: ExprId,
+        recursive: bool = false,
     },
     expr: ExprId,
     expect: ExprId,
@@ -212,6 +236,7 @@ pub const Stmt = union(enum) {
     crash: StringLiteralId,
 };
 
+/// Lambda Mono function body.
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
@@ -220,11 +245,13 @@ pub const Fn = struct {
     ret: Type.TypeId,
 };
 
+/// Root request bound to a Lambda Mono function.
 pub const Root = struct {
     fn_id: FnId,
     request: checked.RootRequest,
 };
 
+/// Complete Lambda Mono program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
     names: names.NameStore,

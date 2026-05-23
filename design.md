@@ -323,6 +323,7 @@ const ImportedProcTemplate = struct {
 const NestedFn = struct {
     owner: ProcTemplate,
     site: NestedProcSiteId,
+    context_fn_key: TypeDigest,
 };
 
 const PromotedTemplate = struct {
@@ -349,6 +350,8 @@ const GeneratedFn = union(enum) {
 const FnTemplate = struct {
     fn_def: FnDef,
     source_fn_ty: CheckedTypeId,
+    source_fn_key: TypeDigest,
+    mono_fn_ty: MonotypeTypeId,
 };
 ```
 
@@ -364,12 +367,33 @@ function type from generated procedures, runtime layouts, or call sites.
 
 Checked module publication assigns a `NestedProcSiteId` to every
 expression-position function inside each checked procedure template. A nested
-function is identified by the pair `(owner template, nested site)`. The site id
-is assigned from the checked body traversal before post-check lowering starts.
+function is identified by `(owner template, nested site, context function
+digest)`. The site id is assigned from the checked body traversal before
+post-check lowering starts. The context function digest is assigned by Monotype
+from the `FnTemplate` whose body currently owns the nested function occurrence.
 Monotype lowering carries that checked identity together with the checked source
-function type. Post-check stages must consume those checked facts; they must not
-name nested functions by allocation order, generated symbols, source display
-strings, body shape, capture shape, runtime layout, or LIR procedure ids.
+function type and the lowered monomorphic function type. Post-check stages must
+consume those checked facts; they must not name nested functions by allocation
+order, generated symbols, source display strings, body shape, capture shape,
+runtime layout, or LIR procedure ids.
+
+Monotype body lowering tracks two function-context digests:
+
+- the owner function digest for local procedure sites published by the checked
+  owner template
+- the current function digest for expression-position lambdas and closures
+  inside the body currently being lowered
+
+References to local procedures use the owner function digest. That makes
+recursive calls and sibling references inside one checked owner point at the
+same nested function instance. Lambdas and closures use the current function
+digest. That makes a lambda inside a nested local procedure belong to that
+nested local procedure, so captures come from the correct body instance.
+
+When Monotype has put a nested function in the nested definition table, that
+table is the only owner of the function body. Later value occurrences of the
+same `FnTemplate` are references to that nested definition; they do not rebuild
+the body or recalculate captures from the occurrence site.
 
 `local_checked_template` is checked-module-relative while the owning builder/checked module
 is being processed. Importers refer to the same body through
@@ -619,6 +643,26 @@ not chosen until direct LIR lowering commits layouts.
 Monotype IR does not need a separate row-finalization stage. Row closure,
 numeric defaulting, nominal backing instantiation, and structural child ordering
 are completed while constructing Monotype types from checked types.
+
+An unconstrained checked type variable that remains open after checking lowers
+to the empty tag union in Monotype. This is not a default choice. It records the
+fact that no runtime value can be constructed at that type. Values such as `[]`
+can still be represented as `List([ ])` because they contain no elements, and
+code that would need an actual element value must have constrained the element
+type earlier or must be unreachable at runtime.
+
+During Monotype construction, an open checked variable is represented by a
+stage-local type cell. The cell starts as the empty tag union, and it may be
+completed with a concrete type while the same Monotype body is still being
+constructed if call-site arguments, expected lambda types, numeric literals, or
+checked type relations provide concrete evidence. This is ordinary type solving
+inside one stage. Once Monotype IR is published, no open cell remains and no
+later stage may change a type.
+
+Generated helper code for an empty tag union, such as an inspector requested
+only because a container type mentions the empty tag union, has an unreachable
+body. Reaching that helper means a runtime value of an uninhabited type existed,
+which is a compiler or unsafe-runtime bug.
 
 If Monotype lowering cannot construct a closed monomorphic type from checked
 facts, that is a compiler bug.

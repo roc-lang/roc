@@ -6,10 +6,20 @@ const check = @import("check");
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
 
+/// Checked boundary name module used by Lambda Solved types.
 pub const names = check.CheckedNames;
+const static_dispatch = check.StaticDispatchRegistry;
 
-pub const TypeVarId = enum(u32) { _ };
+/// Identifier for a type variable in the Lambda Solved store.
+pub const TypeVarId = enum(u32) {
+    _,
 
+    pub fn is_gt(self: TypeVarId, other: TypeVarId) bool {
+        return @intFromEnum(self) > @intFromEnum(other);
+    }
+};
+
+/// Slice descriptor for type, field, tag, capture, or member arrays.
 pub const Span = extern struct {
     start: u32,
     len: u32,
@@ -17,18 +27,26 @@ pub const Span = extern struct {
     pub fn empty() Span {
         return .{ .start = 0, .len = 0 };
     }
+
+    pub fn count(self: Span) usize {
+        return @as(usize, self.len);
+    }
 };
 
+/// Record field type entry.
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeVarId,
 };
 
+/// Tag-union variant type entry.
 pub const Tag = struct {
     name: names.TagNameId,
+    checked_name: names.TagNameId,
     payloads: Span,
 };
 
+/// Captured local recorded for a lambda-set member.
 pub const Capture = struct {
     local: @import("../monotype_lifted/ast.zig").LocalId,
     symbol: Common.Symbol,
@@ -36,11 +54,13 @@ pub const Capture = struct {
     ty: TypeVarId,
 };
 
+/// Function member of a lambda set.
 pub const FnMember = struct {
     lambda: Common.Symbol,
     captures: Span,
 };
 
+/// Lambda Solved type-variable content.
 pub const Content = union(enum) {
     link: TypeVarId,
     unbound,
@@ -50,6 +70,7 @@ pub const Content = union(enum) {
         named_type: MonoType.NamedType,
         def: MonoType.TypeDef,
         kind: MonoType.NamedKind,
+        builtin_owner: ?static_dispatch.BuiltinOwner = null,
         args: Span,
         backing: ?struct {
             ty: TypeVarId,
@@ -69,10 +90,12 @@ pub const Content = union(enum) {
     lambda_set: Span,
     erased: struct {
         source_fn_ty: names.TypeDigest,
+        members: Span = .empty(),
     },
     zst,
 };
 
+/// Store for Lambda Solved type variables and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     vars: std.ArrayList(Content),
@@ -165,20 +188,45 @@ pub const Store = struct {
         return self.spans.items[span_.start..][0..span_.len];
     }
 
+    pub fn spanItem(self: *const Store, span_: Span, index: usize) TypeVarId {
+        if (index >= span_.count()) Common.invariant("Lambda Solved type span index out of bounds");
+        return self.spans.items[@as(usize, span_.start) + index];
+    }
+
     pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
         return self.fields.items[span_.start..][0..span_.len];
+    }
+
+    pub fn fieldItem(self: *const Store, span_: Span, index: usize) Field {
+        if (index >= span_.count()) Common.invariant("Lambda Solved field span index out of bounds");
+        return self.fields.items[@as(usize, span_.start) + index];
     }
 
     pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
         return self.tags.items[span_.start..][0..span_.len];
     }
 
+    pub fn tagItem(self: *const Store, span_: Span, index: usize) Tag {
+        if (index >= span_.count()) Common.invariant("Lambda Solved tag span index out of bounds");
+        return self.tags.items[@as(usize, span_.start) + index];
+    }
+
     pub fn captureSpan(self: *const Store, span_: Span) []const Capture {
         return self.captures.items[span_.start..][0..span_.len];
     }
 
+    pub fn captureItem(self: *const Store, span_: Span, index: usize) Capture {
+        if (index >= span_.count()) Common.invariant("Lambda Solved capture span index out of bounds");
+        return self.captures.items[@as(usize, span_.start) + index];
+    }
+
     pub fn memberSpan(self: *const Store, span_: Span) []const FnMember {
         return self.fn_members.items[span_.start..][0..span_.len];
+    }
+
+    pub fn memberItem(self: *const Store, span_: Span, index: usize) FnMember {
+        if (index >= span_.count()) Common.invariant("Lambda Solved member span index out of bounds");
+        return self.fn_members.items[@as(usize, span_.start) + index];
     }
 };
 

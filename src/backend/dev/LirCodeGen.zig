@@ -4642,11 +4642,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.collectStmtReadLocals(join.body, locals, visited);
                     try self.collectStmtReadLocals(join.remainder, locals, visited);
                 },
-                .jump => |jump| {
-                    for (self.store.getLocalSpan(jump.args)) |arg| {
-                        try locals.put(localKey(arg), arg);
-                    }
-                },
+                .jump => {},
                 .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
                 .crash => {},
                 .loop_continue => {},
@@ -4759,11 +4755,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.collectStmtLocals(join.body, locals, visited);
                     try self.collectStmtLocals(join.remainder, locals, visited);
                 },
-                .jump => |jump| {
-                    for (self.store.getLocalSpan(jump.args)) |arg| {
-                        try locals.put(localKey(arg), arg);
-                    }
-                },
+                .jump => {},
                 .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
                 .crash => {},
                 .loop_continue => {},
@@ -8579,8 +8571,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else => tpa.target_layout,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
-            const payload_offset: u32 = switch (payload_layout.tag) {
-                .struct_ => ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, tpa.payload_idx),
+            const PayloadSelection = struct {
+                offset: u32,
+                layout_idx: layout.Idx,
+            };
+            const selected: PayloadSelection = switch (payload_layout.tag) {
+                .struct_ => .{
+                    .offset = ls.getStructFieldOffsetByOriginalIndex(payload_layout.data.struct_.idx, tpa.payload_idx),
+                    .layout_idx = ls.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, tpa.payload_idx),
+                },
                 else => blk: {
                     if (builtin.mode == .Debug and tpa.payload_idx != 0) {
                         std.debug.panic(
@@ -8588,10 +8587,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .{tpa.payload_idx},
                         );
                     }
-                    break :blk 0;
+                    break :blk .{
+                        .offset = @as(u32, 0),
+                        .layout_idx = payload_layout_idx,
+                    };
                 },
             };
-            const payload_size = ls.layoutSizeAlign(payload_layout).size;
+            const selected_size = ls.layoutSizeAlign(ls.getLayout(selected.layout_idx)).size;
 
             if (union_layout.tag == .tag_union) {
                 const value_loc = try self.materializeValueToStackForLayout(raw_value_loc, source_layout_idx);
@@ -8602,23 +8604,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .list_stack => |ls_info| ls_info.struct_offset,
                     else => unreachable,
                 };
-                const raw_payload_loc = self.fieldLocationFromLayout(base_offset + @as(i32, @intCast(payload_offset)), payload_size, payload_layout_idx);
-                return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tpa.target_layout, "tag_payload_access.inline");
+                const raw_payload_loc = self.fieldLocationFromLayout(base_offset + @as(i32, @intCast(selected.offset)), selected_size, selected.layout_idx);
+                return self.requireExactValueLocationToLayout(raw_payload_loc, selected.layout_idx, tpa.target_layout, "tag_payload_access.inline");
             } else if (union_layout.tag == .box) {
                 const inner_layout = ls.getLayout(union_layout.data.box);
                 if (inner_layout.tag == .tag_union) {
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
-                    const dest_offset = self.codegen.allocStackSlot(payload_size);
-                    var copied: u32 = 0;
-                    while (copied < payload_size) : (copied += 8) {
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(payload_offset + copied));
-                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
+                    defer self.codegen.freeGeneral(box_ptr_reg);
+                    if (selected_size == 0) {
+                        const raw_payload_loc = self.fieldLocationFromLayout(0, selected_size, selected.layout_idx);
+                        return self.requireExactValueLocationToLayout(raw_payload_loc, selected.layout_idx, tpa.target_layout, "tag_payload_access.boxed");
                     }
-                    self.codegen.freeGeneral(box_ptr_reg);
-                    const raw_payload_loc = self.fieldLocationFromLayout(dest_offset, payload_size, payload_layout_idx);
-                    return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tpa.target_layout, "tag_payload_access.boxed");
+                    const dest_offset = self.codegen.allocStackSlot(selected_size);
+                    const temp_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(temp_reg);
+                    try self.copyChunked(
+                        temp_reg,
+                        box_ptr_reg,
+                        @intCast(selected.offset),
+                        frame_ptr,
+                        dest_offset,
+                        selected_size,
+                    );
+                    const raw_payload_loc = self.fieldLocationFromLayout(dest_offset, selected_size, selected.layout_idx);
+                    return self.requireExactValueLocationToLayout(raw_payload_loc, selected.layout_idx, tpa.target_layout, "tag_payload_access.boxed");
                 } else {
                     return raw_value_loc;
                 }
@@ -12929,17 +12938,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 .jump => |jmp| {
-                    const args = self.store.getLocalSpan(jmp.args);
-                    var arg_locs: std.ArrayListUnmanaged(ValueLocation) = .empty;
-                    defer arg_locs.deinit(self.allocator);
-
-                    for (args) |arg| {
-                        const loc = try self.emitValueLocal(arg);
-                        try arg_locs.append(self.allocator, loc);
-                    }
-
-                    try self.rebindJoinPointParams(jmp.target, args, arg_locs.items);
-
                     const jump_location = try self.emitJumpPlaceholder();
 
                     const jp_key = @intFromEnum(jmp.target);
@@ -13048,82 +13046,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             try self.join_point_params.put(jp_key, params);
-        }
-
-        /// Rebind join point parameters to new argument values (for jump).
-        ///
-        /// This backend only moves bytes into the destination slots. Any
-        /// ownership changes required on loop/control-flow edges must already be
-        /// represented by explicit LIR `incref`/`decref` statements; codegen
-        /// must not invent RC behavior while rebinding join params.
-        fn rebindJoinPointParams(self: *Self, join_point: JoinPointId, arg_locals: []const LocalId, arg_locs: []const ValueLocation) Allocator.Error!void {
-            const jp_key = @intFromEnum(join_point);
-            const params = self.join_point_params.get(jp_key) orelse unreachable;
-            const locals = self.store.getLocalSpan(params);
-
-            if (arg_locs.len != locals.len or arg_locals.len != locals.len) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "LIR/codegen invariant violated: jump arg arity ({d}/{d}) does not match join param arity ({d})",
-                        .{ arg_locals.len, arg_locs.len, locals.len },
-                    );
-                }
-                unreachable;
-            }
-
-            const TempInfo = struct {
-                offset: i32,
-                size: u8,
-                layout_idx: layout.Idx,
-            };
-            var temp_infos: std.ArrayListUnmanaged(TempInfo) = .empty;
-            defer temp_infos.deinit(self.allocator);
-
-            for (arg_locals, arg_locs, locals) |arg_local, loc, local| {
-                const local_layout = self.localLayout(local);
-                const temp_loc = self.requireExactValueLocationToLayout(
-                    loc,
-                    self.localLayout(arg_local),
-                    local_layout,
-                    "jump.param",
-                );
-                const size: u8 = @intCast(@max(self.getLayoutSize(local_layout), @as(u32, 8)));
-                const temp_offset = self.codegen.allocStackSlot(size);
-                try self.copyBytesToStackOffset(temp_offset, temp_loc, size);
-
-                try temp_infos.append(self.allocator, .{
-                    .offset = temp_offset,
-                    .size = size,
-                    .layout_idx = local_layout,
-                });
-            }
-
-            for (temp_infos.items, locals) |temp_info, local| {
-                const dst_loc = self.local_locations.get(localKey(local)) orelse {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic(
-                            "LIR/codegen invariant violated: missing destination local location in join param rebind for local {d}",
-                            .{@intFromEnum(local)},
-                        );
-                    }
-                    unreachable;
-                };
-                const dst_offset: i32 = switch (dst_loc) {
-                    .stack => |s| s.offset,
-                    .list_stack => |ls_info| ls_info.struct_offset,
-                    .stack_i128 => |off| off,
-                    .stack_str => |off| off,
-                    .general_reg, .float_reg, .immediate_i64, .immediate_i128, .immediate_f64, .noreturn => unreachable,
-                };
-
-                const temp_reg = try self.allocTempGeneral();
-                var bytes_copied: u8 = 0;
-                while (bytes_copied < temp_info.size) : (bytes_copied += 8) {
-                    try self.emitLoad(.w64, temp_reg, frame_ptr, temp_info.offset + bytes_copied);
-                    try self.emitStore(.w64, frame_ptr, dst_offset + bytes_copied, temp_reg);
-                }
-                self.codegen.freeGeneral(temp_reg);
-            }
         }
 
         /// Generate code for a string literal.

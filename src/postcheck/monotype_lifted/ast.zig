@@ -12,30 +12,43 @@ const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
 const names = check.CheckedNames;
 
+/// Identifier for an expression in Monotype Lifted IR.
 pub const ExprId = enum(u32) { _ };
+/// Identifier for a pattern in Monotype Lifted IR.
 pub const PatId = enum(u32) { _ };
+/// Identifier for a statement in Monotype Lifted IR.
 pub const StmtId = enum(u32) { _ };
+/// Identifier for a lifted function body.
 pub const FnId = enum(u32) { _ };
 
+/// Slice descriptor shared with Monotype IR.
 pub const Span = Mono.Span;
+/// Local binding id shared with Monotype IR.
 pub const LocalId = Mono.LocalId;
+/// Local binding shared with Monotype IR.
 pub const Local = Mono.Local;
+/// Local id paired with a monomorphic type.
 pub const TypedLocal = Mono.TypedLocal;
+/// Owned string literal id shared with Monotype IR.
 pub const StringLiteralId = Mono.StringLiteralId;
+/// Record field expression entry.
 pub const FieldExpr = struct {
     name: names.RecordFieldNameId,
     value: ExprId,
 };
+/// Record destructuring field pattern.
 pub const RecordDestruct = struct {
     name: names.RecordFieldNameId,
     pattern: PatId,
 };
 
+/// Typed Monotype Lifted expression.
 pub const Expr = struct {
     ty: Type.TypeId,
     data: ExprData,
 };
 
+/// Monotype Lifted expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
     unit,
@@ -58,13 +71,12 @@ pub const ExprData = union(enum) {
         rest: ExprId,
     },
     fn_ref: FnId,
-    fn_def: Mono.FnTemplate,
     call_value: struct {
         callee: ExprId,
         args: Span(ExprId),
     },
     call_proc: struct {
-        callee: Mono.FnTemplate,
+        callee: FnId,
         args: Span(ExprId),
     },
     low_level: struct {
@@ -111,11 +123,13 @@ pub const ExprData = union(enum) {
     expect: ExprId,
 };
 
+/// Typed Monotype Lifted pattern.
 pub const Pat = struct {
     ty: Type.TypeId,
     data: PatData,
 };
 
+/// Monotype Lifted pattern forms.
 pub const PatData = union(enum) {
     bind: LocalId,
     wildcard,
@@ -137,21 +151,25 @@ pub const PatData = union(enum) {
     str_lit: StringLiteralId,
 };
 
+/// Match branch.
 pub const Branch = struct {
     pat: PatId,
     guard: ?ExprId = null,
     body: ExprId,
 };
 
+/// Conditional branch in an if expression.
 pub const IfBranch = struct {
     cond: ExprId,
     body: ExprId,
 };
 
+/// Monotype Lifted statement forms.
 pub const Stmt = union(enum) {
     let_: struct {
         pat: PatId,
         value: ExprId,
+        recursive: bool = false,
     },
     expr: ExprId,
     expect: ExprId,
@@ -160,6 +178,7 @@ pub const Stmt = union(enum) {
     crash: StringLiteralId,
 };
 
+/// Lifted function body with explicit captures.
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
@@ -169,11 +188,13 @@ pub const Fn = struct {
     ret: Type.TypeId,
 };
 
+/// Root request bound to a lifted function.
 pub const Root = struct {
     fn_id: FnId,
     request: check.CheckedModule.RootRequest,
 };
 
+/// Complete Monotype Lifted program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
     names: names.NameStore,

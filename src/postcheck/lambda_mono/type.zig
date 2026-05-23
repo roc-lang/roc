@@ -10,11 +10,16 @@ const check = @import("check");
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
 
+/// Checked boundary name module used by Lambda Mono types.
 pub const names = check.CheckedNames;
+const static_dispatch = check.StaticDispatchRegistry;
 
+/// Identifier for a Lambda Mono type in this store.
 pub const TypeId = enum(u32) { _ };
+/// Identifier for a callable variant in this store.
 pub const FnVariantId = enum(u32) { _ };
 
+/// Slice descriptor for type, field, tag, or callable-variant arrays.
 pub const Span = extern struct {
     start: u32,
     len: u32,
@@ -24,34 +29,41 @@ pub const Span = extern struct {
     }
 };
 
+/// Record field type entry.
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeId,
 };
 
+/// Capture record field entry.
 pub const CaptureField = struct {
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
     ty: TypeId,
 };
 
+/// Tag-union variant type entry.
 pub const Tag = struct {
     name: names.TagNameId,
+    checked_name: names.TagNameId,
     payloads: Span,
 };
 
+/// Callable variant entry.
 pub const FnVariant = struct {
     id: FnVariantId,
     lambda: Common.Symbol,
     capture_ty: ?TypeId,
 };
 
+/// Lambda Mono type content.
 pub const Content = union(enum) {
     primitive: MonoType.Primitive,
     named: struct {
         named_type: MonoType.NamedType,
         def: MonoType.TypeDef,
         kind: MonoType.NamedKind,
+        builtin_owner: ?static_dispatch.BuiltinOwner = null,
         args: Span,
         backing: ?struct {
             ty: TypeId,
@@ -67,10 +79,13 @@ pub const Content = union(enum) {
     box: TypeId,
     erased_fn: struct {
         source_fn_ty: names.TypeDigest,
+        members: Span = .empty(),
     },
+    erased_capture_ptr,
     zst,
 };
 
+/// Store for Lambda Mono types and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     types: std.ArrayList(Content),
@@ -168,7 +183,135 @@ pub const Store = struct {
     pub fn fnVariantSpan(self: *const Store, span_: Span) []const FnVariant {
         return self.fn_variants.items[span_.start..][0..span_.len];
     }
+
+    pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        self.writeTypeDigest(name_store, &hasher, ty);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    fn writeTypeDigest(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        ty: TypeId,
+    ) void {
+        switch (self.get(ty)) {
+            .primitive => |primitive| {
+                writeBytes(hasher, "primitive");
+                writeBytes(hasher, @tagName(primitive));
+            },
+            .named => |named| {
+                writeBytes(hasher, "named");
+                hasher.update(&named.named_type.module.bytes);
+                writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
+                writeBytes(hasher, name_store.typeNameText(named.def.type_name));
+                writeBytes(hasher, @tagName(named.kind));
+                if (named.builtin_owner) |owner| {
+                    writeBytes(hasher, "builtin");
+                    writeBytes(hasher, @tagName(owner));
+                } else {
+                    writeBytes(hasher, "not-builtin");
+                }
+                self.writeTypeSpanDigest(name_store, hasher, named.args);
+            },
+            .record => |fields| {
+                writeBytes(hasher, "record");
+                const field_slice = self.fieldSpan(fields);
+                writeU32(hasher, @intCast(field_slice.len));
+                for (field_slice) |field| {
+                    writeBytes(hasher, name_store.recordFieldLabelText(field.name));
+                    self.writeTypeDigest(name_store, hasher, field.ty);
+                }
+            },
+            .capture_record => |fields| {
+                writeBytes(hasher, "capture_record");
+                const field_slice = self.captureFieldSpan(fields);
+                writeU32(hasher, @intCast(field_slice.len));
+                for (field_slice) |field| {
+                    writeU32(hasher, @intFromEnum(field.symbol));
+                    self.writeTypeDigest(name_store, hasher, field.ty);
+                }
+            },
+            .tuple => |items| {
+                writeBytes(hasher, "tuple");
+                self.writeTypeSpanDigest(name_store, hasher, items);
+            },
+            .tag_union => |tags| {
+                writeBytes(hasher, "tag_union");
+                const tag_slice = self.tagSpan(tags);
+                writeU32(hasher, @intCast(tag_slice.len));
+                for (tag_slice) |tag| {
+                    writeBytes(hasher, name_store.tagLabelText(tag.name));
+                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads);
+                }
+            },
+            .callable => |variants| {
+                writeBytes(hasher, "callable");
+                const variant_slice = self.fnVariantSpan(variants);
+                writeU32(hasher, @intCast(variant_slice.len));
+                for (variant_slice) |variant| {
+                    writeU32(hasher, @intFromEnum(variant.lambda));
+                    if (variant.capture_ty) |capture_ty| {
+                        writeBytes(hasher, "capture");
+                        self.writeTypeDigest(name_store, hasher, capture_ty);
+                    } else {
+                        writeBytes(hasher, "no_capture");
+                    }
+                }
+            },
+            .list => |elem| {
+                writeBytes(hasher, "list");
+                self.writeTypeDigest(name_store, hasher, elem);
+            },
+            .box => |elem| {
+                writeBytes(hasher, "box");
+                self.writeTypeDigest(name_store, hasher, elem);
+            },
+            .erased_fn => |erased| {
+                writeBytes(hasher, "erased_fn");
+                hasher.update(&erased.source_fn_ty.bytes);
+                const variant_slice = self.fnVariantSpan(erased.members);
+                writeU32(hasher, @intCast(variant_slice.len));
+                for (variant_slice) |variant| {
+                    writeU32(hasher, @intFromEnum(variant.lambda));
+                    if (variant.capture_ty) |capture_ty| {
+                        writeBytes(hasher, "capture");
+                        self.writeTypeDigest(name_store, hasher, capture_ty);
+                    } else {
+                        writeBytes(hasher, "no_capture");
+                    }
+                }
+            },
+            .erased_capture_ptr => writeBytes(hasher, "erased_capture_ptr"),
+            .zst => writeBytes(hasher, "zst"),
+        }
+    }
+
+    fn writeTypeSpanDigest(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        hasher: *std.crypto.hash.sha2.Sha256,
+        span_: Span,
+    ) void {
+        const values = self.span(span_);
+        writeU32(hasher, @intCast(values.len));
+        for (values) |child| {
+            self.writeTypeDigest(name_store, hasher, child);
+        }
+    }
 };
+
+fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+    writeU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, value, .little);
+    hasher.update(&buf);
+}
 
 test "lambda mono type declarations are referenced" {
     std.testing.refAllDecls(@This());

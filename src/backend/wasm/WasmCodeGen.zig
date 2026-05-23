@@ -1936,9 +1936,7 @@ fn collectProcLocals(
             try self.collectProcLocals(join_stmt.body, locals, visited);
             try self.collectProcLocals(join_stmt.remainder, locals, visited);
         },
-        .jump => |jump_stmt| {
-            for (self.store.getLocalSpan(jump_stmt.args)) |arg| try recordProcLocal(locals, arg);
-        },
+        .jump => {},
         .loop_break => {},
         .ret => |ret_stmt| try recordProcLocal(locals, ret_stmt.value),
         .incref => |inc| {
@@ -5380,34 +5378,6 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
         },
         .jump => |jmp| {
             const jp_key = @intFromEnum(jmp.target);
-            const args = self.store.getLocalSpan(jmp.args);
-
-            const param_locals = self.join_point_param_locals.get(jp_key) orelse unreachable;
-            if (args.len != param_locals.len) {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "WASM/codegen invariant violated: jump arg arity ({d}) does not match join param arity ({d})",
-                        .{ args.len, param_locals.len },
-                    );
-                }
-                unreachable;
-            }
-
-            var temp_locals = self.allocator.alloc(u32, args.len) catch return error.OutOfMemory;
-            defer self.allocator.free(temp_locals);
-
-            for (args, 0..) |arg, i| {
-                try self.emitProcLocal(arg);
-                const vt = self.procLocalValType(arg);
-                const tmp = self.storage.allocAnonymousLocal(vt) catch return error.OutOfMemory;
-                try self.emitLocalSet(tmp);
-                temp_locals[i] = tmp;
-            }
-
-            for (0..args.len) |i| {
-                try self.emitLocalGet(temp_locals[i]);
-                try self.emitLocalSet(param_locals[i]);
-            }
 
             const state_local = self.join_point_state_locals.get(jp_key) orelse unreachable;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;

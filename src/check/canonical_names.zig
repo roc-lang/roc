@@ -43,6 +43,7 @@ pub const ArtifactRef = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// Digest for checked module identity at post-check boundaries.
 pub const CheckedModuleDigest = ArtifactRef;
 
 /// Public `ProcedureValueRef` declaration.
@@ -58,8 +59,10 @@ pub const ProcedureTemplateRef = struct {
     template: CheckedProcedureTemplateId,
 };
 
+/// Short name for a checked procedure template reference.
 pub const ProcTemplate = ProcedureTemplateRef;
 
+/// Return the checked module digest that owns a procedure template.
 pub fn procTemplateModuleDigest(template: ProcTemplate) CheckedModuleDigest {
     return template.artifact;
 }
@@ -70,12 +73,19 @@ pub const MonoSpecializationKey = struct {
     requested_mono_fn_ty: CanonicalTypeKey,
 };
 
+/// Digest for a checked type shape at post-check boundaries.
 pub const TypeDigest = CanonicalTypeKey;
+/// Digest for a checked value type that requests a runtime layout.
 pub const ExecValueDigest = CanonicalExecValueTypeKey;
+/// Short name for the checked boundary name store.
 pub const NameStore = CanonicalNameStore;
+/// Short name used by post-check records for record field labels.
 pub const RecordFieldNameId = RecordFieldLabelId;
+/// Short name used by post-check records for tag labels.
 pub const TagNameId = TagLabelId;
+/// Short name used by post-check records for nested procedure sites.
 pub const ProcSiteId = NestedProcSiteId;
+/// Short name for a procedure template that may come from checked or lifted code.
 pub const CallableProcTemplate = CallableProcedureTemplateRef;
 
 /// Public `MonoSpecializedProcRef` declaration.

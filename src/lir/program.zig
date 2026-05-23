@@ -14,31 +14,39 @@ const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const const_store = check.ConstStore;
 
+/// Layout requested for a checked value type digest.
 pub const RequestedLayout = struct {
     ty: names.ExecValueDigest,
     layout_idx: layout.Idx,
 };
 
+/// Identifier for a finite callable set in the LIR program.
 pub const FnSetId = enum(u32) { _ };
+/// Identifier for an erased callable entry set in the LIR program.
 pub const ErasedFnsId = enum(u32) { _ };
+/// Identifier for one finite callable variant.
 pub const FnVariantId = enum(u32) { _ };
 
+/// Callable lowering result used by const plans.
 pub const FnResult = union(enum) {
     finite: FnSetId,
     erased: ErasedFnsId,
 };
 
+/// Checked function template and source type used to emit callable code.
 pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
 };
 
+/// Capture field copied from a checked binder into a callable payload.
 pub const CaptureSlot = struct {
     binder: checked.PatternBinderId,
     slot: u32,
     plan: ConstPlanId,
 };
 
+/// One runtime tag variant for a finite callable value.
 pub const FnVariant = struct {
     id: FnVariantId,
     discriminant: u16,
@@ -48,30 +56,38 @@ pub const FnVariant = struct {
     captures: []const CaptureSlot = &.{},
 };
 
+/// Runtime tag-union encoding for a finite callable set.
 pub const FnSet = struct {
     layout: layout.Idx,
     variants: []const FnVariant = &.{},
 };
 
+/// One erased callable entry and its capture layout plan.
 pub const ErasedFn = struct {
     entry: LIR.LirProcSpecId,
+    capture_layout: layout.Idx = .zst,
     template: FnTemplate,
     captures: []const CaptureSlot = &.{},
 };
 
+/// Runtime encoding for an erased callable value type.
 pub const ErasedFns = struct {
     layout: layout.Idx,
     entries: []const ErasedFn = &.{},
 };
 
+/// Identifier for a constant storage plan emitted with LIR.
 pub const ConstPlanId = enum(u32) { _ };
 
+/// Tag variant in a constant storage plan.
 pub const ConstTagVariant = struct {
     name: names.TagNameId,
+    checked_name: names.TagNameId,
     discriminant: u16,
     payloads: []const ConstPlanId = &.{},
 };
 
+/// Shape plan used to store an interpreted compile-time result in ConstStore.
 pub const ConstPlan = union(enum) {
     pending,
     zst,
@@ -90,6 +106,7 @@ pub const ConstPlan = union(enum) {
     erased_fn: ErasedFnsId,
 };
 
+/// Constant root metadata needed after LIR interpretation finishes.
 pub const ConstRootPlan = struct {
     root_order: u32,
     request: check.CheckedModule.RootRequest,
@@ -98,6 +115,7 @@ pub const ConstRootPlan = struct {
     plan: ConstPlanId,
 };
 
+/// Complete LIR program and side data consumed by ARC, backends, and eval.
 pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
@@ -147,6 +165,7 @@ pub const Result = struct {
     }
 };
 
+/// Free slices owned by constant storage plans.
 pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
     for (plans) |plan| {
         switch (plan) {
@@ -171,6 +190,7 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
     }
 }
 
+/// Free slices owned by finite callable sets.
 pub fn deinitFnSets(allocator: Allocator, fn_sets: []const FnSet) void {
     for (fn_sets) |fn_set| {
         for (fn_set.variants) |variant| {
@@ -180,6 +200,7 @@ pub fn deinitFnSets(allocator: Allocator, fn_sets: []const FnSet) void {
     }
 }
 
+/// Free slices owned by erased callable entry sets.
 pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void {
     for (erased_fns) |set| {
         for (set.entries) |entry| {
