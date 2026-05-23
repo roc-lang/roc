@@ -71,11 +71,13 @@ NO CHANGE
 				(args
 					(p-assign (ident "acc"))
 					(p-assign (ident "x")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "acc")))
-					(e-lookup-local
-						(p-assign (ident "x"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 75)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "acc"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "x")))))))))
 ~~~
 # TYPES
 ~~~clojure

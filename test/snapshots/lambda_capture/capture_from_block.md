@@ -67,10 +67,12 @@ EndOfFile,
 				(e-lambda
 					(args
 						(p-underscore))
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "a")))
-						(e-num (value "2")))))
+					(e-dispatch-call (method "times") (constraint-fn-var 42)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "a"))))
+						(args
+							(e-num (value "2"))))))
 			(e-num (value "5"))))
 	(e-lookup-local
 		(p-assign (ident "b"))))

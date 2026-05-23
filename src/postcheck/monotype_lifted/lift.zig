@@ -32,6 +32,7 @@ pub fn run(
     errdefer program.deinit();
 
     try program.locals.appendSlice(allocator, owned.locals.items);
+    try program.layout_requests.appendSlice(allocator, owned.layout_requests.items);
 
     var lifter = Lifter.init(allocator, &owned, &program);
     defer lifter.deinit();

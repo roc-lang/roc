@@ -45,11 +45,13 @@ EndOfFile,
 				(patterns
 					(p-assign (ident "x"))
 					(p-assign (ident "y")))))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "x")))
-			(e-lookup-local
-				(p-assign (ident "y")))))
+		(e-dispatch-call (method "times") (constraint-fn-var 17)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "x"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "y"))))))
 	(e-tuple
 		(elems
 			(e-num (value "1"))

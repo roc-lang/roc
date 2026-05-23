@@ -589,11 +589,13 @@ main! = |_| {
 						(e-lookup-local
 							(p-assign (ident "finalIdentity")))
 						(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "a")))
-					(e-lookup-local
-						(p-assign (ident "f"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 459)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "a"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "f")))))))))
 ~~~
 # TYPES
 ~~~clojure

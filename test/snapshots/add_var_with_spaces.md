@@ -46,9 +46,11 @@ add2 = x + 2
 (can-ir
 	(d-let
 		(p-assign (ident "add2"))
-		(e-binop (op "add")
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num (value "2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 22)
+			(receiver
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(args
+				(e-num (value "2"))))))
 ~~~
 # TYPES
 ~~~clojure

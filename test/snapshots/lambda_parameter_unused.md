@@ -219,10 +219,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "_factor")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "_factor")))
-				(e-num (value "2"))))
+			(e-dispatch-call (method "times") (constraint-fn-var 161)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "_factor"))))
+				(args
+					(e-num (value "2")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -242,10 +244,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "value")))
-				(e-num (value "2"))))
+			(e-dispatch-call (method "times") (constraint-fn-var 279)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "value"))))
+				(args
+					(e-num (value "2")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -280,17 +284,23 @@ main! = |_| {
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "4"))))
-				(e-binop (op "add")
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "result1")))
-							(e-lookup-local
-								(p-assign (ident "result2"))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 503)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 493)
+							(receiver
+								(e-dispatch-call (method "plus") (constraint-fn-var 483)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "result1"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "result2"))))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "result3"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "result3"))))
-					(e-lookup-local
-						(p-assign (ident "result4"))))))))
+							(p-assign (ident "result4")))))))))
 ~~~
 # TYPES
 ~~~clojure

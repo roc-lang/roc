@@ -40,8 +40,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-not
-	(e-num (value "3")))
+(e-dispatch-call (method "not") (constraint-fn-var 18)
+	(receiver
+		(e-num (value "3")))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

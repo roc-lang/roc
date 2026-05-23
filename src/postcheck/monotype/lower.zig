@@ -22,8 +22,8 @@ pub fn run(
     modules: Common.CheckedModules,
     roots: Common.RootRequests,
 ) Common.LowerError!Ast.Program {
-    if (roots.requests.len == 0) {
-        Common.invariant("Monotype lowering requires explicit roots");
+    if (roots.requests.len == 0 and roots.layout_requests.len == 0) {
+        Common.invariant("Monotype lowering requires explicit roots or layout requests");
     }
 
     var program = Ast.Program.init(allocator);
@@ -34,6 +34,9 @@ pub fn run(
 
     for (roots.requests) |request| {
         try builder.lowerRoot(request);
+    }
+    for (roots.layout_requests) |checked_ty| {
+        try builder.lowerLayoutRequest(checked_ty);
     }
 
     program.next_symbol = builder.symbols.next;
@@ -260,6 +263,13 @@ const Builder = struct {
         else
             Common.invariant("root request reached Monotype without a checked procedure template or procedure source");
         try self.program.roots.append(self.allocator, .{ .def = def, .request = request });
+    }
+
+    fn lowerLayoutRequest(self: *Builder, checked_ty: checked.CheckedTypeId) Allocator.Error!void {
+        try self.program.layout_requests.append(self.allocator, .{
+            .checked_type = checked_ty,
+            .ty = try self.lowerType(moduleView(self.root_view), checked_ty),
+        });
     }
 
     fn lowerProcedureUseRoot(
@@ -3195,6 +3205,17 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         checked_args: []const checked.CheckedExprId,
     ) Allocator.Error!Type.TypeId {
+        return self.instantiateCallTypeFromCallerAtType(source_fn_ty, caller, checked_ret_ty, checked_args, null);
+    }
+
+    fn instantiateCallTypeFromCallerAtType(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        caller: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        checked_args: []const checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != checked_args.len) {
             Common.invariant("checked direct call arity differs from its function type");
@@ -3202,34 +3223,14 @@ const BodyContext = struct {
 
         try self.bindCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked direct call argument type mapped one checked type to two monotype types");
 
-        const ret_ty = if (caller.type_bindings.get(caller.typeAddress(checked_ret_ty))) |caller_ret_binding| ret: {
-            try self.bindTypeToMono(function.ret, caller_ret_binding.ty, "checked direct call return type mapped one checked type to two monotype types");
-            break :ret caller_ret_binding.ty;
-        } else if (try self.checkedTypeHasFixedShape(function.ret)) ret: {
-            const callee_ret_ty = try self.lowerType(function.ret);
-            try caller.bindTypeToMono(checked_ret_ty, callee_ret_ty, "checked direct call result type mapped one checked type to two monotype types");
-            break :ret callee_ret_ty;
-        } else if (try caller.checkedTypeHasFixedShape(checked_ret_ty)) ret: {
-            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.bindTypeToMono(function.ret, caller_ret_ty, "checked direct call return type mapped one checked type to two monotype types");
-            break :ret caller_ret_ty;
-        } else if (try self.checkedTypeHasConcreteShape(function.ret)) ret: {
-            const callee_ret_ty = try self.lowerType(function.ret);
-            try caller.bindTypeToMono(checked_ret_ty, callee_ret_ty, "checked direct call result type mapped one checked type to two monotype types");
-            break :ret callee_ret_ty;
-        } else if (try caller.checkedTypeHasConcreteShape(checked_ret_ty)) ret: {
-            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.bindTypeToMono(function.ret, caller_ret_ty, "checked direct call return type mapped one checked type to two monotype types");
-            break :ret caller_ret_ty;
-        } else if (try self.checkedTypeCanLower(function.ret)) ret: {
-            const callee_ret_ty = try self.lowerType(function.ret);
-            try caller.bindTypeToMono(checked_ret_ty, callee_ret_ty, "checked direct call result type mapped one checked type to two monotype types");
-            break :ret callee_ret_ty;
-        } else if (try caller.checkedTypeCanLower(checked_ret_ty)) ret: {
-            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.bindTypeToMono(function.ret, caller_ret_ty, "checked direct call return type mapped one checked type to two monotype types");
-            break :ret caller_ret_ty;
-        } else Common.invariant("checked direct call return type was not concrete after call-site binding");
+        const ret_ty = try self.callReturnTypeFromCaller(
+            function.ret,
+            caller,
+            checked_ret_ty,
+            expected_ret_ty,
+            "checked direct call return type mapped one checked type to two monotype types",
+            "checked direct call result type mapped one checked type to two monotype types",
+        );
 
         try self.bindCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked direct call argument type mapped one checked type to two monotype types");
 
@@ -3250,46 +3251,63 @@ const BodyContext = struct {
         return mono_fn_ty;
     }
 
-    fn instantiateTargetCallTypeFromCaller(
+    fn callReturnTypeFromCaller(
         self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
+        function_ret: checked.CheckedTypeId,
         caller: *BodyContext,
-        checked_args: []const checked.CheckedExprId,
+        checked_ret_ty: checked.CheckedTypeId,
         expected_ret_ty: ?Type.TypeId,
+        comptime return_conflict: []const u8,
+        comptime result_conflict: []const u8,
     ) Allocator.Error!Type.TypeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != checked_args.len) {
-            Common.invariant("checked dispatch target arity differs from its function type");
-        }
-
-        try self.bindCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked dispatch target argument type mapped one checked type to two monotype types");
-
         if (expected_ret_ty) |ret_ty| {
-            try self.bindTypeToMono(function.ret, ret_ty, "checked dispatch target return type mapped one checked type to two monotype types");
+            try self.bindTypeToMono(function_ret, ret_ty, return_conflict);
+            try caller.bindTypeToMono(checked_ret_ty, ret_ty, result_conflict);
+            return ret_ty;
         }
 
-        try self.bindCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked dispatch target argument type mapped one checked type to two monotype types");
-
-        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
-        defer self.allocator.free(arg_tys);
-        for (function.args, 0..) |arg_ty, i| {
-            if (!try self.checkedTypeCanLower(arg_ty)) {
-                Common.invariant("checked dispatch target argument type was not concrete after call-site binding");
-            }
-            arg_tys[i] = try self.lowerType(arg_ty);
+        if (caller.type_bindings.get(caller.typeAddress(checked_ret_ty))) |caller_ret_binding| {
+            try self.bindTypeToMono(function_ret, caller_ret_binding.ty, return_conflict);
+            return caller_ret_binding.ty;
         }
 
-        if (!try self.checkedTypeCanLower(function.ret)) {
-            Common.invariant("checked dispatch target return type was not concrete after call-site binding");
+        if (try self.checkedTypeHasFixedShape(function_ret)) {
+            const callee_ret_ty = try self.lowerType(function_ret);
+            try caller.bindTypeToMono(checked_ret_ty, callee_ret_ty, result_conflict);
+            return callee_ret_ty;
         }
-        const ret_ty = try self.lowerType(function.ret);
 
-        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
-        try self.bindTypeToMono(source_fn_ty, mono_fn_ty, "checked dispatch target function type mapped one checked type to two monotype types");
-        return mono_fn_ty;
+        if (try caller.checkedTypeHasFixedShape(checked_ret_ty)) {
+            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
+            try self.bindTypeToMono(function_ret, caller_ret_ty, return_conflict);
+            return caller_ret_ty;
+        }
+
+        if (try self.checkedTypeHasConcreteShape(function_ret)) {
+            const callee_ret_ty = try self.lowerType(function_ret);
+            try caller.bindTypeToMono(checked_ret_ty, callee_ret_ty, result_conflict);
+            return callee_ret_ty;
+        }
+
+        if (try caller.checkedTypeHasConcreteShape(checked_ret_ty)) {
+            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
+            try self.bindTypeToMono(function_ret, caller_ret_ty, return_conflict);
+            return caller_ret_ty;
+        }
+
+        if (try self.checkedTypeCanLower(function_ret)) {
+            const callee_ret_ty = try self.lowerType(function_ret);
+            try caller.bindTypeToMono(checked_ret_ty, callee_ret_ty, result_conflict);
+            return callee_ret_ty;
+        }
+
+        if (try caller.checkedTypeCanLower(checked_ret_ty)) {
+            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
+            try self.bindTypeToMono(function_ret, caller_ret_ty, return_conflict);
+            return caller_ret_ty;
+        }
+
+        Common.invariant("checked call return type was not concrete after call-site binding");
     }
 
     fn instantiateTargetCallTypeFromMonoArgs(
@@ -3325,12 +3343,26 @@ const BodyContext = struct {
         for (formal_tys, checked_args) |formal_ty, checked_arg| {
             if ((try caller.exprHasNumericDefault(checked_arg)) != numeric_literals) continue;
             if (numeric_literals and try self.checkedTypeHasFixedShape(formal_ty)) continue;
+            const actual_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
             try self.bindCheckedTypeRelations(
                 formal_ty,
                 caller,
-                caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty,
+                actual_ty,
                 conflict_message,
             );
+
+            if (try self.checkedTypeHasFixedShape(formal_ty)) {
+                const formal_mono_ty = try self.lowerType(formal_ty);
+                try caller.bindTypeToMono(actual_ty, formal_mono_ty, conflict_message);
+                continue;
+            }
+
+            if (try caller.checkedTypeHasFixedShape(actual_ty)) {
+                const actual_mono_ty = try caller.lowerType(actual_ty);
+                try self.bindTypeToMono(formal_ty, actual_mono_ty, conflict_message);
+                continue;
+            }
+
             if (try caller.callArgumentMonoType(checked_arg)) |actual_mono_ty| {
                 try self.bindTypeToMono(
                     formal_ty,
@@ -3338,7 +3370,7 @@ const BodyContext = struct {
                     conflict_message,
                 );
                 try caller.bindTypeToMono(
-                    caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty,
+                    actual_ty,
                     actual_mono_ty,
                     conflict_message,
                 );
@@ -3391,10 +3423,20 @@ const BodyContext = struct {
         defer _ = active.remove(relation);
 
         if (self.type_bindings.get(relation.left)) |left_binding| {
-            try right_ctx.bindTypeToMono(right_ty, left_binding.ty, conflict_message);
+            const right_fixed = try right_ctx.checkedTypeHasFixedShape(right_ty);
+            if (!left_binding.hasFixedShape() and right_fixed) {
+                // Replaceable placeholders from one side must not constrain fixed checked types on the other side.
+            } else {
+                try right_ctx.bindTypeToMono(right_ty, left_binding.ty, conflict_message);
+            }
         }
         if (right_ctx.type_bindings.get(relation.right)) |right_binding| {
-            try self.bindTypeToMono(left_ty, right_binding.ty, conflict_message);
+            const left_fixed = try self.checkedTypeHasFixedShape(left_ty);
+            if (!right_binding.hasFixedShape() and left_fixed) {
+                // Replaceable placeholders from one side must not constrain fixed checked types on the other side.
+            } else {
+                try self.bindTypeToMono(left_ty, right_binding.ty, conflict_message);
+            }
         }
 
         const left_payload = self.builder.checkedTypePayload(self.view, left_ty);
@@ -3784,7 +3826,7 @@ const BodyContext = struct {
                 .name = try self.builder.tagName(store_view, tag.tag_name),
                 .payloads = try self.restoreConstTagPayloads(store_view, type_view, ty, tag),
             } },
-            .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtType(store_view, type_view, nominal.backing, self.constNamedBackingType(ty)) },
+            .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtType(store_view, type_view, nominal.backing, self.builder.namedBackingType(ty) orelse ty) },
             .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
         };
     }
@@ -3879,11 +3921,6 @@ const BodyContext = struct {
             .record => |fields| self.builder.program.types.fieldSpan(fields),
             else => Common.invariant("ConstStore record restored with a non-record monotype"),
         };
-    }
-
-    fn constNamedBackingType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
-        return self.builder.namedBackingType(ty) orelse
-            Common.invariant("ConstStore nominal restored with a monotype that has no backing");
     }
 
     fn restoreConstFn(
@@ -4106,19 +4143,25 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        const lookup = try self.dispatchTarget(plan);
-        if (lookup == null) {
-            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
-            defer call_ctx.deinit();
-            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-            call_ctx.current_fn_key = self.current_fn_key;
 
-            const callable_mono_ty = try call_ctx.instantiateCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan.args);
-            const fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
-                .func => |data| data,
-                else => Common.invariant("checked structural dispatch target had a non-function type"),
-            };
-            return try self.lowerStructuralEquality(plan, callable_mono_ty, fn_data.ret, self);
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        defer call_ctx.deinit();
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+
+        const callable_mono_ty = try call_ctx.instantiateCallTypeFromCallerAtType(plan.callable_ty, self, checked_ret_ty, plan.args, expected_ret_ty);
+        const plan_fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
+            .func => |data| data,
+            else => Common.invariant("checked dispatch plan had a non-function type"),
+        };
+        const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
+        defer self.allocator.free(plan_arg_tys);
+        const plan_ret_ty = plan_fn_data.ret;
+
+        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+        const lookup = self.dispatchTarget(plan, dispatcher_ty);
+        if (lookup == null) {
+            return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self);
         }
         const resolved = lookup.?;
         const template = resolved.target.template orelse
@@ -4126,19 +4169,21 @@ const BodyContext = struct {
         var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
         defer target_ctx.deinit();
 
-        const dispatch_ret_ty = expected_ret_ty;
-        const callable_mono_ty = try target_ctx.instantiateTargetCallTypeFromCaller(resolved.target.callable_ty, self, plan.args, dispatch_ret_ty);
+        const target_mono_ty = try target_ctx.instantiateTargetCallTypeFromMonoArgs(resolved.target.callable_ty, plan_arg_tys, plan_ret_ty);
+        if (!self.sameType(callable_mono_ty, target_mono_ty)) {
+            Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
+        }
         const fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
             .func => |data| data,
             else => Common.invariant("checked dispatch target had a non-function type"),
         };
         try self.bindTypeToMono(checked_ret_ty, fn_data.ret, "checked dispatch result type mapped one checked type to two monotype types");
-        if (dispatch_ret_ty) |expected| {
+        if (expected_ret_ty) |expected| {
             if (!self.sameType(expected, fn_data.ret)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
         }
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try target_ctx.lowerResolvedDispatch(plan, resolved, callable_mono_ty, self),
+            .data = try target_ctx.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
         return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
     }
@@ -4172,35 +4217,37 @@ const BodyContext = struct {
     ) Allocator.Error!?Type.TypeId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        const lookup = try self.dispatchTarget(plan);
-        if (lookup == null) {
-            if (!try self.checkedTypeCanLower(checked_ret_ty)) return null;
-            return try self.lowerType(checked_ret_ty);
-        }
-        const resolved = lookup.?;
-        const template = resolved.target.template orelse
-            Common.invariant("checked dispatch target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
-        defer target_ctx.deinit();
-        const expected_ret_ty: ?Type.TypeId = null;
-        const callable_mono_ty = try target_ctx.instantiateTargetCallTypeFromCaller(resolved.target.callable_ty, self, plan.args, expected_ret_ty);
-        const ret_ty = target_ctx.functionReturnType(callable_mono_ty);
+
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        defer call_ctx.deinit();
+        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+        call_ctx.current_fn_key = self.current_fn_key;
+
+        const callable_mono_ty = try call_ctx.instantiateCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan.args);
+        const ret_ty = call_ctx.functionReturnType(callable_mono_ty);
         try self.bindTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type mapped one checked type to two monotype types");
         return ret_ty;
+    }
+
+    fn dispatcherMonoType(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        arg_tys: []const Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        return switch (plan.dispatcher) {
+            .arg => |index| blk: {
+                if (index >= arg_tys.len) Common.invariant("dispatch plan dispatcher argument index was outside the argument span");
+                break :blk arg_tys[index];
+            },
+            .type_only => try self.lowerType(plan.dispatcher_ty),
+        };
     }
 
     fn dispatchTarget(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
-    ) Allocator.Error!?MethodLookup {
-        const dispatcher_ty = switch (plan.dispatcher) {
-            .arg => |index| blk: {
-                if (index >= plan.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the argument span");
-                break :blk (try self.callArgumentMonoType(plan.args[index])) orelse
-                    Common.invariant("dispatch plan dispatcher argument was not concrete in the current specialization");
-            },
-            .type_only => try self.lowerType(plan.dispatcher_ty),
-        };
+        dispatcher_ty: Type.TypeId,
+    ) ?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
@@ -5139,15 +5186,48 @@ const BodyContext = struct {
 
     fn lowerBlockStatements(self: *BodyContext, checked_statements: []const checked.CheckedStatementId) Allocator.Error!LoweredStatements {
         const items = try self.allocator.alloc(Ast.StmtId, checked_statements.len);
+        var len: usize = 0;
         var statement_diverges = false;
-        for (checked_statements, 0..) |statement, i| {
-            items[i] = try self.lowerStatement(statement);
+        for (checked_statements) |statement| {
+            if (!self.checkedStatementHasRuntimeEffect(statement)) continue;
+            items[len] = try self.lowerStatement(statement);
+            len += 1;
             if (self.checkedStatementDiverges(statement)) statement_diverges = true;
         }
         return .{
             .items = items,
-            .len = checked_statements.len,
+            .len = len,
             .diverges = statement_diverges,
+        };
+    }
+
+    fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+        const raw = @intFromEnum(statement_id);
+        if (raw >= self.view.bodies.statements.len) {
+            Common.invariant("checked runtime statement filter referenced a missing statement");
+        }
+        return switch (self.view.bodies.statements[raw].data) {
+            .decl,
+            .var_,
+            .reassign,
+            .crash,
+            .dbg,
+            .expr,
+            .expect,
+            .for_,
+            .while_,
+            .break_,
+            .return_,
+            => true,
+            .import_,
+            .alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            => false,
+            .pending,
+            .runtime_error,
+            => Common.invariant("invalid checked statement reached Monotype runtime statement filter"),
         };
     }
 

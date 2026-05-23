@@ -218,10 +218,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "n")))
-				(e-num (value "1"))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 105)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "n"))))
+				(args
+					(e-num (value "1")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))

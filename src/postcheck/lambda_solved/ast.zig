@@ -17,6 +17,12 @@ pub const Def = struct {
     body: Lifted.ExprId,
 };
 
+/// Runtime layout requested for a checked data value.
+pub const LayoutRequest = struct {
+    checked_type: @import("check").CheckedModule.CheckedTypeId,
+    ty: Type.TypeVarId,
+};
+
 /// Lambda Solved program plus the solved type store.
 pub const Program = struct {
     allocator: std.mem.Allocator,
@@ -27,6 +33,7 @@ pub const Program = struct {
     expr_tys: std.ArrayList(Type.TypeVarId),
     pat_tys: std.ArrayList(Type.TypeVarId),
     fn_tys: std.ArrayList(Type.TypeVarId),
+    layout_requests: std.ArrayList(LayoutRequest),
 
     pub fn init(allocator: std.mem.Allocator, lifted: Lifted.Program) Program {
         return .{
@@ -38,10 +45,12 @@ pub const Program = struct {
             .expr_tys = .empty,
             .pat_tys = .empty,
             .fn_tys = .empty,
+            .layout_requests = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.layout_requests.deinit(self.allocator);
         self.fn_tys.deinit(self.allocator);
         self.pat_tys.deinit(self.allocator);
         self.expr_tys.deinit(self.allocator);

@@ -229,10 +229,12 @@ EndOfFile,
 				(e-lambda
 					(args
 						(p-assign (ident "n")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "n")))
-						(e-num (value "1"))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 262)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "n"))))
+						(args
+							(e-num (value "1")))))
 				(e-num (value "42")))))
 	(e-lookup-local
 		(p-assign (ident "empty"))))

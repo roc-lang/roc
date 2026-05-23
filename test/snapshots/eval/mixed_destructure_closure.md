@@ -85,20 +85,28 @@ EndOfFile,
 									(record-destruct (label "e") (ident "e")
 										(required
 											(p-assign (ident "e")))))))))))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 49)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 47)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 45)
+							(receiver
+								(e-dispatch-call (method "plus") (constraint-fn-var 43)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "b"))))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "c"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "a")))
-						(e-lookup-local
-							(p-assign (ident "b"))))
-					(e-lookup-local
-						(p-assign (ident "c"))))
+							(p-assign (ident "d"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "d"))))
-			(e-lookup-local
-				(p-assign (ident "e")))))
+					(p-assign (ident "e"))))))
 	(e-record
 		(fields
 			(field (name "a")

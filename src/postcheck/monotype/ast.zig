@@ -353,6 +353,12 @@ pub const Root = struct {
     request: checked.RootRequest,
 };
 
+/// Runtime layout requested for a checked data value.
+pub const LayoutRequest = struct {
+    checked_type: checked.CheckedTypeId,
+    ty: Type.TypeId,
+};
+
 /// Complete Monotype program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
@@ -375,6 +381,7 @@ pub const Program = struct {
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList([]const u8),
     roots: std.ArrayList(Root),
+    layout_requests: std.ArrayList(LayoutRequest),
 
     pub fn init(allocator: std.mem.Allocator) Program {
         return .{
@@ -398,10 +405,12 @@ pub const Program = struct {
             .if_branches = .empty,
             .string_literals = .empty,
             .roots = .empty,
+            .layout_requests = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal);
         self.string_literals.deinit(self.allocator);

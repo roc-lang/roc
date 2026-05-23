@@ -111,10 +111,12 @@ describe = |value| match value {
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-binop (op "gt")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "0")))))
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 76)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "0"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -129,10 +131,12 @@ describe = |value| match value {
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-binop (op "lt")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "0")))))
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 166)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "0"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)

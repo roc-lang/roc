@@ -98,20 +98,28 @@ NO CHANGE
 													(e-lambda
 														(args
 															(p-assign (ident "e")))
-														(e-binop (op "add")
-															(e-binop (op "add")
-																(e-binop (op "add")
-																	(e-binop (op "add")
+														(e-dispatch-call (method "plus") (constraint-fn-var 55)
+															(receiver
+																(e-dispatch-call (method "plus") (constraint-fn-var 53)
+																	(receiver
+																		(e-dispatch-call (method "plus") (constraint-fn-var 51)
+																			(receiver
+																				(e-dispatch-call (method "plus") (constraint-fn-var 49)
+																					(receiver
+																						(e-lookup-local
+																							(p-assign (ident "a"))))
+																					(args
+																						(e-lookup-local
+																							(p-assign (ident "b"))))))
+																			(args
+																				(e-lookup-local
+																					(p-assign (ident "c"))))))
+																	(args
 																		(e-lookup-local
-																			(p-assign (ident "a")))
-																		(e-lookup-local
-																			(p-assign (ident "b"))))
-																	(e-lookup-local
-																		(p-assign (ident "c"))))
+																			(p-assign (ident "d"))))))
+															(args
 																(e-lookup-local
-																	(p-assign (ident "d"))))
-															(e-lookup-local
-																(p-assign (ident "e")))))))))))))
+																	(p-assign (ident "e"))))))))))))))
 					(e-num (value "1")))
 				(e-num (value "2")))
 			(e-num (value "3")))

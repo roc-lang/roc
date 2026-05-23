@@ -69,35 +69,37 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "eq")
-	(e-record
-		(fields
-			(field (name "name")
-				(e-string
-					(e-literal (string "Alice"))))
-			(field (name "age")
-				(e-string
-					(e-literal (string "30"))))
-			(field (name "process")
-				(e-lambda
-					(args
-						(p-assign (ident "x")))
-					(e-lookup-local
-						(p-assign (ident "x")))))))
-	(e-record
-		(fields
-			(field (name "name")
-				(e-string
-					(e-literal (string "Bob"))))
-			(field (name "age")
-				(e-string
-					(e-literal (string "25"))))
-			(field (name "process")
-				(e-lambda
-					(args
-						(p-assign (ident "y")))
-					(e-lookup-local
-						(p-assign (ident "y"))))))))
+(e-method-eq (negated "false")
+	(lhs
+		(e-record
+			(fields
+				(field (name "name")
+					(e-string
+						(e-literal (string "Alice"))))
+				(field (name "age")
+					(e-string
+						(e-literal (string "30"))))
+				(field (name "process")
+					(e-lambda
+						(args
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "x"))))))))
+	(rhs
+		(e-record
+			(fields
+				(field (name "name")
+					(e-string
+						(e-literal (string "Bob"))))
+				(field (name "age")
+					(e-string
+						(e-literal (string "25"))))
+				(field (name "process")
+					(e-lambda
+						(args
+							(p-assign (ident "y")))
+						(e-lookup-local
+							(p-assign (ident "y")))))))))
 ~~~
 # TYPES
 ~~~clojure

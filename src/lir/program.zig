@@ -16,8 +16,10 @@ const const_store = check.ConstStore;
 
 /// Layout requested for a checked value type digest.
 pub const RequestedLayout = struct {
-    ty: names.ExecValueDigest,
+    ty: names.TypeDigest,
+    checked_type: checked.CheckedTypeId,
     layout_idx: layout.Idx,
+    plan: ConstPlanId,
 };
 
 /// Identifier for a finite callable set in the LIR program.
@@ -81,7 +83,7 @@ pub const ConstPlanId = enum(u32) { _ };
 
 /// Tag variant in a constant storage plan.
 pub const ConstTagVariant = struct {
-    name: names.TagNameId,
+    name: []const u8,
     checked_name: names.TagNameId,
     discriminant: u16,
     payloads: []const ConstPlanId = &.{},
@@ -157,7 +159,7 @@ pub const Result = struct {
         self.store.deinit();
     }
 
-    pub fn requestedLayoutForType(self: *const Result, ty: names.ExecValueDigest) ?layout.Idx {
+    pub fn requestedLayoutForType(self: *const Result, ty: names.TypeDigest) ?layout.Idx {
         for (self.requested_layouts.items) |entry| {
             if (std.mem.eql(u8, entry.ty.bytes[0..], ty.bytes[0..])) return entry.layout_idx;
         }
@@ -172,7 +174,10 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
             .tuple => |items| allocator.free(items),
             .record => |fields| allocator.free(fields),
             .tag_union => |variants| {
-                for (variants) |variant| allocator.free(variant.payloads);
+                for (variants) |variant| {
+                    allocator.free(variant.name);
+                    allocator.free(variant.payloads);
+                }
                 allocator.free(variants);
             },
             .zst,

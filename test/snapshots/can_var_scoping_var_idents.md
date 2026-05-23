@@ -75,22 +75,28 @@ NO CHANGE
 						(p-assign (ident "input"))))
 				(s-var
 					(p-assign (ident "sum_"))
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "input")))
-						(e-num (value "2"))))
+					(e-dispatch-call (method "times") (constraint-fn-var 36)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "input"))))
+						(args
+							(e-num (value "2")))))
 				(s-reassign
 					(p-assign (ident "sum_"))
-					(e-binop (op "add")
+					(e-dispatch-call (method "plus") (constraint-fn-var 38)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "sum_"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "sum"))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 40)
+					(receiver
 						(e-lookup-local
-							(p-assign (ident "sum_")))
+							(p-assign (ident "sum"))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "sum")))))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "sum")))
-					(e-lookup-local
-						(p-assign (ident "sum_"))))))))
+							(p-assign (ident "sum_")))))))))
 ~~~
 # TYPES
 ~~~clojure

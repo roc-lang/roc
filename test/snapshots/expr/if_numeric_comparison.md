@@ -34,9 +34,11 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-binop (op "gt")
-				(e-num (value "5"))
-				(e-num (value "3")))
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 36)
+				(receiver
+					(e-num (value "5")))
+				(args
+					(e-num (value "3"))))
 			(e-num (value "1"))))
 	(if-else
 		(e-num (value "2"))))

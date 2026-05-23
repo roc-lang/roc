@@ -17,7 +17,7 @@ result = func(1)
 ~~~roc
 func = |offset| {
 	condition = True
-	f = if (condition) |x| x + offset else |x| x * 2
+	f = if (condition) |x| x.plus(offset) else |x| x.times(2)
 	f(10)
 }
 
@@ -107,19 +107,23 @@ EndOfFile,
 									(e-lambda
 										(args
 											(p-assign (ident "x")))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "x")))
-											(e-lookup-local
-												(p-assign (ident "offset"))))))))
+										(e-dispatch-call (method "plus") (constraint-fn-var 44)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "x"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "offset")))))))))
 						(if-else
 							(e-lambda
 								(args
 									(p-assign (ident "x")))
-								(e-binop (op "mul")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "2")))))))
+								(e-dispatch-call (method "times") (constraint-fn-var 56)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "2"))))))))
 				(e-call (constraint-fn-var 76)
 					(e-lookup-local
 						(p-assign (ident "f")))

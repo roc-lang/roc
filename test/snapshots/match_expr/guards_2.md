@@ -123,13 +123,15 @@ describe = |value| match value {
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-binop (op "gt")
-									(e-call (constraint-fn-var 94)
-										(e-lookup-external
-											(builtin))
-										(e-lookup-local
-											(p-assign (ident "rest"))))
-									(e-num (value "5")))))
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 108)
+									(receiver
+										(e-call (constraint-fn-var 94)
+											(e-lookup-external
+												(builtin))
+											(e-lookup-local
+												(p-assign (ident "rest")))))
+									(args
+										(e-num (value "5"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)

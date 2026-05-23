@@ -387,14 +387,18 @@ main = |_| {
 							(builtin))
 						(e-lookup-local
 							(p-assign (ident "all_float_list")))))
-				(e-binop (op "add")
-					(e-binop (op "add")
+				(e-dispatch-call (method "plus") (constraint-fn-var 228)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 226)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "len1"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "len2"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "len1")))
-						(e-lookup-local
-							(p-assign (ident "len2"))))
-					(e-lookup-local
-						(p-assign (ident "len3"))))))))
+							(p-assign (ident "len3")))))))))
 ~~~
 # TYPES
 ~~~clojure

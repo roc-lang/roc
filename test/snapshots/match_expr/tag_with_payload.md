@@ -74,35 +74,45 @@ match shape {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "mul")
-						(e-binop (op "mul")
-							(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
+					(e-dispatch-call (method "times") (constraint-fn-var 49)
+						(receiver
+							(e-dispatch-call (method "times") (constraint-fn-var 47)
+								(receiver
+									(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
+								(args
+									(e-lookup-local
+										(p-assign (ident "radius"))))))
+						(args
 							(e-lookup-local
-								(p-assign (ident "radius"))))
-						(e-lookup-local
-							(p-assign (ident "radius"))))))
+								(p-assign (ident "radius")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "width")))
-						(e-lookup-local
-							(p-assign (ident "height"))))))
+					(e-dispatch-call (method "times") (constraint-fn-var 52)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "width"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "height")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "mul")
-						(e-binop (op "mul")
-							(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5"))
+					(e-dispatch-call (method "times") (constraint-fn-var 67)
+						(receiver
+							(e-dispatch-call (method "times") (constraint-fn-var 65)
+								(receiver
+									(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5")))
+								(args
+									(e-lookup-local
+										(p-assign (ident "base"))))))
+						(args
 							(e-lookup-local
-								(p-assign (ident "base"))))
-						(e-lookup-local
-							(p-assign (ident "height")))))))))
+								(p-assign (ident "height"))))))))))
 ~~~
 # TYPES
 ~~~clojure

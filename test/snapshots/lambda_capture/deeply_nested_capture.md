@@ -93,10 +93,12 @@ EndOfFile,
 				(e-block
 					(s-let
 						(p-assign (ident "a_loc"))
-						(e-binop (op "mul")
-							(e-lookup-local
-								(p-assign (ident "a")))
-							(e-num (value "2"))))
+						(e-dispatch-call (method "times") (constraint-fn-var 47)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "a"))))
+							(args
+								(e-num (value "2")))))
 					(e-closure
 						(captures
 							(capture (ident "a_loc")))
@@ -106,22 +108,26 @@ EndOfFile,
 							(e-block
 								(s-let
 									(p-assign (ident "b_loc"))
-									(e-binop (op "add")
-										(e-lookup-local
-											(p-assign (ident "a_loc")))
-										(e-lookup-local
-											(p-assign (ident "b")))))
+									(e-dispatch-call (method "plus") (constraint-fn-var 49)
+										(receiver
+											(e-lookup-local
+												(p-assign (ident "a_loc"))))
+										(args
+											(e-lookup-local
+												(p-assign (ident "b"))))))
 								(e-closure
 									(captures
 										(capture (ident "b_loc")))
 									(e-lambda
 										(args
 											(p-assign (ident "c")))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "b_loc")))
-											(e-lookup-local
-												(p-assign (ident "c")))))))))))
+										(e-dispatch-call (method "plus") (constraint-fn-var 51)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "b_loc"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "c"))))))))))))
 			(e-num (value "100")))
 		(e-num (value "20")))
 	(e-num (value "3")))

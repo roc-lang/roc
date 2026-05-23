@@ -1088,10 +1088,12 @@ main = {
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-num (value "10")))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 585)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-num (value "10"))))))
 			(s-let
 				(p-assign (ident "processor"))
 				(e-call (constraint-fn-var 610)
@@ -1118,10 +1120,12 @@ main = {
 						(e-lambda
 							(args
 								(p-assign (ident "x")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-num (value "1")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 632)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "x"))))
+								(args
+									(e-num (value "1"))))))))
 			(s-let
 				(p-assign (ident "_str_result"))
 				(e-dispatch-call (method "map") (constraint-fn-var 644)
@@ -1148,10 +1152,12 @@ main = {
 										(e-lambda
 											(args
 												(p-assign (ident "x")))
-											(e-binop (op "add")
-												(e-lookup-local
-													(p-assign (ident "x")))
-												(e-num (value "1")))))))
+											(e-dispatch-call (method "plus") (constraint-fn-var 664)
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "x"))))
+												(args
+													(e-num (value "1"))))))))
 							(args
 								(e-lambda
 									(args
@@ -1159,10 +1165,12 @@ main = {
 									(e-nominal (nominal "Container")
 										(e-tag (name "Value")
 											(args
-												(e-binop (op "add")
-													(e-lookup-local
-														(p-assign (ident "x")))
-													(e-num (value "2"))))))))))
+												(e-dispatch-call (method "plus") (constraint-fn-var 686)
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "x"))))
+													(args
+														(e-num (value "2")))))))))))
 					(args
 						(e-num (value "0")))))
 			(s-let
@@ -1170,11 +1178,13 @@ main = {
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "x"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 721)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "x")))))))
 			(s-let
 				(p-assign (ident "transformed"))
 				(e-call (constraint-fn-var 739)

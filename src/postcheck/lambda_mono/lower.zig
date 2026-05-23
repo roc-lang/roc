@@ -137,6 +137,14 @@ const Lowerer = struct {
                 .request = root.request,
             });
         }
+
+        try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
+        for (self.solved.layout_requests.items) |request| {
+            try self.program.layout_requests.append(self.allocator, .{
+                .checked_type = request.checked_type,
+                .ty = try self.lowerType(request.ty),
+            });
+        }
     }
 
     fn reserveFns(self: *Lowerer) Allocator.Error!void {

@@ -255,6 +255,15 @@ const Lowerer = struct {
                 });
             }
         }
+
+        for (self.program.layout_requests.items) |request| {
+            try self.result.requested_layouts.append(self.allocator, .{
+                .ty = self.program.types.typeDigest(&self.program.names, request.ty),
+                .checked_type = request.checked_type,
+                .layout_idx = try self.layoutOfType(request.ty),
+                .plan = try self.constPlanOfType(request.ty),
+            });
+        }
     }
 
     fn constPlanOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LirProgram.ConstPlanId {
@@ -315,17 +324,22 @@ const Lowerer = struct {
                 const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, source.len);
                 var initialized: usize = 0;
                 errdefer {
-                    for (variants[0..initialized]) |variant| self.allocator.free(variant.payloads);
+                    for (variants[0..initialized]) |variant| {
+                        self.allocator.free(variant.name);
+                        self.allocator.free(variant.payloads);
+                    }
                     self.allocator.free(variants);
                 }
                 for (source, 0..) |tag, i| {
+                    const name = try self.allocator.dupe(u8, self.program.names.tagLabelText(tag.name));
+                    errdefer self.allocator.free(name);
                     const payload_tys = self.program.types.span(tag.payloads);
                     const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_tys.len);
                     var payloads_owned = true;
                     errdefer if (payloads_owned) self.allocator.free(payloads);
                     for (payload_tys, 0..) |payload_ty, j| payloads[j] = try self.constPlanOfType(payload_ty);
                     variants[i] = .{
-                        .name = tag.name,
+                        .name = name,
                         .checked_name = tag.checked_name,
                         .discriminant = @intCast(i),
                         .payloads = payloads,

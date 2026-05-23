@@ -32,9 +32,11 @@ foo(x - 1)
 ~~~clojure
 (e-call
 	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-binop (op "sub")
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-num (value "1"))))
+	(e-dispatch-call (method "minus") (constraint-fn-var 23)
+		(receiver
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(args
+			(e-num (value "1")))))
 ~~~
 # TYPES
 ~~~clojure

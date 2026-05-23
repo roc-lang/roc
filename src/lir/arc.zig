@@ -1006,11 +1006,12 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
-                .join => |join_stmt| {
-                    for (self.store.getLocalSpan(join_stmt.params)) |param| {
-                        self.addOwnedIfRc(&path.owned, param);
-                    }
-                    path.cursor = join_stmt.body;
+                .join => {
+                    // A join starts a separate loop/recursive ownership frame.
+                    // Switch continuation analysis must not fold that frame into
+                    // the parent switch's shared continuation.
+                    self.destroyAnalysisPath(path);
+                    return;
                 },
                 .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash => {
                     self.destroyAnalysisPath(path);
@@ -2372,6 +2373,32 @@ test "RC join param move excludes old source from loop body ownership" {
     try f.run();
     try f.expectRc(source, 0, 0, 0);
     try f.expectRc(state, 0, 1, 0);
+}
+
+test "RC switch continuation analysis stops at join ownership boundary" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const cond = try f.local(.i64);
+    const source = try f.local(f.list_i64);
+    const state = try f.local(f.list_i64);
+    const join_id: LIR.JoinPointId = @enumFromInt(0);
+
+    const ret = try f.ret(state);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_state = try f.setLocal(state, source, .initialize_join_param, jump);
+    const remainder = try f.assignList(source, &.{}, initialize_state);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = ret,
+        .remainder = remainder,
+    } });
+    const switch_stmt = try f.switchStmt(cond, join, try f.store.addCFStmt(.runtime_error), ret);
+    const body = try f.assignI64(cond, 1, switch_stmt);
+
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+    try f.expectRc(source, 0, 0, 0);
 }
 
 test "dev lowering: list rest pattern emits two list decrefs" {

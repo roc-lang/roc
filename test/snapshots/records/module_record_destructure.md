@@ -87,22 +87,26 @@ extract_age = |person| {
 									(p-assign (ident "age"))))))
 					(e-lookup-local
 						(p-assign (ident "person"))))
-				(e-binop (op "sub")
-					(e-binop (op "add")
+				(e-dispatch-call (method "minus") (constraint-fn-var 122)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 68)
+							(receiver
+								(e-field-access (field "a")
+									(receiver
+										(e-record
+											(fields
+												(field (name "a")
+													(e-num (value "0"))))))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "age"))))))
+					(args
 						(e-field-access (field "a")
 							(receiver
 								(e-record
 									(fields
 										(field (name "a")
-											(e-num (value "0")))))))
-						(e-lookup-local
-							(p-assign (ident "age"))))
-					(e-field-access (field "a")
-						(receiver
-							(e-record
-								(fields
-									(field (name "a")
-										(e-num (value "0"))))))))))
+											(e-num (value "0")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

@@ -212,19 +212,23 @@ NO CHANGE
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "acc")))
-									(e-num (value "1")))))
+								(e-dispatch-call (method "plus") (constraint-fn-var 237)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "acc"))))
+									(args
+										(e-num (value "1"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "acc")))
-									(e-num (value "10")))))))))
+								(e-dispatch-call (method "plus") (constraint-fn-var 289)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "acc"))))
+									(args
+										(e-num (value "10"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

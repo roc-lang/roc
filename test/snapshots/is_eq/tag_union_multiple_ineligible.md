@@ -152,10 +152,12 @@ expect result == result
 				(e-lambda
 					(args
 						(p-assign (ident "n")))
-					(e-binop (op "gt")
-						(e-lookup-local
-							(p-assign (ident "n")))
-						(e-num (value "0")))))))
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 71)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "n"))))
+						(args
+							(e-num (value "0"))))))))
 	(d-let
 		(p-assign (ident "z"))
 		(e-tag (name "Transform")
@@ -195,11 +197,13 @@ expect result == result
 					(e-lookup-local
 						(p-assign (ident "w")))))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "result")))
-			(e-lookup-local
-				(p-assign (ident "result"))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-lookup-local
+					(p-assign (ident "result")))))))
 ~~~
 # TYPES
 ~~~clojure

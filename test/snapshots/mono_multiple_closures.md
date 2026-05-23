@@ -17,9 +17,9 @@ result = func(10, 20)
 ~~~roc
 func : Dec, Dec -> Dec
 func = |x, y| {
-	add_x = |a| a + x
-	add_y = |b| b + y
-	add_x(5) + add_y(5)
+	add_x = |a| a.plus(x)
+	add_y = |b| b.plus(y)
+	add_x(5).plus(add_y(5))
 }
 
 result : Dec
@@ -104,11 +104,13 @@ EndOfFile,
 						(e-lambda
 							(args
 								(p-assign (ident "a")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "a")))
-								(e-lookup-local
-									(p-assign (ident "x")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 43)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "a"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "x"))))))))
 				(s-let
 					(p-assign (ident "add_y"))
 					(e-closure
@@ -117,20 +119,24 @@ EndOfFile,
 						(e-lambda
 							(args
 								(p-assign (ident "b")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "b")))
-								(e-lookup-local
-									(p-assign (ident "y")))))))
-				(e-binop (op "add")
-					(e-call (constraint-fn-var 60)
-						(e-lookup-local
-							(p-assign (ident "add_x")))
-						(e-num (value "5")))
-					(e-call (constraint-fn-var 74)
-						(e-lookup-local
-							(p-assign (ident "add_y")))
-						(e-num (value "5")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 45)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "b"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "y"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 75)
+					(receiver
+						(e-call (constraint-fn-var 60)
+							(e-lookup-local
+								(p-assign (ident "add_x")))
+							(e-num (value "5"))))
+					(args
+						(e-call (constraint-fn-var 74)
+							(e-lookup-local
+								(p-assign (ident "add_y")))
+							(e-num (value "5"))))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call (constraint-fn-var 103)

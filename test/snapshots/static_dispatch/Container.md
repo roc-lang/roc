@@ -403,10 +403,12 @@ func = {
 										(e-lambda
 											(args
 												(p-assign (ident "x")))
-											(e-binop (op "add")
-												(e-lookup-local
-													(p-assign (ident "x")))
-												(e-num (value "1")))))))
+											(e-dispatch-call (method "plus") (constraint-fn-var 214)
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "x"))))
+												(args
+													(e-num (value "1"))))))))
 							(args
 								(e-lambda
 									(args
@@ -414,10 +416,12 @@ func = {
 									(e-nominal (nominal "Container")
 										(e-tag (name "Value")
 											(args
-												(e-binop (op "add")
-													(e-lookup-local
-														(p-assign (ident "x")))
-													(e-num (value "2"))))))))))
+												(e-dispatch-call (method "plus") (constraint-fn-var 236)
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "x"))))
+													(args
+														(e-num (value "2")))))))))))
 					(args
 						(e-num (value "0")))))
 			(e-lookup-local

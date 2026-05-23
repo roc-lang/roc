@@ -31,6 +31,7 @@ pub const CheckedModuleSet = struct {
 /// Root requests that determine which checked definitions become LIR roots.
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
+    layout_requests: []const checked.CheckedTypeId = &.{},
 };
 
 /// Target settings and checked-state mode for the checked-to-LIR pipeline.
@@ -104,7 +105,7 @@ pub const RuntimeValueSchemaStore = struct {
 /// Fully lowered LIR program plus root and runtime schema metadata.
 pub const LoweredProgram = struct {
     lir_result: LirProgram.Result,
-    main_proc: LIR.LirProcSpecId,
+    main_proc: ?LIR.LirProcSpecId,
     target_usize: base.target.TargetUsize,
     runtime_value_schemas: RuntimeValueSchemaStore,
 
@@ -172,10 +173,13 @@ pub fn lowerCheckedModulesToLir(
 ) LowerResourceError!LoweredProgram {
     verifyCheckedBoundary(modules, target);
 
+    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests);
+    defer allocator.free(layout_requests);
+
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         checkedModules(modules),
-        rootRequests(roots),
+        rootRequests(roots, layout_requests),
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -205,11 +209,14 @@ pub fn lowerCheckedModulesToLir(
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts);
 
-    if (lowered.lir_result.root_procs.items.len == 0) {
+    if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
     }
 
-    const main_proc = lowered.lir_result.root_procs.items[0];
+    const main_proc: ?LIR.LirProcSpecId = if (lowered.lir_result.root_procs.items.len == 0)
+        null
+    else
+        lowered.lir_result.root_procs.items[0];
     const runtime_value_schemas = convertRuntimeSchemas(allocator, lowered.runtime_schemas);
     lowered.runtime_schemas = postcheck.LirLower.RuntimeSchemaStore.init(allocator);
     errdefer runtime_value_schemas.deinit();
@@ -240,10 +247,30 @@ fn checkedModules(modules: CheckedModuleSet) postcheck.Common.CheckedModules {
     };
 }
 
-fn rootRequests(roots: RootRequestSet) postcheck.Common.RootRequests {
+fn rootRequests(roots: RootRequestSet, layout_requests: []const checked.CheckedTypeId) postcheck.Common.RootRequests {
     return .{
         .requests = roots.requests,
+        .layout_requests = layout_requests,
     };
+}
+
+fn collectLayoutRequests(
+    allocator: Allocator,
+    root: *const checked.Module,
+    explicit: []const checked.CheckedTypeId,
+) Allocator.Error![]checked.CheckedTypeId {
+    var requests = std.ArrayList(checked.CheckedTypeId).empty;
+    errdefer requests.deinit(allocator);
+
+    try requests.appendSlice(allocator, explicit);
+    for (root.provided_exports.exports) |provided| {
+        switch (provided) {
+            .data => |data| try requests.append(allocator, data.checked_type),
+            .procedure => {},
+        }
+    }
+
+    return try requests.toOwnedSlice(allocator);
 }
 
 fn convertRuntimeSchemas(

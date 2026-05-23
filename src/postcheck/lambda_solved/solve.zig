@@ -120,6 +120,15 @@ const Solver = struct {
             try self.solveFn(fn_id, fn_);
         }
 
+        try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.program.lifted.layout_requests.items.len);
+        for (self.program.lifted.layout_requests.items) |request| {
+            const ty = try self.lowerTypeFresh(request.ty);
+            try self.program.layout_requests.append(self.allocator, .{
+                .checked_type = request.checked_type,
+                .ty = ty,
+            });
+        }
+
         try self.closeUnfilledCallableSlots();
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
@@ -138,6 +147,10 @@ const Solver = struct {
         for (self.local_tys) |maybe_ty| {
             const ty = maybe_ty orelse Common.invariant("Lambda Solved local type slot was not initialized");
             try self.program.local_tys.append(self.allocator, self.program.types.root(ty));
+        }
+
+        for (self.program.layout_requests.items) |*request| {
+            request.ty = self.program.types.root(request.ty);
         }
     }
 

@@ -135,11 +135,13 @@ match items {
 								(p-underscore)
 								(p-assign (ident "y"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 65)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

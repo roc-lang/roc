@@ -150,9 +150,11 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-binop (op "add")
-						(e-runtime-error (tag "erroneous_value_use"))
-						(e-num (value "1")))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 70)
+						(receiver
+							(e-runtime-error (tag "erroneous_value_use")))
+						(args
+							(e-num (value "1"))))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-string

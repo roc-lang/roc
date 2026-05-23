@@ -70,11 +70,13 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "y"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 30)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -83,10 +85,12 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "x"))))))
 				(value
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-num (value "2"))))))))
+					(e-dispatch-call (method "times") (constraint-fn-var 43)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-num (value "2")))))))))
 ~~~
 # TYPES
 ~~~clojure

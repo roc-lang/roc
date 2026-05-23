@@ -16,7 +16,7 @@ result = add_five(10.I64)
 ~~~
 # MONO
 ~~~roc
-make_adder = |x| |y| x + y
+make_adder = |x| |y| x.plus(y)
 
 add_five : I64 -> I64
 add_five = make_adder(5.I64)
@@ -80,11 +80,13 @@ EndOfFile,
 				(e-lambda
 					(args
 						(p-assign (ident "y")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 27)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))))
 	(d-let
 		(p-assign (ident "add_five"))
 		(e-call (constraint-fn-var 46)

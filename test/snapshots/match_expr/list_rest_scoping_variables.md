@@ -157,11 +157,13 @@ match data {
 							(rest-at (index 1)
 								(p-assign (ident "items"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "first")))
-						(e-lookup-local
-							(p-assign (ident "last")))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 58)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "last"))))))))))
 ~~~
 # TYPES
 ~~~clojure

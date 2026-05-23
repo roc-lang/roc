@@ -3940,47 +3940,12 @@ fn processDevObjectSnapshot(
     const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
     defer allocator.free(relation_artifacts);
 
-    var lowered: ?lir.CheckedPipeline.LoweredProgram = null;
-    defer if (lowered) |*lowered_program| lowered_program.deinit();
-
-    var entrypoints: []backend.Entrypoint = &.{};
-    var entrypoints_owned = false;
-    defer if (entrypoints_owned) {
-        for (entrypoints) |entrypoint| {
-            allocator.free(entrypoint.symbol_name);
-            allocator.free(entrypoint.arg_layouts);
-        }
-        allocator.free(entrypoints);
-    };
-
-    if (snapshotHasProvidedProcedureExports(root_artifact)) {
-        lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-            allocator,
-            .{
-                .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-                .imports = imported_artifacts,
-            },
-            .{ .requests = root_artifact.root_requests.runtime_requests },
-            .{
-                .target_usize = base.target.TargetUsize.native,
-            },
-        );
-
-        if (lowered) |*lowered_program| {
-            entrypoints = try snapshotNativeEntrypoints(allocator, root_artifact, lowered_program);
-        } else unreachable;
-        entrypoints_owned = true;
-    }
-
-    if (entrypoints.len == 0 and !snapshotHasProvidedDataExports(root_artifact)) {
+    const has_procedure_exports = snapshotHasProvidedProcedureExports(root_artifact);
+    const has_data_exports = snapshotHasProvidedDataExports(root_artifact);
+    if (!has_procedure_exports and !has_data_exports) {
         std.log.err("Failed to produce any exported platform entrypoints or data symbols", .{});
         return false;
     }
-
-    var empty_lir_store = lir.LirStore.init(allocator);
-    defer empty_lir_store.deinit();
-    var empty_layout_store = try layout.Store.init(allocator, base.target.TargetUsize.native);
-    defer empty_layout_store.deinit();
 
     const RocTarget = roc_target.RocTarget;
     const Blake3 = std.crypto.hash.Blake3;
@@ -4001,16 +3966,43 @@ fn processDevObjectSnapshot(
                 break :target_snapshot;
             }
 
-            const lir_store = if (lowered) |*lowered_program| &lowered_program.lir_result.store else &empty_lir_store;
-            const layout_store = if (lowered) |*lowered_program| &lowered_program.lir_result.layouts else &empty_layout_store;
-            const proc_specs = if (lowered) |*lowered_program| lowered_program.lir_result.store.getProcSpecs() else &.{};
+            const target_usize: base.target.TargetUsize = switch (target.ptrBitWidth()) {
+                32 => .u32,
+                64 => .u64,
+                else => {
+                    hash_results[i].hash_hex = undefined;
+                    hash_results[i].supported = false;
+                    break :target_snapshot;
+                },
+            };
+            var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+                allocator,
+                .{
+                    .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .imports = imported_artifacts,
+                },
+                .{ .requests = root_artifact.root_requests.runtime_requests },
+                .{
+                    .target_usize = target_usize,
+                },
+            );
+            defer lowered.deinit();
+
+            const entrypoints = try snapshotNativeEntrypoints(allocator, root_artifact, &lowered);
+            defer {
+                for (entrypoints) |entrypoint| {
+                    allocator.free(entrypoint.symbol_name);
+                    allocator.free(entrypoint.arg_layouts);
+                }
+                allocator.free(entrypoints);
+            }
             const static_data_exports = compile.static_data_exports.buildProvidedDataExports(
                 allocator,
                 .{
                     .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
-                if (lowered) |*lowered_program| lowered_program else null,
+                &lowered,
                 target,
             ) catch |err| {
                 std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
@@ -4021,11 +4013,11 @@ fn processDevObjectSnapshot(
             defer compile.static_data_exports.deinitProvidedDataExports(allocator, static_data_exports);
 
             if (object_compiler.compileToObjectFile(
-                lir_store,
-                layout_store,
+                &lowered.lir_result.store,
+                &lowered.lir_result.layouts,
                 entrypoints,
                 static_data_exports,
-                proc_specs,
+                lowered.lir_result.store.getProcSpecs(),
                 target,
             )) |result| {
                 var hasher = Blake3.init(.{});

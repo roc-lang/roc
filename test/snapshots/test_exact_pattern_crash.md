@@ -297,17 +297,21 @@ main = {
 					(e-lambda
 						(args
 							(p-assign (ident "x")))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "x")))
-							(e-num (value "1"))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 197)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "x"))))
+							(args
+								(e-num (value "1")))))
 					(e-lambda
 						(args
 							(p-assign (ident "y")))
-						(e-binop (op "mul")
-							(e-lookup-local
-								(p-assign (ident "y")))
-							(e-num (value "2"))))))
+						(e-dispatch-call (method "times") (constraint-fn-var 209)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "y"))))
+							(args
+								(e-num (value "2")))))))
 			(e-lookup-local
 				(p-assign (ident "p2")))))
 	(s-alias-decl

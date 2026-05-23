@@ -180,11 +180,13 @@ expect sumResult == 10
 				(args
 					(p-assign (ident "acc"))
 					(p-assign (ident "x")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "acc")))
-					(e-lookup-local
-						(p-assign (ident "x"))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 293)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "acc"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "x")))))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

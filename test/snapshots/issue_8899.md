@@ -155,11 +155,13 @@ EndOfFile,
 												(pattern (degenerate false)
 													(p-applied-tag)))
 											(value
-												(e-binop (op "add")
-													(e-lookup-local
-														(p-assign (ident "$total")))
-													(e-lookup-local
-														(p-assign (ident "last"))))))
+												(e-dispatch-call (method "plus") (constraint-fn-var 203)
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "$total"))))
+													(args
+														(e-lookup-local
+															(p-assign (ident "last")))))))
 										(branch
 											(patterns
 												(pattern (degenerate false)

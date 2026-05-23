@@ -71,11 +71,13 @@ EndOfFile,
 				(e-lambda
 					(args
 						(p-assign (ident "b")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "a")))
-						(e-lookup-local
-							(p-assign (ident "b"))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 26)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "a"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "b")))))))))
 	(s-let
 		(p-assign (ident "g"))
 		(e-call (constraint-fn-var 43)

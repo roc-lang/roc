@@ -398,19 +398,23 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-expr
-					(e-binop (op "add")
-						(e-num (value "1"))
-						(e-lookup-local
-							(p-assign (ident "update_data")))))
-				(e-binop (op "add")
-					(e-field-access (field "count")
+					(e-dispatch-call (method "plus") (constraint-fn-var 302)
 						(receiver
+							(e-num (value "1")))
+						(args
 							(e-lookup-local
-								(p-assign (ident "int_container")))))
-					(e-field-access (field "count")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "str_container"))))))))))
+								(p-assign (ident "update_data"))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 315)
+					(receiver
+						(e-field-access (field "count")
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "int_container"))))))
+					(args
+						(e-field-access (field "count")
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "str_container")))))))))))
 ~~~
 # TYPES
 ~~~clojure

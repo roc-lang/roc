@@ -230,14 +230,18 @@ main! = |_| {
 							(p-assign (ident "result1")))
 						(e-lookup-local
 							(p-assign (ident "result2")))))
-				(e-binop (op "add")
-					(e-binop (op "add")
+				(e-dispatch-call (method "plus") (constraint-fn-var 120)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 118)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "a"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "b"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "a")))
-						(e-lookup-local
-							(p-assign (ident "b"))))
-					(e-lookup-local
-						(p-assign (ident "c"))))))))
+							(p-assign (ident "c")))))))))
 ~~~
 # TYPES
 ~~~clojure

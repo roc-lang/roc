@@ -190,37 +190,47 @@ main = |_| {
 			(p-assign (ident "frac"))))
 	(d-let
 		(p-assign (ident "int_add"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-num (value "10"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 93)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "int_multiply"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-num (value "2"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 105)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "float_add"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 117)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))))
 	(d-let
 		(p-assign (ident "float_multiply"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 129)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5")))))
 	(d-let
 		(p-assign (ident "double"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-num (value "2")))))
+			(e-dispatch-call (method "times") (constraint-fn-var 141)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "int_doubled"))
 		(e-call (constraint-fn-var 160)
@@ -239,11 +249,13 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "int_add")))
-					(e-lookup-local
-						(p-assign (ident "int_multiply"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 179)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "int_add"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "int_multiply")))))))))
 ~~~
 # TYPES
 ~~~clojure

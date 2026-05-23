@@ -59,15 +59,19 @@ NO CHANGE
 					(e-if
 						(if-branches
 							(if-branch
-								(e-binop (op "gt")
-									(e-lookup-local
-										(p-assign (ident "outer")))
-									(e-num (value "0")))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "outer")))
-									(e-lookup-local
-										(p-assign (ident "inner"))))))
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 38)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "outer"))))
+									(args
+										(e-num (value "0"))))
+								(e-dispatch-call (method "plus") (constraint-fn-var 43)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "outer"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "inner")))))))
 						(if-else
 							(e-lookup-local
 								(p-assign (ident "inner"))))))))

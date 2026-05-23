@@ -18,6 +18,7 @@ pub const CheckedModules = struct {
 /// Explicit roots requested from checked module data.
 pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},
+    layout_requests: []const checked.CheckedTypeId = &.{},
 };
 
 /// Target settings carried through post-check lowering.

@@ -56,14 +56,18 @@ EndOfFile,
 		(e-num (value "42")))
 	(s-let
 		(p-assign (ident "y"))
-		(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 38)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "x"))))
+			(args
+				(e-num (value "1")))))
+	(e-dispatch-call (method "times") (constraint-fn-var 50)
+		(receiver
 			(e-lookup-local
-				(p-assign (ident "x")))
-			(e-num (value "1"))))
-	(e-binop (op "mul")
-		(e-lookup-local
-			(p-assign (ident "y")))
-		(e-num (value "2"))))
+				(p-assign (ident "y"))))
+		(args
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

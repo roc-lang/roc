@@ -94,10 +94,12 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-assign (ident "counter_"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "counter_")))
-							(e-num (value "1"))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 237)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "counter_"))))
+							(args
+								(e-num (value "1")))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "counter_"))))

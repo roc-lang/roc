@@ -77,37 +77,45 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "value")))
-						(e-num (value "1")))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 48)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "value"))))
+						(args
+							(e-num (value "1"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "sub")
-						(e-lookup-local
-							(p-assign (ident "value")))
-						(e-num (value "1")))))
+					(e-dispatch-call (method "minus") (constraint-fn-var 61)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "value"))))
+						(args
+							(e-num (value "1"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "different")))
-						(e-num (value "2")))))
+					(e-dispatch-call (method "times") (constraint-fn-var 74)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "different"))))
+						(args
+							(e-num (value "2"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "div")
-						(e-lookup-local
-							(p-assign (ident "different")))
-						(e-num (value "2"))))))))
+					(e-dispatch-call (method "div_by") (constraint-fn-var 87)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "different"))))
+						(args
+							(e-num (value "2")))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -92,11 +92,13 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-assign (ident "total_"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "total_")))
-							(e-lookup-local
-								(p-assign (ident "n")))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 258)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "total_"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "n"))))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "total_"))))

@@ -109,14 +109,18 @@ NO CHANGE
 						(e-block
 							(s-reassign
 								(p-assign (ident "result_"))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "result_")))
-									(e-binop (op "mul")
+								(e-dispatch-call (method "plus") (constraint-fn-var 422)
+									(receiver
 										(e-lookup-local
-											(p-assign (ident "i")))
-										(e-lookup-local
-											(p-assign (ident "j"))))))
+											(p-assign (ident "result_"))))
+									(args
+										(e-dispatch-call (method "times") (constraint-fn-var 420)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "i"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "j"))))))))
 							(e-empty_record)))
 					(e-empty_record)))
 			(e-lookup-local

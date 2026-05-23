@@ -198,10 +198,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "number")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "number")))
-				(e-num (value "1")))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 92)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "number"))))
+				(args
+					(e-num (value "1"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -232,17 +234,23 @@ main! = |_| {
 						(e-lookup-local
 							(p-assign (ident "used_regular")))
 						(e-num (value "20"))))
-				(e-binop (op "add")
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "a")))
-							(e-lookup-local
-								(p-assign (ident "b"))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 163)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 161)
+							(receiver
+								(e-dispatch-call (method "plus") (constraint-fn-var 159)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "b"))))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "c"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "c"))))
-					(e-lookup-local
-						(p-assign (ident "d"))))))))
+							(p-assign (ident "d")))))))))
 ~~~
 # TYPES
 ~~~clojure
