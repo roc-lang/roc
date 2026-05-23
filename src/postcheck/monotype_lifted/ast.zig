@@ -207,6 +207,9 @@ pub const LayoutRequest = struct {
     fn_id: ?FnId = null,
 };
 
+/// Runtime schema requested for a named runtime value shape.
+pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
+
 /// Complete Monotype Lifted program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
@@ -229,6 +232,7 @@ pub const Program = struct {
     string_literals: std.ArrayList([]const u8),
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
+    runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -258,10 +262,12 @@ pub const Program = struct {
             .string_literals = string_literals,
             .roots = .empty,
             .layout_requests = .empty,
+            .runtime_schema_requests = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal);

@@ -343,14 +343,17 @@ const Builder = struct {
             try self.lowerProcedureUseRoot(request, procedure)
         else
             Common.invariant("root request reached Monotype without a checked procedure template or procedure source");
+        try self.appendRuntimeSchemaRequestsForDef(def);
         try self.program.roots.append(self.allocator, .{ .def = def, .request = request });
     }
 
     fn lowerLayoutRequest(self: *Builder, checked_ty: checked.CheckedTypeId) Allocator.Error!void {
+        const ty = try self.lowerType(moduleView(self.root_view), checked_ty);
         try self.program.layout_requests.append(self.allocator, .{
             .checked_type = checked_ty,
-            .ty = try self.lowerType(moduleView(self.root_view), checked_ty),
+            .ty = ty,
         });
+        try self.appendRuntimeSchemaRequestsForType(ty);
     }
 
     fn lowerStaticDataRequest(self: *Builder, request: Common.StaticDataRequest) Allocator.Error!void {
@@ -371,6 +374,95 @@ const Builder = struct {
             .ty = ret_ty,
             .def = def,
         });
+        try self.appendRuntimeSchemaRequestsForType(ret_ty);
+    }
+
+    fn appendRuntimeSchemaRequestsForDef(self: *Builder, def: Ast.DefId) Allocator.Error!void {
+        const fn_ = self.program.defs.items[@intFromEnum(def)];
+        for (self.program.typedLocalSpan(fn_.args)) |arg| {
+            try self.appendRuntimeSchemaRequestsForType(arg.ty);
+        }
+        try self.appendRuntimeSchemaRequestsForType(fn_.ret);
+    }
+
+    fn appendRuntimeSchemaRequestsForType(self: *Builder, ty: Type.TypeId) Allocator.Error!void {
+        var active = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer active.deinit();
+        try self.appendRuntimeSchemaRequestsForTypeInner(ty, &active);
+    }
+
+    fn appendRuntimeSchemaRequestsForTypeInner(
+        self: *Builder,
+        ty: Type.TypeId,
+        active: *std.AutoHashMap(Type.TypeId, void),
+    ) Allocator.Error!void {
+        if (active.contains(ty)) return;
+        try active.put(ty, {});
+
+        switch (self.program.types.get(ty)) {
+            .named => |named| {
+                for (self.program.types.span(named.args)) |arg| {
+                    try self.appendRuntimeSchemaRequestsForTypeInner(arg, active);
+                }
+                const backing = named.backing orelse return;
+                if (backing.use == .inspectable and self.runtimeSchemaBackedByRecordOrTagUnion(backing.ty)) {
+                    try self.appendRuntimeSchemaRequest(.{ .def = named.def, .ty = ty });
+                }
+                try self.appendRuntimeSchemaRequestsForTypeInner(backing.ty, active);
+            },
+            .record => |fields| {
+                for (self.program.types.fieldSpan(fields)) |field| {
+                    try self.appendRuntimeSchemaRequestsForTypeInner(field.ty, active);
+                }
+            },
+            .tuple => |items| {
+                for (self.program.types.span(items)) |item| {
+                    try self.appendRuntimeSchemaRequestsForTypeInner(item, active);
+                }
+            },
+            .tag_union => |tags| {
+                for (self.program.types.tagSpan(tags)) |tag| {
+                    for (self.program.types.span(tag.payloads)) |payload| {
+                        try self.appendRuntimeSchemaRequestsForTypeInner(payload, active);
+                    }
+                }
+            },
+            .list,
+            .box,
+            => |elem| try self.appendRuntimeSchemaRequestsForTypeInner(elem, active),
+            .func => |func| {
+                for (self.program.types.span(func.args)) |arg| {
+                    try self.appendRuntimeSchemaRequestsForTypeInner(arg, active);
+                }
+                try self.appendRuntimeSchemaRequestsForTypeInner(func.ret, active);
+            },
+            .primitive,
+            .erased,
+            .zst,
+            => {},
+        }
+    }
+
+    fn runtimeSchemaBackedByRecordOrTagUnion(self: *Builder, ty: Type.TypeId) bool {
+        return switch (self.program.types.get(ty)) {
+            .record,
+            .tag_union,
+            => true,
+            .named => |named| if (named.backing) |backing|
+                backing.use == .inspectable and self.runtimeSchemaBackedByRecordOrTagUnion(backing.ty)
+            else
+                false,
+            else => false,
+        };
+    }
+
+    fn appendRuntimeSchemaRequest(self: *Builder, request: Ast.RuntimeSchemaRequest) Allocator.Error!void {
+        for (self.program.runtime_schema_requests.items) |existing| {
+            if (existing.def.module_name == request.def.module_name and existing.def.type_name == request.def.type_name) {
+                return;
+            }
+        }
+        try self.program.runtime_schema_requests.append(self.allocator, request);
     }
 
     fn lowerProcedureUseRoot(
@@ -3498,6 +3590,7 @@ const BodyContext = struct {
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan)) orelse try self.lowerType(expr.ty),
             .lambda => |lambda| try self.lambdaFunctionType(lambda),
             .closure => |closure| try self.closureFunctionType(closure),
+            .field_access => |field| try self.fieldAccessMonoType(field.receiver, field.field_name),
             else => try self.lowerType(expr.ty),
         };
     }
@@ -3568,15 +3661,18 @@ const BodyContext = struct {
             .method_eq,
             => Common.invariant("dispatch expression reached ordinary expression lowering after call-site lowering"),
             .structural_eq => Common.invariant("structural equality reached ordinary expression lowering after explicit equality lowering"),
-            .field_access => |field| .{ .field_access = .{
-                .receiver = try self.lowerExpr(field.receiver),
-                .field = try self.builder.recordFieldName(self.view, field.field_name),
-            } },
+            .field_access => |field| field_access: {
+                const receiver_ty = try self.lowerExprType(field.receiver);
+                break :field_access .{ .field_access = .{
+                    .receiver = try self.lowerExprAtType(field.receiver, receiver_ty),
+                    .field = try self.builder.recordFieldName(self.view, field.field_name),
+                } };
+            },
             .tuple_access => |access| .{ .tuple_access = .{
                 .tuple = try self.lowerExpr(access.tuple),
                 .elem_index = access.elem_index,
             } },
-            .match_ => |match| return try self.lowerMatchExpr(match, ty),
+            .match_ => |match| return try self.lowerMatchExpr(expr_id, match, ty),
             .if_ => |if_| return try self.lowerIfExpr(expr_id, if_, ty),
             .block => |block| try self.lowerBlock(block, ty),
             .binop,
@@ -4243,11 +4339,24 @@ const BodyContext = struct {
             .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan),
             .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan),
             .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan),
+            .field_access => |field| try self.fieldAccessMonoType(field.receiver, field.field_name),
             else => if (try self.checkedTypeHasConcreteShape(expr.ty))
                 try self.lowerType(expr.ty)
             else
                 null,
         };
+    }
+
+    fn fieldAccessMonoType(
+        self: *BodyContext,
+        receiver: checked.CheckedExprId,
+        field_name: names.RecordFieldNameId,
+    ) Allocator.Error!Type.TypeId {
+        const receiver_ty = try self.lowerExprType(receiver);
+        return self.builder.recordFieldType(
+            receiver_ty,
+            try self.builder.recordFieldName(self.view, field_name),
+        );
     }
 
     fn callResultMonoType(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!?Type.TypeId {
@@ -5242,11 +5351,88 @@ const BodyContext = struct {
         return try self.builder.lowLevelExpr(.num_is_eq, &.{ lhs, rhs }, bool_ty);
     }
 
-    fn lowerMatchExpr(self: *BodyContext, match: anytype, result_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+    const MatchOutput = union(enum) {
+        value: Type.TypeId,
+        state_result: struct {
+            result_ty: Type.TypeId,
+            state_ty: Type.TypeId,
+            merge_binders: []const MergeBinder,
+        },
+        state_only: struct {
+            state_ty: Type.TypeId,
+            merge_binders: []const MergeBinder,
+        },
+    };
+
+    fn matchOutputType(_: *BodyContext, output: MatchOutput) Type.TypeId {
+        return switch (output) {
+            .value => |ty| ty,
+            .state_result => |state| state.state_ty,
+            .state_only => |state| state.state_ty,
+        };
+    }
+
+    fn lowerMatchBranchBody(
+        self: *BodyContext,
+        body: checked.CheckedExprId,
+        output: MatchOutput,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (output) {
+            .value => |result_ty| try self.lowerExprAtType(body, result_ty),
+            .state_result => |state| try self.lowerBodyThenStateResult(
+                body,
+                state.result_ty,
+                state.state_ty,
+                state.merge_binders,
+            ),
+            .state_only => |state| try self.lowerBodyThenStateOnly(
+                body,
+                state.state_ty,
+                state.merge_binders,
+            ),
+        };
+    }
+
+    fn lowerMatchExpr(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype, result_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const merge_binders = try self.stateMergeBinders(expr_id);
+        defer self.allocator.free(merge_binders);
+        if (merge_binders.len == 0) {
+            return try self.lowerMatchExprWithOutput(match, .{ .value = result_ty });
+        }
+
+        const state_ty = try self.stateResultType(merge_binders, result_ty);
+        const state_expr = try self.lowerMatchExprWithOutput(match, .{ .state_result = .{
+            .result_ty = result_ty,
+            .state_ty = state_ty,
+            .merge_binders = merge_binders,
+        } });
+
+        const pattern_items = try self.allocator.alloc(Ast.PatId, merge_binders.len + 1);
+        defer self.allocator.free(pattern_items);
+        for (merge_binders, 0..) |merge, i| {
+            const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try self.binders.put(merge.binder, local);
+            pattern_items[i] = try self.builder.program.addPat(.{ .ty = merge.ty, .data = .{ .bind = local } });
+        }
+
+        const result_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), result_ty);
+        pattern_items[merge_binders.len] = try self.builder.program.addPat(.{ .ty = result_ty, .data = .{ .bind = result_local } });
+        const bind_pat = try self.builder.program.addPat(.{ .ty = state_ty, .data = .{ .tuple = try self.builder.program.addPatSpan(pattern_items) } });
+        const rest = try self.builder.localExpr(result_local, result_ty);
+
+        return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .let_ = .{
+            .bind = bind_pat,
+            .value = state_expr,
+            .rest = rest,
+        } } });
+    }
+
+    fn lowerMatchExprWithOutput(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprId {
+        const output_ty = self.matchOutputType(output);
         if (!self.matchContainsListPattern(match)) {
             return try self.builder.program.addExpr(.{
-                .ty = result_ty,
-                .data = try self.lowerMatch(match, result_ty),
+                .ty = output_ty,
+                .data = try self.lowerMatch(match, output),
             });
         }
 
@@ -5254,8 +5440,8 @@ const BodyContext = struct {
         const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
         const scrutinee_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), scrutinee_ty);
         const scrutinee_expr = try self.builder.localExpr(scrutinee_local, scrutinee_ty);
-        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, result_ty);
-        return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .let_ = .{
+        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output);
+        return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .let_ = .{
             .bind = try self.builder.bindPat(scrutinee_local, scrutinee_ty),
             .value = scrutinee,
             .rest = rest,
@@ -5319,10 +5505,11 @@ const BodyContext = struct {
         scrutinee: Ast.ExprId,
         scrutinee_ty: Type.TypeId,
         branches: []const checked.CheckedMatchBranch,
-        result_ty: Type.TypeId,
+        output: MatchOutput,
     ) Allocator.Error!Ast.ExprId {
+        const output_ty = self.matchOutputType(output);
         const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
-        var fallback = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .crash = msg } });
+        var fallback = try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
 
         var branch_index = branches.len;
         while (branch_index > 0) {
@@ -5338,7 +5525,7 @@ const BodyContext = struct {
                     branch.guard,
                     branch.value,
                     fallback,
-                    result_ty,
+                    output,
                 );
             }
         }
@@ -5354,8 +5541,9 @@ const BodyContext = struct {
         guard: ?checked.CheckedExprId,
         body: checked.CheckedExprId,
         fallback: Ast.ExprId,
-        result_ty: Type.TypeId,
+        output: MatchOutput,
     ) Allocator.Error!Ast.ExprId {
+        const output_ty = self.matchOutputType(output);
         const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern.pattern)];
         switch (checked_pattern.data) {
             .list => |list| {
@@ -5366,14 +5554,24 @@ const BodyContext = struct {
                 try branch_ctx.saveMatchPatternBinders(pattern, &saved);
                 defer branch_ctx.restoreBinders(saved.items);
 
-                const success = try branch_ctx.lowerListPatternSuccess(scrutinee, scrutinee_ty, list, pattern.binder_remaps, guard, body, fallback, result_ty);
+                const success = try branch_ctx.lowerListPatternSuccess(scrutinee, scrutinee_ty, list, pattern.binder_remaps, guard, body, fallback, output);
                 const cond = try self.listPatternCondition(scrutinee, list);
-                return try self.builder.ifExpr(cond, success, fallback, result_ty);
+                return try self.builder.ifExpr(cond, success, fallback, output_ty);
             },
             .underscore => {
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 defer branch_ctx.deinit();
-                return try branch_ctx.lowerExprAtType(body, result_ty);
+                var saved = std.ArrayList(BinderRestore).empty;
+                defer saved.deinit(self.allocator);
+                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
+                defer branch_ctx.restoreBinders(saved.items);
+                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
+                const branch_body = try branch_ctx.lowerMatchBranchBody(body, output);
+                if (guard) |guard_expr| {
+                    const guard_cond = try branch_ctx.lowerExpr(guard_expr);
+                    return try branch_ctx.builder.ifExpr(guard_cond, branch_body, fallback, output_ty);
+                }
+                return branch_body;
             },
             else => {
                 var branch_ctx = try self.childContext(self.current_fn_key);
@@ -5385,13 +5583,13 @@ const BodyContext = struct {
 
                 const pat = try branch_ctx.lowerPatternAtType(pattern.pattern, scrutinee_ty);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const branch_body = try branch_ctx.lowerExprAtType(body, result_ty);
+                const branch_body = try branch_ctx.lowerMatchBranchBody(body, output);
                 const wildcard = try self.builder.program.addPat(.{ .ty = scrutinee_ty, .data = .wildcard });
                 const match_branches = [_]Ast.Branch{
                     .{ .pat = pat, .guard = if (guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null, .body = branch_body },
                     .{ .pat = wildcard, .body = fallback },
                 };
-                return try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .match_ = .{
+                return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .match_ = .{
                     .scrutinee = scrutinee,
                     .branches = try self.builder.program.addBranchSpan(&match_branches),
                 } } });
@@ -5421,8 +5619,9 @@ const BodyContext = struct {
         guard: ?checked.CheckedExprId,
         body: checked.CheckedExprId,
         fallback: Ast.ExprId,
-        result_ty: Type.TypeId,
+        output: MatchOutput,
     ) Allocator.Error!Ast.ExprId {
+        const output_ty = self.matchOutputType(output);
         const elem_ty = self.constListElemType(scrutinee_ty);
         const values = try self.allocator.alloc(Ast.ExprId, list.patterns.len);
         defer self.allocator.free(values);
@@ -5454,15 +5653,15 @@ const BodyContext = struct {
 
         try self.applyAlternativeBinderRemaps(remaps);
         var success = if (guard) |guard_expr| guard_blk: {
-            const guarded = try self.lowerExprAtType(body, result_ty);
+            const guarded = try self.lowerMatchBranchBody(body, output);
             const guard_cond = try self.lowerExpr(guard_expr);
-            break :guard_blk try self.builder.ifExpr(guard_cond, guarded, fallback, result_ty);
-        } else try self.lowerExprAtType(body, result_ty);
+            break :guard_blk try self.builder.ifExpr(guard_cond, guarded, fallback, output_ty);
+        } else try self.lowerMatchBranchBody(body, output);
 
         var index = patterns.len;
         while (index > 0) {
             index -= 1;
-            success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], success, fallback, result_ty);
+            success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], success, fallback, output_ty);
         }
         if (rest_pat) |pat| {
             success = try self.wrapPatternMatch(
@@ -5471,7 +5670,7 @@ const BodyContext = struct {
                 pat,
                 success,
                 fallback,
-                result_ty,
+                output_ty,
             );
         }
 
@@ -5536,7 +5735,7 @@ const BodyContext = struct {
         return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .record = try self.builder.program.addFieldExprSpan(&exprs) } });
     }
 
-    fn lowerMatch(self: *BodyContext, match: anytype, result_ty: Type.TypeId) Allocator.Error!Ast.ExprData {
+    fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprData {
         const scrutinee = try self.lowerExpr(match.cond);
         const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
         const branches = try self.allocator.alloc(Ast.Branch, branchCount(match.branches));
@@ -5544,15 +5743,17 @@ const BodyContext = struct {
         var index: usize = 0;
         for (match.branches) |branch| {
             for (branch.patterns) |pattern| {
+                var branch_ctx = try self.childContext(self.current_fn_key);
+                defer branch_ctx.deinit();
                 var saved = std.ArrayList(BinderRestore).empty;
                 defer saved.deinit(self.allocator);
-                try self.saveMatchPatternBinders(pattern, &saved);
-                defer self.restoreBinders(saved.items);
+                try branch_ctx.saveMatchPatternBinders(pattern, &saved);
+                defer branch_ctx.restoreBinders(saved.items);
 
-                const pat = try self.lowerPatternAtType(pattern.pattern, scrutinee_ty);
-                try self.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const guard = if (branch.guard) |guard_expr| try self.lowerExpr(guard_expr) else null;
-                const body = try self.lowerExprAtType(branch.value, result_ty);
+                const pat = try branch_ctx.lowerPatternAtType(pattern.pattern, scrutinee_ty);
+                try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
+                const guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const body = try branch_ctx.lowerMatchBranchBody(branch.value, output);
                 branches[index] = .{
                     .pat = pat,
                     .guard = guard,
@@ -5829,12 +6030,12 @@ const BodyContext = struct {
                     try self.lowerExprAtType(block.final_expr, result_ty);
                 return try self.builder.program.addExpr(.{ .ty = state_ty, .data = .{ .block = .{
                     .statements = try self.builder.program.addStmtSpan(statements.items[0..statements.len]),
-                    .final_expr = try self.stateResultTupleExpr(state_ty, merge_binders, value),
+                    .final_expr = try self.stateResultAfterValue(state_ty, merge_binders, result_ty, value),
                 } } });
             },
             else => {
                 const value = try self.lowerExprAtType(body, result_ty);
-                return try self.stateResultTupleExpr(state_ty, merge_binders, value);
+                return try self.stateResultAfterValue(state_ty, merge_binders, result_ty, value);
             },
         }
     }
@@ -5889,6 +6090,22 @@ const BodyContext = struct {
         }
         items[merge_binders.len] = result;
         return try self.builder.program.addExpr(.{ .ty = state_ty, .data = .{ .tuple = try self.builder.program.addExprSpan(items) } });
+    }
+
+    fn stateResultAfterValue(
+        self: *BodyContext,
+        state_ty: Type.TypeId,
+        merge_binders: []const MergeBinder,
+        result_ty: Type.TypeId,
+        value: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), result_ty);
+        const local_expr = try self.builder.localExpr(local, result_ty);
+        return try self.builder.program.addExpr(.{ .ty = state_ty, .data = .{ .let_ = .{
+            .bind = try self.builder.bindPat(local, result_ty),
+            .value = value,
+            .rest = try self.stateResultTupleExpr(state_ty, merge_binders, local_expr),
+        } } });
     }
 
     fn stateOnlyTupleExpr(
@@ -6953,6 +7170,10 @@ const BodyContext = struct {
                 .ty = state_ty,
                 .data = try self.lowerIfStateOnly(if_, state_ty, merge_binders),
             }),
+            .match_ => |match| try self.lowerMatchExprWithOutput(match, .{ .state_only = .{
+                .state_ty = state_ty,
+                .merge_binders = merge_binders,
+            } }),
             else => try self.lowerBodyThenStateOnly(expr_id, state_ty, merge_binders),
         };
         return .{ .let_ = .{

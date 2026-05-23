@@ -145,6 +145,14 @@ const Lowerer = struct {
                 .ty = try self.lowerType(request.ty),
             });
         }
+
+        try self.program.runtime_schema_requests.ensureTotalCapacity(self.allocator, self.solved.runtime_schema_requests.items.len);
+        for (self.solved.runtime_schema_requests.items) |request| {
+            try self.program.runtime_schema_requests.append(self.allocator, .{
+                .def = request.def,
+                .ty = try self.lowerType(request.ty),
+            });
+        }
     }
 
     fn reserveFns(self: *Lowerer) Allocator.Error!void {

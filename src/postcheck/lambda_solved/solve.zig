@@ -136,6 +136,16 @@ const Solver = struct {
             });
         }
 
+        try self.program.runtime_schema_requests.ensureTotalCapacity(self.allocator, self.program.lifted.runtime_schema_requests.items.len);
+        for (self.program.lifted.runtime_schema_requests.items) |request| {
+            const ty = try self.lowerTypeFresh(request.ty);
+            try self.markErasedCallablesReachedByType(ty);
+            try self.program.runtime_schema_requests.append(self.allocator, .{
+                .def = request.def,
+                .ty = ty,
+            });
+        }
+
         try self.closeUnfilledCallableSlots();
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
@@ -157,6 +167,9 @@ const Solver = struct {
         }
 
         for (self.program.layout_requests.items) |*request| {
+            request.ty = self.program.types.root(request.ty);
+        }
+        for (self.program.runtime_schema_requests.items) |*request| {
             request.ty = self.program.types.root(request.ty);
         }
     }

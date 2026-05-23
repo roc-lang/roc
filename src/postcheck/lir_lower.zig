@@ -531,24 +531,55 @@ const Lowerer = struct {
     }
 
     fn publishRuntimeSchemas(self: *Lowerer) Common.LowerError!void {
-        for (self.program.types.types.items) |content| {
-            switch (content) {
-                .named => |named| {
-                    const backing = named.backing orelse continue;
-                    const type_name = self.program.names.typeNameText(named.def.type_name);
-                    switch (self.program.types.get(backing.ty)) {
-                        .record => |fields| try self.publishRecordSchema(type_name, fields),
-                        .tag_union => |tags| try self.publishTagUnionSchema(type_name, tags),
-                        else => {},
-                    }
-                },
-                else => {},
-            }
+        for (self.program.runtime_schema_requests.items) |request| {
+            try self.publishRuntimeSchema(request);
         }
     }
 
-    fn publishRecordSchema(self: *Lowerer, type_name: []const u8, fields: Type.Span) Common.LowerError!void {
-        const source = self.program.types.fieldSpan(fields);
+    fn publishRuntimeSchema(self: *Lowerer, request: LambdaMono.RuntimeSchemaRequest) Common.LowerError!void {
+        const content = self.program.types.get(request.ty);
+        const named = switch (content) {
+            .named => |named| named,
+            else => Common.invariant("runtime schema request did not reference a named Lambda Mono type"),
+        };
+        if (named.def.module_name != request.def.module_name or named.def.type_name != request.def.type_name) {
+            Common.invariant("runtime schema request named type identity changed before LIR lowering");
+        }
+
+        const backing = named.backing orelse Common.invariant("runtime schema request referenced a named type without runtime backing");
+        if (backing.use != .inspectable) {
+            Common.invariant("runtime schema request referenced a named type whose backing is not inspectable");
+        }
+        _ = try self.layoutOfType(request.ty);
+
+        const type_name = self.program.names.typeNameText(request.def.type_name);
+        switch (self.runtimeSchemaShape(backing.ty)) {
+            .record => try self.publishRecordSchema(type_name, request.ty),
+            .tag_union => try self.publishTagUnionSchema(type_name, request.ty),
+        }
+    }
+
+    const RuntimeSchemaShape = enum {
+        record,
+        tag_union,
+    };
+
+    fn runtimeSchemaShape(self: *Lowerer, ty: Type.TypeId) RuntimeSchemaShape {
+        return switch (self.program.types.get(ty)) {
+            .record => .record,
+            .tag_union => .tag_union,
+            .named => |named| if (named.backing) |backing| blk: {
+                if (backing.use != .inspectable) {
+                    Common.invariant("runtime schema request crossed a non-inspectable named backing");
+                }
+                break :blk self.runtimeSchemaShape(backing.ty);
+            } else Common.invariant("runtime schema request crossed a named type without backing"),
+            else => Common.invariant("runtime schema request backing was not a record or tag union"),
+        };
+    }
+
+    fn publishRecordSchema(self: *Lowerer, type_name: []const u8, ty: Type.TypeId) Common.LowerError!void {
+        const source = self.recordFields(ty);
         const schema_fields = try self.allocator.alloc(RuntimeRecordFieldSchema, source.len);
         errdefer {
             for (schema_fields) |field| self.allocator.free(field.name);
@@ -566,8 +597,8 @@ const Lowerer = struct {
         });
     }
 
-    fn publishTagUnionSchema(self: *Lowerer, type_name: []const u8, tags: Type.Span) Common.LowerError!void {
-        const source = self.program.types.tagSpan(tags);
+    fn publishTagUnionSchema(self: *Lowerer, type_name: []const u8, ty: Type.TypeId) Common.LowerError!void {
+        const source = self.tagUnionTags(ty);
         const schema_tags = try self.allocator.alloc(RuntimeTagSchema, source.len);
         errdefer {
             for (schema_tags) |tag| self.allocator.free(tag.name);
@@ -576,7 +607,7 @@ const Lowerer = struct {
         for (source, 0..) |tag, index| {
             schema_tags[index] = .{
                 .name = try self.allocator.dupe(u8, self.program.names.tagLabelText(tag.name)),
-                .discriminant = @intCast(index),
+                .discriminant = self.tagIndex(ty, tag.name),
             };
         }
         try self.runtime_schemas.tag_unions.append(self.allocator, .{
@@ -1379,11 +1410,11 @@ const Lowerer = struct {
             .nominal => |inner| try self.lowerPatternThen(inner, source, on_match, miss, continuation),
             .tag => |tag| try self.lowerTagPatternThen(pat_data.ty, tag.name, tag.payloads, source, on_match, miss, continuation),
             .callable => |callable| try self.lowerCallablePatternThen(pat_data.ty, callable.variant, callable.payload, source, on_match, miss, continuation),
-            .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .int_lit = value }, on_match, miss, continuation),
-            .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .dec_lit = value }, on_match, miss, continuation),
-            .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f32_lit = value }, on_match, miss, continuation),
-            .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f64_lit = value }, on_match, miss, continuation),
-            .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .str_lit = value }, on_match, miss, continuation),
+            .int_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .int_lit = value }, on_match, miss),
+            .dec_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .dec_lit = value }, on_match, miss),
+            .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f32_lit = value }, on_match, miss),
+            .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f64_lit = value }, on_match, miss),
+            .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .str_lit = value }, on_match, miss),
         };
     }
 
@@ -1402,11 +1433,10 @@ const Lowerer = struct {
         literal: LiteralPattern,
         on_match: LIR.CFStmtId,
         miss: ?PatternMiss,
-        continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const lit_local = try self.addTemp(ty);
         const eq_local = try self.addLocalForLayout(.bool);
-        const switch_stmt = try self.boolSwitch(eq_local, on_match, try self.patternMissJump(miss), continuation);
+        const switch_stmt = try self.boolSwitchNoContinuation(eq_local, on_match, try self.patternMissJump(miss));
         const compare = try self.lowerEqLocalsInto(eq_local, source, lit_local, ty, false, switch_stmt);
         return try self.lowerLiteralInto(lit_local, literal, compare);
     }
@@ -1453,7 +1483,7 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const variant_index = self.tagIndex(ty, name);
         const bind_payloads = try self.matchTagPayloadPatterns(variant_index, payloads, source, on_match, miss, continuation);
-        return try self.discriminantSwitch(source, variant_index, bind_payloads, try self.patternMissJump(miss), continuation);
+        return try self.discriminantSwitch(source, variant_index, bind_payloads, try self.patternMissJump(miss));
     }
 
     fn lowerCallablePatternThen(
@@ -1483,7 +1513,7 @@ const Lowerer = struct {
                     .next = bound,
                 } });
         } else on_match;
-        return try self.discriminantSwitch(source, variant_index, bind_payload, try self.patternMissJump(miss), continuation);
+        return try self.discriminantSwitch(source, variant_index, bind_payload, try self.patternMissJump(miss));
     }
 
     fn lowerRecordPatternThen(
@@ -1808,7 +1838,7 @@ const Lowerer = struct {
         var i = fields.len;
         while (i > 0) {
             i -= 1;
-            current = try self.lowerFieldEqStep(lhs, rhs, fields[i].ty, @intCast(i), current, failed, next);
+            current = try self.lowerFieldEqStep(lhs, rhs, fields[i].ty, @intCast(i), current, failed);
         }
         return current;
     }
@@ -1827,7 +1857,7 @@ const Lowerer = struct {
         var i = fields.len;
         while (i > 0) {
             i -= 1;
-            current = try self.lowerFieldEqStep(lhs, rhs, fields[i].ty, @intCast(i), current, failed, next);
+            current = try self.lowerFieldEqStep(lhs, rhs, fields[i].ty, @intCast(i), current, failed);
         }
         return current;
     }
@@ -1846,7 +1876,7 @@ const Lowerer = struct {
         var i = items.len;
         while (i > 0) {
             i -= 1;
-            current = try self.lowerFieldEqStep(lhs, rhs, items[i], @intCast(i), current, failed, next);
+            current = try self.lowerFieldEqStep(lhs, rhs, items[i], @intCast(i), current, failed);
         }
         return current;
     }
@@ -1859,12 +1889,11 @@ const Lowerer = struct {
         field_index: u16,
         on_equal: LIR.CFStmtId,
         on_not_equal: LIR.CFStmtId,
-        continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const lhs_field = try self.addTemp(field_ty);
         const rhs_field = try self.addTemp(field_ty);
         const eq = try self.addLocalForLayout(.bool);
-        var current = try self.boolSwitch(eq, on_equal, on_not_equal, continuation);
+        var current = try self.boolSwitchNoContinuation(eq, on_equal, on_not_equal);
         current = try self.lowerEqLocalsInto(eq, lhs_field, rhs_field, field_ty, false, current);
         if (!self.isZstLocal(rhs_field)) {
             current = try self.assignRefRead(
@@ -1910,7 +1939,7 @@ const Lowerer = struct {
         for (tags, 0..) |tag, index| {
             branches[index] = .{
                 .value = @intCast(index),
-                .body = try self.lowerTagPayloadEqVariant(lhs, rhs, tag, @intCast(index), success, failed, next),
+                .body = try self.lowerTagPayloadEqVariant(lhs, rhs, tag, @intCast(index), success, failed),
             };
         }
 
@@ -1918,9 +1947,9 @@ const Lowerer = struct {
             .cond = lhs_disc,
             .branches = try self.result.store.addCFSwitchBranches(branches),
             .default_branch = failed,
-            .continuation = next,
+            .continuation = null,
         } });
-        const disc_switch = try self.boolSwitch(same_disc, payload_switch, failed, next);
+        const disc_switch = try self.boolSwitchNoContinuation(same_disc, payload_switch, failed);
         const eq_op: LIR.LowLevel = .num_is_eq;
         const compare_disc = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = same_disc,
@@ -1949,7 +1978,6 @@ const Lowerer = struct {
         variant_index: u16,
         on_equal: LIR.CFStmtId,
         on_not_equal: LIR.CFStmtId,
-        continuation: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         var current = on_equal;
         const payloads = self.program.types.span(tag.payloads);
@@ -1960,7 +1988,7 @@ const Lowerer = struct {
             const lhs_payload = try self.addTemp(payload_ty);
             const rhs_payload = try self.addTemp(payload_ty);
             const eq = try self.addLocalForLayout(.bool);
-            current = try self.boolSwitch(eq, current, on_not_equal, continuation);
+            current = try self.boolSwitchNoContinuation(eq, current, on_not_equal);
             current = try self.lowerEqLocalsInto(eq, lhs_payload, rhs_payload, payload_ty, false, current);
             const payload_idx: ?u16 = if (payloads.len == 1) null else @as(u16, @intCast(i));
             if (!self.isZstLocal(rhs_payload)) {
@@ -2015,16 +2043,6 @@ const Lowerer = struct {
         } });
     }
 
-    fn boolSwitch(self: *Lowerer, cond: LIR.LocalId, true_body: LIR.CFStmtId, false_body: LIR.CFStmtId, continuation: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
-        return try self.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = cond,
-            .branches = try self.result.store.addCFSwitchBranches(&branches),
-            .default_branch = false_body,
-            .continuation = continuation,
-        } });
-    }
-
     fn boolSwitchNoContinuation(self: *Lowerer, cond: LIR.LocalId, true_body: LIR.CFStmtId, false_body: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
         return try self.result.store.addCFStmt(.{ .switch_stmt = .{
@@ -2035,7 +2053,7 @@ const Lowerer = struct {
         } });
     }
 
-    fn discriminantSwitch(self: *Lowerer, source: LIR.LocalId, discriminant: u16, body: LIR.CFStmtId, default: LIR.CFStmtId, continuation: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn discriminantSwitch(self: *Lowerer, source: LIR.LocalId, discriminant: u16, body: LIR.CFStmtId, default: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         if (self.isZstLocal(source)) return body;
         const disc_local = try self.addLocalForLayout(.u16);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = discriminant, .body = body }};
@@ -2043,7 +2061,7 @@ const Lowerer = struct {
             .cond = disc_local,
             .branches = try self.result.store.addCFSwitchBranches(&branches),
             .default_branch = default,
-            .continuation = continuation,
+            .continuation = null,
         } });
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = disc_local,
@@ -2376,15 +2394,18 @@ const Lowerer = struct {
     }
 
     fn tagIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId) u16 {
-        const tags = switch (self.program.types.get(ty)) {
-            .tag_union => |tags| self.program.types.tagSpan(tags),
-            .named => |named| if (named.backing) |backing| return self.tagIndex(backing.ty, name) else Common.invariant("named tag has no backing"),
-            else => Common.invariant("tag operation expected tag-union type"),
-        };
-        for (tags, 0..) |tag, index| {
+        for (self.tagUnionTags(ty), 0..) |tag, index| {
             if (tag.name == name) return @intCast(index);
         }
         Common.invariant("tag operation referenced tag absent from Lambda Mono type");
+    }
+
+    fn tagUnionTags(self: *Lowerer, ty: Type.TypeId) []const Type.Tag {
+        return switch (self.program.types.get(ty)) {
+            .tag_union => |tags| self.program.types.tagSpan(tags),
+            .named => |named| if (named.backing) |backing| return self.tagUnionTags(backing.ty) else Common.invariant("named tag has no backing"),
+            else => Common.invariant("tag operation expected tag-union type"),
+        };
     }
 
     fn callableVariantIndex(self: *Lowerer, ty: Type.TypeId, variant: Type.FnVariantId) u16 {

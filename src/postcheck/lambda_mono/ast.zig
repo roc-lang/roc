@@ -10,6 +10,7 @@ const builtins = @import("builtins");
 
 const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
+const MonoType = @import("../monotype/type.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Type = @import("type.zig");
 const names = check.CheckedNames;
@@ -262,6 +263,12 @@ pub const LayoutRequest = struct {
     ty: Type.TypeId,
 };
 
+/// Runtime schema requested for a named runtime value shape.
+pub const RuntimeSchemaRequest = struct {
+    def: MonoType.TypeDef,
+    ty: Type.TypeId,
+};
+
 /// Complete Lambda Mono program plus side arrays.
 pub const Program = struct {
     allocator: std.mem.Allocator,
@@ -284,6 +291,7 @@ pub const Program = struct {
     string_literals: std.ArrayList([]const u8),
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
+    runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -311,10 +319,12 @@ pub const Program = struct {
             .string_literals = string_literals,
             .roots = .empty,
             .layout_requests = .empty,
+            .runtime_schema_requests = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         for (self.string_literals.items) |literal| self.allocator.free(literal);

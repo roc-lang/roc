@@ -23,12 +23,16 @@ pub fn run(
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
     var string_literals = owned.string_literals;
     owned.string_literals = .empty;
+    var runtime_schema_requests = owned.runtime_schema_requests;
+    owned.runtime_schema_requests = .empty;
     var name_store = owned.names;
     owned.names = @import("check").CheckedNames.NameStore.init(allocator);
     var program = Ast.Program.init(allocator, name_store, types, string_literals, owned.next_symbol);
     name_store = undefined;
     types = undefined;
     string_literals = undefined;
+    program.runtime_schema_requests = runtime_schema_requests;
+    runtime_schema_requests = undefined;
     errdefer program.deinit();
 
     try program.locals.appendSlice(allocator, owned.locals.items);

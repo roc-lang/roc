@@ -30,6 +30,12 @@ pub const LayoutRequest = struct {
     fn_id: ?Lifted.FnId = null,
 };
 
+/// Runtime schema requested for a named runtime value shape.
+pub const RuntimeSchemaRequest = struct {
+    def: @import("../monotype/type.zig").TypeDef,
+    ty: Type.TypeVarId,
+};
+
 /// Lambda Solved program plus the solved type store.
 pub const Program = struct {
     allocator: std.mem.Allocator,
@@ -41,6 +47,7 @@ pub const Program = struct {
     pat_tys: std.ArrayList(Type.TypeVarId),
     fn_tys: std.ArrayList(Type.TypeVarId),
     layout_requests: std.ArrayList(LayoutRequest),
+    runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
 
     pub fn init(allocator: std.mem.Allocator, lifted: Lifted.Program) Program {
         return .{
@@ -53,10 +60,12 @@ pub const Program = struct {
             .pat_tys = .empty,
             .fn_tys = .empty,
             .layout_requests = .empty,
+            .runtime_schema_requests = .empty,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.fn_tys.deinit(self.allocator);
         self.pat_tys.deinit(self.allocator);

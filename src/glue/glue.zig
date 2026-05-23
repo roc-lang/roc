@@ -1992,8 +1992,8 @@ fn extractGlueResult(
     result_base: [*]const u8,
     result_layout: layout.Idx,
 ) GlueResultFiles {
-    const ok_index = writer.tagIndex("Try", "Ok");
-    const err_index = writer.tagIndex("Try", "Err");
+    const ok_index = writer.tagIndex("Builtin.Try", "Ok");
+    const err_index = writer.tagIndex("Builtin.Try", "Err");
     const discriminant = writer.readTagDiscriminant(result_base, result_layout);
 
     if (discriminant == ok_index) {
