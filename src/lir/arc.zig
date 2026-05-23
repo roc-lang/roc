@@ -36,7 +36,14 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
         try inserter.collectJoinBodies(body, &join_bodies, &join_visit);
         inserter.join_bodies = &join_bodies;
         defer inserter.join_bodies = null;
-
+        var rewritten_joins = RewrittenJoinMap.init(store.allocator);
+        defer {
+            var iter = rewritten_joins.valueIterator();
+            while (iter.next()) |entry| entry.keep.deinit();
+            rewritten_joins.deinit();
+        }
+        inserter.rewritten_joins = &rewritten_joins;
+        defer inserter.rewritten_joins = null;
         var owned = try OwnedSet.init(store.allocator, store.locals.items.len);
         defer owned.deinit();
         for (store.getLocalSpan(proc.args)) |param| {
@@ -49,11 +56,17 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
 const RewriteOptions = struct {
     boundaries: []const RewriteBoundary = &.{},
     loop_keep: ?*const OwnedSet = null,
+    join_keeps: []const JoinKeep = &.{},
 };
 
 const RewriteBoundary = struct {
     stop: LIR.CFStmtId,
     replacement: LIR.CFStmtId,
+    keep: *const OwnedSet,
+};
+
+const JoinKeep = struct {
+    target: LIR.JoinPointId,
     keep: *const OwnedSet,
 };
 
@@ -86,6 +99,26 @@ fn appendRewriteBoundary(
     return nested;
 }
 
+fn appendJoinKeep(
+    allocator: std.mem.Allocator,
+    join_keeps: []const JoinKeep,
+    join_keep: JoinKeep,
+) ResourceError![]JoinKeep {
+    const nested = try allocator.alloc(JoinKeep, join_keeps.len + 1);
+    @memcpy(nested[0..join_keeps.len], join_keeps);
+    nested[join_keeps.len] = join_keep;
+    return nested;
+}
+
+fn keepForJoin(join_keeps: []const JoinKeep, target: LIR.JoinPointId) ?*const OwnedSet {
+    var i = join_keeps.len;
+    while (i > 0) {
+        i -= 1;
+        if (join_keeps[i].target == target) return join_keeps[i].keep;
+    }
+    return null;
+}
+
 const LinearRewriteFrame = struct {
     stmt: LIR.CFStmtId,
     head: LIR.CFStmtId,
@@ -98,6 +131,7 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     local_contains_refcounted: []const bool = &.{},
     join_bodies: ?*const JoinBodyMap = null,
+    rewritten_joins: ?*RewrittenJoinMap = null,
 
     const CallArgOwnership = struct {
         retain_mask: u64 = 0,
@@ -127,6 +161,7 @@ const Inserter = struct {
         body: LIR.CFStmtId = undefined,
         remainder: LIR.CFStmtId = undefined,
         loop_keep: OwnedSet,
+        join_keeps: []JoinKeep = &.{},
         frames: std.ArrayList(LinearRewriteFrame),
         result: *LIR.CFStmtId,
     };
@@ -429,8 +464,11 @@ const Inserter = struct {
                     self.destroyRewritePath(path);
                     return;
                 },
-                .jump => {
-                    const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep, path.cursor) else path.cursor;
+                .jump => |jump_stmt| {
+                    const keep = keepForJoin(path.options.join_keeps, jump_stmt.target) orelse
+                        arcInvariant("ARC jump reached a join without an active ownership target");
+                    const jump = try self.store.addCFStmt(.{ .jump = .{ .target = jump_stmt.target } });
+                    const tail = try self.releaseDifference(&path.owned, keep, jump);
                     path.result.* = try self.finishLinearRewrite(&path.frames, tail);
                     self.destroyRewritePath(path);
                     return;
@@ -472,53 +510,54 @@ const Inserter = struct {
     ) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(frame.stmt);
         var next = tail_start;
+        var cloned: LIR.CFStmtId = undefined;
         switch (stmt) {
             .assign_ref => |assign| {
                 if (frame.retain_assign_ref_target) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_ref = .{
+                cloned = try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
                     .next = next,
-                } };
+                } });
             },
             .assign_literal => |assign| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_literal = .{
+                cloned = try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = assign.target,
                     .value = assign.value,
                     .next = next,
-                } };
+                } });
             },
             .assign_call => |assign| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_call = .{
+                cloned = try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
                     .proc = assign.proc,
                     .args = assign.args,
                     .next = next,
-                } };
+                } });
             },
             .assign_call_erased => |assign| {
                 next = try self.releaseLocalIfRc(assign.closure, next);
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_call_erased = .{
+                cloned = try self.store.addCFStmt(.{ .assign_call_erased = .{
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
                     .next = next,
-                } };
+                } });
             },
             .assign_packed_erased_fn => |assign| {
                 if (assign.capture) |capture| {
                     next = try self.retainLocalIfRc(capture, next);
                 }
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_packed_erased_fn = .{
+                cloned = try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                     .target = assign.target,
                     .proc = assign.proc,
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
                     .next = next,
-                } };
+                } });
             },
             .assign_low_level => |assign| {
                 if (assign.rc_effect.retain_args != 0) {
@@ -527,83 +566,83 @@ const Inserter = struct {
                 if (assign.rc_effect.retain_result) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_low_level = .{
+                cloned = try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = assign.target,
                     .op = assign.op,
                     .rc_effect = assign.rc_effect,
                     .args = assign.args,
                     .next = next,
-                } };
+                } });
             },
             .assign_list => |assign| {
                 next = try self.retainSpan(assign.elems, next);
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_list = .{
+                cloned = try self.store.addCFStmt(.{ .assign_list = .{
                     .target = assign.target,
                     .elems = assign.elems,
                     .next = next,
-                } };
+                } });
             },
             .assign_struct => |assign| {
                 next = try self.retainSpan(assign.fields, next);
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_struct = .{
+                cloned = try self.store.addCFStmt(.{ .assign_struct = .{
                     .target = assign.target,
                     .fields = assign.fields,
                     .next = next,
-                } };
+                } });
             },
             .assign_tag => |assign| {
                 if (assign.payload) |payload| {
                     next = try self.retainLocalIfRc(payload, next);
                 }
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .assign_tag = .{
+                cloned = try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = assign.target,
                     .variant_index = assign.variant_index,
                     .discriminant = assign.discriminant,
                     .payload = assign.payload,
                     .next = next,
-                } };
+                } });
             },
             .set_local => |assign| {
                 if (assign.target != assign.value and frame.retain_set_target) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .set_local = .{
+                cloned = try self.store.addCFStmt(.{ .set_local = .{
                     .target = assign.target,
                     .value = assign.value,
                     .mode = assign.mode,
                     .next = next,
-                } };
+                } });
             },
             .debug => |debug_stmt| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .debug = .{
+                cloned = try self.store.addCFStmt(.{ .debug = .{
                     .message = debug_stmt.message,
                     .next = next,
-                } };
+                } });
             },
             .expect => |expect_stmt| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .expect = .{
+                cloned = try self.store.addCFStmt(.{ .expect = .{
                     .condition = expect_stmt.condition,
                     .next = next,
-                } };
+                } });
             },
             .incref => |rc| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .incref = .{
+                cloned = try self.store.addCFStmt(.{ .incref = .{
                     .value = rc.value,
                     .count = rc.count,
                     .next = next,
-                } };
+                } });
             },
             .decref => |rc| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .decref = .{
+                cloned = try self.store.addCFStmt(.{ .decref = .{
                     .value = rc.value,
                     .next = next,
-                } };
+                } });
             },
             .free => |rc| {
-                self.store.getCFStmtPtr(frame.stmt).* = .{ .free = .{
+                cloned = try self.store.addCFStmt(.{ .free = .{
                     .value = rc.value,
                     .next = next,
-                } };
+                } });
             },
             .runtime_error,
             .switch_stmt,
@@ -615,7 +654,42 @@ const Inserter = struct {
             .crash,
             => arcInvariant("ARC linear rewrite attempted to patch a non-linear statement"),
         }
-        return frame.head;
+        return self.attachPrefix(frame.head, frame.stmt, cloned);
+    }
+
+    fn attachPrefix(self: *Inserter, head: LIR.CFStmtId, old_tail: LIR.CFStmtId, new_tail: LIR.CFStmtId) LIR.CFStmtId {
+        if (head == old_tail) return new_tail;
+
+        var cursor = head;
+        while (cursor != old_tail) {
+            const stmt = self.store.getCFStmtPtr(cursor);
+            switch (stmt.*) {
+                .incref => |*rc| {
+                    if (rc.next == old_tail) {
+                        rc.next = new_tail;
+                        return head;
+                    }
+                    cursor = rc.next;
+                },
+                .decref => |*rc| {
+                    if (rc.next == old_tail) {
+                        rc.next = new_tail;
+                        return head;
+                    }
+                    cursor = rc.next;
+                },
+                .free => |*rc| {
+                    if (rc.next == old_tail) {
+                        rc.next = new_tail;
+                        return head;
+                    }
+                    cursor = rc.next;
+                },
+                else => arcInvariant("ARC linear rewrite prefix contained a non-RC statement"),
+            }
+        }
+
+        arcInvariant("ARC linear rewrite prefix did not reach the cloned statement");
     }
 
     fn scheduleRewriteJoin(
@@ -625,6 +699,14 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         join_stmt: anytype,
     ) ResourceError!void {
+        if (self.rewritten_joins) |rewritten_joins| {
+            if (rewritten_joins.get(start)) |rewritten| {
+                const tail = try self.releaseDifference(&path.owned, &rewritten.keep, rewritten.stmt);
+                path.result.* = try self.finishLinearRewrite(&path.frames, tail);
+                return;
+            }
+        }
+
         const state = try self.store.allocator.create(RewriteJoinTask);
         var queued = false;
         errdefer if (!queued) self.store.allocator.destroy(state);
@@ -638,28 +720,42 @@ const Inserter = struct {
         };
         errdefer if (!queued) state.loop_keep.deinit();
         errdefer if (!queued) state.frames.deinit(self.store.allocator);
+        state.join_keeps = try appendJoinKeep(self.store.allocator, path.options.join_keeps, .{
+            .target = join_stmt.id,
+            .keep = &state.loop_keep,
+        });
+        errdefer if (!queued) self.store.allocator.free(state.join_keeps);
 
         try tasks.append(self.store.allocator, .{ .join = state });
         queued = true;
+        const join_options = RewriteOptions{
+            .boundaries = path.options.boundaries,
+            .loop_keep = &state.loop_keep,
+            .join_keeps = state.join_keeps,
+        };
         try self.pushRewritePath(tasks, join_stmt.remainder, &path.owned, .{
-            .boundaries = path.options.boundaries,
-            .loop_keep = &state.loop_keep,
+            .boundaries = join_options.boundaries,
+            .loop_keep = join_options.loop_keep,
+            .join_keeps = join_options.join_keeps,
         }, &state.remainder);
-        try self.pushRewritePath(tasks, join_stmt.body, &state.loop_keep, .{
-            .boundaries = path.options.boundaries,
-            .loop_keep = &state.loop_keep,
-        }, &state.body);
+        try self.pushRewritePath(tasks, join_stmt.body, &state.loop_keep, join_options, &state.body);
     }
 
     fn finishRewriteJoin(self: *Inserter, state: *RewriteJoinTask) ResourceError!void {
         errdefer self.destroyRewriteJoin(state);
-        self.store.getCFStmtPtr(state.start).* = .{ .join = .{
+        const join = try self.store.addCFStmt(.{ .join = .{
             .id = state.id,
             .params = state.params,
             .body = state.body,
             .remainder = state.remainder,
-        } };
-        state.result.* = try self.finishLinearRewrite(&state.frames, state.start);
+        } });
+        if (self.rewritten_joins) |rewritten_joins| {
+            try rewritten_joins.put(state.start, .{
+                .keep = try state.loop_keep.clone(),
+                .stmt = join,
+            });
+        }
+        state.result.* = try self.finishLinearRewrite(&state.frames, join);
         self.destroyRewriteJoin(state);
     }
 
@@ -734,18 +830,23 @@ const Inserter = struct {
 
     fn finishRewriteSwitchNoContinuation(self: *Inserter, state: *RewriteSwitchNoContinuationTask) ResourceError!void {
         errdefer self.destroyRewriteSwitchNoContinuation(state);
-        const branches = self.store.getCFSwitchBranchesMut(state.branches);
+        const branches = self.store.getCFSwitchBranches(state.branches);
         if (branches.len != state.branch_results.len) arcInvariant("ARC switch branch result count changed during rewrite");
-        for (branches, state.branch_results) |*branch, rewritten| {
-            branch.body = rewritten;
+        const rewritten_branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, branches.len);
+        defer self.store.allocator.free(rewritten_branches);
+        for (branches, state.branch_results, 0..) |branch, rewritten, i| {
+            rewritten_branches[i] = .{
+                .value = branch.value,
+                .body = rewritten,
+            };
         }
-        self.store.getCFStmtPtr(state.start).* = .{ .switch_stmt = .{
+        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
             .cond = state.cond,
-            .branches = state.branches,
+            .branches = try self.store.addCFSwitchBranches(rewritten_branches),
             .default_branch = state.default_branch,
             .continuation = state.continuation,
-        } };
-        state.result.* = try self.finishLinearRewrite(&state.frames, state.start);
+        } });
+        state.result.* = try self.finishLinearRewrite(&state.frames, switch_stmt);
         self.destroyRewriteSwitchNoContinuation(state);
     }
 
@@ -802,6 +903,7 @@ const Inserter = struct {
         const nested_options = RewriteOptions{
             .boundaries = state.nested_boundaries,
             .loop_keep = state.parent_options.loop_keep,
+            .join_keeps = state.parent_options.join_keeps,
         };
 
         try tasks.append(self.store.allocator, .{ .switch_finish_continuation = state });
@@ -817,18 +919,23 @@ const Inserter = struct {
 
     fn finishRewriteSwitchContinuation(self: *Inserter, state: *RewriteSwitchContinuationTask) ResourceError!void {
         errdefer self.destroyRewriteSwitchContinuation(state);
-        const branches = self.store.getCFSwitchBranchesMut(state.branches);
+        const branches = self.store.getCFSwitchBranches(state.branches);
         if (branches.len != state.branch_results.len) arcInvariant("ARC switch branch result count changed during rewrite");
-        for (branches, state.branch_results) |*branch, rewritten| {
-            branch.body = rewritten;
+        const rewritten_branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, branches.len);
+        defer self.store.allocator.free(rewritten_branches);
+        for (branches, state.branch_results, 0..) |branch, rewritten, i| {
+            rewritten_branches[i] = .{
+                .value = branch.value,
+                .body = rewritten,
+            };
         }
-        self.store.getCFStmtPtr(state.start).* = .{ .switch_stmt = .{
+        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
             .cond = state.cond,
-            .branches = state.branches,
+            .branches = try self.store.addCFSwitchBranches(rewritten_branches),
             .default_branch = state.default_branch,
             .continuation = state.continuation,
-        } };
-        state.result.* = try self.finishLinearRewrite(&state.frames, state.start);
+        } });
+        state.result.* = try self.finishLinearRewrite(&state.frames, switch_stmt);
         self.destroyRewriteSwitchContinuation(state);
     }
 
@@ -1058,6 +1165,7 @@ const Inserter = struct {
 
     fn destroyRewriteJoin(self: *Inserter, state: *RewriteJoinTask) void {
         state.frames.deinit(self.store.allocator);
+        if (state.join_keeps.len != 0) self.store.allocator.free(state.join_keeps);
         state.loop_keep.deinit();
         self.store.allocator.destroy(state);
     }
@@ -1462,6 +1570,13 @@ const Inserter = struct {
 };
 
 const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
+
+const RewrittenJoin = struct {
+    keep: OwnedSet,
+    stmt: LIR.CFStmtId,
+};
+
+const RewrittenJoinMap = std.AutoHashMap(LIR.CFStmtId, RewrittenJoin);
 
 const OwnedSet = struct {
     allocator: std.mem.Allocator,
@@ -1918,9 +2033,7 @@ test "RC pass-through: non-refcounted i64 block unchanged" {
     const ret = try f.ret(value);
     const body = try f.assignI64(value, 42, ret);
     _ = try f.addProc(&.{}, body, .i64);
-    const before = f.store.cf_stmts.items.len;
     try f.run();
-    try testing.expectEqual(before, f.store.cf_stmts.items.len);
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
@@ -2080,6 +2193,40 @@ test "RC proc body: returning list param does not tail-decref it" {
     _ = try f.addProc(&.{param}, ret, f.list_str);
     try f.run();
     try f.expectRc(param, 1, 1, 0);
+}
+
+test "RC shared neutral proc body is rewritten separately for each proc" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const ret = try f.ret(value);
+    const shared_body = try f.assignStr(value, "shared-proc-body", ret);
+    const first = try f.addProc(&.{}, shared_body, .str);
+    const second = try f.addProc(&.{}, shared_body, .str);
+
+    try f.run();
+
+    const first_body = f.store.getProcSpec(first).body orelse return error.MissingProcBody;
+    const second_body = f.store.getProcSpec(second).body orelse return error.MissingProcBody;
+    try testing.expect(first_body != shared_body);
+    try testing.expect(second_body != shared_body);
+    try testing.expect(first_body != second_body);
+}
+
+test "RC shared neutral branch tail is rewritten separately for each branch" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const cond = try f.local(.i64);
+    const value = try f.local(.str);
+    const result = try f.local(.str);
+    const ret = try f.ret(result);
+    const shared_tail = try f.assignRefLocal(result, value, ret);
+    const switch_stmt = try f.switchStmt(cond, shared_tail, shared_tail, null);
+    const cond_assign = try f.assignI64(cond, 1, switch_stmt);
+    const body = try f.assignStr(value, "shared-branch-tail", cond_assign);
+    _ = try f.addProc(&.{}, body, .str);
+
+    try f.run();
 }
 
 test "RC proc_call caller: consumed refcounted arg is not tail-decref'd by caller" {

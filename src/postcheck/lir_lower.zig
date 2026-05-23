@@ -902,13 +902,6 @@ const Lowerer = struct {
         const target_content = self.result.layouts.getLayout(target_layout);
         const source_content = self.result.layouts.getLayout(source_layout);
         if (target_content.eql(source_content)) return try self.assignLocal(target, source, next);
-        if (self.isZstLocal(target)) {
-            if (!self.isZstLocal(source)) {
-                Common.invariant("box boundary tried to store non-zero-sized source into zero-sized target");
-            }
-            return try self.assignZst(target, next);
-        }
-
         if (target_content.tag == .box and self.result.layouts.getLayout(target_content.data.box).eql(source_content)) {
             return try self.assignUnaryLowLevel(target, .box_box, source, next);
         }
@@ -920,6 +913,13 @@ const Lowerer = struct {
         }
         if (source_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) {
             return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
+        }
+
+        if (self.isZstLocal(target)) {
+            if (!self.isZstLocal(source)) {
+                Common.invariant("box boundary tried to store non-zero-sized source into zero-sized target");
+            }
+            return try self.assignZst(target, next);
         }
 
         if (@import("builtin").mode == .Debug) {
@@ -1057,6 +1057,13 @@ const Lowerer = struct {
 
     fn lowerLowLevelInto(self: *Lowerer, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: LambdaMono.Span(LambdaMono.ExprId), next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const args = self.program.exprSpan(span);
+        switch (op) {
+            .box_box,
+            .box_unbox,
+            => return try self.lowerBoxBoundaryLowLevelInto(target, op, args, next),
+            else => {},
+        }
+
         const lowered = try self.lowerExprsToTemps(args);
         defer self.allocator.free(lowered.ids);
         var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
@@ -1068,6 +1075,19 @@ const Lowerer = struct {
         } });
         current = try self.prependExprs(lowered, current);
         return current;
+    }
+
+    fn lowerBoxBoundaryLowLevelInto(self: *Lowerer, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, args: []const LambdaMono.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        if (args.len != 1) Common.invariant("Box low-level operation reached LIR lowering with the wrong arity");
+        const source = try self.addTemp(self.expr(args[0]).ty);
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        const assign = switch (op) {
+            .box_box,
+            .box_unbox,
+            => try self.assignBoxBoundary(target, source, source_layout, next),
+            else => unreachable,
+        };
+        return try self.lowerExprInto(source, args[0], assign);
     }
 
     fn lowerFieldAccessInto(self: *Lowerer, target: LIR.LocalId, receiver: LambdaMono.ExprId, field_name: Type.names.RecordFieldNameId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -1135,22 +1155,35 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const scrutinee_local = try self.addTemp(self.expr(scrutinee).ty);
         const branches = self.program.branchSpan(branches_span);
-        const branch_chain = try self.lowerBranchChain(scrutinee_local, branches, target, next);
-        return try self.lowerExprInto(scrutinee_local, scrutinee, branch_chain);
+        const done = self.freshJoinPointId();
+        const branch_chain = try self.lowerBranchChain(scrutinee_local, branches, target, done);
+        const remainder = try self.lowerExprInto(scrutinee_local, scrutinee, branch_chain);
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = done,
+            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
+            .body = next,
+            .remainder = remainder,
+        } });
     }
 
     fn lowerIfInto(self: *Lowerer, target: LIR.LocalId, branches_span: LambdaMono.Span(LambdaMono.IfBranch), final_else: LambdaMono.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const branches = self.program.ifBranchSpan(branches_span);
-        var current = try self.lowerExprInto(target, final_else, next);
+        const done = self.freshJoinPointId();
+        var current = try self.lowerExprInto(target, final_else, try self.joinJump(done));
         var i = branches.len;
         while (i > 0) {
             i -= 1;
-            const body = try self.lowerExprInto(target, branches[i].body, next);
+            const body = try self.lowerExprInto(target, branches[i].body, try self.joinJump(done));
             const cond_local = try self.addTemp(self.expr(branches[i].cond).ty);
-            const switch_stmt = try self.boolSwitch(cond_local, body, current, next);
+            const switch_stmt = try self.boolSwitchNoContinuation(cond_local, body, current);
             current = try self.lowerExprInto(cond_local, branches[i].cond, switch_stmt);
         }
-        return current;
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = done,
+            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
+            .body = next,
+            .remainder = current,
+        } });
     }
 
     fn lowerBlockInto(self: *Lowerer, target: LIR.LocalId, stmts_span: LambdaMono.Span(LambdaMono.StmtId), final_expr: LambdaMono.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -1270,7 +1303,7 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
     };
 
-    fn lowerBranchChain(self: *Lowerer, scrutinee: LIR.LocalId, branches: []const LambdaMono.Branch, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn lowerBranchChain(self: *Lowerer, scrutinee: LIR.LocalId, branches: []const LambdaMono.Branch, target: LIR.LocalId, done: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
         var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = branches.len;
         while (i > 0) {
@@ -1281,13 +1314,14 @@ const Lowerer = struct {
                 PatternMiss{ .join_id = self.freshJoinPointId() }
             else
                 null;
-            const branch_body = try self.lowerExprInto(target, branches[i].body, next);
+            const branch_done = try self.joinJump(done);
+            const branch_body = try self.lowerExprInto(target, branches[i].body, branch_done);
             const guarded = if (branches[i].guard) |guard| blk: {
                 const guard_local = try self.addTemp(self.expr(guard).ty);
-                const guard_switch = try self.boolSwitch(guard_local, branch_body, try self.patternMissJump(miss), next);
+                const guard_switch = try self.boolSwitchNoContinuation(guard_local, branch_body, try self.patternMissJump(miss));
                 break :blk try self.lowerExprInto(guard_local, guard, guard_switch);
             } else branch_body;
-            const branch_start = try self.lowerPatternThen(branches[i].pat, scrutinee, guarded, miss, next);
+            const branch_start = try self.lowerPatternThen(branches[i].pat, scrutinee, guarded, miss, branch_done);
             current = if (miss) |miss_info|
                 try self.result.store.addCFStmt(.{ .join = .{
                     .id = miss_info.join_id,
@@ -1299,6 +1333,10 @@ const Lowerer = struct {
                 branch_start;
         }
         return current;
+    }
+
+    fn joinJump(self: *Lowerer, join_id: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
     }
 
     fn patternMissJump(self: *Lowerer, miss: ?PatternMiss) Common.LowerError!LIR.CFStmtId {
@@ -1443,7 +1481,7 @@ const Lowerer = struct {
                         .tag_discriminant = variant_index,
                     } },
                     .next = bound,
-                    } });
+                } });
         } else on_match;
         return try self.discriminantSwitch(source, variant_index, bind_payload, try self.patternMissJump(miss), continuation);
     }
@@ -1987,6 +2025,16 @@ const Lowerer = struct {
         } });
     }
 
+    fn boolSwitchNoContinuation(self: *Lowerer, cond: LIR.LocalId, true_body: LIR.CFStmtId, false_body: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        return try self.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try self.result.store.addCFSwitchBranches(&branches),
+            .default_branch = false_body,
+            .continuation = null,
+        } });
+    }
+
     fn discriminantSwitch(self: *Lowerer, source: LIR.LocalId, discriminant: u16, body: LIR.CFStmtId, default: LIR.CFStmtId, continuation: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         if (self.isZstLocal(source)) return body;
         const disc_local = try self.addLocalForLayout(.u16);
@@ -2201,10 +2249,31 @@ const Lowerer = struct {
                 .tag_union => |tags| .{ .tag_union = try self.appendTagPayloadInputs(self.lowerer.program.types.tagSpan(tags)) },
                 .callable => |variants| .{ .tag_union = try self.appendCallablePayloadInputs(self.lowerer.program.types.fnVariantSpan(variants)) },
                 .list => |elem| .{ .list = try self.inputForType(elem) },
-                .box => |elem| .{ .box = try self.inputForType(elem) },
+                .box => |elem| if (self.isErasedCallableValueType(elem))
+                    .erased_callable
+                else
+                    .{ .box = try self.inputForType(elem) },
                 .erased_fn => .erased_callable,
                 .erased_capture_ptr => unreachable,
             };
+        }
+
+        fn isErasedCallableValueType(self: *LayoutGraphBuilder, ty: Type.TypeId) bool {
+            var current = ty;
+            var depth: u8 = 0;
+            while (true) {
+                if (depth == 32) Common.invariant("transparent alias chain exceeded layout lowering limit");
+                depth += 1;
+                switch (self.lowerer.program.types.get(current)) {
+                    .erased_fn => return true,
+                    .named => |named| {
+                        if (named.kind != .alias) return false;
+                        const backing = named.backing orelse Common.invariant("transparent alias reached layout lowering without a backing type");
+                        current = backing.ty;
+                    },
+                    else => return false,
+                }
+            }
         }
 
         fn appendTupleFields(self: *LayoutGraphBuilder, items: []const Type.TypeId) Common.LowerError!layout.GraphFieldSpan {

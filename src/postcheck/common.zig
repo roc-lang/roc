@@ -19,6 +19,12 @@ pub const CheckedModules = struct {
 pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
+    static_data_requests: []const StaticDataRequest = &.{},
+};
+
+/// Checked const data that must publish a runtime layout and callable entries.
+pub const StaticDataRequest = struct {
+    data: checked.ProvidedDataExport,
 };
 
 /// Target settings carried through post-check lowering.

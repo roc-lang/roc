@@ -201,7 +201,11 @@ pub const Root = struct {
 };
 
 /// Runtime layout requested for a checked data value.
-pub const LayoutRequest = Mono.LayoutRequest;
+pub const LayoutRequest = struct {
+    checked_type: check.CheckedModule.CheckedTypeId,
+    ty: Type.TypeId,
+    fn_id: ?FnId = null,
+};
 
 /// Complete Monotype Lifted program plus side arrays.
 pub const Program = struct {

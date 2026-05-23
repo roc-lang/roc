@@ -32,7 +32,6 @@ pub fn run(
     errdefer program.deinit();
 
     try program.locals.appendSlice(allocator, owned.locals.items);
-    try program.layout_requests.appendSlice(allocator, owned.layout_requests.items);
 
     var lifter = Lifter.init(allocator, &owned, &program);
     defer lifter.deinit();
@@ -201,6 +200,20 @@ const Lifter = struct {
             try self.output.roots.append(self.allocator, .{
                 .fn_id = fn_id,
                 .request = root.request,
+            });
+        }
+
+        for (self.input.layout_requests.items) |request| {
+            const fn_id = if (request.def) |def| blk: {
+                const raw = @intFromEnum(def);
+                if (raw >= self.def_map.len) Common.invariant("Monotype static data layout request references a missing definition");
+                break :blk self.def_map[raw] orelse
+                    Common.invariant("Monotype static data layout request definition was not lifted");
+            } else null;
+            try self.output.layout_requests.append(self.allocator, .{
+                .checked_type = request.checked_type,
+                .ty = request.ty,
+                .fn_id = fn_id,
             });
         }
     }
@@ -846,11 +859,26 @@ fn removeBound(input: *const Mono.Program, bound: *BoundSet, locals: []const Mon
     }
 }
 
-fn functionRet(types: *const @import("../monotype/type.zig").Store, ty: @import("../monotype/type.zig").TypeId) @import("../monotype/type.zig").TypeId {
-    return switch (types.get(ty)) {
+fn functionRet(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.TypeId {
+    return switch (shapeContent(types, ty)) {
         .func => |fn_ty| fn_ty.ret,
         else => Common.invariant("lifted lambda expression did not have a function type"),
     };
+}
+
+fn shapeContent(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.Content {
+    var current = ty;
+    while (true) {
+        switch (types.get(current)) {
+            .named => |named| if (named.backing) |backing| {
+                current = backing.ty;
+                continue;
+            } else {
+                return types.get(current);
+            },
+            else => |content| return content,
+        }
+    }
 }
 
 test "monotype lifted lower declarations are referenced" {

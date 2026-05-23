@@ -124,10 +124,15 @@ const Solver = struct {
 
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.program.lifted.layout_requests.items.len);
         for (self.program.lifted.layout_requests.items) |request| {
-            const ty = try self.lowerTypeFresh(request.ty);
+            const ty = if (request.fn_id) |fn_id|
+                self.fnRetType(fn_id)
+            else
+                try self.lowerTypeFresh(request.ty);
+            try self.markErasedCallablesReachedByType(ty);
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = ty,
+                .fn_id = request.fn_id,
             });
         }
 
@@ -190,6 +195,16 @@ const Solver = struct {
             .callable = callable,
             .ret = try self.lowerTypeFresh(fn_.ret),
         } });
+    }
+
+    fn fnRetType(self: *Solver, fn_id: Lifted.FnId) Type.TypeVarId {
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.program.fn_tys.items.len) Common.invariant("Lambda Solved layout request referenced a missing function");
+        const fn_ty = self.program.types.rootContent(self.program.fn_tys.items[raw]);
+        return switch (fn_ty) {
+            .func => |func| func.ret,
+            else => Common.invariant("Lambda Solved layout request referenced a non-function"),
+        };
     }
 
     fn solveFn(self: *Solver, fn_id: Lifted.FnId, fn_: Lifted.Fn) Allocator.Error!void {
@@ -847,6 +862,17 @@ const Solver = struct {
         if (active_entry.found_existing) return;
         defer _ = self.active_unifications.remove(pair);
 
+        if (transparentAliasBacking(left)) |backing| {
+            try self.unify(backing, b);
+            self.program.types.set(a, .{ .link = self.program.types.root(backing) });
+            return;
+        }
+        if (transparentAliasBacking(right)) |backing| {
+            try self.unify(a, backing);
+            self.program.types.set(b, .{ .link = self.program.types.root(backing) });
+            return;
+        }
+
         switch (left) {
             .primitive => |left_primitive| switch (right) {
                 .primitive => |right_primitive| {
@@ -964,6 +990,16 @@ const Solver = struct {
             },
             .link, .unbound, .forall => unreachable,
         }
+    }
+
+    fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
+        return switch (content) {
+            .named => |named| if (named.kind == .alias)
+                (named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty
+            else
+                null,
+            else => null,
+        };
     }
 
     fn unifySpans(self: *Solver, lhs: Type.Span, rhs: Type.Span, comptime message: []const u8) Allocator.Error!void {

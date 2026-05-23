@@ -175,11 +175,16 @@ pub fn lowerCheckedModulesToLir(
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests);
     defer allocator.free(layout_requests);
+    const static_data_requests = switch (target.checked_state) {
+        .published => try collectStaticDataRequests(allocator, modules.root.module),
+        .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
+    };
+    defer allocator.free(static_data_requests);
 
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         checkedModules(modules),
-        rootRequests(roots, layout_requests),
+        rootRequests(roots, layout_requests, static_data_requests),
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -247,10 +252,15 @@ fn checkedModules(modules: CheckedModuleSet) postcheck.Common.CheckedModules {
     };
 }
 
-fn rootRequests(roots: RootRequestSet, layout_requests: []const checked.CheckedTypeId) postcheck.Common.RootRequests {
+fn rootRequests(
+    roots: RootRequestSet,
+    layout_requests: []const checked.CheckedTypeId,
+    static_data_requests: []const postcheck.Common.StaticDataRequest,
+) postcheck.Common.RootRequests {
     return .{
         .requests = roots.requests,
         .layout_requests = layout_requests,
+        .static_data_requests = static_data_requests,
     };
 }
 
@@ -263,14 +273,114 @@ fn collectLayoutRequests(
     errdefer requests.deinit(allocator);
 
     try requests.appendSlice(allocator, explicit);
+    const types = root.checked_types.view();
     for (root.provided_exports.exports) |provided| {
         switch (provided) {
-            .data => |data| try requests.append(allocator, data.checked_type),
+            .data => |data| {
+                if (!try checkedTypeContainsFunction(allocator, types, data.checked_type)) {
+                    try requests.append(allocator, data.checked_type);
+                }
+            },
+            .procedure => {},
+        }
+    }
+    return try requests.toOwnedSlice(allocator);
+}
+
+fn collectStaticDataRequests(
+    allocator: Allocator,
+    root: *const checked.Module,
+) Allocator.Error![]postcheck.Common.StaticDataRequest {
+    var requests = std.ArrayList(postcheck.Common.StaticDataRequest).empty;
+    errdefer requests.deinit(allocator);
+
+    for (root.provided_exports.exports) |provided| {
+        switch (provided) {
+            .data => |data| {
+                if (try checkedTypeContainsFunction(allocator, root.checked_types.view(), data.checked_type)) {
+                    try requests.append(allocator, .{ .data = data });
+                }
+            },
             .procedure => {},
         }
     }
 
     return try requests.toOwnedSlice(allocator);
+}
+
+fn checkedTypeContainsFunction(
+    allocator: Allocator,
+    types: checked.CheckedTypeStoreView,
+    root: checked.CheckedTypeId,
+) Allocator.Error!bool {
+    var active = std.AutoHashMap(checked.CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    return try checkedTypeContainsFunctionInner(types, root, &active);
+}
+
+fn checkedTypeContainsFunctionInner(
+    types: checked.CheckedTypeStoreView,
+    root: checked.CheckedTypeId,
+    active: *std.AutoHashMap(checked.CheckedTypeId, void),
+) Allocator.Error!bool {
+    if (active.contains(root)) return false;
+    try active.put(root, {});
+    defer _ = active.remove(root);
+
+    const index: usize = @intFromEnum(root);
+    if (index >= types.payloads.len) checkedPipelineInvariant("checked type function scan referenced a missing type");
+    return switch (types.payloads[index]) {
+        .pending => checkedPipelineInvariant("checked type function scan reached a pending type"),
+        .function => true,
+        .alias => |alias| (try checkedTypeContainsFunctionInner(types, alias.backing, active)) or
+            try checkedTypeSliceContainsFunction(types, alias.args, active),
+        .nominal => |nominal| (try checkedTypeSliceContainsFunction(types, nominal.args, active)) or
+            try checkedTypeContainsFunctionInner(types, nominal.backing, active),
+        .record => |record| (try checkedFieldsContainFunction(types, record.fields, active)) or
+            try checkedTypeContainsFunctionInner(types, record.ext, active),
+        .record_unbound => |fields| checkedFieldsContainFunction(types, fields, active),
+        .tuple => |items| checkedTypeSliceContainsFunction(types, items, active),
+        .tag_union => |tag_union| (try checkedTagsContainFunction(types, tag_union.tags, active)) or
+            try checkedTypeContainsFunctionInner(types, tag_union.ext, active),
+        .flex,
+        .rigid,
+        .empty_record,
+        .empty_tag_union,
+        => false,
+    };
+}
+
+fn checkedTypeSliceContainsFunction(
+    types: checked.CheckedTypeStoreView,
+    items: []const checked.CheckedTypeId,
+    active: *std.AutoHashMap(checked.CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (items) |item| {
+        if (try checkedTypeContainsFunctionInner(types, item, active)) return true;
+    }
+    return false;
+}
+
+fn checkedFieldsContainFunction(
+    types: checked.CheckedTypeStoreView,
+    fields: []const checked.CheckedRecordField,
+    active: *std.AutoHashMap(checked.CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (fields) |field| {
+        if (try checkedTypeContainsFunctionInner(types, field.ty, active)) return true;
+    }
+    return false;
+}
+
+fn checkedTagsContainFunction(
+    types: checked.CheckedTypeStoreView,
+    tags: []const checked.CheckedTag,
+    active: *std.AutoHashMap(checked.CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (tags) |tag| {
+        if (try checkedTypeSliceContainsFunction(types, tag.args, active)) return true;
+    }
+    return false;
 }
 
 fn convertRuntimeSchemas(

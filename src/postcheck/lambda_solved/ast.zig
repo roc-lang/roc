@@ -27,6 +27,7 @@ pub const FnBody = union(enum) {
 pub const LayoutRequest = struct {
     checked_type: @import("check").CheckedModule.CheckedTypeId,
     ty: Type.TypeVarId,
+    fn_id: ?Lifted.FnId = null,
 };
 
 /// Lambda Solved program plus the solved type store.

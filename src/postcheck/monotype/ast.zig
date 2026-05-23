@@ -375,6 +375,7 @@ pub const Root = struct {
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
     ty: Type.TypeId,
+    def: ?DefId = null,
 };
 
 /// Complete Monotype program plus side arrays.

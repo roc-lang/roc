@@ -73,7 +73,7 @@ pub const ConstValue = union(enum) {
     tuple: []const ConstNodeId,
     record: []const ConstNodeId,
     tag: struct {
-        tag_name: names.TagNameId,
+        tag_name: []const u8,
         payloads: []const ConstNodeId,
     },
     nominal: struct {
@@ -179,7 +179,10 @@ pub const ConstStore = struct {
             .list => |items| self.allocator.free(items),
             .tuple => |items| self.allocator.free(items),
             .record => |items| self.allocator.free(items),
-            .tag => |tag| self.allocator.free(tag.payloads),
+            .tag => |tag| {
+                self.allocator.free(tag.tag_name);
+                self.allocator.free(tag.payloads);
+            },
         }
     }
 

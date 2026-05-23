@@ -6,6 +6,7 @@
 const std = @import("std");
 
 const backend = @import("backend");
+const builtins = @import("builtins");
 const check = @import("check");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -15,6 +16,7 @@ const Allocator = std.mem.Allocator;
 const CanonicalNameStore = check.CanonicalNames.CanonicalNameStore;
 const Checked = check.CheckedArtifact;
 const CheckedModule = check.CheckedModule;
+const ConstFn = check.ConstStore.ConstFn;
 const ConstValue = CheckedModule.ConstValue;
 const StaticDataExport = backend.StaticDataExport;
 const StaticDataRelocation = backend.StaticDataRelocation;
@@ -266,9 +268,8 @@ const StaticDataBuilder = struct {
                 };
                 try self.writeValue(bytes, relocations, base_offset, source, source.store.get(backing), named.backing, layout_idx);
             },
-            .fn_value,
-            .erased_fn,
-            => staticDataInvariant("provided function-valued data exports require callable static materialization"),
+            .fn_value => staticDataInvariant("provided function-valued data export reached finite callable static materialization"),
+            .erased_fn => |set| try self.writeErasedFn(bytes, relocations, base_offset, source, value, set, layout_idx),
         }
     }
 
@@ -430,6 +431,10 @@ const StaticDataBuilder = struct {
             self.writeWord(bytes, base_offset, 0);
             return;
         }
+        if (box_layout.tag == .erased_callable) {
+            try self.writeValue(bytes, relocations, base_offset, source, source.store.get(payload_node), payload_plan, box_layout_idx);
+            return;
+        }
         if (box_layout.tag != .box) staticDataInvariant("Box const plan had non-box layout");
 
         const abi = self.layouts().builtinBoxAbi(box_layout_idx);
@@ -518,7 +523,7 @@ const StaticDataBuilder = struct {
             .tag => |tag| tag,
             else => staticDataInvariant("tag-union const plan received non-tag ConstStore node"),
         };
-        const variant_index = variantIndexForTag(source, variants, tag.tag_name);
+        const variant_index = variantIndexForTag(variants, tag.tag_name);
         const variant = variants[variant_index];
         if (variant.payloads.len != tag.payloads.len) staticDataInvariant("tag const plan payload count differed from ConstStore node");
 
@@ -558,14 +563,150 @@ const StaticDataBuilder = struct {
         tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant);
     }
 
-    fn variantIndexForTag(
+    fn writeErasedFn(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
         source: ConstModule,
+        value: ConstValue,
+        set_id: lir.Program.ErasedFnsId,
+        erased_layout_idx: layout.Idx,
+    ) MaterializationError!void {
+        if (self.layoutValue(erased_layout_idx).tag != .erased_callable) {
+            staticDataInvariant("erased callable const plan had non-erased-callable layout");
+        }
+        const fn_id = switch (value) {
+            .fn_value => |fn_id| fn_id,
+            else => staticDataInvariant("erased callable const plan received non-function ConstStore node"),
+        };
+        const raw = @intFromEnum(fn_id);
+        if (raw >= source.store.fns.items.len) staticDataInvariant("ConstStore function id is out of range");
+        const fn_value = source.store.fns.items[raw];
+        const entry = self.erasedFnEntry(set_id, fn_value);
+        const target = try self.materializeErasedFn(source, fn_value, entry);
+        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
+    }
+
+    fn erasedFnEntry(
+        self: *StaticDataBuilder,
+        set_id: lir.Program.ErasedFnsId,
+        fn_value: ConstFn,
+    ) lir.Program.ErasedFn {
+        const set = self.lowered.lir_result.erased_fns.items[@intFromEnum(set_id)];
+        for (set.entries) |entry| {
+            if (sameFnTemplate(fn_value, entry.template)) return entry;
+        }
+        staticDataInvariant("erased callable ConstStore function was absent from LIR erased callable entries");
+    }
+
+    fn materializeErasedFn(
+        self: *StaticDataBuilder,
+        source: ConstModule,
+        fn_value: ConstFn,
+        entry: lir.Program.ErasedFn,
+    ) MaterializationError!PointerTarget {
+        const capture_layout = self.layoutValue(entry.capture_layout);
+        const capture_size = self.layouts().layoutSize(capture_layout);
+        const capture_align = capture_layout.alignment(self.target_usize).toByteUnits();
+        if (capture_align > builtins.erased_callable.capture_alignment) {
+            staticDataInvariant("erased callable capture layout alignment exceeded erased callable capture alignment");
+        }
+
+        const payload_size = builtins.erased_callable.payloadSize(capture_size);
+        const payload = try self.allocator.alloc(u8, payload_size);
+        @memset(payload, 0);
+
+        var payload_relocs = std.ArrayList(StaticDataRelocation).empty;
+        var payload_consumed = false;
+        errdefer {
+            if (!payload_consumed) {
+                deinitRelocationList(self.allocator, &payload_relocs);
+                self.allocator.free(payload);
+            }
+        }
+
+        const proc = self.lowered.lir_result.store.getProcSpec(entry.entry);
+        const proc_symbol = try backend.procSymbolName(self.allocator, proc.name);
+        var proc_symbol_owned = true;
+        errdefer if (proc_symbol_owned) self.allocator.free(proc_symbol);
+        try self.writeOwnedPointerRelocation(payload, &payload_relocs, 0, proc_symbol, 0);
+        proc_symbol_owned = false;
+
+        try self.writeCaptures(
+            payload,
+            &payload_relocs,
+            builtins.erased_callable.capture_offset,
+            source,
+            fn_value,
+            entry.captures,
+            entry.capture_layout,
+        );
+
+        const relocations = try payload_relocs.toOwnedSlice(self.allocator);
+        errdefer if (!payload_consumed) self.allocator.free(relocations);
+        const target = try self.addStaticAllocationWithRelocs(
+            payload,
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+            null,
+            relocations,
+        );
+        payload_consumed = true;
+        return target;
+    }
+
+    fn writeCaptures(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        base_offset: u32,
+        source: ConstModule,
+        fn_value: ConstFn,
+        slots: []const lir.Program.CaptureSlot,
+        capture_layout_idx: layout.Idx,
+    ) MaterializationError!void {
+        if (slots.len != fn_value.captures.len) {
+            staticDataInvariant("erased callable capture slot count differed from ConstStore captures");
+        }
+        if (slots.len == 0) return;
+
+        const capture_layout = self.layoutValue(capture_layout_idx);
+        if (capture_layout.tag == .zst) return;
+        if (capture_layout.tag == .struct_) {
+            for (slots) |slot| {
+                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(capture_layout.data.struct_.idx, slot.slot);
+                const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(capture_layout.data.struct_.idx, slot.slot);
+                const capture_node = self.captureNode(fn_value, slot.binder);
+                try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(capture_node), slot.plan, field_layout);
+            }
+            return;
+        }
+        if (slots.len == 1) {
+            const capture_node = self.captureNode(fn_value, slots[0].binder);
+            try self.writeValue(bytes, relocations, base_offset, source, source.store.get(capture_node), slots[0].plan, capture_layout_idx);
+            return;
+        }
+        staticDataInvariant("multi-capture erased callable did not use a struct capture layout");
+    }
+
+    fn captureNode(
+        _: *StaticDataBuilder,
+        fn_value: ConstFn,
+        binder: CheckedModule.PatternBinderId,
+    ) CheckedModule.ConstNodeId {
+        for (fn_value.captures) |capture| {
+            if (capture.binder == binder) return capture.value;
+        }
+        staticDataInvariant("erased callable capture slot had no ConstStore capture");
+    }
+
+    fn variantIndexForTag(
         variants: []const lir.Program.ConstTagVariant,
-        tag_name: check.CheckedNames.TagNameId,
+        tag_name: []const u8,
     ) usize {
-        const wanted = source.names.tagLabelText(tag_name);
         for (variants, 0..) |variant, index| {
-            if (std.mem.eql(u8, wanted, variant.name)) return index;
+            if (std.mem.eql(u8, tag_name, variant.name)) return index;
         }
         staticDataInvariant("ConstStore tag name was absent from requested static data plan");
     }
@@ -674,6 +815,23 @@ const StaticDataBuilder = struct {
         });
     }
 
+    fn writeOwnedPointerRelocation(
+        self: *StaticDataBuilder,
+        bytes: []u8,
+        relocations: *std.ArrayList(StaticDataRelocation),
+        offset: u32,
+        target_symbol_name: []const u8,
+        addend: i64,
+    ) Allocator.Error!void {
+        self.writeWord(bytes, offset, 0);
+        try relocations.append(self.allocator, .{
+            .offset = offset,
+            .target_symbol_name = target_symbol_name,
+            .addend = addend,
+            .owns_target_symbol_name = true,
+        });
+    }
+
     fn writeBytes(_: *StaticDataBuilder, bytes: []u8, offset: u32, source: []const u8) void {
         @memcpy(bytes[offset..][0..source.len], source);
     }
@@ -749,6 +907,12 @@ fn payloadOffsetForTagArg(
 fn staticDataPtrOffset(word_size: u32, element_alignment: u32, contains_refcounted: bool) u32 {
     const required_space = if (contains_refcounted) word_size * 2 else word_size;
     return alignForwardU32(required_space, element_alignment);
+}
+
+fn sameFnTemplate(fn_value: ConstFn, template: lir.Program.FnTemplate) bool {
+    return std.meta.eql(fn_value.fn_def, template.fn_def) and
+        fn_value.source_fn_ty == template.source_fn_ty and
+        std.mem.eql(u8, fn_value.source_fn_key.bytes[0..], template.source_fn_key.bytes[0..]);
 }
 
 fn alignForwardU32(value: u32, alignment: u32) u32 {

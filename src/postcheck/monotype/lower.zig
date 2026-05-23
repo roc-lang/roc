@@ -22,8 +22,8 @@ pub fn run(
     modules: Common.CheckedModules,
     roots: Common.RootRequests,
 ) Common.LowerError!Ast.Program {
-    if (roots.requests.len == 0 and roots.layout_requests.len == 0) {
-        Common.invariant("Monotype lowering requires explicit roots or layout requests");
+    if (roots.requests.len == 0 and roots.layout_requests.len == 0 and roots.static_data_requests.len == 0) {
+        Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
     }
 
     var program = Ast.Program.init(allocator);
@@ -38,6 +38,9 @@ pub fn run(
     }
     for (roots.layout_requests) |checked_ty| {
         try builder.lowerLayoutRequest(checked_ty);
+    }
+    for (roots.static_data_requests) |request| {
+        try builder.lowerStaticDataRequest(request);
     }
 
     program.next_symbol = builder.symbols.next;
@@ -70,9 +73,19 @@ const ModuleView = struct {
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
 };
 
+const ConstNode = struct {
+    module: ModuleView,
+    id: checked.ConstNodeId,
+};
+
 const MethodLookup = struct {
     view: ModuleView,
     target: static_dispatch.MethodTarget,
+};
+
+const FunctionShape = struct {
+    args: Type.Span,
+    ret: Type.TypeId,
 };
 
 const HostedCatalogEntry = struct {
@@ -340,6 +353,26 @@ const Builder = struct {
         });
     }
 
+    fn lowerStaticDataRequest(self: *Builder, request: Common.StaticDataRequest) Allocator.Error!void {
+        const type_view = moduleView(self.root_view);
+        const ret_ty = try self.lowerType(type_view, request.data.checked_type);
+        const const_node = self.providedConstNode(request.data);
+        const body = try self.restoreConstNodeAtType(const_node.module, type_view, const_node.id, ret_ty);
+        const def: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
+        try self.program.defs.append(self.allocator, .{
+            .symbol = self.symbols.fresh(),
+            .fn_def = null,
+            .args = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .{ .roc = body },
+            .ret = ret_ty,
+        });
+        try self.program.layout_requests.append(self.allocator, .{
+            .checked_type = request.data.checked_type,
+            .ty = ret_ty,
+            .def = def,
+        });
+    }
+
     fn lowerProcedureUseRoot(
         self: *Builder,
         request: checked.RootRequest,
@@ -347,10 +380,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.DefId {
         const view = moduleView(self.root_view);
         const fn_ty = try self.lowerType(view, request.checked_type);
-        const fn_data = switch (self.program.types.get(fn_ty)) {
-            .func => |func| func,
-            else => Common.invariant("procedure use root had a non-function checked type"),
-        };
+        const fn_data = self.functionShape(fn_ty, "procedure use root had a non-function checked type");
         const arg_tys = self.program.types.span(fn_data.args);
         const args = try self.allocator.alloc(Ast.TypedLocal, arg_tys.len);
         defer self.allocator.free(args);
@@ -390,10 +420,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.DefId {
         const view = moduleView(self.root_view);
         const fn_ty = try self.lowerType(view, request.checked_type);
-        const fn_data = switch (self.program.types.get(fn_ty)) {
-            .func => |func| func,
-            else => Common.invariant("procedure binding root had a non-function checked type"),
-        };
+        const fn_data = self.functionShape(fn_ty, "procedure binding root had a non-function checked type");
         const arg_tys = self.program.types.span(fn_data.args);
         const args = try self.allocator.alloc(Ast.TypedLocal, arg_tys.len);
         defer self.allocator.free(args);
@@ -539,10 +566,7 @@ const Builder = struct {
 
         switch (template.target) {
             .hosted => {
-                const fn_data = switch (self.program.types.get(fn_ty)) {
-                    .func => |data| data,
-                    else => Common.invariant("hosted procedure template root type was not a function"),
-                };
+                const fn_data = self.functionShape(fn_ty, "hosted procedure template root type was not a function");
                 const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
                 self.program.defs.items[@intFromEnum(reserved)] = .{
                     .symbol = symbol,
@@ -805,6 +829,13 @@ const Builder = struct {
         }
     }
 
+    fn functionShape(self: *Builder, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
+        return switch (self.shapeContent(ty)) {
+            .func => |func| .{ .args = func.args, .ret = func.ret },
+            else => Common.invariant(message),
+        };
+    }
+
     fn lowerNominalBackingType(
         self: *Builder,
         view: ModuleView,
@@ -1007,6 +1038,17 @@ const Builder = struct {
             if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return moduleView(relation);
         }
         Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
+    }
+
+    fn providedConstNode(self: *Builder, data: checked.ProvidedDataExport) ConstNode {
+        const view = self.moduleForId(checked.constModuleId(data.const_ref));
+        const template = view.const_templates.get(data.const_ref);
+        return switch (template.state) {
+            .stored_const => |stored| .{ .module = view, .id = stored.node },
+            .reserved,
+            .eval_template,
+            => Common.invariant("static data request const was not stored before Monotype lowering"),
+        };
     }
 
     fn lookupMethodTarget(
@@ -1364,6 +1406,169 @@ const Builder = struct {
             });
         }
         return expr;
+    }
+
+    fn restoreConstNode(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.restoreConstNodeAtType(store_view, type_view, node, try self.lowerType(type_view, checked_ty));
+    }
+
+    fn restoreConstNodeAtType(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const address = ConstExprAddress{
+            .store_module_bytes = store_view.key.bytes,
+            .type_module_bytes = type_view.key.bytes,
+            .node = @intFromEnum(node),
+            .mono_ty = @intFromEnum(ty),
+        };
+        if (self.const_expr_cache.get(address)) |existing| return existing;
+
+        const value = store_view.const_store.get(node);
+        switch (value) {
+            .fn_value => |fn_id| {
+                const expr = try self.restoreConstFnExpr(store_view, type_view, fn_id, ty);
+                try self.const_expr_cache.put(address, expr);
+                return expr;
+            },
+            else => {},
+        }
+        const data = try self.restoreConstData(store_view, type_view, value, ty);
+        const expr = try self.program.addExpr(.{ .ty = ty, .data = data });
+        try self.const_expr_cache.put(address, expr);
+        return expr;
+    }
+
+    fn restoreConstData(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        value: checked.ConstValue,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprData {
+        return switch (value) {
+            .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
+            .zst => .unit,
+            .scalar => |scalar| restoreScalar(scalar),
+            .str => |bytes| .{ .str_lit = try self.program.addStringLiteral(bytes) },
+            .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items) },
+            .box => |payload| blk: {
+                const child = try self.restoreConstNodeAtType(store_view, type_view, payload, self.constBoxPayloadType(ty));
+                break :blk .{ .low_level = .{
+                    .op = .box_box,
+                    .args = try self.program.addExprSpan(&.{child}),
+                } };
+            },
+            .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items) },
+            .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, ty, items) },
+            .tag => |tag| .{ .tag = .{
+                .name = try self.program.names.internTagLabel(tag.tag_name),
+                .payloads = try self.restoreConstTagPayloads(store_view, type_view, ty, tag),
+            } },
+            .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtType(store_view, type_view, nominal.backing, self.namedBackingType(ty) orelse ty) },
+            .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
+        };
+    }
+
+    fn restoreConstList(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        items: []const checked.ConstNodeId,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        const elem_ty = self.constListElemType(ty);
+        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
+        defer self.allocator.free(lowered);
+        for (items, 0..) |item, index| {
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, elem_ty);
+        }
+        return try self.program.addExprSpan(lowered);
+    }
+
+    fn restoreConstTuple(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        items: []const checked.ConstNodeId,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        const item_tys = self.tupleItemTypes(ty);
+        if (item_tys.len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
+        defer self.allocator.free(lowered);
+        for (items, 0..) |item, index| {
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_tys[index]);
+        }
+        return try self.program.addExprSpan(lowered);
+    }
+
+    fn restoreConstRecord(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        items: []const checked.ConstNodeId,
+    ) Allocator.Error!Ast.Span(Ast.FieldExpr) {
+        const fields = self.constRecordFields(ty);
+        if (fields.len != items.len) Common.invariant("ConstStore record length differs from checked type");
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, items.len);
+        defer self.allocator.free(lowered);
+        for (items, 0..) |item, index| {
+            lowered[index] = .{
+                .name = fields[index].name,
+                .value = try self.restoreConstNodeAtType(store_view, type_view, item, fields[index].ty),
+            };
+        }
+        return try self.program.addFieldExprSpan(lowered);
+    }
+
+    fn restoreConstTagPayloads(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        tag: anytype,
+    ) Allocator.Error!Ast.Span(Ast.ExprId) {
+        const mono_tag_name = try self.program.names.internTagLabel(tag.tag_name);
+        const payload_tys = self.tagPayloadTypes(ty, mono_tag_name);
+        if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+        const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
+        defer self.allocator.free(lowered);
+        for (tag.payloads, 0..) |payload, index| {
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_tys[index]);
+        }
+        return try self.program.addExprSpan(lowered);
+    }
+
+    fn constListElemType(self: *Builder, ty: Type.TypeId) Type.TypeId {
+        return switch (self.shapeContent(ty)) {
+            .list => |elem| elem,
+            else => Common.invariant("ConstStore list restored with a non-list monotype"),
+        };
+    }
+
+    fn constBoxPayloadType(self: *Builder, ty: Type.TypeId) Type.TypeId {
+        return switch (self.shapeContent(ty)) {
+            .box => |payload| payload,
+            else => Common.invariant("ConstStore box restored with a non-box monotype"),
+        };
+    }
+
+    fn constRecordFields(self: *Builder, ty: Type.TypeId) []const Type.Field {
+        return switch (self.shapeContent(ty)) {
+            .record => |fields| self.program.types.fieldSpan(fields),
+            else => Common.invariant("ConstStore record restored with a non-record monotype"),
+        };
     }
 
     fn inspectCall(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -2269,7 +2474,10 @@ const BodyContext = struct {
 
     fn monoAliasBacking(types: *const Type.Store, mono_ty: Type.TypeId) ?Type.TypeId {
         return switch (types.get(mono_ty)) {
-            .named => |named| if (named.backing) |backing| backing.ty else null,
+            .named => |named| if (named.kind == .alias) blk: {
+                const backing = named.backing orelse break :blk null;
+                break :blk backing.ty;
+            } else null,
             else => null,
         };
     }
@@ -3136,11 +3344,7 @@ const BodyContext = struct {
         if (!names.procedureTemplateRefEql(self.owner_template, template_ref)) {
             Common.invariant("Monotype body context owner did not match lowered checked template");
         }
-        const fn_content = self.builder.program.types.get(fn_ty);
-        const ret_ty = switch (fn_content) {
-            .func => |fn_data| fn_data.ret,
-            else => Common.invariant("checked procedure template root type was not a function"),
-        };
+        const ret_ty = self.builder.functionShape(fn_ty, "checked procedure template root type was not a function").ret;
 
         switch (template.body) {
             .checked_body => |body_id| {
@@ -3185,11 +3389,7 @@ const BodyContext = struct {
     }
 
     fn lowerStrInspectIntrinsic(self: *BodyContext, fn_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
-        const fn_content = self.builder.program.types.get(fn_ty);
-        const fn_data = switch (fn_content) {
-            .func => |data| data,
-            else => Common.invariant("Str.inspect intrinsic had a non-function type"),
-        };
+        const fn_data = self.builder.functionShape(fn_ty, "Str.inspect intrinsic had a non-function type");
         const arg_tys = self.builder.program.types.span(fn_data.args);
         if (arg_tys.len != 1) Common.invariant("Str.inspect intrinsic requires exactly one argument");
 
@@ -3205,11 +3405,7 @@ const BodyContext = struct {
     }
 
     fn lowerLambdaTemplate(self: *BodyContext, lambda: anytype, fn_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
-        const fn_content = self.builder.program.types.get(fn_ty);
-        const fn_data = switch (fn_content) {
-            .func => |data| data,
-            else => Common.invariant("lambda template had a non-function type"),
-        };
+        const fn_data = self.builder.functionShape(fn_ty, "lambda template had a non-function type");
         const arg_tys = self.builder.program.types.span(fn_data.args);
         if (arg_tys.len != lambda.args.len) Common.invariant("lambda template arity differs from concrete function type");
 
@@ -3442,10 +3638,7 @@ const BodyContext = struct {
     }
 
     fn functionReturnType(self: *BodyContext, fn_ty: Type.TypeId) Type.TypeId {
-        return switch (self.builder.program.types.get(fn_ty)) {
-            .func => |func| func.ret,
-            else => Common.invariant("checked call function type was not a function"),
-        };
+        return self.builder.functionShape(fn_ty, "checked call function type was not a function").ret;
     }
 
     fn lowerCall(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!LoweredCall {
@@ -3460,10 +3653,7 @@ const BodyContext = struct {
             const mono_fn_ty = try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);
             const source_fn_key = call_ctx.view.types.rootKey(call.source_fn_ty_payload);
             const callee = try self.fnTemplateForDirectCallWithMono(target, call.source_fn_ty_payload, source_fn_key, mono_fn_ty);
-            const fn_data = switch (self.builder.program.types.get(mono_fn_ty)) {
-                .func => |data| data,
-                else => Common.invariant("checked direct call target had a non-function type"),
-            };
+            const fn_data = self.builder.functionShape(mono_fn_ty, "checked direct call target had a non-function type");
             try self.bindTypeToMono(checked_ret_ty, fn_data.ret, "checked direct call result type mapped one checked type to two monotype types");
             return .{
                 .ret_ty = fn_data.ret,
@@ -3475,10 +3665,7 @@ const BodyContext = struct {
         }
 
         const fn_ty = try self.lowerType(call.source_fn_ty_payload);
-        const fn_data = switch (self.builder.program.types.get(fn_ty)) {
-            .func => |data| data,
-            else => Common.invariant("checked call function type was not a function"),
-        };
+        const fn_data = self.builder.functionShape(fn_ty, "checked call function type was not a function");
         return .{
             .ret_ty = fn_data.ret,
             .data = .{ .call_value = .{
@@ -4361,7 +4548,7 @@ const BodyContext = struct {
             .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items) },
             .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, ty, items) },
             .tag => |tag| .{ .tag = .{
-                .name = try self.builder.tagName(store_view, tag.tag_name),
+                .name = try self.builder.program.names.internTagLabel(tag.tag_name),
                 .payloads = try self.restoreConstTagPayloads(store_view, type_view, ty, tag),
             } },
             .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtType(store_view, type_view, nominal.backing, self.builder.namedBackingType(ty) orelse ty) },
@@ -4429,7 +4616,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
         tag: anytype,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const mono_tag_name = try self.builder.tagName(store_view, tag.tag_name);
+        const mono_tag_name = try self.builder.program.names.internTagLabel(tag.tag_name);
         const payload_tys = self.builder.tagPayloadTypes(ty, mono_tag_name);
         if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
@@ -4549,7 +4736,18 @@ const BodyContext = struct {
     }
 
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
+        return self.sameTypeInner(expected, actual, 0);
+    }
+
+    fn sameTypeInner(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
         if (expected == actual) return true;
+        if (depth == 32) return false;
+        if (monoAliasBacking(&self.builder.program.types, expected)) |backing| {
+            if (self.sameTypeInner(backing, actual, depth + 1)) return true;
+        }
+        if (monoAliasBacking(&self.builder.program.types, actual)) |backing| {
+            if (self.sameTypeInner(expected, backing, depth + 1)) return true;
+        }
         const expected_digest = self.builder.program.types.typeDigest(&self.builder.program.names, expected);
         const actual_digest = self.builder.program.types.typeDigest(&self.builder.program.names, actual);
         return std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..]);
@@ -4644,11 +4842,7 @@ const BodyContext = struct {
         defer lambda_ctx.deinit();
         try lambda_ctx.bindTypeToMono(nested.source_fn_ty, nested.mono_fn_ty, "lambda function root mapped one checked type to two monotype types");
 
-        const fn_content = self.builder.program.types.get(nested.mono_fn_ty);
-        const fn_data = switch (fn_content) {
-            .func => |data| data,
-            else => Common.invariant("nested lambda had a non-function type"),
-        };
+        const fn_data = self.builder.functionShape(nested.mono_fn_ty, "nested lambda had a non-function type");
         const arg_tys = self.builder.program.types.span(fn_data.args);
         if (arg_tys.len != lambda.args.len) Common.invariant("nested lambda arity differs from concrete function type");
 
@@ -4688,10 +4882,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
 
         const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan.args, expected_ret_ty);
-        const plan_fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
-            .func => |data| data,
-            else => Common.invariant("checked dispatch plan had a non-function type"),
-        };
+        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
         const plan_ret_ty = plan_fn_data.ret;
@@ -4712,10 +4903,7 @@ const BodyContext = struct {
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
         }
-        const fn_data = switch (self.builder.program.types.get(target_mono_ty)) {
-            .func => |data| data,
-            else => Common.invariant("checked dispatch target had a non-function type"),
-        };
+        const fn_data = self.builder.functionShape(target_mono_ty, "checked dispatch target had a non-function type");
         try self.bindTypeToMono(checked_ret_ty, fn_data.ret, "checked dispatch result type mapped one checked type to two monotype types");
         if (expected_ret_ty) |expected| {
             if (!self.sameType(expected, fn_data.ret)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
@@ -4763,10 +4951,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
 
         const callable_mono_ty = try call_ctx.instantiateDispatchPlanCallTypeFromCaller(plan.callable_ty, self, checked_ret_ty, plan.args, null);
-        const plan_fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
-            .func => |data| data,
-            else => Common.invariant("checked dispatch plan had a non-function type"),
-        };
+        const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
         const plan_arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
         defer self.allocator.free(plan_arg_tys);
         const plan_ret_ty = plan_fn_data.ret;
@@ -4840,10 +5025,7 @@ const BodyContext = struct {
             callable_mono_ty,
         );
 
-        const fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
-            .func => |data| data,
-            else => Common.invariant("checked dispatch target had a non-function type"),
-        };
+        const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
         const args = try arg_ctx.lowerExprSpanAtTypes(plan.args, self.builder.program.types.span(fn_data.args));
         return .{ .call_proc = .{
             .callee = self.builder.fnDefForTemplate(
@@ -4867,10 +5049,7 @@ const BodyContext = struct {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
                 if (plan.args.len != 2) Common.invariant("structural equality dispatch plan must have two operands");
-                const fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
-                    .func => |data| data,
-                    else => Common.invariant("checked structural equality target had a non-function type"),
-                };
+                const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural equality target had a non-function type");
                 const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
                 defer self.allocator.free(arg_tys);
                 if (arg_tys.len != 2) Common.invariant("structural equality callable type must have two operands");
@@ -5809,11 +5988,6 @@ const BodyContext = struct {
         checked_expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprData {
-        try self.bindTypeToMono(
-            self.view.bodies.exprs[@intFromEnum(checked_expr_id)].ty,
-            ty,
-            "divergent checked expression type mapped one checked type to two monotype types",
-        );
         const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
         return switch (checked_expr.data) {
             .block => |block| try self.lowerBlock(block, ty),
@@ -5991,10 +6165,7 @@ const BodyContext = struct {
         try self.bindTypeToMono(plan.callable_ty, callable_mono_ty, "checked iterator dispatch callable type mapped one checked type to two monotype types");
         _ = try self.builder.lowerTemplateWithMono(template, lookup.view, lookup.target.callable_ty, lookup.view.types.rootKey(lookup.target.callable_ty), callable_mono_ty);
 
-        const fn_data = switch (self.builder.program.types.get(callable_mono_ty)) {
-            .func => |data| data,
-            else => Common.invariant("checked iterator dispatch target had a non-function type"),
-        };
+        const fn_data = self.builder.functionShape(callable_mono_ty, "checked iterator dispatch target had a non-function type");
         const args = try self.allocator.alloc(Ast.ExprId, plan.args.len);
         defer self.allocator.free(args);
         const arg_tys = self.builder.program.types.span(fn_data.args);
@@ -6934,37 +7105,6 @@ fn unsignedIntLiteral(value: anytype) can.CIR.IntValue {
     return .{ .bytes = @bitCast(widened), .kind = .u128 };
 }
 
-fn checkedListElemType(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
-    return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedListElemType(view, alias.backing),
-        .nominal => |nominal| blk: {
-            if (nominal.builtin == .list and nominal.args.len == 1) break :blk nominal.args[0];
-            break :blk checkedListElemType(view, nominal.backing);
-        },
-        else => Common.invariant("ConstStore list restored with a non-list checked type"),
-    };
-}
-
-fn checkedBoxPayloadType(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
-    return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedBoxPayloadType(view, alias.backing),
-        .nominal => |nominal| blk: {
-            if (nominal.builtin == .box and nominal.args.len == 1) break :blk nominal.args[0];
-            break :blk checkedBoxPayloadType(view, nominal.backing);
-        },
-        else => Common.invariant("ConstStore box restored with a non-box checked type"),
-    };
-}
-
-fn checkedTupleItems(view: ModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {
-    return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedTupleItems(view, alias.backing),
-        .nominal => |nominal| checkedTupleItems(view, nominal.backing),
-        .tuple => |items| items,
-        else => Common.invariant("ConstStore tuple restored with a non-tuple checked type"),
-    };
-}
-
 fn checkedRecordFields(view: ModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedRecordField {
     return switch (checkedPayload(view, checked_ty)) {
         .alias => |alias| checkedRecordFields(view, alias.backing),
@@ -6981,44 +7121,11 @@ fn checkedRecordFields(view: ModuleView, checked_ty: checked.CheckedTypeId) []co
     };
 }
 
-fn checkedTagPayloadTypes(
-    view: ModuleView,
-    checked_ty: checked.CheckedTypeId,
-    tag_view: ModuleView,
-    tag_name: names.TagNameId,
-) []const checked.CheckedTypeId {
-    return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedTagPayloadTypes(view, alias.backing, tag_view, tag_name),
-        .nominal => |nominal| checkedTagPayloadTypes(view, nominal.backing, tag_view, tag_name),
-        .tag_union => |tag_union| blk: {
-            if (!checkedTypeIsEmptyTagUnion(view, tag_union.ext)) {
-                Common.invariant("ConstStore tag restored with an open checked tag union type");
-            }
-            const wanted = tag_view.names.tagLabelText(tag_name);
-            for (tag_union.tags) |tag| {
-                if (std.mem.eql(u8, view.names.tagLabelText(tag.name), wanted)) break :blk tag.args;
-            }
-            Common.invariant("ConstStore tag name was not present in checked tag union type");
-        },
-        .empty_tag_union => Common.invariant("ConstStore tag restored with an empty checked tag union type"),
-        else => Common.invariant("ConstStore tag restored with a non-tag-union checked type"),
-    };
-}
-
 fn checkedTypeIsEmptyRecord(view: ModuleView, checked_ty: checked.CheckedTypeId) bool {
     return switch (checkedPayload(view, checked_ty)) {
         .alias => |alias| checkedTypeIsEmptyRecord(view, alias.backing),
         .nominal => |nominal| checkedTypeIsEmptyRecord(view, nominal.backing),
         .empty_record => true,
-        else => false,
-    };
-}
-
-fn checkedTypeIsEmptyTagUnion(view: ModuleView, checked_ty: checked.CheckedTypeId) bool {
-    return switch (checkedPayload(view, checked_ty)) {
-        .alias => |alias| checkedTypeIsEmptyTagUnion(view, alias.backing),
-        .nominal => |nominal| checkedTypeIsEmptyTagUnion(view, nominal.backing),
-        .empty_tag_union => true,
         else => false,
     };
 }

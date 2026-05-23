@@ -5379,7 +5379,10 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
         .jump => |jmp| {
             const jp_key = @intFromEnum(jmp.target);
 
-            const state_local = self.join_point_state_locals.get(jp_key) orelse unreachable;
+            const state_local = self.join_point_state_locals.get(jp_key) orelse wasmInvariantFmt(
+                "WASM/codegen invariant violated: jump target {d} has no active join-point state",
+                .{jp_key},
+            );
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, 1) catch return error.OutOfMemory;
             try self.emitLocalSet(state_local);

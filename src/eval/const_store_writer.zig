@@ -193,7 +193,8 @@ pub const Writer = struct {
                 const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed value had null payload pointer");
                 break :blk try self.storeValue(elem_plan, layout_value.data.box, .{ .ptr = ptr });
             },
-            else => writerInvariant("box const plan had non-box layout"),
+            .erased_callable => try self.storeValue(elem_plan, layout_idx, value),
+            else => writerInvariant("box const plan had incompatible layout"),
         };
         return try self.module.const_store.append(.{ .box = child });
     }
@@ -255,8 +256,11 @@ pub const Writer = struct {
         const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
         const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
         const payload_nodes = try self.storeTagPayloads(selected.payloads, payload_layout, tag_base.value);
+        errdefer self.module.const_store.allocator.free(payload_nodes);
+        const tag_name = try self.module.const_store.allocator.dupe(u8, selected.name);
+        errdefer self.module.const_store.allocator.free(tag_name);
         return try self.module.const_store.append(.{ .tag = .{
-            .tag_name = selected.checked_name,
+            .tag_name = tag_name,
             .payloads = payload_nodes,
         } });
     }
