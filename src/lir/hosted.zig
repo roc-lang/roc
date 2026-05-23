@@ -1,8 +1,7 @@
 //! Hosted procedure metadata owned by the LIR boundary.
 //!
 //! Hosted procedures are discovered during checking. Post-check lowering carries
-//! the checked hosted id and exported symbol into LIR instead of reaching
-//! through the old middle namespace.
+//! the checked hosted id and exported symbol into LIR.
 
 const check = @import("check");
 

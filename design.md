@@ -17,9 +17,9 @@ It also keeps the existing LIR boundary:
 - backend, interpreter, LirImage, and glue consumers of LIR
 
 Keeping the LIR boundary means preserving the public LIR contract, not keeping
-dependencies on the old middle. Any hosted, platform, symbol, or literal
-metadata currently reached through MIR or IR modules must move to neutral
-modules before those old middle modules are deleted.
+dependencies on a second post-check representation. Hosted ABI metadata,
+platform metadata, symbols, literal ids, layout stores, and LIR stores live in
+neutral modules owned by their actual consumers.
 
 Everything in between those boundaries is a Cor-style typed IR pipeline:
 
@@ -111,10 +111,9 @@ meaning in the surrounding design or module comments. Longer names are reserved
 for cases where two nearby concepts would otherwise be genuinely ambiguous.
 Avoid vague compiler jargon when a plain name is available. The words `bridge`
 and `projection` are banned in new post-check docs, APIs, modules, type names,
-variable names, and comments. They may appear only in this ban or when quoting
-pre-existing code that is scheduled for deletion. Say the specific operation
-instead, such as conversion, field read, tag payload read, capture slot, or
-wrapper function.
+variable names, and comments. They may appear only in this ban. Say the
+specific operation instead, such as conversion, field read, tag payload read,
+capture slot, or wrapper function.
 
 The terms `readback`, `reification`, `value graph`,
 `compile-time value store`, and `representation repair` are also banned in new
@@ -125,9 +124,8 @@ representations unexpectedly differ for the same value at the same boundary,
 that is an invariant violation; fix the producer instead of adding a later
 conversion.
 
-Outside the existing Canonicalization phase and existing files scheduled for
-rename or deletion, the word `canonical` is banned in new post-check docs and
-code. Use the exact term instead: `authoritative` for source-of-truth documents,
+Outside the existing Canonicalization phase, the word `canonical` is banned in
+new post-check docs and code. Use the exact term instead: `authoritative` for source-of-truth documents,
 `lexicographic order by name` for sorted rows, `payload position order` for tag
 payloads, `TypeDef`/`NamedType` for named type definitions, and `TypeDigest` for
 structural checked-type digests.
@@ -164,7 +162,7 @@ value, runtime layout, or checked function template.
 
 The word `obligation` is banned in new post-check docs and code. Use the exact
 owner instead: checked dispatch plan, erased callable requirement,
-specialization queue entry, debug assertion, or deletion target for old code.
+specialization queue entry, or debug assertion.
 
 ## Cache Boundary
 
@@ -266,20 +264,16 @@ post-check state and is never visible to importers.
 
 The checked module may store checked-stage constant values in `ConstStore` and
 checked procedure templates for promoted callables. It must not store post-check
-representation data. In particular, the checked module does not contain
-old middle runtime type payloads, old middle value conversion plans,
-callable-set descriptors, erased callable ABI decisions, layout ids, runtime tag
-discriminants, or backend encodings.
+representation data. In particular, the checked module does not contain runtime
+type payloads, value conversion plans, callable-set descriptors, erased callable
+ABI decisions, layout ids, runtime tag discriminants, or backend encodings.
 
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
-module field whose only purpose is to feed the old post-check middle is not
-part of the checked boundary. Existing fields with names such as old middle
-runtime payload, old middle value conversion, callable descriptor, erased ABI, runtime
-encoding, or layout creation are boundary debt. A checked module boundary
-checklist must classify each such field exactly once as a checked
-fact to keep, a checked fact to add before deletion, or old
-representation data to delete before the new post-check pipeline is the public
-path.
+module field whose only purpose is to feed post-check runtime representation is
+not part of the checked boundary. If later lowering needs data, checking must
+publish it as target-independent checked facts such as templates, dispatch
+plans, method registry entries, platform relation data, hosted declarations, or
+`ConstStore` entries. Runtime representation data is produced after checking.
 
 The checked module may publish checked facts that later stages need, such
 as:
@@ -669,9 +663,8 @@ facts, that is a compiler bug.
 
 ### Row, Nominal, Alias, And Opaque Authority
 
-Monotype lowering is the sole replacement for the old concrete-source-type
-recovery layer. It consumes checked type facts and produces closed
-Monotype type nodes directly.
+Monotype lowering is the sole owner of turning checked type facts into closed
+Monotype type nodes.
 
 For records and tag unions, checking publishes the checked row ids and stored
 spans. Record fields and tag variants use lexicographic order by name. Tag
@@ -1224,10 +1217,11 @@ explicit contracts so the stage does not become an implicit reconstruction layer
   nominal identities
 
 No internal component may inspect source syntax, checked bodies, display names,
-runtime bytes, backend symbols, or old middle data. Internal maps are work
-caches only. If an internal component needs a fact that is not in Lambda Mono IR,
-committed layouts, checked identities explicitly passed to the builder,
-or the LIR result it is constructing, the earlier stage contract is incomplete.
+runtime bytes, backend symbols, or any data outside the direct-builder inputs.
+Internal maps are work caches only. If an internal component needs a fact that
+is not in Lambda Mono IR, committed layouts, checked identities explicitly
+passed to the builder, or the LIR result it is constructing, the earlier stage
+contract is incomplete.
 The direct builder must not invent conversion operations to repair a mismatch
 between Lambda Mono IR and committed layouts.
 
@@ -1603,7 +1597,7 @@ Cor's final `ir` is a post-lambda IR stored as a distinct data structure. Roc
 does not keep that as a separate persisted stage because the existing LIR
 boundary already serves the consumer side. Roc's direct LIR builder corresponds
 to Cor's final lowering work, with explicit internal contracts instead of a
-serialized Layout IR or MIR-like layer.
+serialized Layout IR or extra middle layer.
 
 Cor's experiment also performs some final field and tag lookup by source label
 inside its final lowering. Roc does not copy that part. Roc's checked and
@@ -1619,15 +1613,15 @@ The post-check pipeline must not contain:
 - MIR as a separate compiler layer
 - a persisted layout IR between Lambda Mono IR and LIR
 - post-demand worklists
-- using the old middle path as a source of truth for the new path
-- comparing new output against old output to decide compiler behavior
+- alternate post-check lowering paths
+- comparing against another lowering path to decide compiler behavior
 - callable descriptor replacement
 - callable value repointing
 - late payload publication
 - generic conversion expressions, post-hoc conversion plan tables, or mismatch
   patching lowering paths
-- checked-module old middle runtime payloads, old middle value conversion plans,
-  callable-set descriptors, or erased ABI decisions
+- checked-module runtime payloads, value conversion plans, callable-set
+  descriptors, or erased ABI decisions
 - owner discovery by method-registry intersection
 - backend reference-counting decisions
 - user-facing errors after checked module publication

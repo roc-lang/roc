@@ -184,7 +184,7 @@ pub const ProcAbi = enum {
     erased_callable,
 };
 
-/// Single canonical statement/control-flow language for all lowered code.
+/// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
