@@ -44,6 +44,11 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
 }
 
+fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
+    return mustUseLlvm(target) or
+        (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
+}
+
 fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     if (mustUseLlvm(target)) {
         step.use_llvm = true;
@@ -2057,10 +2062,10 @@ fn createTestPlatformHostLib(
     lib.root_module.addImport("base", roc_modules.base);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
-    // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
-    // symbols like __zig_probe_stack are available at link time. Otherwise skip it
-    // to avoid duplicate symbol errors (e.g. on Windows).
-    lib.bundle_compiler_rt = mustUseLlvm(target);
+    // Bundle compiler_rt when the generated host object may call compiler_rt
+    // routines that are not supplied by the OS libraries. ARM64 Windows Zig code
+    // can emit stack-protector calls to __stack_chk_fail.
+    lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
 
     return lib;
 }
