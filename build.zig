@@ -55,6 +55,33 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     }
 }
 
+const TestHostOptions = struct {
+    uses_stack_handler: bool = false,
+};
+
+fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
+    return std.mem.eql(u8, platform_dir, "fx");
+}
+
+fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
+    if (!options.uses_stack_handler) return false;
+
+    return switch (target.result.os.tag) {
+        .linux,
+        .macos,
+        .ios,
+        .tvos,
+        .watchos,
+        .visionos,
+        .freebsd,
+        .dragonfly,
+        .netbsd,
+        .openbsd,
+        => true,
+        else => false,
+    };
+}
+
 fn isNativeishOrMusl(target: ResolvedTarget) bool {
     return target.result.cpu.arch == builtin.target.cpu.arch and
         target.result.os.tag == builtin.target.os.tag and
@@ -2043,6 +2070,7 @@ fn createTestPlatformHostLib(
     roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
+    options: TestHostOptions,
 ) *Step.Compile {
     const lib = b.addLibrary(.{
         .name = name,
@@ -2055,11 +2083,13 @@ fn createTestPlatformHostLib(
             .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
             // Only linked so host code can set up stack overflow handling.
-            .link_libc = true,
+            .link_libc = testHostNeedsLibc(options, target),
         }),
     });
     configureBackend(lib, target);
-    lib.root_module.addImport("base", roc_modules.base);
+    if (options.uses_stack_handler) {
+        lib.root_module.addImport("base", roc_modules.base);
+    }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
     // Bundle compiler_rt when the generated host object may call compiler_rt
@@ -2082,6 +2112,10 @@ fn buildAndCopyTestPlatformHostLib(
     strip: bool,
     omit_frame_pointer: ?bool,
 ) *Step {
+    const options = TestHostOptions{
+        .uses_stack_handler = testPlatformUsesStackHandler(platform_dir),
+    };
+
     const lib = createTestPlatformHostLib(
         b,
         b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, target_name }),
@@ -2091,6 +2125,7 @@ fn buildAndCopyTestPlatformHostLib(
         roc_modules,
         strip,
         omit_frame_pointer,
+        options,
     );
 
     // Use correct filename for target platform
@@ -3784,6 +3819,7 @@ pub fn build(b: *std.Build) void {
             roc_modules,
             strip,
             omit_frame_pointer,
+            .{ .uses_stack_handler = true },
         );
 
         // Copy the fx test platform host library to the source directory
@@ -3907,10 +3943,10 @@ pub fn build(b: *std.Build) void {
                     roc_modules,
                     strip,
                     omit_frame_pointer,
+                    .{ .uses_stack_handler = true },
                 );
 
                 // Add compiler modules to glue platform host for type extraction
-                glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
                 glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
                 glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
                 glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
