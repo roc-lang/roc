@@ -281,15 +281,18 @@ pub const CFStmt = union(enum) {
     runtime_error: void,
     incref: struct {
         value: LocalId,
+        rc: layout.RcHelper,
         count: u16 = 1,
         next: CFStmtId,
     },
     decref: struct {
         value: LocalId,
+        rc: layout.RcHelper,
         next: CFStmtId,
     },
     free: struct {
         value: LocalId,
+        rc: layout.RcHelper,
         next: CFStmtId,
     },
     switch_stmt: struct {

@@ -7830,16 +7830,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCallToOffset(code_offset);
         }
 
-        fn emitRawRcHelperCallAtStackOffset(
+        fn emitRcHelperCallAtStackOffset(
             self: *Self,
-            op: RcOp,
+            helper_key: RcHelperKey,
             base_offset: i32,
-            layout_idx: layout.Idx,
             count: u16,
         ) Allocator.Error!void {
-            const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
-            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return;
-
             const ptr_slot = self.codegen.allocStackSlot(8);
             const roc_ops_slot = self.codegen.allocStackSlot(8);
             const ptr_reg = try self.allocTempGeneral();
@@ -7853,7 +7849,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, roc_ops_slot, roc_ops_reg);
             self.codegen.freeGeneral(ptr_reg);
 
-            switch (op) {
+            switch (helper_key.op) {
                 .incref => {
                     const count_slot = self.codegen.allocStackSlot(8);
                     const count_reg = try self.allocTempGeneral();
@@ -7878,31 +7874,56 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const l = self.layout_store.getLayout(layout_idx);
             if (!explicitRcLayoutValContainsRefcounted(self.layout_store, "dev.emitRcHelperCallForValue.layout_rc", l)) return;
 
+            const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
+            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return;
+
             const value_size = self.layout_store.layoutSizeAlign(l).size;
             if (value_size == 0) return;
 
             const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
-            try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+            try self.emitRcHelperCallAtStackOffset(helper_key, base_offset, count);
         }
 
         fn emitExplicitRcHelperCallForValue(
             self: *Self,
-            op: RcOp,
+            helper_key: RcHelperKey,
             value_loc: ValueLocation,
-            layout_idx: layout.Idx,
             count: u16,
         ) Allocator.Error!void {
-            try self.emitRawRcHelperCallForValue(op, value_loc, layout_idx, count);
+            const helper_plan = self.layout_store.rcHelperPlan(helper_key);
+            if (helper_plan == .noop) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+                }
+                unreachable;
+            }
+
+            const layout_val = self.layout_store.getLayout(helper_key.layout_idx);
+            const value_size = self.layout_store.layoutSizeAlign(layout_val).size;
+            if (value_size == 0) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+                }
+                unreachable;
+            }
+
+            const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
+            try self.emitRcHelperCallAtStackOffset(helper_key, base_offset, count);
         }
 
         fn emitExplicitRcHelperCallAtStackOffset(
             self: *Self,
-            op: RcOp,
+            helper_key: RcHelperKey,
             base_offset: i32,
-            layout_idx: layout.Idx,
             count: u16,
         ) Allocator.Error!void {
-            try self.emitRawRcHelperCallAtStackOffset(op, base_offset, layout_idx, count);
+            if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("LIR/codegen invariant violated: explicit RC stack helper was noop for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+                }
+                unreachable;
+            }
+            try self.emitRcHelperCallAtStackOffset(helper_key, base_offset, count);
         }
 
         fn emitRawRcHelperCallFromPtrReg(
@@ -11215,42 +11236,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn generateRcOperandValue(self: *Self, local: LocalId, _: layout.Idx) Allocator.Error!ValueLocation {
+        fn generateRcOperandValue(self: *Self, local: LocalId) Allocator.Error!ValueLocation {
             return self.emitValueLocal(local);
         }
 
         /// Generate code for incref operation.
         fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
-            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateIncref.layout_rc", layout_val)) return value_loc;
-
-            switch (layout_val.tag) {
-                .closure => {
-                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, layout_val.data.closure.captures_layout_idx, rc_op.count);
-                },
-                else => {
-                    try self.emitExplicitRcHelperCallForValue(.incref, value_loc, rc_op.layout_idx, rc_op.count);
-                },
-            }
-
+            const value_loc = try self.generateRcOperandValue(rc_op.value);
+            try self.emitExplicitRcHelperCallForValue(rc_op.rc, value_loc, rc_op.count);
             return value_loc;
         }
 
         /// Generate code for decref operation.
         fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
-            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateDecref.layout_rc", layout_val)) return value_loc;
-
-            if (layout_val.tag == .closure) {
-                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1);
-            } else {
-                try self.emitExplicitRcHelperCallForValue(.decref, value_loc, rc_op.layout_idx, 1);
-            }
-
+            const value_loc = try self.generateRcOperandValue(rc_op.value);
+            try self.emitExplicitRcHelperCallForValue(rc_op.rc, value_loc, 1);
             return value_loc;
         }
 
@@ -11289,7 +11289,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitIncrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
                 },
                 else => {
-                    try self.emitExplicitRcHelperCallAtStackOffset(.incref, base_offset, layout_idx, 1);
+                    try self.emitExplicitRcHelperCallAtStackOffset(.{ .op = .incref, .layout_idx = layout_idx }, base_offset, 1);
                 },
             }
         }
@@ -11304,23 +11304,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitDecrefAtStackOffset(base_offset, layout_val.data.closure.captures_layout_idx);
                 },
                 else => {
-                    try self.emitExplicitRcHelperCallAtStackOffset(.decref, base_offset, layout_idx, 1);
+                    try self.emitExplicitRcHelperCallAtStackOffset(.{ .op = .decref, .layout_idx = layout_idx }, base_offset, 1);
                 },
             }
         }
 
         /// Generate code for free operation.
         fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
-            const value_loc = try self.generateRcOperandValue(rc_op.value, rc_op.layout_idx);
-            const ls = self.layout_store;
-            const layout_val = ls.getLayout(rc_op.layout_idx);
-            if (!explicitRcLayoutValContainsRefcounted(ls, "dev.generateFree.layout_rc", layout_val)) return value_loc;
-
-            switch (layout_val.tag) {
-                .closure => try self.emitExplicitRcHelperCallForValue(.decref, value_loc, layout_val.data.closure.captures_layout_idx, 1),
-                else => try self.emitExplicitRcHelperCallForValue(.free, value_loc, rc_op.layout_idx, 1),
-            }
-
+            const value_loc = try self.generateRcOperandValue(rc_op.value);
+            try self.emitExplicitRcHelperCallForValue(rc_op.rc, value_loc, 1);
             return value_loc;
         }
 
@@ -13038,7 +13030,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .incref => |inc| {
                     _ = try self.generateIncref(.{
                         .value = inc.value,
-                        .layout_idx = self.localLayout(inc.value),
+                        .rc = inc.rc,
                         .count = inc.count,
                     });
                     try self.generateStmt(inc.next);
@@ -13047,7 +13039,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .decref => |dec| {
                     _ = try self.generateDecref(.{
                         .value = dec.value,
-                        .layout_idx = self.localLayout(dec.value),
+                        .rc = dec.rc,
                     });
                     try self.generateStmt(dec.next);
                 },
@@ -13055,7 +13047,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .free => |free_stmt| {
                     _ = try self.generateFree(.{
                         .value = free_stmt.value,
-                        .layout_idx = self.localLayout(free_stmt.value),
+                        .rc = free_stmt.rc,
                     });
                     try self.generateStmt(free_stmt.next);
                 },
@@ -14306,6 +14298,7 @@ test "two-arg proc list join loop returns full length" {
     const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const drop_list = try store.addCFStmt(.{ .decref = .{
         .value = root_list,
+        .rc = .{ .op = .decref, .layout_idx = list_layout },
         .next = ret_result,
     } });
     const call_args = try store.addLocalSpan(&.{ root_list, ignored });

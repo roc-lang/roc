@@ -631,6 +631,7 @@ const Inserter = struct {
             .incref => |rc| {
                 cloned = try self.store.addCFStmt(.{ .incref = .{
                     .value = rc.value,
+                    .rc = rc.rc,
                     .count = rc.count,
                     .next = next,
                 } });
@@ -638,12 +639,14 @@ const Inserter = struct {
             .decref => |rc| {
                 cloned = try self.store.addCFStmt(.{ .decref = .{
                     .value = rc.value,
+                    .rc = rc.rc,
                     .next = next,
                 } });
             },
             .free => |rc| {
                 cloned = try self.store.addCFStmt(.{ .free = .{
                     .value = rc.value,
+                    .rc = rc.rc,
                     .next = next,
                 } });
             },
@@ -1672,8 +1675,10 @@ const Inserter = struct {
 
     fn retainLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
+        const rc = self.rcHelperForLocal(.incref, local);
         return try self.store.addCFStmt(.{ .incref = .{
             .value = local,
+            .rc = rc,
             .count = 1,
             .next = next,
         } });
@@ -1681,10 +1686,36 @@ const Inserter = struct {
 
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
+        const rc = self.rcHelperForLocal(.decref, local);
         return try self.store.addCFStmt(.{ .decref = .{
             .value = local,
+            .rc = rc,
             .next = next,
         } });
+    }
+
+    fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) layout_mod.RcHelper {
+        const local_layout = self.store.getLocal(local).layout_idx;
+        const helper = self.rcHelperForLayout(op, local_layout);
+        if (self.layouts.rcHelperPlan(helper) == .noop) {
+            arcInvariant("ARC attempted to emit a noop RC helper for a refcounted local");
+        }
+        return helper;
+    }
+
+    fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
+        const layout_val = self.layouts.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.data.closure.captures_layout_idx),
+            else => .{ .op = op, .layout_idx = layout_idx },
+        };
+    }
+
+    fn nestedDropOp(op: layout_mod.RcOp) layout_mod.RcOp {
+        return switch (op) {
+            .incref => .incref,
+            .decref, .free => .decref,
+        };
     }
 
     fn localContainsRefcounted(self: *const Inserter, local: LIR.LocalId) bool {

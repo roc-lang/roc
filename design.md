@@ -74,7 +74,10 @@ later stages consume that mapping.
 
 Backends do not reason about reference counting. They lower and execute the
 explicit LIR `incref`, `decref`, and `free` statements emitted before backend
-code generation. Reference-counting policy belongs to LIR ARC insertion.
+code generation. Each explicit RC statement carries the concrete RC helper
+selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
+execution plans for that helper, but they must not select a different helper
+from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
 The compiler does not contain a static borrow, alias-permission, lifetime,
 uniqueness, parameter-mode, or escape-summary model in this architecture.
@@ -1292,7 +1295,9 @@ no persisted pattern-decision IR.
 
 The direct LIR builder emits ownership-neutral LIR. ARC insertion runs after
 LIR construction and emits explicit `incref`, `decref`, and `free` statements.
-Backends and LirImage builders follow those statements mechanically.
+Each explicit RC statement carries the concrete RC helper selected by ARC.
+Backends, the interpreter, and LirImage builders follow those statements
+mechanically.
 
 ## Compile-Time Constants
 

@@ -1717,9 +1717,8 @@ pub const Interpreter = struct {
                         @intFromPtr((try self.getLocalChecked(frame, inc.value)).ptr),
                     });
                     self.performExplicitRcStmt(
-                        .incref,
+                        inc.rc,
                         try self.getLocalChecked(frame, inc.value),
-                        self.store.getLocal(inc.value).layout_idx,
                         inc.count,
                     );
                     current = inc.next;
@@ -1741,9 +1740,8 @@ pub const Interpreter = struct {
                         @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
                     });
                     self.performExplicitRcStmt(
-                        .decref,
+                        dec.rc,
                         try self.getLocalChecked(frame, dec.value),
-                        self.store.getLocal(dec.value).layout_idx,
                         0,
                     );
                     current = dec.next;
@@ -1765,9 +1763,8 @@ pub const Interpreter = struct {
                         @intFromPtr((try self.getLocalChecked(frame, free_stmt.value)).ptr),
                     });
                     self.performExplicitRcStmt(
-                        .free,
+                        free_stmt.rc,
                         try self.getLocalChecked(frame, free_stmt.value),
-                        self.store.getLocal(free_stmt.value).layout_idx,
                         0,
                     );
                     current = free_stmt.next;
@@ -2397,12 +2394,7 @@ pub const Interpreter = struct {
             @enumFromInt(context.capture_layout_plus_one - 1);
         if (capture_layout == .zst) return;
         const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
-        const helper = layout_mod.RcHelperKey{ .op = .decref, .layout_idx = capture_layout };
-        context.interpreter.performRawRcPlan(
-            context.interpreter.cachedRcPlan(helper),
-            .{ .ptr = capture_value_ptr },
-            1,
-        );
+        context.interpreter.performRawRc(.decref, .{ .ptr = capture_value_ptr }, capture_layout, 1);
     }
 
     fn callInterpreterErasedCallable(
@@ -3038,17 +3030,14 @@ pub const Interpreter = struct {
 
     const RcOp = layout_mod.RcOp;
 
-    /// Perform a reference count operation on a value using the layout-driven
-    /// RC helper plan.  This walks structs, tag unions, boxes, etc. recursively
-    /// so the interpreter's refcounting matches what the dev backend emits.
     fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
         trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
-        const helper = layout_mod.RcHelperKey{ .op = op, .layout_idx = layout_idx };
-        self.performRawRcPlan(self.cachedRcPlan(helper), val, count);
+        const helper = self.rcHelperForLayout(op, layout_idx);
+        self.performRcHelperIfNeeded(helper, val, count);
     }
 
-    fn performExplicitRcStmt(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
-        self.performRawRc(op, val, layout_idx, count);
+    fn performExplicitRcStmt(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16) void {
+        self.performRcHelperRequired(helper, val, count);
     }
 
     fn performBuiltinInternalRc(
@@ -3128,6 +3117,31 @@ pub const Interpreter = struct {
             .incref => .incref,
             .decref, .free => .decref,
         };
+    }
+
+    fn rcHelperForLayout(self: *LirInterpreter, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.data.closure.captures_layout_idx),
+            else => .{ .op = op, .layout_idx = layout_idx },
+        };
+    }
+
+    fn performRcHelperIfNeeded(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16) void {
+        const plan = self.cachedRcPlan(helper);
+        if (plan == .noop) return;
+        self.performRawRcPlan(plan, val, count);
+    }
+
+    fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16) void {
+        const plan = self.cachedRcPlan(helper);
+        if (plan == .noop) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper.layout_idx)});
+            }
+            unreachable;
+        }
+        self.performRawRcPlan(plan, val, count);
     }
 
     fn cachedStructFieldPlan(

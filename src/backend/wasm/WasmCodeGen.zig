@@ -720,13 +720,49 @@ fn emitRawRcForValueLocal(
 
 fn emitExplicitRcForValueLocal(
     self: *Self,
-    comptime kind: RcOpKind,
+    helper_key: RcHelperKey,
     value_local: u32,
     value_vt: ValType,
-    layout_idx: layout.Idx,
     inc_count: u16,
 ) Allocator.Error!void {
-    try self.emitRawRcForValueLocal(kind, value_local, value_vt, layout_idx, inc_count);
+    if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) {
+        wasmInvariantFmt(
+            "WASM/codegen invariant violated: explicit RC statement used noop helper for layout {d}",
+            .{@intFromEnum(helper_key.layout_idx)},
+        );
+    }
+    if (value_vt != .i32) {
+        wasmInvariantFmt(
+            "WASM/codegen invariant violated: explicit RC local {d} was not represented as i32",
+            .{value_local},
+        );
+    }
+
+    const ls = self.getLayoutStore();
+    const l = ls.getLayout(helper_key.layout_idx);
+    if (self.isCompositeLayout(helper_key.layout_idx)) {
+        try self.emitExplicitRcHelperCallForValuePtr(helper_key, value_local, inc_count);
+        return;
+    }
+
+    const size_align = ls.layoutSizeAlign(l);
+    if (size_align.size == 0) {
+        wasmInvariantFmt(
+            "WASM/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}",
+            .{@intFromEnum(helper_key.layout_idx)},
+        );
+    }
+
+    const slot = try self.allocStackMemory(@intCast(size_align.size), @intCast(size_align.alignment.toByteUnits()));
+    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(slot);
+    try self.emitLocalSet(ptr_local);
+
+    try self.emitLocalGet(ptr_local);
+    try self.emitLocalGet(value_local);
+    try self.emitStoreOpSized(.i32, @intCast(size_align.size), 0);
+
+    try self.emitExplicitRcHelperCallForValuePtr(helper_key, ptr_local, inc_count);
 }
 
 fn emitRawDirectRcPlan(
@@ -884,6 +920,37 @@ fn emitRawRcHelperCallForValuePtr(
     const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
     try self.emitLocalGet(normalized_value_ptr);
     switch (kind) {
+        .incref => {
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inc_count)) catch return error.OutOfMemory;
+            try self.emitLocalGet(self.roc_ops_local);
+        },
+        .decref, .free => {
+            try self.emitLocalGet(self.roc_ops_local);
+        },
+    }
+    try self.emitCall(helper_func_idx);
+}
+
+fn emitExplicitRcHelperCallForValuePtr(
+    self: *Self,
+    helper_key: RcHelperKey,
+    value_ptr_local: u32,
+    inc_count: u16,
+) Allocator.Error!void {
+    const normalized_value_ptr = try self.normalizeCompositeValuePtr(value_ptr_local, helper_key.layout_idx);
+    const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
+    if (helper_plan == .noop) {
+        wasmInvariantFmt(
+            "WASM/codegen invariant violated: explicit RC statement used noop helper for layout {d}",
+            .{@intFromEnum(helper_key.layout_idx)},
+        );
+    }
+    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, normalized_value_ptr, null)) return;
+
+    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
+    try self.emitLocalGet(normalized_value_ptr);
+    switch (helper_key.op) {
         .incref => {
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inc_count)) catch return error.OutOfMemory;
@@ -5396,15 +5463,15 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
             WasmModule.leb128WriteU32(self.allocator, &self.body, br_target) catch return error.OutOfMemory;
         },
         .incref => |inc| {
-            try self.generateRcStmt(.incref, inc.value, inc.count);
+            try self.generateRcStmt(inc.value, inc.rc, inc.count);
             try self.generateCFStmtUntil(inc.next, stop);
         },
         .decref => |dec| {
-            try self.generateRcStmt(.decref, dec.value, 1);
+            try self.generateRcStmt(dec.value, dec.rc, 1);
             try self.generateCFStmtUntil(dec.next, stop);
         },
         .free => |free_stmt| {
-            try self.generateRcStmt(.free, free_stmt.value, 1);
+            try self.generateRcStmt(free_stmt.value, free_stmt.rc, 1);
             try self.generateCFStmtUntil(free_stmt.next, stop);
         },
         .runtime_error => {
@@ -5824,14 +5891,14 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
 
 fn generateRcStmt(
     self: *Self,
-    comptime kind: RcOpKind,
     value: ProcLocalId,
+    rc: RcHelperKey,
     inc_count: u16,
 ) Allocator.Error!void {
     try self.emitProcLocal(value);
     const value_local = self.storage.allocAnonymousLocal(self.procLocalValType(value)) catch return error.OutOfMemory;
     try self.emitLocalSet(value_local);
-    try self.emitExplicitRcForValueLocal(kind, value_local, self.procLocalValType(value), self.procLocalLayoutIdx(value), inc_count);
+    try self.emitExplicitRcForValueLocal(rc, value_local, self.procLocalValType(value), inc_count);
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
