@@ -227,7 +227,11 @@ test "access violation handler is not reported as stack overflow" {
         return error.SkipZigTest;
     }
 
-    try testCrashInChildProcess("high-access-violation", "Segmentation fault", 139);
+    const expected_msg = if (comptime builtin.os.tag == .windows)
+        "Access violation"
+    else
+        "Segmentation fault";
+    try testCrashInChildProcess("high-access-violation", expected_msg, 139);
 }
 
 test "worker thread installs stack overflow handler" {

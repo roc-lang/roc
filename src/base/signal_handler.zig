@@ -57,13 +57,18 @@ const EXCEPTION_POINTERS = extern struct {
 };
 
 const LPTOP_LEVEL_EXCEPTION_FILTER = ?*const fn (*EXCEPTION_POINTERS) callconv(.winapi) LONG;
+const PVECTORED_EXCEPTION_HANDLER = ?*const fn (*EXCEPTION_POINTERS) callconv(.winapi) LONG;
 
 extern "kernel32" fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: LPTOP_LEVEL_EXCEPTION_FILTER) callconv(.winapi) LPTOP_LEVEL_EXCEPTION_FILTER;
+extern "kernel32" fn AddVectoredExceptionHandler(First: c_uint, Handler: PVECTORED_EXCEPTION_HANDLER) callconv(.winapi) PVOID;
+extern "kernel32" fn SetThreadStackGuarantee(StackSizeInBytes: *ULONG) callconv(.winapi) BOOL;
 extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) BOOL;
 extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
 extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: c_uint) callconv(.winapi) BOOL;
 extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
+
+const ULONG = c_ulong;
 
 const ALT_STACK_SIZE = 64 * 1024;
 
@@ -222,6 +227,13 @@ fn installPosixProcessHandlers(callbacks: Callbacks) bool {
     return true;
 }
 
+// Per-thread guarantee reserved so EXCEPTION_STACK_OVERFLOW can dispatch.
+// Without this, an overflow on a worker thread takes the process down before
+// any handler runs — the OS only reserves a guarantee for the main thread.
+// 32 KB is well below the default 1 MB stack and large enough to host our
+// minimal handler frame.
+const WINDOWS_STACK_GUARANTEE: ULONG = 32 * 1024;
+
 fn installWindows(callbacks: Callbacks) bool {
     install_mutex.lock();
     defer install_mutex.unlock();
@@ -231,10 +243,19 @@ fn installWindows(callbacks: Callbacks) bool {
     arithmetic_error_callback = callbacks.arithmetic_error;
 
     if (!process_handlers_installed) {
+        // Vectored handlers get first-chance dispatch and run even when
+        // SetUnhandledExceptionFilter is preempted (e.g. by a debugger or
+        // CRT-installed filter). Keep the legacy filter as a backstop.
+        _ = AddVectoredExceptionHandler(1, handleExceptionWindows);
         _ = SetUnhandledExceptionFilter(handleExceptionWindows);
         process_handlers_installed = true;
     }
-    current_thread_installed = true;
+
+    if (!current_thread_installed) {
+        var guarantee: ULONG = WINDOWS_STACK_GUARANTEE;
+        _ = SetThreadStackGuarantee(&guarantee);
+        current_thread_installed = true;
+    }
     return true;
 }
 

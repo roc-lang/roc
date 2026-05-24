@@ -112,9 +112,14 @@ events: std.ArrayListUnmanaged(HostEvent) = .empty,
 allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
 
 pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
+    // The allocation_tracker grows from inside rocAllocFn, which on Windows
+    // is invoked from JIT'd dev-backend code. Stack-capturing allocators
+    // (testing.allocator) crash inside walkStackWindows when unwinding
+    // through JIT memory that lacks Windows unwind data, so the tracker
+    // uses a non-tracing allocator regardless of what was passed in.
     return .{
         .allocator = allocator,
-        .allocation_tracker = std.AutoHashMap(usize, AllocationInfo).init(allocator),
+        .allocation_tracker = std.AutoHashMap(usize, AllocationInfo).init(runtime_bytes_allocator),
     };
 }
 
@@ -291,12 +296,12 @@ fn rocReallocFn(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
         std.debug.panic("RuntimeHostEnv: realloc of untracked memory at ptr=0x{x}", .{old_alloc_ptr});
     };
 
-    const new_base_ptr = allocateTrackedBytes(self.allocator, realloc_args.new_length, realloc_args.alignment);
+    const new_base_ptr = allocateTrackedBytes(undefined, realloc_args.new_length, realloc_args.alignment);
     const old_bytes: [*]u8 = @ptrCast(@alignCast(realloc_args.answer));
     const copy_size = @min(old_info.value.size, realloc_args.new_length);
     @memcpy(new_base_ptr[0..copy_size], old_bytes[0..copy_size]);
 
-    freeTrackedBytes(self.allocator, realloc_args.answer, old_info.value);
+    freeTrackedBytes(undefined, realloc_args.answer, old_info.value);
     realloc_args.answer = @ptrCast(new_base_ptr);
 
     self.allocation_tracker.put(@intFromPtr(new_base_ptr), .{
@@ -307,7 +312,19 @@ fn rocReallocFn(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     };
 }
 
-fn allocateTrackedBytes(allocator: std.mem.Allocator, len: usize, alignment: usize) [*]u8 {
+// Use a non-tracing allocator for Roc runtime bytes. On Windows the
+// dev-backend JIT emits code without unwind data, so a stack-capturing
+// allocator (e.g. DebugAllocator/testing.allocator) crashes inside
+// walkStackWindows when an alloc happens from JIT'd code. RuntimeHostEnv
+// owns its own allocation_tracker for leak detection, so we don't need the
+// underlying allocator to track.
+const runtime_bytes_allocator: std.mem.Allocator = if (@import("builtin").target.os.tag == .freestanding)
+    std.heap.wasm_allocator
+else
+    std.heap.smp_allocator;
+
+fn allocateTrackedBytes(_: std.mem.Allocator, len: usize, alignment: usize) [*]u8 {
+    const allocator = runtime_bytes_allocator;
     return switch (alignment) {
         1 => (allocator.alignedAlloc(u8, .@"1", len) catch oom("roc_alloc")).ptr,
         2 => (allocator.alignedAlloc(u8, .@"2", len) catch oom("roc_alloc")).ptr,
@@ -318,7 +335,8 @@ fn allocateTrackedBytes(allocator: std.mem.Allocator, len: usize, alignment: usi
     };
 }
 
-fn freeTrackedBytes(allocator: std.mem.Allocator, ptr: *anyopaque, alloc_info: AllocationInfo) void {
+fn freeTrackedBytes(_: std.mem.Allocator, ptr: *anyopaque, alloc_info: AllocationInfo) void {
+    const allocator = runtime_bytes_allocator;
     const bytes: [*]u8 = @ptrCast(@alignCast(ptr));
     switch (alloc_info.alignment) {
         1 => allocator.free(bytes[0..alloc_info.size]),
