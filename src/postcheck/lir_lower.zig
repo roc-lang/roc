@@ -699,11 +699,14 @@ const Lowerer = struct {
                 .value = .{ .dec_literal = value.num },
                 .next = next,
             } }),
-            .str_lit => |literal| try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .str_literal = try self.result.store.insertString(self.program.stringLiteralText(literal)) },
-                .next = next,
-            } }),
+            .str_lit => |literal| blk: {
+                const str_lit = self.program.stringLiteral(literal);
+                break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .str_literal = try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len) },
+                    .next = next,
+                } });
+            },
             .list => |items| try self.lowerListInto(target, items, next),
             .tuple => |items| try self.lowerTupleInto(target, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_data.ty, fields, next),
@@ -1507,11 +1510,14 @@ const Lowerer = struct {
                 .value = .{ .f64_literal = value },
                 .next = next,
             } }),
-            .str_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .str_literal = try self.result.store.insertString(self.program.stringLiteralText(value)) },
-                .next = next,
-            } }),
+            .str_lit => |value| blk: {
+                const str_lit = self.program.stringLiteral(value);
+                break :blk try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .str_literal = try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len) },
+                    .next = next,
+                } });
+            },
         };
     }
 

@@ -16514,6 +16514,7 @@ test "checked module keeps current compile-time ownership tables" {
     try std.testing.expect(@hasField(ConstTemplateTable, "templates"));
     try std.testing.expect(@hasField(ConstStore, "values"));
     try std.testing.expect(@hasField(ConstStore, "fns"));
+    try std.testing.expect(@hasField(ConstStore, "str_data"));
 }
 
 test "provided primitive constant is a data export, not a runtime root" {

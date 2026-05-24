@@ -769,38 +769,46 @@ generate_rust_roc_str =
 	\\/// A Roc string value. Small strings (up to 23 bytes on 64-bit) are stored inline;
 	\\/// larger strings are heap-allocated with a reference count.
 	\\///
+	\\/// `bytes` is never tagged. Operations, host code, glue code, and object-file
+	\\/// relocations can use it directly as the UTF-8 byte pointer for non-small
+	\\/// strings. Seamless-slice tagging lives in `capacity_or_alloc_ptr` instead.
+	\\/// Big-string capacity is stored shifted left by one bit, so max capacity is
+	\\/// essentially `isize::MAX` bytes: about 2 GiB on 32-bit targets and 8 EiB on
+	\\/// 64-bit targets.
+	\\///
 	\\/// This type is ABI-compatible with the Zig RocStr (24 bytes, `#[repr(C)]`).
 	\\#[repr(C)]
 	\\pub struct RocStr {
 	\\    pub bytes: *mut u8,
-	\\    pub length: usize,
 	\\    pub capacity_or_alloc_ptr: usize,
+	\\    pub length: usize,
 	\\}
 	\\
 	\\const ROC_STR_SIZE: usize = core::mem::size_of::<RocStr>();
 	\\const ROC_SMALL_STR_MAX_LEN: usize = ROC_STR_SIZE - 1;
-	\\const ROC_SEAMLESS_SLICE_BIT: usize = isize::MIN as usize;
+	\\const ROC_SMALL_STR_BIT: usize = isize::MIN as usize;
+	\\const ROC_SEAMLESS_SLICE_TAG: usize = 1;
 	\\
 	\\impl RocStr {
 	\\    /// Return an empty RocStr (small string with zero length).
 	\\    pub fn empty() -> Self {
 	\\        Self {
 	\\            bytes: core::ptr::null_mut(),
-	\\            length: 0,
-	\\            capacity_or_alloc_ptr: ROC_SEAMLESS_SLICE_BIT,
+	\\            capacity_or_alloc_ptr: 0,
+	\\            length: ROC_SMALL_STR_BIT,
 	\\        }
 	\\    }
 	\\
 	\\    /// Return true if this string is stored inline (small string optimization).
 	\\    #[inline]
 	\\    pub fn is_small_str(&self) -> bool {
-	\\        (self.capacity_or_alloc_ptr as isize) < 0
+	\\        (self.length as isize) < 0
 	\\    }
 	\\
 	\\    /// Return true if this string is a seamless slice into another allocation.
 	\\    #[inline]
 	\\    pub fn is_seamless_slice(&self) -> bool {
-	\\        !self.is_small_str() && (self.length as isize) < 0
+	\\        !self.is_small_str() && (self.capacity_or_alloc_ptr & ROC_SEAMLESS_SLICE_TAG) != 0
 	\\    }
 	\\
 	\\    /// Return the length of the string in bytes.
@@ -811,7 +819,7 @@ generate_rust_roc_str =
 	\\            let last_byte = unsafe { *bytes_ptr.add(ROC_STR_SIZE - 1) };
 	\\            (last_byte ^ 0b1000_0000) as usize
 	\\        } else {
-	\\            self.length & !ROC_SEAMLESS_SLICE_BIT
+	\\            self.length
 	\\        }
 	\\    }
 	\\
@@ -866,8 +874,8 @@ generate_rust_roc_str =
 	\\            }
 	\\            Self {
 	\\                bytes: data_ptr,
+	\\                capacity_or_alloc_ptr: slice.len() << 1,
 	\\                length: slice.len(),
-	\\                capacity_or_alloc_ptr: slice.len(),
 	\\            }
 	\\        }
 	\\    }
@@ -900,7 +908,7 @@ generate_rust_roc_str =
 	\\
 	\\    fn get_allocation_ptr(&self) -> *mut u8 {
 	\\        if self.is_seamless_slice() {
-	\\            (self.capacity_or_alloc_ptr << 1) as *mut u8
+	\\            (self.capacity_or_alloc_ptr & !ROC_SEAMLESS_SLICE_TAG) as *mut u8
 	\\        } else {
 	\\            self.bytes
 	\\        }

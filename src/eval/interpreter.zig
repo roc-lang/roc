@@ -2967,28 +2967,39 @@ pub const Interpreter = struct {
         return val;
     }
 
-    fn evalStrLiteral(self: *LirInterpreter, idx: base.StringLiteral.Idx) Error!Value {
-        const str_bytes = self.store.getString(idx);
-        return self.makeStaticRocStrLiteral(str_bytes);
+    fn evalStrLiteral(self: *LirInterpreter, literal: LIR.StrLiteral) Error!Value {
+        return self.makeStaticRocStrLiteralView(
+            self.store.getStringLiteralBacking(literal),
+            literal.offset,
+            literal.len,
+        );
     }
 
     // String helpers (RocStr construction)
 
-    fn makeStaticRocStrLiteral(self: *LirInterpreter, bytes: []const u8) Error!Value {
-        if (RocStr.fitsInSmallStr(bytes.len)) {
+    fn makeStaticRocStrLiteralView(self: *LirInterpreter, backing: []const u8, offset: u32, len: u32) Error!Value {
+        const offset_usize: usize = offset;
+        const len_usize: usize = len;
+        if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
+            self.invariantFailed("LIR/interpreter invariant violated: string literal view exceeded backing bytes", .{});
+        }
+
+        const bytes = backing[offset_usize..][0..len_usize];
+        const whole_backing = offset_usize == 0 and len_usize == backing.len;
+        if (backing.len < @sizeOf(RocStr) and RocStr.fitsInSmallStr(bytes.len)) {
             const small = RocStr.fromSliceSmall(bytes);
             return self.rocStrToValue(small, .str);
         }
 
         if (builtin.mode == .Debug) {
-            const data_addr = @intFromPtr(bytes.ptr);
+            const data_addr = @intFromPtr(backing.ptr);
             if (data_addr % @alignOf(isize) != 0) {
                 self.invariantFailed(
-                    "LIR/interpreter invariant violated: static string literal bytes are not refcount-aligned",
+                    "LIR/interpreter invariant violated: static string literal backing is not refcount-aligned",
                     .{},
                 );
             }
-            const refcount_ptr: *const isize = @ptrCast(@alignCast(bytes.ptr - @sizeOf(isize)));
+            const refcount_ptr: *const isize = @ptrCast(@alignCast(backing.ptr - @sizeOf(isize)));
             if (refcount_ptr.* != builtins.utils.REFCOUNT_STATIC_DATA) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: static string literal missing static refcount",
@@ -2999,8 +3010,11 @@ pub const Interpreter = struct {
 
         const rs = RocStr{
             .bytes = @ptrCast(@constCast(bytes.ptr)),
+            .capacity_or_alloc_ptr = if (whole_backing)
+                RocStr.encodeCapacity(bytes.len)
+            else
+                RocStr.encodeSliceAllocationPtr(@ptrCast(@constCast(backing.ptr))),
             .length = bytes.len,
-            .capacity_or_alloc_ptr = bytes.len,
         };
         return self.rocStrToValue(rs, .str);
     }

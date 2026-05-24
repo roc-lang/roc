@@ -332,7 +332,7 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
             pos += 1;
         }
         heap_ptr[pos] = '"';
-        out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
+        out.* = .{ .bytes = heap_ptr, .capacity_or_alloc_ptr = RocStr.encodeCapacity(result_len), .length = result_len };
     }
 }
 
@@ -781,8 +781,8 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
         @memcpy(heap_ptr[0..slice.len], slice);
         out.* = .{
             .bytes = heap_ptr,
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(slice.len),
             .length = slice.len,
-            .capacity_or_alloc_ptr = slice.len,
         };
     }
 }

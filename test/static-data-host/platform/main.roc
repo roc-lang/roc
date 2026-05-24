@@ -21,6 +21,10 @@ platform ""
             ),
         ],
         boxed_add_one : Box((I64 -> I64)),
+        literal_long : Str,
+        assembled_strings : (Str, Str, Str),
+        intermediate_final : Str,
+        static_slices : (Str, Str),
     }
     exposes []
     packages {}
@@ -33,6 +37,10 @@ platform ""
         names_for_host: "names",
         tree_for_host: "tree",
         boxed_add_one_for_host: "boxed_add_one",
+        literal_long_for_host: "literal_long",
+        assembled_strings_for_host: "assembled_strings",
+        intermediate_final_for_host: "intermediate_final",
+        static_slices_for_host: "static_slices",
     }
     targets: {
         files: "targets/",
@@ -82,3 +90,15 @@ tree_for_host = tree
 
 boxed_add_one_for_host : Box((I64 -> I64))
 boxed_add_one_for_host = boxed_add_one
+
+literal_long_for_host : Str
+literal_long_for_host = literal_long
+
+assembled_strings_for_host : (Str, Str, Str)
+assembled_strings_for_host = assembled_strings
+
+intermediate_final_for_host : Str
+intermediate_final_for_host = intermediate_final
+
+static_slices_for_host : (Str, Str)
+static_slices_for_host = static_slices

@@ -496,6 +496,7 @@ fn wrapStrFromUtf8Lossy(out: *RocStr, list_bytes: ?[*]u8, list_len: usize, list_
     out.* = strFromUtf8Lossy(list, roc_ops);
 }
 
+const LIR = lir.LIR;
 const LirProcSpec = lir.LirProcSpec;
 
 const Allocator = std.mem.Allocator;
@@ -511,12 +512,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
     // ── Target-specific size constants ──
     // These are derived from the target pointer size for the 64-bit architectures we support.
-    // RocStr and RocList both have the same layout: { ptr: [*]u8, length: usize, capacity: usize }
+    // RocStr and RocList are both three target words. RocStr stores bytes, encoded capacity, then length.
 
     // Size of a pointer on the target architecture (8 bytes for x86_64/aarch64)
     const target_ptr_size: u32 = 8;
 
-    // Size of a RocStr struct: ptr + length + capacity = 3 × pointer size (24 bytes on 64-bit)
+    // Size of a RocStr struct: ptr + encoded capacity + length = 3 × pointer size (24 bytes on 64-bit)
     const roc_str_size: u32 = 3 * target_ptr_size;
     const small_str_max_len: u32 = roc_str_size - 1;
 
@@ -850,7 +851,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             },
             /// 128-bit value on the stack (16 bytes: low at offset, high at offset+8)
             stack_i128: i32,
-            /// 24-byte string value on the stack (for RocStr: ptr/data, len, capacity)
+            /// 24-byte string value on the stack (for RocStr: ptr/data, encoded capacity, length)
             stack_str: i32,
             /// List value on the stack - tracks both struct and element locations
             /// for proper copying when returning lists
@@ -3397,8 +3398,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addMemArg(frame_ptr, str_off);
-            try builder.addMemArg(frame_ptr, str_off + 8);
             try builder.addMemArg(frame_ptr, str_off + 16);
+            try builder.addMemArg(frame_ptr, str_off + 8);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
@@ -3415,8 +3416,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addMemArg(base_ptr, str_off);
-            try builder.addMemArg(base_ptr, str_off + 8);
             try builder.addMemArg(base_ptr, str_off + 16);
+            try builder.addMemArg(base_ptr, str_off + 8);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             // Result is in return register (X0 or RAX)
@@ -3436,11 +3437,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addMemArg(base_ptr, a_off);
-            try builder.addMemArg(base_ptr, a_off + 8);
             try builder.addMemArg(base_ptr, a_off + 16);
+            try builder.addMemArg(base_ptr, a_off + 8);
             try builder.addMemArg(base_ptr, b_off);
-            try builder.addMemArg(base_ptr, b_off + 8);
             try builder.addMemArg(base_ptr, b_off + 16);
+            try builder.addMemArg(base_ptr, b_off + 8);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             // Result is in return register (X0 or RAX)
@@ -3473,11 +3474,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(base_ptr, result_offset);
             try builder.addMemArg(base_ptr, a_off);
-            try builder.addMemArg(base_ptr, a_off + 8);
             try builder.addMemArg(base_ptr, a_off + 16);
+            try builder.addMemArg(base_ptr, a_off + 8);
             try builder.addMemArg(base_ptr, b_off);
-            try builder.addMemArg(base_ptr, b_off + 8);
             try builder.addMemArg(base_ptr, b_off + 16);
+            try builder.addMemArg(base_ptr, b_off + 8);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
@@ -3498,8 +3499,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(base_ptr, result_offset);
             try builder.addMemArg(base_ptr, str_off);
-            try builder.addMemArg(base_ptr, str_off + 8);
             try builder.addMemArg(base_ptr, str_off + 16);
+            try builder.addMemArg(base_ptr, str_off + 8);
             try builder.addMemArg(base_ptr, u64_off);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
@@ -4370,12 +4371,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(ptr_reg);
 
             try self.emitLoad(.w64, ptr_reg, frame_ptr, slot_offset);
-            try self.emitLoad(.w64, len_reg, frame_ptr, slot_offset + 8);
-            try self.emitLoad(.w64, cap_reg, frame_ptr, slot_offset + 16);
+            try self.emitLoad(.w64, cap_reg, frame_ptr, slot_offset + 8);
+            try self.emitLoad(.w64, len_reg, frame_ptr, slot_offset + 16);
 
-            // Small RocStrs are stored inline and identified by the sign bit of cap.
+            // Small RocStrs are stored inline and identified by the sign bit of length.
             try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
-            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, cap_reg);
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, len_reg);
             try self.emitCmpImm(tmp_reg, 0);
             const small_patch = try self.emitJumpIfNotEqual();
 
@@ -4390,12 +4391,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // allocation pointer in capacity_or_alloc_ptr. Their bytes pointer
             // may be arbitrarily offset, so validate the stored allocation
             // pointer instead of requiring bytes alignment.
-            try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
-            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, len_reg);
+            try self.codegen.emitLoadImm(tmp_reg, 1);
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, cap_reg);
             try self.emitCmpImm(tmp_reg, 0);
             const non_seamless_patch = try self.emitJumpIfEqual();
 
-            try self.emitShlImm(.w64, tmp_reg, cap_reg, 1);
+            try self.codegen.emitLoadImm(tmp_reg, -2);
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, cap_reg);
             try self.emitCmpImm(tmp_reg, 0);
             const alloc_non_null_patch = try self.emitJumpIfNotEqual();
             try self.emitDebugCrashInvalidStrLocal(local, "null allocation pointer");
@@ -4414,7 +4416,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const after_seamless = self.codegen.currentOffset();
             self.codegen.patchJump(non_seamless_patch, after_seamless);
 
-            // Non-small RocStrs must satisfy len <= capacity.
+            // Non-slice RocStrs must satisfy len <= decoded capacity.
             try self.codegen.emitLoadImm(tmp_reg, @alignOf(usize) - 1);
             try self.emitAndRegs(.w64, tmp_reg, tmp_reg, ptr_reg);
             try self.emitCmpImm(tmp_reg, 0);
@@ -4423,7 +4425,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const after_ptr_align = self.codegen.currentOffset();
             self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
 
-            try self.emitCmpReg(len_reg, cap_reg);
+            try self.emitLsrImm(.w64, tmp_reg, cap_reg, 1);
+            try self.emitCmpReg(len_reg, tmp_reg);
             const len_ok_patch = try self.codegen.emitCondJump(condBelowOrEqual());
             try self.emitDebugCrashInvalidStrLocal(local, "length exceeds capacity");
             const done = self.codegen.currentOffset();
@@ -5590,8 +5593,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, str_off);
-                    try builder.addMemArg(base_reg, str_off + 8);
                     try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addMemArg(base_reg, str_off + 8);
                     try builder.addImmArg(@intCast(disc_offset));
                     try self.callBuiltin(&builder, fn_addr, .dec_from_str);
                 },
@@ -5600,8 +5603,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, str_off);
-                    try builder.addMemArg(base_reg, str_off + 8);
                     try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addMemArg(base_reg, str_off + 8);
                     try builder.addImmArg(@intCast(float.width_bytes));
                     try builder.addImmArg(@intCast(disc_offset));
                     try self.callBuiltin(&builder, fn_addr, .float_from_str);
@@ -5611,8 +5614,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, str_off);
-                    try builder.addMemArg(base_reg, str_off + 8);
                     try builder.addMemArg(base_reg, str_off + 16);
+                    try builder.addMemArg(base_reg, str_off + 8);
                     try builder.addImmArg(@intCast(int.width_bytes));
                     try builder.addImmArg(if (int.signed) @as(i64, 1) else @as(i64, 0));
                     try builder.addImmArg(@intCast(disc_offset));
@@ -10397,7 +10400,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.storeI128ToMem(saved_ptr_reg, loc);
                 },
                 .str => {
-                    // Strings are 24 bytes (ptr, len, capacity) - same as lists
+                    // Strings are 24 bytes.
                     switch (loc) {
                         .stack_str => |stack_offset| {
                             // Copy 24-byte RocStr struct from stack to result buffer
@@ -13105,11 +13108,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a string literal.
-        fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Allocator.Error!ValueLocation {
-            const str_bytes = self.store.getString(str_idx);
+        fn generateStrLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!ValueLocation {
+            const str_bytes = self.store.getStringLiteral(literal);
+            const backing_bytes = self.store.getStringLiteralBacking(literal);
+            const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing_bytes.len;
             const base_offset = self.codegen.allocStackSlot(roc_str_size);
 
-            if (str_bytes.len < roc_str_size) {
+            if (backing_bytes.len < roc_str_size and str_bytes.len < roc_str_size) {
                 var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
                 @memcpy(bytes[0..str_bytes.len], str_bytes);
                 bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80);
@@ -13134,21 +13139,56 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 switch (self.generation_mode) {
                     .native_execution => {
-                        verifyStaticStringBytes(str_bytes);
+                        verifyStaticStringBytes(backing_bytes);
                         try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(str_bytes.ptr))));
                     },
                     .object_file => {
-                        const symbol_name = self.staticStringSymbol(str_idx);
+                        const symbol_name = self.staticStringSymbol(literal.backing);
                         try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                        try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.offset);
                     },
                 }
                 try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
-                try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
+                switch (self.generation_mode) {
+                    .native_execution => {
+                        const cap_or_alloc = if (whole_backing)
+                            str_bytes.len << 1
+                        else
+                            @intFromPtr(backing_bytes.ptr) | 1;
+                        try self.codegen.emitLoadImm(ptr_reg, @intCast(cap_or_alloc));
+                    },
+                    .object_file => {
+                        if (whole_backing) {
+                            try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len << 1));
+                        } else {
+                            const symbol_name = self.staticStringSymbol(literal.backing);
+                            try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                            try self.emitAddUsizeImm(ptr_reg, ptr_reg, 1);
+                        }
+                    },
+                }
                 try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+                try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
                 try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
             }
 
             return .{ .stack_str = base_offset };
+        }
+
+        fn emitAddUsizeImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: usize) Allocator.Error!void {
+            if (imm == 0) {
+                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
+                return;
+            }
+            if (imm <= @as(usize, @intCast(std.math.maxInt(i32)))) {
+                try self.emitAddPtrImmAny(dst, src, @intCast(imm));
+                return;
+            }
+
+            const scratch = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(scratch);
+            try self.codegen.emitLoadImm(scratch, @intCast(imm));
+            try self.emitAddRegs(.w64, dst, src, scratch);
         }
 
         fn staticStringSymbol(self: *Self, str_idx: base.StringLiteral.Idx) []const u8 {

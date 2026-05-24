@@ -92,6 +92,13 @@ pub const LocalSpan = extern struct {
 /// Builtin low-level operations reused from `base`.
 pub const LowLevel = base.LowLevel;
 
+/// LIR string literal view into one stored backing string.
+pub const StrLiteral = struct {
+    backing: StringLiteral.Idx,
+    offset: u32,
+    len: u32,
+};
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -105,7 +112,7 @@ pub const LiteralValue = union(enum) {
     f64_literal: f64,
     f32_literal: f32,
     dec_literal: i128,
-    str_literal: StringLiteral.Idx,
+    str_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
 };

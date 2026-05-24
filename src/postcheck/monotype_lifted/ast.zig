@@ -229,7 +229,7 @@ pub const Program = struct {
     record_destructs: std.ArrayList(RecordDestruct),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
-    string_literals: std.ArrayList([]const u8),
+    string_literals: std.ArrayList(Mono.StringLiteral),
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
@@ -238,7 +238,7 @@ pub const Program = struct {
         allocator: std.mem.Allocator,
         name_store: names.NameStore,
         types: Type.Store,
-        string_literals: std.ArrayList([]const u8),
+        string_literals: std.ArrayList(Mono.StringLiteral),
         next_symbol: u32,
     ) Program {
         return .{
@@ -270,7 +270,7 @@ pub const Program = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
-        for (self.string_literals.items) |literal| self.allocator.free(literal);
+        for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);

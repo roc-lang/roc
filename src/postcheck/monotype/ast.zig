@@ -24,6 +24,17 @@ pub const LocalId = enum(u32) { _ };
 /// Identifier for an owned string literal.
 pub const StringLiteralId = enum(u32) { _ };
 
+/// Owned string bytes plus the exact slice used by this literal.
+pub const StringLiteral = struct {
+    backing: []const u8,
+    offset: u32,
+    len: u32,
+
+    pub fn text(self: StringLiteral) []const u8 {
+        return self.backing[self.offset..][0..self.len];
+    }
+};
+
 /// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -404,7 +415,7 @@ pub const Program = struct {
     record_destructs: std.ArrayList(RecordDestruct),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
-    string_literals: std.ArrayList([]const u8),
+    string_literals: std.ArrayList(StringLiteral),
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
@@ -440,7 +451,7 @@ pub const Program = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
-        for (self.string_literals.items) |literal| self.allocator.free(literal);
+        for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -479,15 +490,33 @@ pub const Program = struct {
     }
 
     pub fn addStringLiteral(self: *Program, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
+        return try self.addStringView(text, 0, @intCast(text.len));
+    }
+
+    pub fn addStringView(self: *Program, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+        const offset_usize: usize = offset;
+        const len_usize: usize = len;
+        if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
+            Common.invariant("string literal view exceeded backing bytes");
+        }
+
         const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.items.len)));
-        const owned = try self.allocator.dupe(u8, text);
+        const owned = try self.allocator.dupe(u8, backing);
         errdefer self.allocator.free(owned);
-        try self.string_literals.append(self.allocator, owned);
+        try self.string_literals.append(self.allocator, .{
+            .backing = owned,
+            .offset = offset,
+            .len = len,
+        });
         return id;
     }
 
-    pub fn stringLiteralText(self: *const Program, id: StringLiteralId) []const u8 {
+    pub fn stringLiteral(self: *const Program, id: StringLiteralId) StringLiteral {
         return self.string_literals.items[@intFromEnum(id)];
+    }
+
+    pub fn stringLiteralText(self: *const Program, id: StringLiteralId) []const u8 {
+        return self.stringLiteral(id).text();
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {

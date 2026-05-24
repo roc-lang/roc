@@ -472,3 +472,184 @@ test "generate aarch64 windows object with unwind sections" {
     const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
     try std.testing.expectEqual(@as(u16, 3), num_sections);
 }
+
+test "static strings are emitted into readonly object sections for native targets" {
+    const required = "readonly string literal longer than thirty bytes";
+    const forbidden = "INTERMEDIATE_ONLY_SHOULD_NOT_BE_EMITTED";
+
+    const targets = [_]RocTarget{
+        .x64mac,
+        .arm64mac,
+        .x64musl,
+        .arm64musl,
+        .x64glibc,
+        .arm64glibc,
+        .x64win,
+        .arm64win,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64elf,
+    };
+
+    for (targets) |target| {
+        try expectReadonlyObjectDataForTarget(target, required, forbidden);
+    }
+}
+
+fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, forbidden: []const u8) !void {
+    const allocator = std.testing.allocator;
+    const code = switch (target.toCpuArch()) {
+        .aarch64 => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 }, // ret
+        .x86_64 => &[_]u8{0xC3}, // ret
+        else => return error.UnsupportedTarget,
+    };
+    const rodata = required;
+    const symbols = [_]Symbol{
+        .{
+            .name = "roc__static_string",
+            .section = .rodata,
+            .offset = 0,
+            .size = rodata.len,
+            .is_global = true,
+            .is_function = false,
+            .is_external = false,
+        },
+    };
+
+    var output = std.ArrayList(u8).empty;
+    defer output.deinit(allocator);
+
+    try generateObjectFile(
+        allocator,
+        target,
+        code,
+        rodata,
+        &symbols,
+        &.{},
+        &.{},
+        &output,
+    );
+
+    const readonly = try readonlySection(target, output.items);
+    try std.testing.expect(std.mem.indexOf(u8, readonly, required) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, forbidden) == null);
+}
+
+fn readonlySection(target: RocTarget, object_bytes: []const u8) ![]const u8 {
+    return switch (target.toOsTag()) {
+        .macos => try machoSection(object_bytes, "__const"),
+        .windows => try coffSectionData(object_bytes, ".rdata"),
+        .linux, .freebsd, .openbsd, .netbsd => try elfSectionData(object_bytes, ".rodata"),
+        else => error.UnsupportedTarget,
+    };
+}
+
+fn elfSectionData(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
+    if (bytes.len < 64) return error.InvalidObjectFile;
+    if (!std.mem.eql(u8, bytes[0..4], "\x7fELF")) return error.InvalidObjectFile;
+    if (bytes[4] != 2) return error.UnsupportedTarget;
+
+    const e_shoff = std.mem.readInt(u64, bytes[40..48], .little);
+    const e_shentsize = std.mem.readInt(u16, bytes[58..60], .little);
+    const e_shnum = std.mem.readInt(u16, bytes[60..62], .little);
+    const e_shstrndx = std.mem.readInt(u16, bytes[62..64], .little);
+    if (e_shoff == 0 or e_shnum == 0) return error.SectionNotFound;
+    if (e_shoff + @as(u64, e_shnum) * e_shentsize > bytes.len) return error.InvalidObjectFile;
+    if (e_shstrndx >= e_shnum) return error.InvalidObjectFile;
+
+    const shstr_hdr_offset = e_shoff + @as(u64, e_shstrndx) * e_shentsize;
+    if (shstr_hdr_offset + 64 > bytes.len) return error.InvalidObjectFile;
+    const shstr_hdr = bytes[@intCast(shstr_hdr_offset)..];
+    const shstr_offset = std.mem.readInt(u64, shstr_hdr[24..32], .little);
+    const shstr_size = std.mem.readInt(u64, shstr_hdr[32..40], .little);
+    if (shstr_offset + shstr_size > bytes.len) return error.InvalidObjectFile;
+    const shstr = bytes[@intCast(shstr_offset)..@intCast(shstr_offset + shstr_size)];
+
+    var i: u16 = 0;
+    while (i < e_shnum) : (i += 1) {
+        const sh_offset = e_shoff + @as(u64, i) * e_shentsize;
+        if (sh_offset + 64 > bytes.len) return error.InvalidObjectFile;
+        const sh = bytes[@intCast(sh_offset)..];
+        const name_offset = std.mem.readInt(u32, sh[0..4], .little);
+        if (name_offset >= shstr.len) return error.InvalidObjectFile;
+        const name_tail = shstr[name_offset..];
+        const name_len = std.mem.indexOfScalar(u8, name_tail, 0) orelse return error.InvalidObjectFile;
+        const name = name_tail[0..name_len];
+        if (!std.mem.eql(u8, name, wanted_name)) continue;
+
+        const section_offset = std.mem.readInt(u64, sh[24..32], .little);
+        const section_size = std.mem.readInt(u64, sh[32..40], .little);
+        if (section_offset + section_size > bytes.len) return error.InvalidObjectFile;
+        return bytes[@intCast(section_offset)..@intCast(section_offset + section_size)];
+    }
+
+    return error.SectionNotFound;
+}
+
+fn machoSection(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
+    if (bytes.len < 32) return error.InvalidObjectFile;
+    if (std.mem.readInt(u32, bytes[0..4], .little) != 0xfeedfacf) return error.InvalidObjectFile;
+
+    const ncmds = std.mem.readInt(u32, bytes[16..20], .little);
+    var command_offset: usize = 32;
+    var command_index: u32 = 0;
+    while (command_index < ncmds) : (command_index += 1) {
+        if (command_offset + 8 > bytes.len) return error.InvalidObjectFile;
+        const cmd = std.mem.readInt(u32, bytes[command_offset..][0..4], .little);
+        const cmdsize = std.mem.readInt(u32, bytes[command_offset..][4..8], .little);
+        if (cmdsize < 8 or command_offset + cmdsize > bytes.len) return error.InvalidObjectFile;
+
+        if (cmd == 0x19) {
+            if (cmdsize < 72) return error.InvalidObjectFile;
+            const nsects = std.mem.readInt(u32, bytes[command_offset + 64 ..][0..4], .little);
+            var section_offset = command_offset + 72;
+            var section_index: u32 = 0;
+            while (section_index < nsects) : (section_index += 1) {
+                if (section_offset + 80 > bytes.len) return error.InvalidObjectFile;
+                const raw_name = bytes[section_offset..][0..16];
+                const name_len = std.mem.indexOfScalar(u8, raw_name, 0) orelse raw_name.len;
+                const name = raw_name[0..name_len];
+                if (std.mem.eql(u8, name, wanted_name)) {
+                    const size = std.mem.readInt(u64, bytes[section_offset + 40 ..][0..8], .little);
+                    const offset = std.mem.readInt(u32, bytes[section_offset + 48 ..][0..4], .little);
+                    if (@as(u64, offset) + size > bytes.len) return error.InvalidObjectFile;
+                    const start: usize = @intCast(offset);
+                    const end: usize = @intCast(@as(u64, offset) + size);
+                    return bytes[start..end];
+                }
+                section_offset += 80;
+            }
+        }
+
+        command_offset += cmdsize;
+    }
+
+    return error.SectionNotFound;
+}
+
+fn coffSectionData(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
+    if (bytes.len < 20) return error.InvalidObjectFile;
+    const number_of_sections = std.mem.readInt(u16, bytes[2..4], .little);
+    const optional_header_size = std.mem.readInt(u16, bytes[16..18], .little);
+    var section_offset: usize = 20 + optional_header_size;
+
+    var section_index: u16 = 0;
+    while (section_index < number_of_sections) : (section_index += 1) {
+        if (section_offset + 40 > bytes.len) return error.InvalidObjectFile;
+        const raw_name = bytes[section_offset..][0..8];
+        const name_len = std.mem.indexOfScalar(u8, raw_name, 0) orelse raw_name.len;
+        const name = raw_name[0..name_len];
+        if (std.mem.eql(u8, name, wanted_name)) {
+            const size = std.mem.readInt(u32, bytes[section_offset + 16 ..][0..4], .little);
+            const offset = std.mem.readInt(u32, bytes[section_offset + 20 ..][0..4], .little);
+            if (@as(u64, offset) + @as(u64, size) > bytes.len) return error.InvalidObjectFile;
+            const start: usize = @intCast(offset);
+            const end: usize = @intCast(@as(u64, offset) + @as(u64, size));
+            return bytes[start..end];
+        }
+        section_offset += 40;
+    }
+
+    return error.SectionNotFound;
+}

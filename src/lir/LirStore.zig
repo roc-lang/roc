@@ -71,9 +71,51 @@ pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLi
     return self.strings.insert(self.allocator, text);
 }
 
+/// Interns string backing bytes and returns a literal view into them.
+pub fn insertStringView(
+    self: *Self,
+    backing: []const u8,
+    offset: u32,
+    len: u32,
+) Allocator.Error!lir_defs.StrLiteral {
+    const offset_usize: usize = offset;
+    const len_usize: usize = len;
+    if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LirStore invariant violated: string literal view exceeded backing bytes", .{});
+        }
+        unreachable;
+    }
+
+    return .{
+        .backing = try self.insertString(backing),
+        .offset = offset,
+        .len = len,
+    };
+}
+
 /// Returns the text for an interned string literal.
 pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
+}
+
+/// Returns the bytes used by one string literal view.
+pub fn getStringLiteral(self: *const Self, literal: lir_defs.StrLiteral) []const u8 {
+    const backing = self.getString(literal.backing);
+    const offset: usize = literal.offset;
+    const len: usize = literal.len;
+    if (offset > backing.len or len > backing.len - offset) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
+        }
+        unreachable;
+    }
+    return backing[offset..][0..len];
+}
+
+/// Returns the full backing bytes for one string literal view.
+pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) []const u8 {
+    return self.getString(literal.backing);
 }
 
 /// Registers one LIR local and returns its id.

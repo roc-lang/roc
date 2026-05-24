@@ -288,7 +288,7 @@ pub const Program = struct {
     record_destructs: std.ArrayList(RecordDestruct),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
-    string_literals: std.ArrayList([]const u8),
+    string_literals: std.ArrayList(Mono.StringLiteral),
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
@@ -296,7 +296,7 @@ pub const Program = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         name_store: names.NameStore,
-        string_literals: std.ArrayList([]const u8),
+        string_literals: std.ArrayList(Mono.StringLiteral),
     ) Program {
         return .{
             .allocator = allocator,
@@ -327,7 +327,7 @@ pub const Program = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
-        for (self.string_literals.items) |literal| self.allocator.free(literal);
+        for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
@@ -466,6 +466,10 @@ pub const Program = struct {
     }
 
     pub fn stringLiteralText(self: *const Program, id: StringLiteralId) []const u8 {
+        return self.stringLiteral(id).text();
+    }
+
+    pub fn stringLiteral(self: *const Program, id: StringLiteralId) Mono.StringLiteral {
         return self.string_literals.items[@intFromEnum(id)];
     }
 };

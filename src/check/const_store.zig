@@ -11,6 +11,8 @@ const Allocator = std.mem.Allocator;
 pub const ConstNodeId = enum(u32) { _ };
 /// Identifier for a function value in the checked const store.
 pub const ConstFnId = enum(u32) { _ };
+/// Identifier for stored string backing bytes in the checked const store.
+pub const ConstStrDataId = enum(u32) { _ };
 
 /// Scalar value stored by compile-time evaluation.
 pub const ConstScalar = union(enum) {
@@ -62,12 +64,23 @@ pub const FnDef = union(enum) {
     checked_generated: names.ProcTemplate,
 };
 
+/// Stored string value.
+///
+/// `data` identifies the backing bytes. `offset` and `len` describe the string
+/// view into those bytes. This lets checked constants keep the sharing needed
+/// for readonly static slices while still storing only checked Roc values.
+pub const ConstStr = struct {
+    data: ConstStrDataId,
+    offset: u32,
+    len: u32,
+};
+
 /// Compile-time constant stored in checked module data.
 pub const ConstValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    str: []const u8,
+    str: ConstStr,
     list: []const ConstNodeId,
     box: ConstNodeId,
     tuple: []const ConstNodeId,
@@ -90,12 +103,14 @@ pub const ConstStore = struct {
     allocator: Allocator,
     values: std.ArrayList(ConstValue),
     fns: std.ArrayList(ConstFn),
+    str_data: std.ArrayList([]const u8),
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
             .allocator = allocator,
             .values = .empty,
             .fns = .empty,
+            .str_data = .empty,
         };
     }
 
@@ -126,8 +141,34 @@ pub const ConstStore = struct {
         return id;
     }
 
+    pub fn addStrData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstStrDataId {
+        const id: ConstStrDataId = @enumFromInt(@as(u32, @intCast(self.str_data.items.len)));
+        const owned = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(owned);
+        try self.str_data.append(self.allocator, owned);
+        return id;
+    }
+
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
         return self.values.items[@intFromEnum(id)];
+    }
+
+    pub fn strData(self: *const ConstStore, id: ConstStrDataId) []const u8 {
+        const index = @intFromEnum(id);
+        if (@import("builtin").mode == .Debug and index >= self.str_data.items.len) {
+            constStoreInvariant("string backing id is out of range");
+        }
+        return self.str_data.items[index];
+    }
+
+    pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
+        const backing = self.strData(str.data);
+        const offset: usize = str.offset;
+        const len: usize = str.len;
+        if (@import("builtin").mode == .Debug and (offset > backing.len or len > backing.len - offset)) {
+            constStoreInvariant("string view is outside backing data");
+        }
+        return backing[offset..][0..len];
     }
 
     pub fn verifyComplete(self: *const ConstStore) void {
@@ -161,6 +202,8 @@ pub const ConstStore = struct {
     pub fn deinit(self: *ConstStore) void {
         for (self.values.items) |*value| self.deinitValue(value);
         for (self.fns.items) |fn_value| self.allocator.free(fn_value.captures);
+        for (self.str_data.items) |bytes| self.allocator.free(bytes);
+        self.str_data.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.values.deinit(self.allocator);
         self.* = ConstStore.init(self.allocator);
@@ -174,8 +217,8 @@ pub const ConstStore = struct {
             .box,
             .nominal,
             .fn_value,
+            .str,
             => {},
-            .str => |bytes| self.allocator.free(bytes),
             .list => |items| self.allocator.free(items),
             .tuple => |items| self.allocator.free(items),
             .record => |items| self.allocator.free(items),
@@ -203,10 +246,10 @@ pub const ConstStore = struct {
         value_state[index] = .active;
         switch (self.values.items[index]) {
             .pending => constStoreInvariant("completed store contains a pending node"),
-            .zst,
-            .scalar,
-            .str,
-            => {},
+            .zst, .scalar => {},
+            .str => |str| {
+                _ = self.strBytes(str);
+            },
             .fn_value => |fn_id| self.verifyFnAcyclic(fn_id, value_state, fn_state),
             .box => |child| self.verifyAcyclic(child, value_state, fn_state),
             .nominal => |nominal| self.verifyAcyclic(nominal.backing, value_state, fn_state),

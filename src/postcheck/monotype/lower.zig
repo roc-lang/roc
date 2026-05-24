@@ -1552,7 +1552,11 @@ const Builder = struct {
             .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
             .zst => .unit,
             .scalar => |scalar| restoreScalar(scalar),
-            .str => |bytes| .{ .str_lit = try self.program.addStringLiteral(bytes) },
+            .str => |str| .{ .str_lit = try self.program.addStringView(
+                store_view.const_store.strData(str.data),
+                str.offset,
+                str.len,
+            ) },
             .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items) },
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtType(store_view, type_view, payload, self.constBoxPayloadType(ty));
@@ -4793,7 +4797,11 @@ const BodyContext = struct {
             .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
             .zst => .unit,
             .scalar => |scalar| restoreScalar(scalar),
-            .str => |bytes| .{ .str_lit = try self.builder.program.addStringLiteral(bytes) },
+            .str => |str| .{ .str_lit = try self.builder.program.addStringView(
+                store_view.const_store.strData(str.data),
+                str.offset,
+                str.len,
+            ) },
             .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items) },
             .box => |payload| .{ .nominal = try self.restoreConstNodeAtType(store_view, type_view, payload, self.constBoxPayloadType(ty)) },
             .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items) },

@@ -233,7 +233,7 @@ pub fn runWasmStr(
         break :sd mem_slice[str_ptr..][0..sso_len];
     } else sd: {
         const data_ptr: u32 = @bitCast(mem_slice[str_ptr..][0..4].*);
-        const data_len: u32 = @bitCast(mem_slice[str_ptr + 4 ..][0..4].*);
+        const data_len: u32 = @bitCast(mem_slice[str_ptr + 8 ..][0..4].*);
         if (data_ptr + data_len > mem_slice.len) {
             if (std.debug.runtime_safety) {
                 debugPrint("wasm invalid str heap slice: str_ptr={d} data_ptr={d} data_len={d} mem_len={d}\n", .{ str_ptr, data_ptr, data_len, mem_slice.len });
@@ -680,7 +680,7 @@ fn readWasmStr(buffer: []u8, str_ptr: usize) struct { data: [*]const u8, len: us
         return .{ .data = bytes[0..11].ptr, .len = len };
     } else {
         const data_ptr: usize = @intCast(readIntLittle(u32, buffer, str_ptr));
-        const len: usize = @intCast(readIntLittle(u32, buffer, str_ptr + 4));
+        const len: usize = @intCast(readIntLittle(u32, buffer, str_ptr + 8));
         if (builtin.mode == .Debug and std.debug.runtime_safety) {
             if (data_ptr + len > buffer.len) {
                 std.debug.panic(
@@ -702,7 +702,7 @@ fn writeWasmStr(buffer: []u8, result_ptr: usize, data: [*]const u8, len: usize) 
         const data_ptr = allocWasmData(buffer, 1, len);
         @memcpy(buffer[data_ptr..][0..len], data[0..len]);
         writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
-        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len << 1));
         writeIntLittle(u32, buffer, result_ptr + 8, @intCast(len));
     }
 }
@@ -719,8 +719,8 @@ fn rocStrFromWasmSlice(data: [*]const u8, len: usize) builtins.str.RocStr {
 
     return .{
         .bytes = @constCast(data),
+        .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(len),
         .length = len,
-        .capacity_or_alloc_ptr = len,
     };
 }
 
@@ -881,8 +881,8 @@ fn hostStrWithCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: 
     }
     const dest_start = allocWasmData(buffer, 1, cap);
     writeIntLittle(u32, buffer, result_ptr, @intCast(dest_start));
-    writeIntLittle(u32, buffer, result_ptr + 4, 0);
-    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(cap));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(cap << 1));
+    writeIntLittle(u32, buffer, result_ptr + 8, 0);
 }
 
 fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1095,8 +1095,8 @@ fn hostStrReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const dest_start = allocWasmData(buffer, 1, needed);
     @memcpy(buffer[dest_start..][0..str.len], str.data[0..str.len]);
     writeIntLittle(u32, buffer, result_ptr, @intCast(dest_start));
-    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(str.len));
-    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(needed));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(needed << 1));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(str.len));
 }
 
 fn hostStrCaselessAsciiEquals(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {

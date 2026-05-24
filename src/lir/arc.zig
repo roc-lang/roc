@@ -1924,7 +1924,7 @@ const ArcTest = struct {
     fn assignStr(self: *ArcTest, target: LIR.LocalId, text: []const u8, next: LIR.CFStmtId) !LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .str_literal = try self.store.insertString(text) },
+            .value = .{ .str_literal = try self.store.insertStringView(text, 0, @intCast(text.len)) },
             .next = next,
         } });
     }

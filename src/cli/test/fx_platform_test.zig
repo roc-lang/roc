@@ -100,6 +100,7 @@ fn buildAndRunDevBackendApp(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
     output_basename: []const u8,
+    inspect_output: ?*const fn (std.mem.Allocator, []const u8) anyerror!void,
 ) !std.process.Child.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -157,6 +158,10 @@ fn buildAndRunDevBackendApp(
             std.debug.print("STDERR: {s}\n", .{build_result.stderr});
             return error.DevBackendBuildFailed;
         },
+    }
+
+    if (inspect_output) |inspect| {
+        try inspect(allocator, output_path);
     }
 
     return try std.process.Child.run(.{
@@ -360,6 +365,7 @@ test "provided static data exports are host-linkable readonly constants" {
         allocator,
         "test/static-data-host/app.roc",
         "static_data_host_test",
+        inspectStaticDataHostBinary,
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -383,6 +389,40 @@ test "provided static data exports are host-linkable readonly constants" {
 
     try testing.expectEqualStrings("", run_result.stdout);
     try testing.expectEqualStrings("static data host constants ok\n", run_result.stderr);
+}
+
+fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) !void {
+    const bytes = try std.fs.cwd().readFileAlloc(allocator, output_path, 256 * 1024 * 1024);
+    defer allocator.free(bytes);
+
+    const required = [_][]const u8{
+        "literal readonly string longer than thirty bytes",
+        "assembled readonly first string from comptime concat",
+        "assembled readonly second string from comptime concat",
+        "assembled readonly first string from comptime concat + assembled readonly second string from comptime concat",
+        "final readonly string after comptime branch",
+        "STATIC_SLICE_SOURCE:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    };
+
+    for (required) |needle| {
+        if (std.mem.indexOf(u8, bytes, needle) == null) {
+            std.debug.print("compiled static-data-host binary is missing expected static string: {s}\n", .{needle});
+            return error.StaticDataHostBinaryMissingString;
+        }
+    }
+
+    const forbidden = [_][]const u8{
+        "INTERMEDIATE_ONLY_LEFT_SHOULD_NOT_BE_EMITTED",
+        "INTERMEDIATE_ONLY_RIGHT_SHOULD_NOT_BE_EMITTED",
+        "unreachable readonly string after comptime branch",
+    };
+
+    for (forbidden) |needle| {
+        if (std.mem.indexOf(u8, bytes, needle) != null) {
+            std.debug.print("compiled static-data-host binary contains comptime-only string: {s}\n", .{needle});
+            return error.StaticDataHostBinaryContainsComptimeOnlyString;
+        }
+    }
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.

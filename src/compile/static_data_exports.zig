@@ -1,7 +1,7 @@
 //! Target-layout readonly data symbols for provided non-function constants.
 //!
 //! Static data exports are materialized from checked `ConstStore` nodes and the
-//! layout/const plans published by direct LIR lowering.
+//! layout/const plans output by direct LIR lowering.
 
 const std = @import("std");
 
@@ -17,6 +17,7 @@ const CanonicalNameStore = check.CanonicalNames.CanonicalNameStore;
 const Checked = check.CheckedArtifact;
 const CheckedModule = check.CheckedModule;
 const ConstFn = check.ConstStore.ConstFn;
+const ConstStrDataId = check.ConstStore.ConstStrDataId;
 const ConstValue = CheckedModule.ConstValue;
 const StaticDataExport = backend.StaticDataExport;
 const StaticDataRelocation = backend.StaticDataRelocation;
@@ -54,6 +55,11 @@ const ConstNode = struct {
     id: CheckedModule.ConstNodeId,
 };
 
+const ConstStrDataSite = struct {
+    store_address: usize,
+    data: u32,
+};
+
 /// Build readonly data exports for provided constants.
 pub fn buildProvidedDataExports(
     allocator: Allocator,
@@ -72,6 +78,7 @@ pub fn buildProvidedDataExports(
 
     var builder = StaticDataBuilder.init(allocator, root, modules.imports, lowered_program, target) orelse
         return error.UnsupportedTarget;
+    defer builder.deinitScratch();
     return try builder.build();
 }
 
@@ -104,6 +111,7 @@ const StaticDataBuilder = struct {
     target_usize: @import("base").target.TargetUsize,
     word_size: u32,
     nodes: std.ArrayList(StaticDataExport),
+    str_allocations: std.AutoHashMap(ConstStrDataSite, PointerTarget),
     local_symbol_ordinal: u32,
 
     fn init(
@@ -126,8 +134,13 @@ const StaticDataBuilder = struct {
             .target_usize = target_usize,
             .word_size = target_usize.size(),
             .nodes = .empty,
+            .str_allocations = std.AutoHashMap(ConstStrDataSite, PointerTarget).init(allocator),
             .local_symbol_ordinal = 0,
         };
+    }
+
+    fn deinitScratch(self: *StaticDataBuilder) void {
+        self.str_allocations.deinit();
     }
 
     fn build(self: *StaticDataBuilder) MaterializationError![]StaticDataExport {
@@ -255,7 +268,7 @@ const StaticDataBuilder = struct {
                 else => staticDataInvariant("ZST const plan received non-ZST ConstStore node"),
             },
             .scalar => self.writeScalar(bytes, base_offset, value, layout_idx),
-            .str => try self.writeStr(bytes, relocations, base_offset, value),
+            .str => try self.writeStr(bytes, relocations, base_offset, source, value),
             .list => |elem_plan| try self.writeList(bytes, relocations, base_offset, source, value, elem_plan, layout_idx),
             .box => |payload_plan| try self.writeBox(bytes, relocations, base_offset, source, value, payload_plan, layout_idx),
             .tuple => |items| try self.writeTuple(bytes, relocations, base_offset, source, value, items, layout_idx),
@@ -326,24 +339,62 @@ const StaticDataBuilder = struct {
         bytes: []u8,
         relocations: *std.ArrayList(StaticDataRelocation),
         base_offset: u32,
+        source: ConstModule,
         value: ConstValue,
     ) MaterializationError!void {
-        const str_bytes = switch (value) {
-            .str => |str_bytes| str_bytes,
+        const str = switch (value) {
+            .str => |str| str,
             else => staticDataInvariant("Str const plan received non-Str ConstStore node"),
         };
+        const str_bytes = source.store.strBytes(str);
+        const backing = source.store.strData(str.data);
+        const whole_backing = str.offset == 0 and @as(usize, str.len) == backing.len;
         const roc_str_size = self.word_size * 3;
-        if (str_bytes.len < roc_str_size) {
+        if (backing.len < roc_str_size and str_bytes.len < roc_str_size) {
             self.writeBytes(bytes, base_offset, str_bytes);
             bytes[base_offset + roc_str_size - 1] = @as(u8, @intCast(str_bytes.len)) | 0x80;
             return;
         }
 
+        const target = try self.staticStrAllocation(source, str.data);
+        try self.writePointerRelocation(
+            bytes,
+            relocations,
+            base_offset,
+            target.symbol_name,
+            target.addend + @as(i64, str.offset),
+        );
+
+        if (whole_backing) {
+            self.writeWord(bytes, base_offset + self.word_size, self.encodeRocStrCapacity(str_bytes.len));
+        } else {
+            try self.writePointerRelocation(
+                bytes,
+                relocations,
+                base_offset + self.word_size,
+                target.symbol_name,
+                target.addend + 1,
+            );
+        }
+        self.writeWord(bytes, base_offset + self.word_size * 2, str_bytes.len);
+    }
+
+    fn staticStrAllocation(
+        self: *StaticDataBuilder,
+        source: ConstModule,
+        data: ConstStrDataId,
+    ) MaterializationError!PointerTarget {
+        const site: ConstStrDataSite = .{
+            .store_address = @intFromPtr(source.store),
+            .data = @intFromEnum(data),
+        };
+        if (self.str_allocations.get(site)) |target| return target;
+
+        const str_bytes = source.store.strData(data);
         const payload = try self.allocator.dupe(u8, str_bytes);
         const target = try self.addStaticAllocation(payload, self.word_size, false, null);
-        try self.writePointerRelocation(bytes, relocations, base_offset, target.symbol_name, target.addend);
-        self.writeWord(bytes, base_offset + self.word_size, str_bytes.len);
-        self.writeWord(bytes, base_offset + self.word_size * 2, str_bytes.len);
+        try self.str_allocations.put(site, target);
+        return target;
     }
 
     fn writeList(
@@ -842,6 +893,16 @@ const StaticDataBuilder = struct {
             8 => std.mem.writeInt(u64, bytes[offset..][0..8], @intCast(value), .little),
             else => unreachable,
         }
+    }
+
+    fn encodeRocStrCapacity(self: *StaticDataBuilder, capacity: usize) usize {
+        const max_capacity: usize = switch (self.word_size) {
+            4 => std.math.maxInt(u32) >> 1,
+            8 => std.math.maxInt(u64) >> 1,
+            else => unreachable,
+        };
+        if (capacity > max_capacity) staticDataInvariant("static string exceeds RocStr capacity limit for target");
+        return capacity << 1;
     }
 
     fn writeSignedWord(self: *StaticDataBuilder, bytes: []u8, offset: u32, value: isize) void {

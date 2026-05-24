@@ -1598,8 +1598,8 @@ fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
 
         return RocStr{
             .bytes = first_element,
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(SMALL_STRING_SIZE),
             .length = str.len,
-            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
         };
     } else {
         return RocStr.fromSlice(str, roc_ops);
