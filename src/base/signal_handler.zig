@@ -434,13 +434,14 @@ test "formatHex" {
 
 test "classifyFault uses only exact stack data" {
     const bounds = StackBounds.init(0x7000, 0x9000, 0x6000, 0x7000).?;
+    const unrelated_addr: usize = 0x5000_0000;
 
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1_0000_1000, 0x8000, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1_0000_1000, 0x9000, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x9000, bounds));
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6800, 0x8000, bounds));
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x5000, 0x5ff0, bounds));
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x6800, null, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1_0000_1000, 0x8000, null));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, null));
 }
 
 test "installForCurrentThread records current stack bounds" {
