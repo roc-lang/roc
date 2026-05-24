@@ -1696,7 +1696,7 @@ pub const Interpreter = struct {
                             break;
                         }
                     }
-                    return try self.execStmtChain(frame, target);
+                    current = target;
                 },
                 .loop_continue => return .loop_continue,
                 .loop_break => return .loop_break,
