@@ -1503,6 +1503,10 @@ pub const Store = struct {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
     }
 
+    pub fn layoutCount(self: *const Self) usize {
+        return @intCast(self.layouts.len());
+    }
+
     pub fn getStructData(self: *const Self, idx: StructIdx) *const StructData {
         return self.struct_data.get(@enumFromInt(idx.int_idx));
     }

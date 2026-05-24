@@ -128,6 +128,9 @@ const Lowerer = struct {
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     current_ret_ty: ?Type.TypeId = null,
+    current_proc_locals: ?*ProcLocalSet = null,
+
+    const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
 
     const LoopContext = struct {
         join_id: LIR.JoinPointId,
@@ -243,16 +246,57 @@ const Lowerer = struct {
         };
     }
 
+    fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
+        if (self.current_proc_locals) |locals| {
+            try locals.put(self.allocator, @intFromEnum(local), {});
+        }
+    }
+
+    fn noteLocalSpan(self: *Lowerer, span: LIR.LocalSpan) Common.LowerError!void {
+        for (self.result.store.getLocalSpan(span)) |local| {
+            try self.noteLocal(local);
+        }
+    }
+
+    fn writeFrameLocals(self: *Lowerer, locals: *ProcLocalSet) Common.LowerError!LIR.LocalSpan {
+        const raw_ids = locals.keys();
+        const sorted = try self.allocator.alloc(LIR.LocalId, raw_ids.len);
+        defer self.allocator.free(sorted);
+        for (raw_ids, 0..) |raw_id, i| {
+            sorted[i] = @enumFromInt(raw_id);
+        }
+        std.mem.sort(LIR.LocalId, sorted, {}, localIdLessThan);
+        return try self.result.store.addLocalSpan(sorted);
+    }
+
+    fn localIdLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
+        return @intFromEnum(a) < @intFromEnum(b);
+    }
+
     fn lowerAllFns(self: *Lowerer) Common.LowerError!void {
         for (self.program.fns.items, 0..) |fn_, index| {
             const proc_id = self.fn_map[index];
             switch (fn_.body) {
                 .roc => |body_expr| {
                     const saved_ret_ty = self.current_ret_ty;
+                    const saved_proc_locals = self.current_proc_locals;
+                    var proc_locals: ProcLocalSet = .{};
+                    defer proc_locals.deinit(self.allocator);
+
+                    self.current_proc_locals = &proc_locals;
                     self.current_ret_ty = fn_.ret;
+                    defer {
+                        self.current_ret_ty = saved_ret_ty;
+                        self.current_proc_locals = saved_proc_locals;
+                    }
+
+                    try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
                     const body = try self.lowerExprReturn(body_expr, fn_.ret);
-                    self.current_ret_ty = saved_ret_ty;
-                    self.result.store.getProcSpecPtr(proc_id).body = body;
+
+                    const frame_locals = try self.writeFrameLocals(&proc_locals);
+                    const proc = self.result.store.getProcSpecPtr(proc_id);
+                    proc.body = body;
+                    proc.frame_locals = frame_locals;
                 },
                 .hosted => {
                     if (self.result.store.getProcSpec(proc_id).hosted == null) {
@@ -2122,12 +2166,17 @@ const Lowerer = struct {
     }
 
     fn addLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
-        return try self.result.store.addLocal(.{ .layout_idx = layout_idx });
+        const local = try self.result.store.addLocal(.{ .layout_idx = layout_idx });
+        try self.noteLocal(local);
+        return local;
     }
 
     fn localFor(self: *Lowerer, local: LambdaMono.LocalId) Common.LowerError!LIR.LocalId {
         const index = @intFromEnum(local);
-        if (self.local_map[index]) |existing| return existing;
+        if (self.local_map[index]) |existing| {
+            try self.noteLocal(existing);
+            return existing;
+        }
         const program_local = self.program.locals.items[index];
         const lir_local = try self.addTemp(program_local.ty);
         self.local_map[index] = lir_local;

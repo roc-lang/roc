@@ -125,6 +125,28 @@ const ShimLibraries = struct {
     }
 };
 
+fn interpreterShimBytes(target: ?RocTarget) []const u8 {
+    return if (target) |t| ShimLibraries.forTarget(t) else ShimLibraries.native;
+}
+
+fn interpreterShimDigest(target: ?RocTarget) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc-interpreter-shim-cache-v1");
+    hasher.update(interpreterShimBytes(target));
+    var out: [32]u8 = undefined;
+    hasher.final(&out);
+    return out;
+}
+
+fn interpreterShimCacheFilename(ctx: *CliContext, target: RocTarget) ![]const u8 {
+    const digest = interpreterShimDigest(target);
+    const digest_hex = std.fmt.bytesToHex(digest, .lower);
+    return if (target.isWindows())
+        std.fmt.allocPrint(ctx.arena, "roc_interpreter_shim_{s}_{s}.lib", .{ @tagName(target), digest_hex[0..] })
+    else
+        std.fmt.allocPrint(ctx.arena, "libroc_interpreter_shim_{s}_{s}.a", .{ @tagName(target), digest_hex[0..] });
+}
+
 /// Embedded pre-compiled builtins object files for each target.
 /// These contain the wrapper functions needed by the dev backend for string/list operations.
 /// Used by `roc build --opt=dev` to link the app object with builtins.
@@ -931,6 +953,8 @@ fn interpreterExeCacheName(
     var hash = std.hash.Crc32.init();
     hash.update("roc-run-lir-shared-memory-v1");
     hash.update(build_options.compiler_version);
+    const shim_digest = interpreterShimDigest(target);
+    hash.update(&shim_digest);
     hash.update(app_path);
     hash.update(@tagName(target));
     for (entrypoint_names) |name| {
@@ -2370,17 +2394,11 @@ pub fn extractReadRocFilePathShimLibrary(_: *CliContext, output_path: []const u8
         return;
     }
 
-    // Get the appropriate shim for the target (or native if not specified)
-    const shim_data = if (target) |t|
-        ShimLibraries.forTarget(t)
-    else
-        ShimLibraries.native;
-
     // Write the embedded shim library to the output path
     const shim_file = try std.fs.cwd().createFile(output_path, .{});
     defer shim_file.close();
 
-    try shim_file.writeAll(shim_data);
+    try shim_file.writeAll(interpreterShimBytes(target));
 }
 
 /// Format a bundle path validation reason into a user-friendly error message
@@ -3650,7 +3668,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         }
     }
 
-    const shim_filename = try std.fmt.allocPrint(ctx.arena, "libroc_interpreter_shim_{s}.a", .{target_name});
+    const shim_filename = try interpreterShimCacheFilename(ctx, target);
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
     std.fs.cwd().access(shim_path, .{}) catch {
         extractReadRocFilePathShimLibrary(ctx, shim_path, target) catch |err| {

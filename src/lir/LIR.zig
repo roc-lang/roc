@@ -159,6 +159,29 @@ pub const CFSwitchBranchSpan = extern struct {
     }
 };
 
+/// One join target available in a proc.
+pub const JoinPoint = extern struct {
+    id: JoinPointId,
+    params: LocalSpan,
+    body: CFStmtId,
+};
+
+/// Span into flat join-point storage.
+pub const JoinPointSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty join-point span.
+    pub fn empty() JoinPointSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span contains no join points.
+    pub fn isEmpty(self: JoinPointSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Explicit ARC meaning of a `set_local` write. ARC insertion consumes this
 /// directly; it must not derive the meaning from control-flow shape.
 pub const SetLocalWriteMode = enum {
@@ -302,6 +325,8 @@ pub const CFStmt = union(enum) {
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    frame_locals: LocalSpan = LocalSpan.empty(),
+    join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     abi: ProcAbi = .roc,

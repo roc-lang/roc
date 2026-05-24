@@ -79,16 +79,21 @@ var stack_overflow_callback: ?StackOverflowCallback = null;
 var access_violation_callback: ?AccessViolationCallback = null;
 var arithmetic_error_callback: ?ArithmeticErrorCallback = null;
 
+/// Called when the handler identifies a stack overflow.
 pub const StackOverflowCallback = *const fn () noreturn;
+/// Called when the handler identifies a non-stack memory access violation.
 pub const AccessViolationCallback = *const fn (fault_addr: usize) noreturn;
+/// Called when the handler identifies an arithmetic exception.
 pub const ArithmeticErrorCallback = *const fn () noreturn;
 
+/// Crash callbacks used by process-wide handlers.
 pub const Callbacks = struct {
     stack_overflow: StackOverflowCallback,
     access_violation: AccessViolationCallback,
     arithmetic_error: ArithmeticErrorCallback,
 };
 
+/// Stack address range for one thread, including guard-page bounds when known.
 pub const StackBounds = struct {
     low: usize,
     high: usize,
@@ -120,6 +125,7 @@ pub const StackBounds = struct {
     }
 };
 
+/// Classification for a memory fault observed by a crash handler.
 pub const FaultKind = enum {
     stack_overflow,
     access_violation,
@@ -156,10 +162,12 @@ pub fn installForCurrentThread(callbacks: Callbacks) bool {
     return installPosixProcessHandlers(callbacks);
 }
 
+/// Return the installed current-thread stack bounds for unit tests.
 pub fn currentThreadStackBoundsForTest() ?StackBounds {
     return thread_stack_bounds;
 }
 
+/// Classify a fault from its address, interrupted stack pointer, and stack range.
 pub fn classifyFault(fault_addr: usize, interrupted_sp: ?usize, bounds: ?StackBounds) FaultKind {
     const stack_bounds = bounds orelse return .access_violation;
     const sp = interrupted_sp orelse return .access_violation;
@@ -386,6 +394,7 @@ fn queryCurrentThreadStackBounds() ?StackBounds {
     return null;
 }
 
+/// Format a pointer-sized integer as lowercase hexadecimal into caller storage.
 pub fn formatHex(value: usize, buf: []u8) []const u8 {
     const hex_chars = "0123456789abcdef";
     var i: usize = buf.len;

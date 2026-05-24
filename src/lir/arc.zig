@@ -50,6 +50,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
             inserter.addOwnedIfRc(&owned, param);
         }
         proc.body = try inserter.rewritePath(body, &owned, .{});
+        try inserter.writeProcJoinPoints(proc);
     }
 }
 
@@ -1436,6 +1437,92 @@ const Inserter = struct {
         }
     }
 
+    fn writeProcJoinPoints(self: *Inserter, proc: *LIR.LirProcSpec) ResourceError!void {
+        const body = proc.body orelse {
+            proc.join_points = LIR.JoinPointSpan.empty();
+            return;
+        };
+
+        var joins = FinalJoinMap.init(self.store.allocator);
+        defer joins.deinit();
+        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
+        defer visited.deinit();
+        try self.collectFinalJoinPoints(body, &joins, &visited);
+
+        const sorted = try self.store.allocator.alloc(LIR.JoinPoint, joins.count());
+        defer self.store.allocator.free(sorted);
+        for (joins.values(), 0..) |join, index| {
+            sorted[index] = join;
+        }
+        std.mem.sort(LIR.JoinPoint, sorted, {}, joinPointLessThan);
+        proc.join_points = try self.store.addJoinPointSpan(sorted);
+    }
+
+    fn collectFinalJoinPoints(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        joins: *FinalJoinMap,
+        visited: *std.AutoHashMap(LIR.CFStmtId, void),
+    ) ResourceError!void {
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(self.store.allocator);
+        try stack.append(self.store.allocator, start);
+
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+
+            const stmt = self.store.getCFStmt(current);
+            switch (stmt) {
+                .assign_ref => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_call => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_call_erased => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_packed_erased_fn => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_low_level => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_list => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_struct => |assign| try stack.append(self.store.allocator, assign.next),
+                .assign_tag => |assign| try stack.append(self.store.allocator, assign.next),
+                .set_local => |assign| try stack.append(self.store.allocator, assign.next),
+                .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
+                .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
+                .incref => |rc| try stack.append(self.store.allocator, rc.next),
+                .decref => |rc| try stack.append(self.store.allocator, rc.next),
+                .free => |rc| try stack.append(self.store.allocator, rc.next),
+                .switch_stmt => |switch_stmt| {
+                    if (switch_stmt.continuation) |continuation| {
+                        try stack.append(self.store.allocator, continuation);
+                    }
+                    try stack.append(self.store.allocator, switch_stmt.default_branch);
+                    for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                        try stack.append(self.store.allocator, branch.body);
+                    }
+                },
+                .join => |join_stmt| {
+                    const entry = try joins.getOrPut(join_stmt.id);
+                    const join_point = LIR.JoinPoint{
+                        .id = join_stmt.id,
+                        .params = join_stmt.params,
+                        .body = join_stmt.body,
+                    };
+                    if (entry.found_existing and !joinPointEql(entry.value_ptr.*, join_point)) {
+                        arcInvariant("ARC final join-point output saw one join id with different data");
+                    }
+                    entry.value_ptr.* = join_point;
+                    try stack.append(self.store.allocator, join_stmt.remainder);
+                    try stack.append(self.store.allocator, join_stmt.body);
+                },
+                .jump,
+                .ret,
+                .runtime_error,
+                .loop_continue,
+                .loop_break,
+                .crash,
+                => {},
+            }
+        }
+    }
+
     fn localValueUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
@@ -1608,6 +1695,19 @@ const Inserter = struct {
 };
 
 const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
+const FinalJoinMap = std.AutoArrayHashMap(LIR.JoinPointId, LIR.JoinPoint);
+
+fn joinPointLessThan(_: void, a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
+    return @intFromEnum(a.id) < @intFromEnum(b.id);
+}
+
+fn joinPointEql(a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
+    return a.id == b.id and a.body == b.body and localSpanEql(a.params, b.params);
+}
+
+fn localSpanEql(a: LIR.LocalSpan, b: LIR.LocalSpan) bool {
+    return a.start == b.start and a.len == b.len;
+}
 
 const RewrittenJoin = struct {
     keep: OwnedSet,

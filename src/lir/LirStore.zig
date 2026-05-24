@@ -12,6 +12,8 @@ const CFStmt = lir_defs.CFStmt;
 const CFStmtId = lir_defs.CFStmtId;
 const CFSwitchBranch = lir_defs.CFSwitchBranch;
 const CFSwitchBranchSpan = lir_defs.CFSwitchBranchSpan;
+const JoinPoint = lir_defs.JoinPoint;
+const JoinPointSpan = lir_defs.JoinPointSpan;
 const LirProcSpec = lir_defs.LirProcSpec;
 const LirProcSpecId = lir_defs.LirProcSpecId;
 const Local = lir_defs.Local;
@@ -23,6 +25,7 @@ const Self = @This();
 
 cf_stmts: std.ArrayList(CFStmt),
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
+join_points: std.ArrayList(JoinPoint),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
 proc_specs: std.ArrayList(LirProcSpec),
@@ -35,6 +38,7 @@ pub fn init(allocator: Allocator) Self {
     return .{
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
+        .join_points = std.ArrayList(JoinPoint).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
         .proc_specs = std.ArrayList(LirProcSpec).empty,
@@ -48,6 +52,7 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
+    self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
@@ -180,6 +185,30 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) []CFSwitchB
         }
     }
     return self.cf_switch_branches.items[span.start..][0..span.len];
+}
+
+/// Appends join-point entries and returns the corresponding flat-storage span.
+pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.Error!JoinPointSpan {
+    if (join_points.len == 0) return JoinPointSpan.empty();
+
+    const start = @as(u32, @intCast(self.join_points.items.len));
+    try self.join_points.appendSlice(self.allocator, join_points);
+    return .{ .start = start, .len = @intCast(join_points.len) };
+}
+
+/// Resolves a join-point span to its stored slice.
+pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) []const JoinPoint {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.join_points.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: join-point span start={d} len={d} exceeds join-point storage len={d}",
+                .{ span.start, span.len, self.join_points.items.len },
+            );
+        }
+    }
+    return self.join_points.items[span.start..][0..span.len];
 }
 
 /// Appends a proc specification and returns its id.

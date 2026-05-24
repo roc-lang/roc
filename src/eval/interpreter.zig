@@ -243,6 +243,11 @@ pub const Interpreter = struct {
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
+    frame_plans: []FramePlan,
+    rc_presence: []RcPresence,
+    rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{},
+    struct_field_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan) = .{},
+    tag_variant_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey) = .{},
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
@@ -251,12 +256,11 @@ pub const Interpreter = struct {
     /// Call stack captured at the first failed exit in the current evaluation.
     failed_call_stack: std.ArrayList(LirProcSpecId),
 
-    const JoinPointMap = std.AutoHashMapUnmanaged(u32, JoinPointInfo);
-    const VisitedStmtSet = std.AutoHashMapUnmanaged(u32, void);
-
-    const JoinPointInfo = struct {
-        params: LocalSpan,
-        body: CFStmtId,
+    const RcPresence = enum(u2) {
+        unknown,
+        active,
+        no,
+        yes,
     };
 
     pub const Error = error{
@@ -301,19 +305,91 @@ pub const Interpreter = struct {
         val: Value,
     };
 
+    const FramePlan = struct {
+        locals: []const LocalId,
+        join_points: []const LIR.JoinPoint,
+        free_slots: std.ArrayListUnmanaged([]LocalSlot) = .empty,
+
+        fn deinit(self: *FramePlan, allocator: Allocator) void {
+            while (self.free_slots.pop()) |slots| {
+                allocator.free(slots);
+            }
+            self.free_slots.deinit(allocator);
+        }
+
+        fn acquireSlots(self: *FramePlan, allocator: Allocator) Allocator.Error![]LocalSlot {
+            if (self.free_slots.pop()) |slots| return slots;
+            return try allocator.alloc(LocalSlot, self.locals.len);
+        }
+
+        fn releaseSlots(self: *FramePlan, allocator: Allocator, slots: []LocalSlot) void {
+            self.free_slots.append(allocator, slots) catch {
+                allocator.free(slots);
+            };
+        }
+
+        fn slotIndex(self: *const FramePlan, local_id: LocalId) ?usize {
+            var low: usize = 0;
+            var high: usize = self.locals.len;
+            const target = @intFromEnum(local_id);
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                const current = @intFromEnum(self.locals[mid]);
+                if (current == target) return mid;
+                if (current < target) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            return null;
+        }
+
+        fn joinPoint(self: *const FramePlan, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
+            var low: usize = 0;
+            var high: usize = self.join_points.len;
+            const target = @intFromEnum(join_point_id);
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                const current = @intFromEnum(self.join_points[mid].id);
+                if (current == target) return self.join_points[mid];
+                if (current < target) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            return null;
+        }
+    };
+
     const Frame = struct {
         proc_id: LirProcSpecId,
         ret_layout: layout_mod.Idx,
-        locals: []LocalSlot,
-        join_points: JoinPointMap = .{},
+        plan: *FramePlan,
+        slots: []LocalSlot,
 
         fn deinit(self: *Frame, allocator: Allocator) void {
-            self.join_points.deinit(allocator);
-            allocator.free(self.locals);
+            self.plan.releaseSlots(allocator, self.slots);
+        }
+
+        fn slotIndex(self: *const Frame, local_id: LocalId) usize {
+            if (self.plan.slotIndex(local_id)) |index| return index;
+            if (builtin.mode == .Debug) {
+                debugPrint(
+                    "LIR/interpreter invariant violated: proc {d} frame plan does not contain local {d}\n",
+                    .{ @intFromEnum(self.proc_id), @intFromEnum(local_id) },
+                );
+            }
+            unreachable;
+        }
+
+        fn isAssigned(self: *const Frame, local_id: LocalId) bool {
+            return self.slots[self.slotIndex(local_id)].assigned;
         }
 
         fn setLocal(self: *Frame, local_id: LocalId, value: Value) void {
-            const slot = &self.locals[@intFromEnum(local_id)];
+            const slot = &self.slots[self.slotIndex(local_id)];
             slot.* = .{
                 .assigned = true,
                 .val = value,
@@ -345,6 +421,21 @@ pub const Interpreter = struct {
         layout_store: *const layout_mod.Store,
         caller_roc_ops: *RocOps,
     ) Allocator.Error!LirInterpreter {
+        const frame_plans = try buildFramePlans(allocator, store);
+        errdefer deinitFramePlans(allocator, frame_plans);
+
+        const rc_presence = try allocator.alloc(RcPresence, layout_store.layoutCount());
+        errdefer allocator.free(rc_presence);
+        @memset(rc_presence, .unknown);
+
+        var rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{};
+        errdefer rc_plans.deinit(allocator);
+        var struct_field_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan) = .{};
+        errdefer struct_field_plans.deinit(allocator);
+        var tag_variant_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey) = .{};
+        errdefer tag_variant_plans.deinit(allocator);
+        try reserveRcCaches(allocator, layout_store, &rc_plans, &struct_field_plans, &tag_variant_plans);
+
         const roc_env = try allocator.create(InterpreterRocEnv);
         roc_env.* = InterpreterRocEnv.init(allocator, caller_roc_ops);
 
@@ -365,6 +456,11 @@ pub const Interpreter = struct {
                 .roc_crashed = &InterpreterRocEnv.rocCrashedFn,
                 .hosted_fns = caller_roc_ops.hosted_fns,
             },
+            .frame_plans = frame_plans,
+            .rc_presence = rc_presence,
+            .rc_plans = rc_plans,
+            .struct_field_plans = struct_field_plans,
+            .tag_variant_plans = tag_variant_plans,
             .call_stack = .empty,
             .failed_call_stack = .empty,
         };
@@ -376,6 +472,80 @@ pub const Interpreter = struct {
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.arena.deinit();
+        self.tag_variant_plans.deinit(self.allocator);
+        self.struct_field_plans.deinit(self.allocator);
+        self.rc_plans.deinit(self.allocator);
+        self.allocator.free(self.rc_presence);
+        deinitFramePlans(self.allocator, self.frame_plans);
+    }
+
+    fn deinitFramePlans(allocator: Allocator, frame_plans: []FramePlan) void {
+        for (frame_plans) |*plan| {
+            plan.deinit(allocator);
+        }
+        allocator.free(frame_plans);
+    }
+
+    fn buildFramePlans(allocator: Allocator, store: *const LirStore) Allocator.Error![]FramePlan {
+        const proc_specs = store.getProcSpecs();
+        const frame_plans = try allocator.alloc(FramePlan, proc_specs.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (frame_plans[0..initialized]) |*plan| {
+                plan.deinit(allocator);
+            }
+            allocator.free(frame_plans);
+        }
+
+        for (proc_specs, 0..) |proc_spec, i| {
+            frame_plans[i] = buildFramePlan(store, proc_spec);
+            initialized += 1;
+        }
+
+        return frame_plans;
+    }
+
+    fn buildFramePlan(store: *const LirStore, proc_spec: LirProcSpec) FramePlan {
+        return .{
+            .locals = store.getLocalSpan(proc_spec.frame_locals),
+            .join_points = store.getJoinPointSpan(proc_spec.join_points),
+        };
+    }
+
+    fn reserveRcCaches(
+        allocator: Allocator,
+        layout_store: *const layout_mod.Store,
+        rc_plans: *std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan),
+        struct_field_plans: *std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan),
+        tag_variant_plans: *std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey),
+    ) Allocator.Error!void {
+        const layout_count = layout_store.layoutCount();
+        try rc_plans.ensureTotalCapacity(allocator, try cacheCapacity(layout_count));
+
+        var struct_field_count: usize = 0;
+        var tag_variant_count: usize = 0;
+        for (0..layout_count) |raw| {
+            const layout_idx: layout_mod.Idx = @enumFromInt(raw);
+            const layout_val = layout_store.getLayout(layout_idx);
+            switch (layout_val.tag) {
+                .struct_ => {
+                    struct_field_count += layout_store.getStructData(layout_val.data.struct_.idx).fields.count;
+                },
+                .tag_union => {
+                    const tu_data = layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                    tag_variant_count += layout_store.getTagUnionVariants(tu_data).len;
+                },
+                else => {},
+            }
+        }
+
+        try struct_field_plans.ensureTotalCapacity(allocator, try cacheCapacity(struct_field_count));
+        try tag_variant_plans.ensureTotalCapacity(allocator, try cacheCapacity(tag_variant_count));
+    }
+
+    fn cacheCapacity(count: usize) Allocator.Error!u32 {
+        const capacity = std.math.mul(usize, count, 3) catch return error.OutOfMemory;
+        return std.math.cast(u32, capacity) orelse error.OutOfMemory;
     }
 
     fn evalAllocator(self: *LirInterpreter) Allocator {
@@ -661,7 +831,7 @@ pub const Interpreter = struct {
     }
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
-        const slot = frame.locals[@intFromEnum(local_id)];
+        const slot = frame.slots[frame.slotIndex(local_id)];
         if (!slot.assigned) {
             if (comptime builtin.target.os.tag != .freestanding) {
                 const proc = self.store.getProcSpec(frame.proc_id);
@@ -1264,7 +1434,7 @@ pub const Interpreter = struct {
         defer self.call_depth -= 1;
 
         var frame = try self.initFrame(proc_id, proc_spec);
-        defer frame.deinit(self.evalAllocator());
+        defer frame.deinit(self.allocator);
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
@@ -1373,25 +1543,22 @@ pub const Interpreter = struct {
     }
 
     fn initFrame(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) Error!Frame {
-        const locals = try self.evalAllocator().alloc(LocalSlot, self.store.locals.items.len);
-        @memset(locals, .{ .assigned = false, .val = Value.zst });
-        for (locals, 0..) |*slot, idx| {
-            const local_id: LocalId = @enumFromInt(@as(u32, @intCast(idx)));
+        const plan = &self.frame_plans[@intFromEnum(proc_id)];
+        const slots = try plan.acquireSlots(self.allocator);
+        @memset(slots, .{ .assigned = false, .val = Value.zst });
+        for (slots, plan.locals) |*slot, local_id| {
             const layout_idx = self.store.getLocal(local_id).layout_idx;
             if (self.layout_store.getLayout(layout_idx).tag == .zst) {
                 slot.assigned = true;
             }
         }
 
-        var frame = Frame{
+        return .{
             .proc_id = proc_id,
             .ret_layout = proc_spec.ret_layout,
-            .locals = locals,
+            .plan = plan,
+            .slots = slots,
         };
-        var visited_stmts: VisitedStmtSet = .{};
-        defer visited_stmts.deinit(self.evalAllocator());
-        try self.collectJoinPoints(&frame.join_points, &visited_stmts, self.requireProcBody(proc_id, proc_spec));
-        return frame;
     }
 
     fn requireProcBody(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
@@ -1399,69 +1566,6 @@ pub const Interpreter = struct {
             "LIR/interpreter invariant violated: non-hosted proc {d} missing statement body",
             .{@intFromEnum(proc_id)},
         );
-    }
-
-    fn collectJoinPoints(
-        self: *LirInterpreter,
-        join_points: *JoinPointMap,
-        visited_stmts: *VisitedStmtSet,
-        stmt_id: CFStmtId,
-    ) Error!void {
-        const visit = try visited_stmts.getOrPut(self.evalAllocator(), @intFromEnum(stmt_id));
-        if (visit.found_existing) return;
-
-        const stmt = self.store.getCFStmt(stmt_id);
-        switch (stmt) {
-            .assign_ref => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_literal => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_call => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_call_erased => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_packed_erased_fn => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_low_level => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_list => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_struct => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .assign_tag => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .set_local => |assign| try self.collectJoinPoints(join_points, visited_stmts, assign.next),
-            .debug => |debug_stmt| try self.collectJoinPoints(join_points, visited_stmts, debug_stmt.next),
-            .expect => |expect_stmt| try self.collectJoinPoints(join_points, visited_stmts, expect_stmt.next),
-            .incref => |inc| try self.collectJoinPoints(join_points, visited_stmts, inc.next),
-            .decref => |dec| try self.collectJoinPoints(join_points, visited_stmts, dec.next),
-            .free => |free_stmt| try self.collectJoinPoints(join_points, visited_stmts, free_stmt.next),
-            .switch_stmt => |switch_stmt| {
-                for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
-                    try self.collectJoinPoints(join_points, visited_stmts, branch.body);
-                }
-                try self.collectJoinPoints(join_points, visited_stmts, switch_stmt.default_branch);
-            },
-            .join => |join_stmt| {
-                const join_entry = try join_points.getOrPut(self.evalAllocator(), @intFromEnum(join_stmt.id));
-                if (join_entry.found_existing) {
-                    if (!std.meta.eql(join_entry.value_ptr.*, JoinPointInfo{
-                        .params = join_stmt.params,
-                        .body = join_stmt.body,
-                    })) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: join point {d} has conflicting bodies",
-                            .{@intFromEnum(join_stmt.id)},
-                        );
-                    }
-                } else {
-                    join_entry.value_ptr.* = .{
-                        .params = join_stmt.params,
-                        .body = join_stmt.body,
-                    };
-                }
-                try self.collectJoinPoints(join_points, visited_stmts, join_stmt.body);
-                try self.collectJoinPoints(join_points, visited_stmts, join_stmt.remainder);
-            },
-            .runtime_error,
-            .loop_continue,
-            .loop_break,
-            .jump,
-            .ret,
-            .crash,
-            => {},
-        }
     }
 
     fn execStmtChain(
@@ -1596,7 +1700,7 @@ pub const Interpreter = struct {
                     return self.runtimeError("RuntimeError");
                 },
                 .incref => |inc| {
-                    if (builtin.mode == .Debug and !frame.locals[@intFromEnum(inc.value)].assigned) {
+                    if (builtin.mode == .Debug and !frame.isAssigned(inc.value)) {
                         debugPrint(
                             "LIR/interpreter invariant violated before incref: local {d} unassigned in proc {d} at stmt {d}\n",
                             .{ @intFromEnum(inc.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
@@ -1621,7 +1725,7 @@ pub const Interpreter = struct {
                     current = inc.next;
                 },
                 .decref => |dec| {
-                    if (builtin.mode == .Debug and !frame.locals[@intFromEnum(dec.value)].assigned) {
+                    if (builtin.mode == .Debug and !frame.isAssigned(dec.value)) {
                         debugPrint(
                             "LIR/interpreter invariant violated before decref: local {d} unassigned in proc {d} at stmt {d}\n",
                             .{ @intFromEnum(dec.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
@@ -1645,7 +1749,7 @@ pub const Interpreter = struct {
                     current = dec.next;
                 },
                 .free => |free_stmt| {
-                    if (builtin.mode == .Debug and !frame.locals[@intFromEnum(free_stmt.value)].assigned) {
+                    if (builtin.mode == .Debug and !frame.isAssigned(free_stmt.value)) {
                         debugPrint(
                             "LIR/interpreter invariant violated before free: local {d} unassigned in proc {d} at stmt {d}\n",
                             .{ @intFromEnum(free_stmt.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
@@ -1704,11 +1808,11 @@ pub const Interpreter = struct {
                     current = join_stmt.remainder;
                 },
                 .jump => |jump_stmt| {
-                    const join_info = frame.join_points.get(@intFromEnum(jump_stmt.target)) orelse self.invariantFailed(
+                    const join_point = frame.plan.joinPoint(jump_stmt.target) orelse self.invariantFailed(
                         "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
                         .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
                     );
-                    current = join_info.body;
+                    current = join_point.body;
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
@@ -2293,8 +2397,9 @@ pub const Interpreter = struct {
             @enumFromInt(context.capture_layout_plus_one - 1);
         if (capture_layout == .zst) return;
         const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
+        const helper = layout_mod.RcHelperKey{ .op = .decref, .layout_idx = capture_layout };
         context.interpreter.performRawRcPlan(
-            context.interpreter.layout_store.rcHelperPlan(.{ .op = .decref, .layout_idx = capture_layout }),
+            context.interpreter.cachedRcPlan(helper),
             .{ .ptr = capture_value_ptr },
             1,
         );
@@ -2502,6 +2607,38 @@ pub const Interpreter = struct {
         base_layout: layout_mod.Idx,
     };
 
+    const BoxAllocInfo = struct {
+        elem_layout: layout_mod.Idx,
+        elem_size: u32,
+        elem_alignment: u32,
+        contains_rc: bool,
+    };
+
+    fn boxAllocInfo(self: *LirInterpreter, box_layout: Layout) BoxAllocInfo {
+        return switch (box_layout.tag) {
+            .box => blk: {
+                const elem_layout = box_layout.data.box;
+                const elem_layout_val = self.layout_store.getLayout(elem_layout);
+                break :blk .{
+                    .elem_layout = elem_layout,
+                    .elem_size = self.layout_store.layoutSize(elem_layout_val),
+                    .elem_alignment = @intCast(elem_layout_val.alignment(self.layout_store.targetUsize()).toByteUnits()),
+                    .contains_rc = self.layoutContainsRc(elem_layout),
+                };
+            },
+            .box_of_zst => .{
+                .elem_layout = .zst,
+                .elem_size = 0,
+                .elem_alignment = 1,
+                .contains_rc = false,
+            },
+            else => self.invariantFailed(
+                "LIR/interpreter invariant violated: expected box layout, got {s}",
+                .{@tagName(box_layout.tag)},
+            ),
+        };
+    }
+
     fn allocStructValue(self: *LirInterpreter, struct_layout: layout_mod.Idx) Error!AllocatedStruct {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
         switch (struct_layout_val.tag) {
@@ -2516,11 +2653,11 @@ pub const Interpreter = struct {
                 .base_layout = .zst,
             },
             .box => {
-                const box_info = self.layout_store.getBoxInfo(struct_layout_val);
+                const box_info = self.boxAllocInfo(struct_layout_val);
                 const data_ptr = try self.allocRocDataWithRc(
                     box_info.elem_size,
                     box_info.elem_alignment,
-                    box_info.contains_refcounted,
+                    box_info.contains_rc,
                 );
                 @memset(data_ptr[0..box_info.elem_size], 0);
                 const boxed = try self.alloc(struct_layout);
@@ -2624,11 +2761,11 @@ pub const Interpreter = struct {
     fn allocTagValue(self: *LirInterpreter, union_layout: layout_mod.Idx) Error!AllocatedTag {
         const union_layout_val = self.layout_store.getLayout(union_layout);
         if (union_layout_val.tag == .box) {
-            const box_info = self.layout_store.getBoxInfo(union_layout_val);
+            const box_info = self.boxAllocInfo(union_layout_val);
             const data_ptr = try self.allocRocDataWithRc(
                 box_info.elem_size,
                 box_info.elem_alignment,
-                box_info.contains_refcounted,
+                box_info.contains_rc,
             );
             @memset(data_ptr[0..box_info.elem_size], 0);
             const boxed = try self.alloc(union_layout);
@@ -2906,8 +3043,8 @@ pub const Interpreter = struct {
     /// so the interpreter's refcounting matches what the dev backend emits.
     fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
         trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
-        const key = layout_mod.RcHelperKey{ .op = op, .layout_idx = layout_idx };
-        self.performRawRcPlan(self.layout_store.rcHelperPlan(key), val, count);
+        const helper = layout_mod.RcHelperKey{ .op = op, .layout_idx = layout_idx };
+        self.performRawRcPlan(self.cachedRcPlan(helper), val, count);
     }
 
     fn performExplicitRcStmt(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
@@ -2930,7 +3067,222 @@ pub const Interpreter = struct {
     }
 
     fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime _: []const u8, layout_idx: layout_mod.Idx) bool {
-        return self.helper.containsRefcounted(layout_idx);
+        return self.layoutContainsRc(layout_idx);
+    }
+
+    fn cachedRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
+        const id = helper.encode();
+        if (self.rc_plans.get(id)) |plan| return plan;
+
+        const plan = self.buildRcPlan(helper);
+        self.rc_plans.putAssumeCapacity(id, plan);
+        return plan;
+    }
+
+    fn buildRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
+        if (!self.layoutContainsRc(helper.layout_idx)) return .noop;
+
+        const l = self.layout_store.getLayout(helper.layout_idx);
+        return switch (l.tag) {
+            .zst => .noop,
+            .scalar => if (l.data.scalar.tag == .str)
+                switch (helper.op) {
+                    .incref => .str_incref,
+                    .decref => .str_decref,
+                    .free => .str_free,
+                }
+            else
+                .noop,
+            .list, .list_of_zst => switch (helper.op) {
+                .incref => .{ .list_incref = self.rcListPlan(helper.layout_idx) },
+                .decref => .{ .list_decref = self.rcListPlan(helper.layout_idx) },
+                .free => .{ .list_free = self.rcListPlan(helper.layout_idx) },
+            },
+            .box, .box_of_zst => switch (helper.op) {
+                .incref => .box_incref,
+                .decref => .{ .box_decref = self.rcBoxPlan(helper.layout_idx) },
+                .free => .{ .box_free = self.rcBoxPlan(helper.layout_idx) },
+            },
+            .erased_callable => switch (helper.op) {
+                .incref => .erased_callable_incref,
+                .decref => .erased_callable_decref,
+                .free => .erased_callable_free,
+            },
+            .struct_ => .{ .struct_ = .{
+                .struct_idx = l.data.struct_.idx,
+                .child_op = nestedDropOp(helper.op),
+            } },
+            .tag_union => .{ .tag_union = .{
+                .tag_union_idx = l.data.tag_union.idx,
+                .child_op = nestedDropOp(helper.op),
+            } },
+            .closure => .{ .closure = .{
+                .op = nestedDropOp(helper.op),
+                .layout_idx = l.data.closure.captures_layout_idx,
+            } },
+        };
+    }
+
+    fn nestedDropOp(op: RcOp) RcOp {
+        return switch (op) {
+            .incref => .incref,
+            .decref, .free => .decref,
+        };
+    }
+
+    fn cachedStructFieldPlan(
+        self: *LirInterpreter,
+        struct_plan: layout_mod.RcStructPlan,
+        field_index: u32,
+    ) ?layout_mod.RcFieldPlan {
+        const id = helperChildPlanId(@intCast(struct_plan.struct_idx.int_idx), struct_plan.child_op, field_index);
+        if (self.struct_field_plans.get(id)) |plan| return plan;
+
+        const field_layout_idx = self.layout_store.getStructFieldLayout(struct_plan.struct_idx, field_index);
+        const plan: ?layout_mod.RcFieldPlan = if (!self.layoutContainsRc(field_layout_idx) or
+            self.layout_store.getStructFieldSize(struct_plan.struct_idx, field_index) == 0)
+            null
+        else
+            .{
+                .offset = self.layout_store.getStructFieldOffset(struct_plan.struct_idx, field_index),
+                .child = .{
+                    .op = struct_plan.child_op,
+                    .layout_idx = field_layout_idx,
+                },
+            };
+        self.struct_field_plans.putAssumeCapacity(id, plan);
+        return plan;
+    }
+
+    fn cachedTagVariantPlan(
+        self: *LirInterpreter,
+        tag_plan: layout_mod.RcTagUnionPlan,
+        variant_index: u32,
+    ) ?layout_mod.RcHelperKey {
+        const id = helperChildPlanId(@intCast(tag_plan.tag_union_idx.int_idx), tag_plan.child_op, variant_index);
+        if (self.tag_variant_plans.get(id)) |plan| return plan;
+
+        const tu_data = self.layout_store.getTagUnionData(tag_plan.tag_union_idx);
+        const variants = self.layout_store.getTagUnionVariants(tu_data);
+        const payload_layout_idx = variants.get(variant_index).payload_layout;
+        const plan: ?layout_mod.RcHelperKey = if (!self.layoutContainsRc(payload_layout_idx) or
+            self.layout_store.layoutSizeAlign(self.layout_store.getLayout(payload_layout_idx)).size == 0)
+            null
+        else
+            .{
+                .op = tag_plan.child_op,
+                .layout_idx = payload_layout_idx,
+            };
+        self.tag_variant_plans.putAssumeCapacity(id, plan);
+        return plan;
+    }
+
+    fn helperChildPlanId(parent_idx: u32, child_op: layout_mod.RcOp, child_index: u32) u64 {
+        return (@as(u64, parent_idx) << 34) |
+            (@as(u64, @intFromEnum(child_op)) << 32) |
+            @as(u64, child_index);
+    }
+
+    fn rcListPlan(self: *LirInterpreter, list_layout_idx: layout_mod.Idx) layout_mod.RcListPlan {
+        const list_layout = self.layout_store.getLayout(list_layout_idx);
+        const runtime_elem_layout_idx: ?layout_mod.Idx = switch (list_layout.tag) {
+            .list => self.layout_store.runtimeRepresentationLayoutIdx(list_layout.data.list),
+            .list_of_zst => null,
+            else => unreachable,
+        };
+        if (runtime_elem_layout_idx) |elem_idx| {
+            const elem_layout = self.layout_store.getLayout(elem_idx);
+            return .{
+                .elem_alignment = @intCast(elem_layout.alignment(self.layout_store.targetUsize()).toByteUnits()),
+                .elem_width = self.layout_store.layoutSize(elem_layout),
+                .child = if (self.layoutContainsRc(elem_idx))
+                    .{
+                        .op = .decref,
+                        .layout_idx = elem_idx,
+                    }
+                else
+                    null,
+            };
+        }
+
+        return .{
+            .elem_alignment = 1,
+            .elem_width = 0,
+            .child = null,
+        };
+    }
+
+    fn rcBoxPlan(self: *LirInterpreter, box_layout_idx: layout_mod.Idx) layout_mod.RcBoxPlan {
+        const box_layout = self.layout_store.getLayout(box_layout_idx);
+        const runtime_elem_layout_idx: ?layout_mod.Idx = switch (box_layout.tag) {
+            .box => self.layout_store.runtimeRepresentationLayoutIdx(box_layout.data.box),
+            .box_of_zst => null,
+            else => unreachable,
+        };
+        if (runtime_elem_layout_idx) |elem_idx| {
+            const elem_layout = self.layout_store.getLayout(elem_idx);
+            return .{
+                .elem_alignment = @intCast(elem_layout.alignment(self.layout_store.targetUsize()).toByteUnits()),
+                .child = if (self.layoutContainsRc(elem_idx))
+                    .{
+                        .op = .decref,
+                        .layout_idx = elem_idx,
+                    }
+                else
+                    null,
+            };
+        }
+
+        return .{
+            .elem_alignment = 1,
+            .child = null,
+        };
+    }
+
+    fn layoutContainsRc(self: *LirInterpreter, layout_idx: layout_mod.Idx) bool {
+        const raw = @intFromEnum(layout_idx);
+        switch (self.rc_presence[raw]) {
+            .yes => return true,
+            .no => return false,
+            .active => return true,
+            .unknown => {},
+        }
+
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        const direct = switch (layout_val.tag) {
+            .scalar => layout_val.data.scalar.tag == .str,
+            .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
+            .zst => false,
+            .struct_, .tag_union, .closure => null,
+        };
+        if (direct) |result| {
+            self.rc_presence[raw] = if (result) .yes else .no;
+            return result;
+        }
+
+        self.rc_presence[raw] = .active;
+        const contains = switch (layout_val.tag) {
+            .struct_ => blk: {
+                const sd = self.layout_store.getStructData(layout_val.data.struct_.idx);
+                for (0..sd.fields.count) |i| {
+                    const field_layout = self.layout_store.getStructFieldLayout(layout_val.data.struct_.idx, @intCast(i));
+                    if (self.layoutContainsRc(field_layout)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => blk: {
+                const tu_data = self.layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                const variants = self.layout_store.getTagUnionVariants(tu_data);
+                for (0..variants.len) |i| {
+                    if (self.layoutContainsRc(variants.get(@intCast(i)).payload_layout)) break :blk true;
+                }
+                break :blk false;
+            },
+            .closure => self.layoutContainsRc(layout_val.data.closure.captures_layout_idx),
+            .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
+        };
+        self.rc_presence[raw] = if (contains) .yes else .no;
+        return contains;
     }
 
     fn performRawRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u16) void {
@@ -3023,7 +3375,7 @@ pub const Interpreter = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), child_val, count);
+                        self.performRawRcPlan(self.cachedRcPlan(child_key), child_val, count);
                     }
                 }
                 utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
@@ -3038,7 +3390,7 @@ pub const Interpreter = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), child_val, count);
+                        self.performRawRcPlan(self.cachedRcPlan(child_key), child_val, count);
                     }
                 }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
@@ -3071,9 +3423,9 @@ pub const Interpreter = struct {
                 const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
                 var i: u32 = 0;
                 while (i < field_count) : (i += 1) {
-                    const field_plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, i) orelse continue;
+                    const field_plan = self.cachedStructFieldPlan(struct_plan, i) orelse continue;
                     const field_val = Value{ .ptr = val.ptr + field_plan.offset };
-                    self.performRawRcPlan(self.layout_store.rcHelperPlan(field_plan.child), field_val, count);
+                    self.performRawRcPlan(self.cachedRcPlan(field_plan.child), field_val, count);
                 }
             },
             .tag_union => |tag_plan| {
@@ -3092,14 +3444,14 @@ pub const Interpreter = struct {
                 trace_rc.log("tag_union rc: disc={d} variant_count={d}", .{ disc, variant_count });
 
                 if (disc < variant_count) {
-                    if (self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, disc)) |child_key| {
+                    if (self.cachedTagVariantPlan(tag_plan, disc)) |child_key| {
                         // Payload is always at offset 0 in the tag union.
-                        self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), val, count);
+                        self.performRawRcPlan(self.cachedRcPlan(child_key), val, count);
                     }
                 }
             },
             .closure => |child_key| {
-                self.performRawRcPlan(self.layout_store.rcHelperPlan(child_key), val, count);
+                self.performRawRcPlan(self.cachedRcPlan(child_key), val, count);
             },
         }
     }
@@ -3115,7 +3467,7 @@ pub const Interpreter = struct {
     ) void {
         if (rl.getAllocationDataPtr(&self.roc_ops)) |source| {
             const elem_count = rl.getAllocationElementCount(true, &self.roc_ops);
-            const child_plan = self.layout_store.rcHelperPlan(child_key);
+            const child_plan = self.cachedRcPlan(child_key);
             var i: usize = 0;
             while (i < elem_count) : (i += 1) {
                 const element_ptr = source + i * list_plan.elem_width;
@@ -3201,11 +3553,11 @@ pub const Interpreter = struct {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
         switch (ret_layout_val.tag) {
             .box => {
-                const box_info = self.layout_store.getBoxInfo(ret_layout_val);
+                const box_info = self.boxAllocInfo(ret_layout_val);
                 const data_ptr = try self.allocRocDataWithRc(
                     box_info.elem_size,
                     box_info.elem_alignment,
-                    box_info.contains_refcounted,
+                    box_info.contains_rc,
                 );
                 @memcpy(data_ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
 
@@ -6070,10 +6422,10 @@ pub const Interpreter = struct {
         switch (ret_layout_val.tag) {
             .box_of_zst => return try self.allocBoxOfZstValue(ret_layout),
             .box => {
-                const box_info = self.layout_store.getBoxInfo(ret_layout_val);
+                const box_info = self.boxAllocInfo(ret_layout_val);
                 const elem_size = box_info.elem_size;
                 const elem_align = box_info.elem_alignment;
-                const data_ptr = try self.allocRocDataWithRc(elem_size, elem_align, box_info.contains_refcounted);
+                const data_ptr = try self.allocRocDataWithRc(elem_size, elem_align, box_info.contains_rc);
                 if (elem_size > 0) {
                     @memcpy(data_ptr[0..elem_size], arg.ptr[0..elem_size]);
                 }
