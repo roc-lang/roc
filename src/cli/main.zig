@@ -1084,7 +1084,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     // host executable. The same lowered root metadata supplies the platform
     // entrypoint names used by the shim, so `roc run` does not rediscover roots
     // from platform source syntax after checking.
-    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, null);
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, null, args.max_threads);
     const shm_handle = shm_result.handle;
     defer closeSharedMemoryHandle(shm_handle);
 
@@ -1397,7 +1397,7 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, app_path, original_source_dir);
+    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads);
     defer closeSharedMemoryHandle(shm_result.handle);
 
     if (shm_result.error_count > 0) {
@@ -1910,6 +1910,7 @@ pub fn buildLirRuntimeImageWithCoordinator(
     ctx: *CliContext,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
+    max_threads: ?usize,
 ) !SharedMemoryResult {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try createSharedMemory(page_size);
@@ -1958,10 +1959,13 @@ pub fn buildLirRuntimeImageWithCoordinator(
     else
         null;
 
+    const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
     var coord = try Coordinator.init(
         ctx.gpa,
-        .single_threaded,
-        1,
+        mode,
+        thread_count,
         RocTarget.detectNative(),
         &builtin_modules,
         build_options.compiler_version,
