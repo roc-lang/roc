@@ -2784,6 +2784,8 @@ pub const Coordinator = struct {
 
     /// Worker thread main function
     fn workerThread(self: *Coordinator) void {
+        _ = base.stack_overflow.installForCurrentThread();
+
         // Each worker has its own allocators for thread safety.
         // - gpa: smp_allocator for long-lived data (ModuleEnv, source)
         // - arena: for temporary allocations, reset between tasks

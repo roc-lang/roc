@@ -2049,9 +2049,12 @@ fn createTestPlatformHostLib(
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
+            // Only linked so host code can set up stack overflow handling.
+            .link_libc = true,
         }),
     });
     configureBackend(lib, target);
+    lib.root_module.addImport("base", roc_modules.base);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
     // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
@@ -3280,7 +3283,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
     stack_overflow_test_helper_exe.root_module.addImport("base", roc_modules.base);
-    stack_overflow_test_helper_exe.root_module.addImport("builtins", roc_modules.builtins);
     roc_modules.addModuleDependencies(stack_overflow_test_helper_exe, .base);
     const install_stack_overflow_test_helper = b.addInstallArtifact(stack_overflow_test_helper_exe, .{});
     const stack_overflow_test_helper_path = b.getInstallPath(.bin, stack_overflow_test_helper_exe.out_filename);

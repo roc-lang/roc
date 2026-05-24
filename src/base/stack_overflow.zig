@@ -1,19 +1,9 @@
-//! Signal handling for the Roc compiler (stack overflow, segfault, division by zero).
-//!
-//! This module provides a thin wrapper around the generic signal handlers in
-//! builtins.handlers, configured with compiler-specific error messages.
-//!
-//! On POSIX systems (Linux, macOS), we use sigaltstack to set up an alternate
-//! signal stack and install handlers for SIGSEGV, SIGBUS, and SIGFPE.
-//!
-//! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
-//!
-//! Freestanding targets (like wasm32) are not supported (no signal handling available).
+//! Signal handling for the Roc compiler process.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const handlers = @import("builtins").handlers;
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
+const signal_handler = @import("signal_handler.zig");
 const STACK_OVERFLOW_TEST_HELPER_ENV_VAR = "ROC_STACK_OVERFLOW_TEST_HELPER";
 
 /// Error message to display on stack overflow
@@ -119,7 +109,7 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nAccess violation in the Roc compiler.\nFault address: ";
         const msg2 = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
@@ -151,7 +141,7 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
 
         // Write the fault address as hex
         var addr_buf: [18]u8 = undefined;
-        const addr_str = handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
         {
             const written = posix.write(posix.STDERR_FILENO, addr_str) catch |err| {
                 if (comptime builtin.mode == .Debug) {
@@ -191,11 +181,13 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
     }
 }
 
-/// Install signal handlers for stack overflow, segfault, and division by zero.
-/// This should be called early in main() before any significant work is done.
-/// Returns true if the handlers were installed successfully, false otherwise.
-pub fn install() bool {
-    return handlers.install(handleStackOverflow, handleAccessViolation, handleArithmeticError);
+/// Install compiler crash handling for the current thread.
+pub fn installForCurrentThread() bool {
+    return signal_handler.installForCurrentThread(.{
+        .stack_overflow = handleStackOverflow,
+        .access_violation = handleAccessViolation,
+        .arithmetic_error = handleArithmeticError,
+    });
 }
 
 /// Test function that intentionally causes a stack overflow.
@@ -221,29 +213,32 @@ pub fn triggerStackOverflowForTest() noreturn {
     std.process.exit(1);
 }
 
-test "formatHex" {
-    var buf: [18]u8 = undefined;
-
-    const zero = handlers.formatHex(0, &buf);
-    try std.testing.expectEqualStrings("0x0", zero);
-
-    const small = handlers.formatHex(0xff, &buf);
-    try std.testing.expectEqualStrings("0xff", small);
-
-    const medium = handlers.formatHex(0xdeadbeef, &buf);
-    try std.testing.expectEqualStrings("0xdeadbeef", medium);
-}
-
 test "stack overflow handler produces helpful error message" {
     // Skip on freestanding targets - no process spawning or signal handling
     if (comptime builtin.os.tag == .freestanding) {
         return error.SkipZigTest;
     }
 
-    try testStackOverflowInChildProcess();
+    try testCrashInChildProcess("stack-overflow", "overflowed its stack memory", 134);
 }
 
-fn testStackOverflowInChildProcess() !void {
+test "access violation handler is not reported as stack overflow" {
+    if (comptime builtin.os.tag == .freestanding) {
+        return error.SkipZigTest;
+    }
+
+    try testCrashInChildProcess("high-access-violation", "Segmentation fault", 139);
+}
+
+test "worker thread installs stack overflow handler" {
+    if (comptime builtin.os.tag == .freestanding) {
+        return error.SkipZigTest;
+    }
+
+    try testCrashInChildProcess("thread-stack-overflow", "overflowed its stack memory", 134);
+}
+
+fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code: u8) !void {
     const allocator = std.testing.allocator;
     const helper_path = std.process.getEnvVarOwned(allocator, STACK_OVERFLOW_TEST_HELPER_ENV_VAR) catch |err| {
         std.debug.print("Missing {s}: {s}\n", .{ STACK_OVERFLOW_TEST_HELPER_ENV_VAR, @errorName(err) });
@@ -253,25 +248,25 @@ fn testStackOverflowInChildProcess() !void {
 
     const result = try std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{helper_path},
+        .argv = &.{ helper_path, mode },
         .max_output_bytes = 4096,
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    try verifyHandlerOutput(result.term, result.stderr);
+    try verifyHandlerOutput(result.term, result.stderr, expected, expected_code);
 }
 
-fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8) !void {
-    const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null;
-    const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
+fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, expected: []const u8, expected_code: u8) !void {
+    const has_expected_msg = std.mem.indexOf(u8, stderr_output, expected) != null;
+    const has_wrong_stack_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null and
+        !std.mem.eql(u8, expected, "overflowed its stack memory");
 
     switch (term) {
         .Exited => |code| {
-            // Exit code 134 = stack overflow detected
-            // Exit code 139 = generic segfault/access violation handler path
-            if (code == 134 or code == 139) {
-                try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);
+            if (code == expected_code) {
+                try std.testing.expect(has_expected_msg);
+                try std.testing.expect(!has_wrong_stack_msg);
                 return;
             }
 

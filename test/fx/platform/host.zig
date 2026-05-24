@@ -27,6 +27,7 @@
 //! - 1: Test failed (mismatch, missing output, extra output, or invalid spec)
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
@@ -101,7 +102,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         const msg2 = "\n\n";
@@ -117,7 +118,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         _ = posix.write(posix.STDERR_FILENO, msg) catch {};
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
         _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
         _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
         posix.exit(139);
@@ -159,7 +160,11 @@ const HostSelfTest = enum {
 };
 
 fn installRuntimeSignalHandlers() void {
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = base.signal_handler.installForCurrentThread(.{
+        .stack_overflow = handleRocStackOverflow,
+        .access_violation = handleRocAccessViolation,
+        .arithmetic_error = handleRocArithmeticError,
+    });
 }
 
 fn triggerSelfTest(mode: HostSelfTest) noreturn {

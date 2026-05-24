@@ -7,6 +7,7 @@
 //! Entry point: make_glue : List Types -> Result (List File) Str
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
@@ -81,7 +82,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         const msg2 = "\n\n";
@@ -97,7 +98,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         _ = posix.write(posix.STDERR_FILENO, msg) catch {};
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
         _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
         _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
         posix.exit(139);
@@ -655,7 +656,11 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
 
     // Install signal handlers
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = base.signal_handler.installForCurrentThread(.{
+        .stack_overflow = handleRocStackOverflow,
+        .access_violation = handleRocAccessViolation,
+        .arithmetic_error = handleRocArithmeticError,
+    });
     if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
         builtins.utils.DebugRefcountTracker.enable();
     }

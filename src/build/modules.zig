@@ -322,7 +322,7 @@ pub const ModuleType = enum {
             .io => &.{},
             .tracy => &.{.build_options},
             .collections => &.{},
-            .base => &.{ .collections, .builtins },
+            .base => &.{.collections},
             .roc_src => &.{},
             .types => &.{ .tracy, .base, .collections },
             .reporting => &.{ .collections, .base },
@@ -649,12 +649,13 @@ pub const RocModules = struct {
                     .root_source_file = module.root_source_file.?,
                     .target = target,
                     .optimize = optimize,
+                    // Base module needs libc for compiler crash handler tests.
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
                     // Eval module needs libc for setjmp/longjmp crash protection
                     // sljmp module needs libc for setjmp/longjmp functions
                     // compile/lsp modules transitively depend on eval->sljmp, so also need libc
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
+                    .link_libc = (module_type == .base or module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
                 }),
                 .filters = filter_injection.filters,
             });

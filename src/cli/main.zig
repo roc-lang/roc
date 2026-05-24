@@ -592,7 +592,7 @@ pub fn main() !void {
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
-    const stack_overflow_installed = base.stack_overflow.install();
+    const stack_overflow_installed = base.stack_overflow.installForCurrentThread();
     if (comptime builtin.mode == .Debug) {
         std.debug.assert(stack_overflow_installed);
     } else if (!stack_overflow_installed) {
