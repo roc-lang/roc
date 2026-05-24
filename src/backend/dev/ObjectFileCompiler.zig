@@ -264,6 +264,9 @@ fn compileWithCodeGen(
             .section = .text,
             .prologue_size = proc_symbol.prologue_size,
             .stack_alloc = proc_symbol.stack_alloc,
+            .frame_size = proc_symbol.frame_size,
+            .callee_saved_mask = proc_symbol.callee_saved_mask,
+            .epilogue_offset = proc_symbol.epilogue_offset,
             .uses_frame_pointer = proc_symbol.uses_frame_pointer,
         }) catch return CompilationError.OutOfMemory;
     }
@@ -289,9 +292,12 @@ fn compileWithCodeGen(
             .is_function = true,
             .is_external = false,
             .section = .text,
-            // Unwind info for Windows x64
+            // Unwind metadata for Windows object files.
             .prologue_size = export_info.prologue_size,
             .stack_alloc = export_info.stack_alloc,
+            .frame_size = export_info.frame_size,
+            .callee_saved_mask = export_info.callee_saved_mask,
+            .epilogue_offset = export_info.epilogue_offset,
             .uses_frame_pointer = export_info.uses_frame_pointer,
         }) catch {
             return CompilationError.OutOfMemory;

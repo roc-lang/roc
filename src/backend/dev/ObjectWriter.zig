@@ -156,8 +156,13 @@ pub fn generateObjectFile(
                     }
                 }
 
-                // Add function info for Windows x64 unwind tables
-                if (coff_arch == .x86_64 and sym.is_function and !sym.is_external) {
+                // Add function info for Windows unwind tables.
+                const has_unwind_info = sym.prologue_size != 0 or
+                    sym.stack_alloc != 0 or
+                    sym.frame_size != 0 or
+                    sym.callee_saved_mask != 0 or
+                    sym.epilogue_offset != 0;
+                if ((coff_arch == .x86_64 or coff_arch == .aarch64) and sym.is_function and !sym.is_external and has_unwind_info) {
                     try coff_writer.addFunctionInfo(.{
                         .start_offset = @intCast(sym.offset),
                         .end_offset = @intCast(sym.offset + sym.size),
@@ -165,6 +170,9 @@ pub fn generateObjectFile(
                         .frame_reg_offset = 0, // RSP offset not scaled for our simple case
                         .uses_frame_pointer = sym.uses_frame_pointer,
                         .stack_alloc = sym.stack_alloc,
+                        .frame_size = sym.frame_size,
+                        .callee_saved_mask = sym.callee_saved_mask,
+                        .epilogue_offset = sym.epilogue_offset,
                     });
                 }
             }
@@ -184,9 +192,12 @@ pub const Symbol = struct {
     is_global: bool,
     is_function: bool,
     is_external: bool,
-    // Unwind info for Windows x64
-    prologue_size: u8 = 0,
+    // Unwind metadata for Windows object files.
+    prologue_size: u32 = 0,
     stack_alloc: u32 = 0,
+    frame_size: u32 = 0,
+    callee_saved_mask: u32 = 0,
+    epilogue_offset: u32 = 0,
     uses_frame_pointer: bool = true,
 };
 
@@ -407,4 +418,54 @@ test "generate aarch64 windows object" {
     // Verify COFF machine type (ARM64 = 0xAA64)
     const machine = std.mem.readInt(u16, output.items[0..2], .little);
     try std.testing.expectEqual(@as(u16, 0xAA64), machine);
+}
+
+test "generate aarch64 windows object with unwind sections" {
+    const allocator = std.testing.allocator;
+
+    const code = &[_]u8{
+        0xFD, 0x7B, 0xBA, 0xA9, // stp x29, x30, [sp, #-96]!
+        0xFD, 0x03, 0x00, 0x91, // mov x29, sp
+        0xF3, 0x53, 0x01, 0xA9, // stp x19, x20, [sp, #16]
+        0xF3, 0x53, 0x41, 0xA9, // ldp x19, x20, [sp, #16]
+        0xFD, 0x7B, 0xC6, 0xA8, // ldp x29, x30, [sp], #96
+        0xC0, 0x03, 0x5F, 0xD6, // ret
+    };
+
+    const x19_bit = @as(u32, 1) << 19;
+    const x20_bit = @as(u32, 1) << 20;
+    const symbols = &[_]Symbol{
+        .{
+            .name = "test_func",
+            .offset = 0,
+            .size = code.len,
+            .is_global = true,
+            .is_function = true,
+            .is_external = false,
+            .prologue_size = 12,
+            .frame_size = 96,
+            .callee_saved_mask = x19_bit | x20_bit,
+            .epilogue_offset = 12,
+        },
+    };
+
+    var output: std.ArrayList(u8) = .{};
+    defer output.deinit(allocator);
+
+    try generateObjectFile(
+        allocator,
+        .arm64win,
+        code,
+        &.{},
+        symbols,
+        &.{},
+        &.{},
+        &output,
+    );
+
+    const machine = std.mem.readInt(u16, output.items[0..2], .little);
+    try std.testing.expectEqual(@as(u16, 0xAA64), machine);
+
+    const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
+    try std.testing.expectEqual(@as(u16, 3), num_sections);
 }

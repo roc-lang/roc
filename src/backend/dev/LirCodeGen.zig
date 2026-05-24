@@ -740,9 +740,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Declared arguments for ABI-correct call lowering.
             args: LocalSpan,
             /// Size of the emitted prologue, used for object unwind metadata.
-            prologue_size: u8 = 0,
+            prologue_size: u32 = 0,
             /// Stack allocation size recorded in object unwind metadata.
             stack_alloc: u32 = 0,
+            /// Full AArch64 frame size recorded in object unwind metadata.
+            frame_size: u32 = 0,
+            /// AArch64 callee-saved register mask for object unwind metadata.
+            callee_saved_mask: u32 = 0,
+            /// Offset of the shared epilogue from this procedure's code start.
+            epilogue_offset: u32 = 0,
             /// Whether this procedure uses the platform frame pointer.
             uses_frame_pointer: bool = true,
         };
@@ -752,8 +758,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             name: Symbol,
             code_start: usize,
             code_end: usize,
-            prologue_size: u8,
+            prologue_size: u32,
             stack_alloc: u32,
+            frame_size: u32,
+            callee_saved_mask: u32,
+            epilogue_offset: u32,
             uses_frame_pointer: bool,
         };
 
@@ -887,9 +896,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Size of the function in bytes
             size: usize,
             /// Size of the function prologue in bytes (for unwind info)
-            prologue_size: u8 = 0,
+            prologue_size: u32 = 0,
             /// Stack allocation size (for unwind info)
             stack_alloc: u32 = 0,
+            /// Full AArch64 frame size (for unwind info)
+            frame_size: u32 = 0,
+            /// AArch64 callee-saved register mask (for unwind info)
+            callee_saved_mask: u32 = 0,
+            /// Offset of the shared epilogue from the symbol start (for unwind info)
+            epilogue_offset: u32 = 0,
             /// Whether function uses frame pointer
             uses_frame_pointer: bool = true,
         };
@@ -11429,6 +11444,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .code_end = proc.code_end,
                 .prologue_size = proc.prologue_size,
                 .stack_alloc = proc.stack_alloc,
+                .frame_size = proc.frame_size,
+                .callee_saved_mask = proc.callee_saved_mask,
+                .epilogue_offset = proc.epilogue_offset,
                 .uses_frame_pointer = proc.uses_frame_pointer,
             };
         }
@@ -11671,6 +11689,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     entry.code_end = self.codegen.currentOffset();
                     entry.prologue_size = @intCast(prologue_size);
                     entry.stack_alloc = actual_locals_x86;
+                    entry.frame_size = actual_locals_x86;
+                    entry.callee_saved_mask = self.codegen.callee_saved_used;
+                    entry.epilogue_offset = @intCast(final_epilogue - prologue_start);
                     entry.uses_frame_pointer = true;
                 }
             } else {
@@ -11690,6 +11711,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 frame_builder.setStackSize(actual_locals);
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
+                const frame_size = frame_builder.actual_stack_alloc;
 
                 // Re-append body
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
@@ -11726,6 +11748,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     entry.code_end = self.codegen.currentOffset();
                     entry.prologue_size = @intCast(prologue_size);
                     entry.stack_alloc = actual_locals;
+                    entry.frame_size = frame_size;
+                    entry.callee_saved_mask = self.codegen.callee_saved_used;
+                    entry.epilogue_offset = @intCast(final_epilogue - prologue_start);
                     entry.uses_frame_pointer = true;
                 }
             }
@@ -13311,8 +13336,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_layout: layout.Idx,
         ) Allocator.Error!ExportedSymbol {
             const func_start = self.codegen.currentOffset();
-            var prologue_size: u8 = 0;
+            var prologue_size: u32 = 0;
             var stack_alloc: u32 = 0;
+            var frame_size: u32 = 0;
+            var callee_saved_mask: u32 = 0;
+            var epilogue_offset: u32 = 0;
 
             self.local_locations.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
@@ -13362,8 +13390,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                     frame_builder.setStackSize(actual_locals);
                     _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                    frame_size = frame_builder.actual_stack_alloc;
                 }
                 const prologue_size_val = self.codegen.currentOffset() - prologue_start;
+                prologue_size = @intCast(prologue_size_val);
+                stack_alloc = actual_locals;
+                callee_saved_mask = self.codegen.callee_saved_used;
 
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
@@ -13381,6 +13413,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     patch.* += prologue_size_val;
                 }
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size_val + prologue_start;
+                epilogue_offset = @intCast(final_epilogue - prologue_start);
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
                     self.codegen.patchJump(patch, final_epilogue);
                 }
@@ -13440,6 +13473,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 prologue_size = @intCast(prologue_size_x86);
                 stack_alloc = actual_locals_x86;
+                frame_size = actual_locals_x86;
+                callee_saved_mask = self.codegen.callee_saved_used;
 
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
@@ -13457,6 +13492,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     patch.* += prologue_size_x86;
                 }
                 const final_epilogue = body_epilogue_offset - body_start + prologue_size_x86 + prologue_start_x86;
+                epilogue_offset = @intCast(final_epilogue - prologue_start_x86);
                 for (self.early_return_patches.items[saved_early_return_patches_len..]) |patch| {
                     self.codegen.patchJump(patch, final_epilogue);
                 }
@@ -13475,6 +13511,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .size = func_end - func_start,
                 .prologue_size = prologue_size,
                 .stack_alloc = stack_alloc,
+                .frame_size = frame_size,
+                .callee_saved_mask = callee_saved_mask,
+                .epilogue_offset = epilogue_offset,
                 .uses_frame_pointer = true,
             };
         }
