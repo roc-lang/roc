@@ -9,6 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 
 /// COFF file format constants
 const COFF = struct {
@@ -43,6 +44,8 @@ const COFF = struct {
     // ARM64 relocation types
     const IMAGE_REL_ARM64_ADDR32NB = 0x0002; // 32-bit address w/o base (RVA)
     const IMAGE_REL_ARM64_BRANCH26 = 0x0003;
+    const IMAGE_REL_ARM64_PAGEBASE_REL21 = 0x0004;
+    const IMAGE_REL_ARM64_PAGEOFFSET_12A = 0x0006;
     const IMAGE_REL_ARM64_ADDR64 = 0x000E;
 
     // x64 Unwind operation codes
@@ -279,6 +282,30 @@ pub const CoffWriter = struct {
             .offset = offset,
             .symbol_idx = symbol_idx,
             .reloc_type = self.arch.branchRelocType(),
+        });
+    }
+
+    /// Add a data-symbol relocation to the text section.
+    pub fn addTextDataRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: DataRelocationKind) !void {
+        const reloc_type: u16 = switch (kind) {
+            .abs64 => self.arch.absolutePointerRelocType(),
+            .rel32 => switch (self.arch) {
+                .x86_64 => COFF.IMAGE_REL_AMD64_REL32,
+                .aarch64 => unreachable,
+            },
+            .page21 => switch (self.arch) {
+                .x86_64 => unreachable,
+                .aarch64 => COFF.IMAGE_REL_ARM64_PAGEBASE_REL21,
+            },
+            .pageoff12 => switch (self.arch) {
+                .x86_64 => unreachable,
+                .aarch64 => COFF.IMAGE_REL_ARM64_PAGEOFFSET_12A,
+            },
+        };
+        try self.text_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .reloc_type = reloc_type,
         });
     }
 

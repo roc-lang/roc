@@ -9,6 +9,8 @@ pub const StaticDataExport = struct {
     symbol_name: []const u8,
     /// Fully materialized Roc ABI bytes for the constant.
     bytes: []const u8,
+    /// Offset inside `bytes` where `symbol_name` points.
+    symbol_offset: u32 = 0,
     /// Required alignment of the symbol inside the readonly section.
     alignment: u32,
     /// Whether the symbol should be visible to the host linker.

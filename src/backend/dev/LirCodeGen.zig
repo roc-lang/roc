@@ -73,7 +73,7 @@ const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
 
 const Relocation = @import("Relocation.zig").Relocation;
 
-const StaticDataInterner = @import("StaticDataInterner.zig");
+const StaticStringData = @import("StaticStringData.zig");
 
 const LirStore = lir.LirStore;
 const Symbol = lir.Symbol;
@@ -594,8 +594,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Layout store for accessing struct/tag field offsets
         layout_store: *const LayoutStore,
 
-        /// Static data interner for string literals
-        static_interner: ?*StaticDataInterner,
+        /// Readonly data symbols for non-SSO strings in object-file output.
+        static_strings: []const StaticStringData.Entry,
 
         /// Map from LIR local id to value location (register or stack slot)
         local_locations: std.AutoHashMap(u32, ValueLocation),
@@ -926,7 +926,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             allocator: Allocator,
             store: *const LirStore,
             layout_store_opt: *const LayoutStore,
-            static_interner: ?*StaticDataInterner,
+            static_strings: []const StaticStringData.Entry,
         ) Allocator.Error!Self {
             return .{
                 .allocator = allocator,
@@ -934,7 +934,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .codegen = CodeGen.init(allocator),
                 .store = store,
                 .layout_store = layout_store_opt,
-                .static_interner = static_interner,
+                .static_strings = static_strings,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
@@ -7879,26 +7879,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitRawRcHelperCallForValue(
-            self: *Self,
-            op: RcOp,
-            value_loc: ValueLocation,
-            layout_idx: layout.Idx,
-            count: u16,
-        ) Allocator.Error!void {
-            const l = self.layout_store.getLayout(layout_idx);
-            if (!explicitRcLayoutValContainsRefcounted(self.layout_store, "dev.emitRcHelperCallForValue.layout_rc", l)) return;
-
-            const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
-            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return;
-
-            const value_size = self.layout_store.layoutSizeAlign(l).size;
-            if (value_size == 0) return;
-
-            const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
-            try self.emitRcHelperCallAtStackOffset(helper_key, base_offset, count);
-        }
-
         fn emitExplicitRcHelperCallForValue(
             self: *Self,
             helper_key: RcHelperKey,
@@ -13149,51 +13129,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emitLoadImm(reg, @bitCast(chunk2));
                 try self.codegen.emitStoreStack(.w64, base_offset + 2 * target_ptr_size, reg);
             } else {
-                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
-                const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
-
-                const alloc_size = std.mem.alignForward(usize, str_bytes.len, 8);
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(alloc_size));
-                try builder.addImmArg(1);
-                try builder.addImmArg(0);
-                try builder.addRegArg(roc_ops_reg);
-                try self.callBuiltin(&builder, fn_addr, .allocate_with_refcount);
-
-                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
-
-                const heap_ptr = try self.allocTempGeneral();
-                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
-
-                var remaining: usize = str_bytes.len;
-                var str_offset: usize = 0;
-                const temp_reg = try self.allocTempGeneral();
-
-                while (remaining >= 8) {
-                    const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
-                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                    str_offset += 8;
-                    remaining -= 8;
-                }
-
-                if (remaining > 0) {
-                    var last_chunk: u64 = 0;
-                    for (0..remaining) |j| {
-                        last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
-                    }
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
-                    try self.emitStore(.w64, heap_ptr, @intCast(str_offset), temp_reg);
-                }
-
-                self.codegen.freeGeneral(temp_reg);
-                self.codegen.freeGeneral(heap_ptr);
-
                 const ptr_reg = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(ptr_reg);
-                try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
 
+                switch (self.generation_mode) {
+                    .native_execution => {
+                        verifyStaticStringBytes(str_bytes);
+                        try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(str_bytes.ptr))));
+                    },
+                    .object_file => {
+                        const symbol_name = self.staticStringSymbol(str_idx);
+                        try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
+                    },
+                }
                 try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
                 try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
                 try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
@@ -13201,6 +13149,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return .{ .stack_str = base_offset };
+        }
+
+        fn staticStringSymbol(self: *Self, str_idx: base.StringLiteral.Idx) []const u8 {
+            for (self.static_strings) |entry| {
+                if (entry.id == str_idx) return entry.symbol_name;
+            }
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: non-SSO string literal {d} has no readonly data symbol",
+                    .{@intFromEnum(str_idx)},
+                );
+            }
+            unreachable;
+        }
+
+        fn verifyStaticStringBytes(str_bytes: []const u8) void {
+            if (builtin.mode != .Debug) return;
+
+            const data_addr = @intFromPtr(str_bytes.ptr);
+            if (data_addr % @alignOf(isize) != 0) {
+                std.debug.panic("Dev/codegen invariant violated: static string literal bytes are not refcount-aligned", .{});
+            }
+            const refcount_ptr: *const isize = @ptrCast(@alignCast(str_bytes.ptr - @sizeOf(isize)));
+            if (refcount_ptr.* != builtins.utils.REFCOUNT_STATIC_DATA) {
+                std.debug.panic("Dev/codegen invariant violated: static string literal missing static refcount", .{});
+            }
         }
 
         /// Max size of any debug-assertion crash message (in bytes, aligned to 8).
@@ -14028,7 +14002,7 @@ fn compileRoot(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR
     entry_offset: usize,
 } {
     const allocator = std.testing.allocator;
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, null);
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{});
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -14107,7 +14081,7 @@ test "code generator initialization" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{});
     defer codegen.deinit();
 }
 
@@ -14152,7 +14126,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     } });
     const args = try store.addLocalSpan(&.{ start, end });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{});
     defer codegen.deinit();
 
     const HostCodeGen = @TypeOf(codegen.codegen);
@@ -14194,7 +14168,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const list = try addLocal(&store, list_layout);
     const args = try store.addLocalSpan(&.{ a, b, c, d, list });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{});
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -14631,7 +14605,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{});
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
@@ -14658,7 +14632,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
         test_state.layout_store.getLayout(.f32),
     });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{});
     defer codegen.deinit();
 
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));

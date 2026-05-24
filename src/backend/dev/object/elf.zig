@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 
 /// ELF file header constants
 const ELF = struct {
@@ -51,10 +52,13 @@ const ELF = struct {
 
     // x86_64 relocation types
     const R_X86_64_64 = 1;
+    const R_X86_64_PC32 = 2;
     const R_X86_64_PLT32 = 4;
 
     // aarch64 relocation types
     const R_AARCH64_ABS64 = 257;
+    const R_AARCH64_ADR_PREL_PG_HI21 = 275;
+    const R_AARCH64_ADD_ABS_LO12_NC = 277;
     const R_AARCH64_CALL26 = 283;
 };
 
@@ -169,6 +173,11 @@ pub const ElfWriter = struct {
         addend: i64,
     };
 
+    const TextDataReloc = struct {
+        kind: u32,
+        addend: i64,
+    };
+
     pub fn init(allocator: Allocator, arch: Architecture) !Self {
         var self = Self{
             .allocator = allocator,
@@ -276,6 +285,47 @@ pub const ElfWriter = struct {
             .symbol_idx = symbol_idx,
             .reloc_type = reloc_type,
             .addend = addend,
+        });
+    }
+
+    /// Add a data-address relocation to the text section.
+    pub fn addTextDataRelocation(self: *Self, offset: u64, symbol_idx: u32, kind: DataRelocationKind) !void {
+        const reloc: TextDataReloc = switch (kind) {
+            .abs64 => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => ELF.R_X86_64_64,
+                    .aarch64 => ELF.R_AARCH64_ABS64,
+                },
+                .addend = @as(i64, 0),
+            },
+            .rel32 => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => ELF.R_X86_64_PC32,
+                    .aarch64 => unreachable,
+                },
+                .addend = @as(i64, -4),
+            },
+            .page21 => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => unreachable,
+                    .aarch64 => ELF.R_AARCH64_ADR_PREL_PG_HI21,
+                },
+                .addend = @as(i64, 0),
+            },
+            .pageoff12 => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => unreachable,
+                    .aarch64 => ELF.R_AARCH64_ADD_ABS_LO12_NC,
+                },
+                .addend = @as(i64, 0),
+            },
+        };
+
+        try self.text_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .reloc_type = reloc.kind,
+            .addend = reloc.addend,
         });
     }
 

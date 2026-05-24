@@ -18,7 +18,6 @@ pub const SymbolResolver = dev.SymbolResolver;
 pub const CodeGen = dev.CodeGen;
 pub const Backend = dev.Backend;
 pub const ExecutableMemory = dev.ExecutableMemory;
-pub const StaticDataInterner = dev.StaticDataInterner;
 pub const HostLirCodeGen = dev.HostLirCodeGen;
 pub const host_lir_codegen_available = dev.host_lir_codegen_available;
 pub const LirCodeGenMod = dev.LirCodeGenMod;

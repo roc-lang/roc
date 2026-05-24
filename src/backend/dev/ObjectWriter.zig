@@ -55,13 +55,14 @@ pub fn generateObjectFile(
                 // x86_64 R_X86_64_PLT32 needs addend -4 (PC-relative from end of 4-byte field)
                 const reloc_addend: i64 = if (cpu_arch == .x86_64) -4 else 0;
                 for (relocations) |rel| {
-                    const rel_name = switch (rel) {
-                        .linked_function => |f| f.name,
-                        .linked_data => |d| d.name,
-                        else => continue,
-                    };
-                    if (std.mem.eql(u8, rel_name, sym.name)) {
-                        try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
+                    switch (rel) {
+                        .linked_function => |f| if (std.mem.eql(u8, f.name, sym.name)) {
+                            try elf.addTextRelocation(rel.getOffset(), sym_idx, reloc_addend);
+                        },
+                        .linked_data => |d| if (std.mem.eql(u8, d.name, sym.name)) {
+                            try elf.addTextDataRelocation(rel.getOffset(), sym_idx, d.kind);
+                        },
+                        else => {},
                     }
                 }
 
@@ -97,13 +98,14 @@ pub fn generateObjectFile(
 
                 // Add relocations for this symbol
                 for (relocations) |rel| {
-                    const rel_name = switch (rel) {
-                        .linked_function => |f| f.name,
-                        .linked_data => |d| d.name,
-                        else => continue,
-                    };
-                    if (std.mem.eql(u8, rel_name, sym.name)) {
-                        try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
+                    switch (rel) {
+                        .linked_function => |f| if (std.mem.eql(u8, f.name, sym.name)) {
+                            try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
+                        },
+                        .linked_data => |d| if (std.mem.eql(u8, d.name, sym.name)) {
+                            try macho.addTextDataRelocation(@intCast(rel.getOffset()), sym_idx, d.kind);
+                        },
+                        else => {},
                     }
                 }
 
@@ -140,13 +142,14 @@ pub fn generateObjectFile(
 
                 // Add relocations for this symbol
                 for (relocations) |rel| {
-                    const rel_name = switch (rel) {
-                        .linked_function => |f| f.name,
-                        .linked_data => |d| d.name,
-                        else => continue,
-                    };
-                    if (std.mem.eql(u8, rel_name, sym.name)) {
-                        try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);
+                    switch (rel) {
+                        .linked_function => |f| if (std.mem.eql(u8, f.name, sym.name)) {
+                            try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);
+                        },
+                        .linked_data => |d| if (std.mem.eql(u8, d.name, sym.name)) {
+                            try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), sym_idx, d.kind);
+                        },
+                        else => {},
                     }
                 }
 

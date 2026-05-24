@@ -53,10 +53,6 @@ fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime _: [
     return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
 }
 
-fn explicitRcLayoutContainsRefcounted(ls: *const LayoutStore, comptime _: []const u8, layout_idx: layout.Idx) bool {
-    return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
-}
-
 const BuiltinListAbi = struct {
     elem_layout_idx: ?layout.Idx,
     elem_layout: layout.Layout,
@@ -685,39 +681,6 @@ fn emitProcLocal(self: *Self, value: ProcLocalId) Allocator.Error!void {
     try self.emitCanonicalizeScalarForLayout(self.procLocalLayoutIdx(value));
 }
 
-fn emitRawRcForValueLocal(
-    self: *Self,
-    comptime kind: RcOpKind,
-    value_local: u32,
-    value_vt: ValType,
-    layout_idx: layout.Idx,
-    inc_count: u16,
-) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const l = ls.getLayout(layout_idx);
-    if (!explicitRcLayoutContainsRefcounted(ls, "wasm.emitRcForValueLocal.layout_rc", layout_idx)) return;
-    if (value_vt != .i32) return;
-
-    if (self.isCompositeLayout(layout_idx)) {
-        try self.emitRawRcHelperCallForValuePtr(kind, value_local, layout_idx, inc_count);
-        return;
-    }
-
-    const size_align = ls.layoutSizeAlign(l);
-    if (size_align.size == 0) return;
-
-    const slot = try self.allocStackMemory(@intCast(size_align.size), @intCast(size_align.alignment.toByteUnits()));
-    const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(slot);
-    try self.emitLocalSet(ptr_local);
-
-    try self.emitLocalGet(ptr_local);
-    try self.emitLocalGet(value_local);
-    try self.emitStoreOpSized(.i32, @intCast(size_align.size), 0);
-
-    try self.emitRawRcHelperCallForValuePtr(kind, ptr_local, layout_idx, inc_count);
-}
-
 fn emitExplicitRcForValueLocal(
     self: *Self,
     helper_key: RcHelperKey,
@@ -898,38 +861,6 @@ fn emitRawDirectRcPlan(
         },
         .struct_, .tag_union, .closure => return false,
     }
-}
-
-fn emitRawRcHelperCallForValuePtr(
-    self: *Self,
-    comptime kind: RcOpKind,
-    value_ptr_local: u32,
-    layout_idx: layout.Idx,
-    inc_count: u16,
-) Allocator.Error!void {
-    const normalized_value_ptr = try self.normalizeCompositeValuePtr(value_ptr_local, layout_idx);
-    const helper_key = RcHelperKey{ .op = switch (kind) {
-        .incref => .incref,
-        .decref => .decref,
-        .free => .free,
-    }, .layout_idx = layout_idx };
-    const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
-    if (helper_plan == .noop) return;
-    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, normalized_value_ptr, null)) return;
-
-    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
-    try self.emitLocalGet(normalized_value_ptr);
-    switch (kind) {
-        .incref => {
-            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inc_count)) catch return error.OutOfMemory;
-            try self.emitLocalGet(self.roc_ops_local);
-        },
-        .decref, .free => {
-            try self.emitLocalGet(self.roc_ops_local);
-        },
-    }
-    try self.emitCall(helper_func_idx);
 }
 
 fn emitExplicitRcHelperCallForValuePtr(

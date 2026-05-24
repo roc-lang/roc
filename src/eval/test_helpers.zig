@@ -1230,7 +1230,7 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
-            null,
+            &.{},
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());

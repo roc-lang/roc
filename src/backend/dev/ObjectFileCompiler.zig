@@ -23,8 +23,8 @@ const RocTarget = @import("roc_target").RocTarget;
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
-const StaticDataInterner = @import("StaticDataInterner.zig");
 const static_data_export = @import("StaticDataExport.zig");
+const StaticStringData = @import("StaticStringData.zig");
 
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
@@ -157,20 +157,17 @@ fn compileWithCodeGen(
         return CompilationError.NoEntrypoints;
     }
 
-    // Create memory backend for static data allocation
-    var memory_backend = StaticDataInterner.MemoryBackend.init(allocator);
-    defer memory_backend.deinit();
-
-    // Create static data interner for string literals
-    var static_interner = StaticDataInterner.init(allocator, memory_backend.backend());
-    defer static_interner.deinit();
+    var static_strings = StaticStringData.build(allocator, lir_store, target) catch {
+        return CompilationError.OutOfMemory;
+    };
+    defer static_strings.deinit();
 
     // Initialize the code generator
     var codegen = CodeGen.init(
         allocator,
         lir_store,
         layout_store,
-        &static_interner,
+        static_strings.entries,
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
@@ -202,36 +199,10 @@ fn compileWithCodeGen(
     }
 
     for (static_data_exports) |data_export| {
-        const alignment = @as(usize, @intCast(data_export.alignment));
-        const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
-        rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
-            return CompilationError.OutOfMemory;
-        };
-        rodata.appendSlice(allocator, data_export.bytes) catch {
-            return CompilationError.OutOfMemory;
-        };
-
-        static_data_symbols.append(allocator, .{
-            .name = data_export.symbol_name,
-            .offset = aligned_offset,
-            .size = data_export.bytes.len,
-            .is_global = data_export.is_global,
-            .is_function = false,
-            .is_external = false,
-            .section = .rodata,
-        }) catch {
-            return CompilationError.OutOfMemory;
-        };
-
-        for (data_export.relocations) |relocation| {
-            rodata_relocations.append(allocator, .{
-                .offset = @as(u64, @intCast(aligned_offset)) + relocation.offset,
-                .target_symbol_name = relocation.target_symbol_name,
-                .addend = relocation.addend,
-            }) catch {
-                return CompilationError.OutOfMemory;
-            };
-        }
+        try appendStaticDataExport(allocator, data_export, &rodata, &rodata_relocations, &static_data_symbols);
+    }
+    for (static_strings.exports) |data_export| {
+        try appendStaticDataExport(allocator, data_export, &rodata, &rodata_relocations, &static_data_symbols);
     }
 
     // ELF requires all local symbols to appear before global symbols. Keep that
@@ -407,6 +378,53 @@ fn compileWithCodeGen(
         },
         .allocator = allocator,
     };
+}
+
+fn appendStaticDataExport(
+    allocator: Allocator,
+    data_export: StaticDataExport,
+    rodata: *std.ArrayList(u8),
+    rodata_relocations: *std.ArrayList(ObjectWriter.DataRelocation),
+    static_data_symbols: *std.ArrayList(ObjectWriter.Symbol),
+) CompilationError!void {
+    const alignment = @as(usize, @intCast(data_export.alignment));
+    const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
+    rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
+        return CompilationError.OutOfMemory;
+    };
+    rodata.appendSlice(allocator, data_export.bytes) catch {
+        return CompilationError.OutOfMemory;
+    };
+
+    const symbol_offset: usize = @intCast(data_export.symbol_offset);
+    if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
+        std.debug.panic(
+            "ObjectFileCompiler invariant violated: static data symbol offset {d} exceeds byte length {d}",
+            .{ data_export.symbol_offset, data_export.bytes.len },
+        );
+    }
+
+    static_data_symbols.append(allocator, .{
+        .name = data_export.symbol_name,
+        .offset = aligned_offset + symbol_offset,
+        .size = data_export.bytes.len - symbol_offset,
+        .is_global = data_export.is_global,
+        .is_function = false,
+        .is_external = false,
+        .section = .rodata,
+    }) catch {
+        return CompilationError.OutOfMemory;
+    };
+
+    for (data_export.relocations) |relocation| {
+        rodata_relocations.append(allocator, .{
+            .offset = @as(u64, @intCast(aligned_offset)) + relocation.offset,
+            .target_symbol_name = relocation.target_symbol_name,
+            .addend = relocation.addend,
+        }) catch {
+            return CompilationError.OutOfMemory;
+        };
+    }
 }
 
 /// Runtime-to-comptime dispatch for compilation.
