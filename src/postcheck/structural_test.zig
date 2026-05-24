@@ -32,6 +32,17 @@ fn unionPayloadType(comptime T: type, comptime name: []const u8) type {
     @compileError("missing union field: " ++ name);
 }
 
+fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []const u8 {
+    const start_index = std.mem.indexOf(u8, source, start) orelse @panic("missing source slice start marker");
+    const after_start = source[start_index..];
+    const end_index = std.mem.indexOf(u8, after_start, end) orelse @panic("missing source slice end marker");
+    return after_start[0..end_index];
+}
+
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+}
+
 test "Monotype has direct calls and no checked-only expression forms" {
     try std.testing.expect(@hasField(Mono.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Mono.ExprData, "call_value"));
@@ -165,6 +176,24 @@ test "post-check stage products do not store expression cache state" {
         try std.testing.expect(!@hasField(T, "expr_map"));
         try std.testing.expect(!@hasField(T, "memoized_exprs"));
     }
+}
+
+test "stage-local expression maps are scoped to one function" {
+    const lifted_source = @embedFile("monotype_lifted/lift.zig");
+    const lower_nested_def = sourceSliceBetween(lifted_source, "fn lowerNestedDef", "fn pushFunctionMaps");
+    try expectContains(lower_nested_def, "const saved_maps = self.pushFunctionMaps();");
+    try expectContains(lower_nested_def, "defer self.popFunctionMaps(saved_maps);");
+
+    const lift_lambda = sourceSliceBetween(lifted_source, "fn liftLambda", "fn reserveFnTemplate");
+    try expectContains(lift_lambda, "const saved_maps = self.pushFunctionMaps();");
+    try expectContains(lift_lambda, "defer self.popFunctionMaps(saved_maps);");
+
+    const lambda_mono_source = @embedFile("lambda_mono/lower.zig");
+    const lower_fn = sourceSliceBetween(lambda_mono_source, "fn lowerFn", "fn captureParamForFn");
+    try expectContains(lower_fn, "self.captures.clearRetainingCapacity();");
+    try expectContains(lower_fn, "@memset(self.expr_map, null);");
+    try expectContains(lower_fn, "@memset(self.pat_map, null);");
+    try expectContains(lower_fn, "@memset(self.stmt_map, null);");
 }
 
 test "post-check invariant helper is failure-only" {

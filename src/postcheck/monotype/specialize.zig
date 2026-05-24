@@ -62,14 +62,35 @@ test "monotype specialize queue keeps distinct requests" {
     try std.testing.expectEqual(@as(usize, 3), queue.entries.items.len);
 }
 
+test "monotype specialize queue coalesces equivalent checked function type ids" {
+    var queue = Queue.init();
+    defer queue.deinit(std.testing.allocator);
+
+    const first = testSpecWithSourceType(0, 0, 0, 1);
+    const second = testSpecWithSourceType(0, 0, 0, 2);
+
+    try std.testing.expect(try queue.enqueue(std.testing.allocator, first));
+    try std.testing.expect(!try queue.enqueue(std.testing.allocator, second));
+    try std.testing.expectEqual(@as(usize, 1), queue.entries.items.len);
+}
+
 fn testSpec(comptime proc_index: u32, comptime source_digest_byte: u8, comptime ty_index: u32) Spec {
+    return testSpecWithSourceType(proc_index, source_digest_byte, ty_index, ty_index + 1);
+}
+
+fn testSpecWithSourceType(
+    comptime proc_index: u32,
+    comptime source_digest_byte: u8,
+    comptime ty_index: u32,
+    comptime source_ty_index: u32,
+) Spec {
     return .{
         .fn_def = .{
             .fn_def = .{ .local_template = .{
                 .proc_base = @enumFromInt(proc_index),
                 .template = @enumFromInt(proc_index + 1),
             } },
-            .source_fn_ty = @enumFromInt(ty_index + 1),
+            .source_fn_ty = @enumFromInt(source_ty_index),
             .source_fn_key = digestWithFirstByte(source_digest_byte),
             .mono_fn_ty = @enumFromInt(ty_index),
         },
