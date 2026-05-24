@@ -2592,7 +2592,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.callStr1RocOpsToResult(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy, .str);
                 },
                 .str_from_utf8 => {
-                    // str_from_utf8(list) -> Result Str [BadUtf8 {problem: Utf8Problem, index: U64}]
+                    // str_from_utf8(list) -> Try(Str, [BadUtf8 {problem: Utf8Problem, index: U64}])
                     if (args.len != 1) unreachable;
                     const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
