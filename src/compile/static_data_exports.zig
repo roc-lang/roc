@@ -898,11 +898,7 @@ const StaticDataBuilder = struct {
 
     fn encodeRocStrCapacity(self: *StaticDataBuilder, capacity: usize) u64 {
         const target_capacity: u64 = @intCast(capacity);
-        const max_capacity: u64 = switch (self.word_size) {
-            4 => std.math.maxInt(u32) >> 1,
-            8 => std.math.maxInt(u64) >> 1,
-            else => unreachable,
-        };
+        const max_capacity = self.targetWordMax() >> 1;
         if (target_capacity > max_capacity) staticDataInvariant("static string exceeds RocStr capacity limit for target");
         return target_capacity << 1;
     }
@@ -916,11 +912,8 @@ const StaticDataBuilder = struct {
     }
 
     fn targetWordMax(self: *StaticDataBuilder) u64 {
-        return switch (self.word_size) {
-            4 => std.math.maxInt(u32),
-            8 => std.math.maxInt(u64),
-            else => unreachable,
-        };
+        const unused_bits: std.math.Log2Int(u64) = @intCast((8 - self.word_size) * 8);
+        return @as(u64, std.math.maxInt(u64)) >> unused_bits;
     }
 };
 
