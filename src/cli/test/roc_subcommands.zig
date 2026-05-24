@@ -580,10 +580,10 @@ test "roc run test/str/app_static_24_byte_string.roc does not panic" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    const did_panic = result.term == .Signal or
-        (result.term == .Exited and result.term.Exited == 134) or
-        std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "reached unreachable code") != null;
+    const did_panic = result.term == .signal or
+        (result.term == .exited and result.term.exited == 134) or
+        std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "reached unreachable code") != null;
 
     if (did_panic) {
         std.debug.print("roc direct run panicked\nterm: {}\nstdout: {s}\nstderr: {s}\n", .{

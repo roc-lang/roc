@@ -1930,41 +1930,6 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) void {
-    const message = switch (err) {
-        error.OutOfMemory => "Roc interpreter ran out of memory",
-        error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
-        error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
-        error.Crash => return,
-    };
-    ops.crash(message);
-}
-
-fn evaluateRuntimeImageEntrypoint(
-    allocator: Allocator,
-    view: *const lir.RuntimeImage.ProgramView,
-    ordinal: u32,
-    ops: *echo_platform.host_abi.RocOps,
-    ret_ptr: ?*anyopaque,
-    arg_ptr: ?*anyopaque,
-) !void {
-    var interpreter = try eval.LirInterpreter.init(allocator, &view.store, &view.layouts, ops);
-    defer interpreter.deinit();
-
-    _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
-        error.EntrypointNotFound => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("CLI runtime image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
-            }
-            unreachable;
-        },
-        else => |e| {
-            reportCliInterpreterError(ops, &interpreter, e);
-            return;
-        },
-    };
-}
-
 /// Build shared memory containing a viewable ARC-inserted LIR runtime image.
 ///
 /// The parent process owns parse, canonicalize, checking, checked-artifact
@@ -1992,7 +1957,7 @@ pub fn buildLirRuntimeImageWithCoordinator(
 
     // Parse the app header
     const header_info = compile.app_header.parseAppHeader(
-        FsIo.default(),
+        ctx.coreCtx(),
         ctx.gpa,
         ctx.arena,
         roc_file_path,
@@ -2126,6 +2091,12 @@ pub fn buildLirRuntimeImageWithCoordinator(
 
     shm.updateHeader();
     return sharedMemoryResult(&shm, finalized_counts, entrypoint_names);
+}
+
+/// Wrapper around buildLirRuntimeImageWithCoordinator for callers that pass allow_errors.
+/// The allow_errors flag is handled by the caller; this function ignores it.
+pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) !SharedMemoryResult {
+    return buildLirRuntimeImageWithCoordinator(ctx, roc_file_path, null);
 }
 
 /// Platform resolution result containing the platform source path

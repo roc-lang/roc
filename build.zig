@@ -1561,7 +1561,7 @@ const MiniCiStep = struct {
         try recordTiming(b.allocator, io, &timings, "zig build test", &timer);
 
         try runSubBuild(step, &.{"test-builtin-doc"}, "zig build test-builtin-doc");
-        try recordTiming(b.allocator, &timings, "zig build test-builtin-doc", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build test-builtin-doc", &timer);
 
         try runSubBuild(
             step,
@@ -2650,6 +2650,8 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/cli/test/echo_tests.zig"),
                 .target = target,
                 .optimize = optimize,
+                // util.zig reads std.c.environ (Zig 0.16 requires explicit link_libc).
+                .link_libc = true,
             }),
             .filters = test_filters,
         });

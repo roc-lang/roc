@@ -20,6 +20,7 @@ const host_abi = @import("builtins").host_abi;
 const roc_target = @import("roc_target");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
+const CoreCtx = @import("ctx").CoreCtx;
 
 // Allocator callbacks for the test's RocOps. The simple_success.roc app's
 // `main!` is empty, so these are unlikely to fire — but they must be valid
@@ -68,6 +69,7 @@ test "embedding API: full canonical sequence on simple_success app" {
         &builtin_modules,
         build_options.compiler_version,
         null,
+        CoreCtx.default(gpa, arena, std.testing.io),
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;

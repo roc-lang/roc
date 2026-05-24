@@ -760,7 +760,7 @@ pub const Coordinator = struct {
         arena: Allocator,
         opts: AppDiscoveryOptions,
     ) AppDiscoveryError!void {
-        const header_info = try app_header_mod.parseAppHeader(self.io, self.gpa, arena, opts.entry_path);
+        const header_info = try app_header_mod.parseAppHeader(self.roc_ctx, self.gpa, arena, opts.entry_path);
 
         const app_dir = std.fs.path.dirname(opts.entry_path) orelse ".";
 

@@ -646,7 +646,7 @@ test "Store.Serialized roundtrip" {
     try writer.writeGather(tmp_file, io);
 
     // Read back
-    const file_size = try tmp_file.getEndPos();
+    const file_size = try tmp_file.length(io);
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
     _ = try tmp_file.readPositionalAll(io, buffer, 0);

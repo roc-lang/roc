@@ -91,7 +91,7 @@ pub fn main() !void {
         i += 1;
         if (i >= args.len) printUsageAndExit();
         const spec = args[i];
-        const eq = std.mem.indexOfScalar(u8, spec, '=') orelse {
+        const eq = std.mem.findScalar(u8, spec, '=') orelse {
             std.fs.File.stderr().writeAll("--with-file value must be Name=path\n") catch {};
             std.process.exit(2);
         };

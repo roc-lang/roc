@@ -14,7 +14,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
-const posix = std.posix;
 
 /// Forking is needed so a single crashing block (e.g. annotation-only function
 /// reference that hits a compiler invariant) doesn't kill the whole test.
@@ -25,6 +24,7 @@ const has_fork = switch (builtin.os.tag) {
 
 const eval_mod = @import("eval");
 const test_helpers = eval_mod.test_helpers;
+const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
@@ -152,11 +152,11 @@ fn stripDocPrefix(line: []const u8) []const u8 {
     var i: usize = 0;
     while (i < line.len and (line[i] == ' ' or line[i] == '\t')) : (i += 1) {}
     if (i + 1 >= line.len or line[i] != '#' or line[i + 1] != '#') {
-        return std.mem.trimRight(u8, line[i..], " \t\r");
+        return std.mem.trimEnd(u8, line[i..], " \t\r");
     }
     i += 2;
     if (i < line.len and line[i] == ' ') i += 1;
-    return std.mem.trimRight(u8, line[i..], " \t\r");
+    return std.mem.trimEnd(u8, line[i..], " \t\r");
 }
 
 const Analysis = struct {
@@ -356,27 +356,29 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
         return .success;
     }
 
-    const pipe_fds = posix.pipe() catch return .fork_unavailable;
+    var pipe_fds: [2]std.c.fd_t = undefined;
+    if (std.c.pipe(&pipe_fds) != 0) return .fork_unavailable;
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = std.c.fork();
+    if (fork_result < 0) {
+        _ = std.c.close(pipe_read);
+        _ = std.c.close(pipe_write);
         return .fork_unavailable;
-    };
+    }
 
     if (fork_result == 0) {
         // Child path.
-        posix.close(pipe_read);
+        _ = std.c.close(pipe_read);
 
         // Silence the child's stderr — a crashing child writes its panic stack
         // there, which would otherwise flood the parent test's output. The
         // parent already records the signal number via waitpid.
-        const dev_null = posix.openat(posix.AT.FDCWD, "/dev/null", .{ .ACCMODE = .WRONLY }, 0) catch -1;
+        const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY });
         if (dev_null >= 0) {
-            _ = posix.dup2(dev_null, 2) catch {};
-            posix.close(dev_null);
+            _ = std.c.dup2(dev_null, 2);
+            _ = std.c.close(dev_null);
         }
 
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -384,39 +386,39 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
 
         const result = work(child_alloc, source) catch |err| {
             const name = @errorName(err);
-            _ = posix.write(pipe_write, name) catch {};
-            posix.close(pipe_write);
+            _ = std.c.write(pipe_write, name.ptr, name.len);
+            _ = std.c.close(pipe_write);
             std.c._exit(1);
         };
         if (result) |msg| {
-            _ = posix.write(pipe_write, msg) catch {};
-            posix.close(pipe_write);
+            _ = std.c.write(pipe_write, msg.ptr, msg.len);
+            _ = std.c.close(pipe_write);
             std.c._exit(1);
         }
-        posix.close(pipe_write);
+        _ = std.c.close(pipe_write);
         std.c._exit(0);
     }
 
     // Parent path.
-    posix.close(pipe_write);
+    _ = std.c.close(pipe_write);
 
     var buf = std.ArrayList(u8).empty;
     defer buf.deinit(allocator);
     while (true) {
         var read_buf: [4096]u8 = undefined;
-        const bytes = posix.read(pipe_read, &read_buf) catch break;
-        if (bytes == 0) break;
-        buf.appendSlice(allocator, read_buf[0..bytes]) catch break;
+        const bytes = std.c.read(pipe_read, &read_buf, read_buf.len);
+        if (bytes <= 0) break;
+        buf.appendSlice(allocator, read_buf[0..@intCast(bytes)]) catch break;
     }
-    posix.close(pipe_read);
+    _ = std.c.close(pipe_read);
 
-    const wait_result = posix.waitpid(fork_result, 0);
-    const status = wait_result.status;
-    const sig: u8 = @truncate(status & 0x7f);
+    var status: c_int = 0;
+    _ = std.c.waitpid(fork_result, &status, 0);
+    const sig: u8 = @truncate(@as(u32, @bitCast(status)) & 0x7f);
     if (sig != 0) {
         return .{ .crashed = sig };
     }
-    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    const exit_code: u8 = @truncate((@as(u32, @bitCast(status)) >> 8) & 0xff);
     if (exit_code != 0) {
         const owned = buf.toOwnedSlice(allocator) catch return .{ .failed = "" };
         return .{ .failed = owned };
@@ -470,7 +472,7 @@ fn runExpects(allocator: Allocator, source: []const u8) !?[]u8 {
         return try dupeErr(allocator, "expect-only block had no expect statements", .{});
     }
 
-    var compiled = test_helpers.compileInspectedProgram(allocator, .module, wrapped, &.{}) catch |err|
+    var compiled = test_helpers.compileInspectedProgram(allocator, std.testing.io, .module, wrapped, &.{}) catch |err|
         return try dupeErr(allocator, "compileInspectedProgram: {s}", .{@errorName(err)});
     defer compiled.deinit(allocator);
 
@@ -525,9 +527,9 @@ fn rewriteExpectsAsModule(allocator: Allocator, source: []const u8) ![]u8 {
     try buf.appendSlice(allocator, "\nmain =");
     for (expect_bodies.items, 0..) |body, i| {
         if (i == 0) {
-            try buf.writer(allocator).print(" ({s})", .{body});
+            try buf.print(allocator, " ({s})", .{body});
         } else {
-            try buf.writer(allocator).print(" and ({s})", .{body});
+            try buf.print(allocator, " and ({s})", .{body});
         }
     }
     try buf.append(allocator, '\n');
@@ -551,6 +553,7 @@ fn runEval(
 ) !?[]u8 {
     var compiled = test_helpers.compileInspectedProgram(
         allocator,
+        std.testing.io,
         source_kind,
         source,
         &.{},
@@ -686,12 +689,10 @@ fn reproduceWithBinary(
     defer allocator.free(path);
 
     // Ensure the debug directory exists.
-    std.fs.cwd().makePath(debug_dir) catch {};
+    const ctx = CoreCtx.default(allocator, allocator, std.testing.io);
+    ctx.makePath(debug_dir) catch {};
 
-    try std.fs.cwd().writeFile(.{
-        .sub_path = path,
-        .data = wrapper,
-    });
+    try ctx.writeFile(path, wrapper);
 
     // Determine which roc subcommand reproduces the failure.
     const subcommand = switch (block.kind) {
@@ -700,30 +701,36 @@ fn reproduceWithBinary(
     };
 
     // Skip reproduction if the binary doesn't exist (e.g. tests run before build).
-    std.fs.cwd().access(roc_binary, .{}) catch {
+    const access_ctx = CoreCtx.default(allocator, allocator, std.testing.io);
+    if (!access_ctx.fileExists(roc_binary)) {
         std.debug.print(
             "[builtin-doc-tests] roc binary not found at {s}; skipping reproduction step for block #{d} (line {d}). Debug file: {s}\n",
             .{ roc_binary, block_index, block.start_line, path },
         );
         return true;
-    };
+    }
 
-    var child = std.process.Child.init(
-        &.{ roc_binary, subcommand, path, "--no-cache" },
-        allocator,
-    );
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    const term = child.spawnAndWait() catch |err| {
+    var child = std.process.spawn(std.testing.io, .{
+        .argv = &.{ roc_binary, subcommand, path, "--no-cache" },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch |err| {
         std.debug.print(
             "[builtin-doc-tests] could not spawn roc binary ({s}); leaving debug file at {s}\n",
             .{ @errorName(err), path },
         );
         return true;
     };
+    const term = child.wait(std.testing.io) catch |err| {
+        std.debug.print(
+            "[builtin-doc-tests] roc binary wait failed ({s}); leaving debug file at {s}\n",
+            .{ @errorName(err), path },
+        );
+        return true;
+    };
 
     const binary_failed = switch (term) {
-        .Exited => |code| code != 0,
+        .exited => |code| code != 0,
         else => true,
     };
     return binary_failed;
@@ -752,7 +759,8 @@ fn wrapForBinary(allocator: Allocator, block: *const Block) ![]u8 {
 test "Builtin.roc doc code blocks check and evaluate" {
     const allocator = std.heap.page_allocator;
 
-    const source = std.fs.cwd().readFileAlloc(allocator, builtin_roc_path, 16 * 1024 * 1024) catch |err| {
+    const ctx = CoreCtx.default(allocator, allocator, std.testing.io);
+    const source = ctx.readFile(builtin_roc_path, allocator) catch |err| {
         std.debug.print(
             "[builtin-doc-tests] could not read {s} ({s}); tests must run from the project root.\n",
             .{ builtin_roc_path, @errorName(err) },

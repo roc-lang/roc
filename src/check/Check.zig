@@ -260,7 +260,7 @@ pub fn initWithOwnerModules(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    try preflightForTypeChecking(mutable_cir);
+    try preflightForTypeChecking(mutable_cir, imported_modules);
     return initAssumePrepared(
         gpa,
         types,
