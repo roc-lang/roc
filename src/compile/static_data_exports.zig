@@ -366,7 +366,7 @@ const StaticDataBuilder = struct {
         );
 
         if (whole_backing) {
-            self.writeWord(bytes, base_offset + self.word_size, self.encodeRocStrCapacity(str_bytes.len));
+            self.writeTargetWord(bytes, base_offset + self.word_size, self.encodeRocStrCapacity(str_bytes.len));
         } else {
             try self.writePointerRelocation(
                 bytes,
@@ -376,7 +376,7 @@ const StaticDataBuilder = struct {
                 target.addend + 1,
             );
         }
-        self.writeWord(bytes, base_offset + self.word_size * 2, str_bytes.len);
+        self.writeTargetWord(bytes, base_offset + self.word_size * 2, @intCast(str_bytes.len));
     }
 
     fn staticStrAllocation(
@@ -411,9 +411,9 @@ const StaticDataBuilder = struct {
             .list => |items| items,
             else => staticDataInvariant("List const plan received non-list ConstStore node"),
         };
-        self.writeWord(bytes, base_offset, 0);
-        self.writeWord(bytes, base_offset + self.word_size, items.len);
-        self.writeWord(bytes, base_offset + self.word_size * 2, items.len);
+        self.writeTargetWord(bytes, base_offset, 0);
+        self.writeTargetWord(bytes, base_offset + self.word_size, @intCast(items.len));
+        self.writeTargetWord(bytes, base_offset + self.word_size * 2, @intCast(items.len));
         if (items.len == 0) return;
 
         const list_layout = self.layoutValue(list_layout_idx);
@@ -479,7 +479,7 @@ const StaticDataBuilder = struct {
         };
         const box_layout = self.layoutValue(box_layout_idx);
         if (box_layout.tag == .box_of_zst) {
-            self.writeWord(bytes, base_offset, 0);
+            self.writeTargetWord(bytes, base_offset, 0);
             return;
         }
         if (box_layout.tag == .erased_callable) {
@@ -804,9 +804,9 @@ const StaticDataBuilder = struct {
         payload_owned = false;
 
         if (contains_refcounted) {
-            self.writeWord(bytes, data_offset - self.word_size * 2, list_element_count orelse 0);
+            self.writeTargetWord(bytes, data_offset - self.word_size * 2, if (list_element_count) |count| @intCast(count) else 0);
         }
-        self.writeSignedWord(bytes, data_offset - self.word_size, 0);
+        self.writeTargetSignedWord(bytes, data_offset - self.word_size, 0);
 
         const relocations = try self.allocator.alloc(StaticDataRelocation, payload_relocations.len);
         errdefer {
@@ -858,7 +858,7 @@ const StaticDataBuilder = struct {
         target_symbol_name: []const u8,
         addend: i64,
     ) Allocator.Error!void {
-        self.writeWord(bytes, offset, 0);
+        self.writeTargetWord(bytes, offset, 0);
         try relocations.append(self.allocator, .{
             .offset = offset,
             .target_symbol_name = target_symbol_name,
@@ -874,7 +874,7 @@ const StaticDataBuilder = struct {
         target_symbol_name: []const u8,
         addend: i64,
     ) Allocator.Error!void {
-        self.writeWord(bytes, offset, 0);
+        self.writeTargetWord(bytes, offset, 0);
         try relocations.append(self.allocator, .{
             .offset = offset,
             .target_symbol_name = target_symbol_name,
@@ -887,30 +887,40 @@ const StaticDataBuilder = struct {
         @memcpy(bytes[offset..][0..source.len], source);
     }
 
-    fn writeWord(self: *StaticDataBuilder, bytes: []u8, offset: u32, value: usize) void {
+    fn writeTargetWord(self: *StaticDataBuilder, bytes: []u8, offset: u32, value: u64) void {
+        if (value > self.targetWordMax()) staticDataInvariant("static data word exceeds target usize");
         switch (self.word_size) {
             4 => std.mem.writeInt(u32, bytes[offset..][0..4], @intCast(value), .little),
-            8 => std.mem.writeInt(u64, bytes[offset..][0..8], @intCast(value), .little),
+            8 => std.mem.writeInt(u64, bytes[offset..][0..8], value, .little),
             else => unreachable,
         }
     }
 
-    fn encodeRocStrCapacity(self: *StaticDataBuilder, capacity: usize) usize {
-        const max_capacity: usize = switch (self.word_size) {
+    fn encodeRocStrCapacity(self: *StaticDataBuilder, capacity: usize) u64 {
+        const target_capacity: u64 = @intCast(capacity);
+        const max_capacity: u64 = switch (self.word_size) {
             4 => std.math.maxInt(u32) >> 1,
             8 => std.math.maxInt(u64) >> 1,
             else => unreachable,
         };
-        if (capacity > max_capacity) staticDataInvariant("static string exceeds RocStr capacity limit for target");
-        return capacity << 1;
+        if (target_capacity > max_capacity) staticDataInvariant("static string exceeds RocStr capacity limit for target");
+        return target_capacity << 1;
     }
 
-    fn writeSignedWord(self: *StaticDataBuilder, bytes: []u8, offset: u32, value: isize) void {
+    fn writeTargetSignedWord(self: *StaticDataBuilder, bytes: []u8, offset: u32, value: i64) void {
         switch (self.word_size) {
             4 => std.mem.writeInt(i32, bytes[offset..][0..4], @intCast(value), .little),
-            8 => std.mem.writeInt(i64, bytes[offset..][0..8], @intCast(value), .little),
+            8 => std.mem.writeInt(i64, bytes[offset..][0..8], value, .little),
             else => unreachable,
         }
+    }
+
+    fn targetWordMax(self: *StaticDataBuilder) u64 {
+        return switch (self.word_size) {
+            4 => std.math.maxInt(u32),
+            8 => std.math.maxInt(u64),
+            else => unreachable,
+        };
     }
 };
 
