@@ -3136,10 +3136,10 @@ pub const Interpreter = struct {
     fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16) void {
         const plan = self.cachedRcPlan(helper);
         if (plan == .noop) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper.layout_idx)});
-            }
-            unreachable;
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}",
+                .{@intFromEnum(helper.layout_idx)},
+            );
         }
         self.performRawRcPlan(plan, val, count);
     }

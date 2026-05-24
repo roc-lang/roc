@@ -97,18 +97,20 @@ pub const Callbacks = struct {
 pub const StackBounds = struct {
     low: usize,
     high: usize,
+    page_size: usize,
     guard_low: ?usize = null,
     guard_high: ?usize = null,
 
-    pub fn init(low: usize, high: usize, guard_low: ?usize, guard_high: ?usize) ?StackBounds {
-        if (low == 0 or high <= low) return null;
+    pub fn init(low: usize, high: usize, page_size: usize, guard_low: ?usize, guard_high: ?usize) ?StackBounds {
+        if (low == 0 or high <= low or !std.math.isPowerOfTwo(page_size)) return null;
         if (guard_low == null or guard_high == null) {
-            return .{ .low = low, .high = high };
+            return .{ .low = low, .high = high, .page_size = page_size };
         }
         if (guard_high.? <= guard_low.?) return null;
         return .{
             .low = low,
             .high = high,
+            .page_size = page_size,
             .guard_low = guard_low,
             .guard_high = guard_high,
         };
@@ -122,6 +124,17 @@ pub const StackBounds = struct {
         const guard_low = self.guard_low orelse return false;
         const guard_high = self.guard_high orelse return false;
         return addr >= guard_low and addr < guard_high;
+    }
+
+    pub fn containsLowerBoundaryFault(self: StackBounds, fault_addr: usize, sp: usize) bool {
+        const boundary_low = self.low -| self.page_size;
+        const boundary_high = self.low;
+        const lowest_stack_page_high = self.low +| self.page_size;
+
+        return fault_addr >= boundary_low and
+            fault_addr < boundary_high and
+            sp >= self.low and
+            sp <= lowest_stack_page_high;
     }
 };
 
@@ -174,6 +187,7 @@ pub fn classifyFault(fault_addr: usize, interrupted_sp: ?usize, bounds: ?StackBo
 
     if (sp < stack_bounds.low) return .stack_overflow;
     if (stack_bounds.containsGuardAddress(fault_addr)) return .stack_overflow;
+    if (stack_bounds.containsLowerBoundaryFault(fault_addr, sp)) return .stack_overflow;
     return .access_violation;
 }
 
@@ -359,7 +373,7 @@ fn queryCurrentThreadStackBounds() ?StackBounds {
         const size = darwin.pthread_get_stacksize_np(std.c.pthread_self());
         if (size == 0 or high <= size) return null;
 
-        return StackBounds.init(high - size, high, null, null);
+        return StackBounds.init(high - size, high, std.heap.pageSize(), null, null);
     }
 
     if (comptime builtin.os.tag == .linux) {
@@ -388,7 +402,7 @@ fn queryCurrentThreadStackBounds() ?StackBounds {
         const guard_low: ?usize = if (has_guard) low - guard_size else null;
         const guard_high: ?usize = if (has_guard) low else null;
 
-        return StackBounds.init(low, low + stack_size, guard_low, guard_high);
+        return StackBounds.init(low, low + stack_size, std.heap.pageSize(), guard_low, guard_high);
     }
 
     return null;
@@ -433,7 +447,7 @@ test "formatHex" {
 }
 
 test "classifyFault uses only exact stack data" {
-    const bounds = StackBounds.init(0x7000, 0x9000, 0x6000, 0x7000).?;
+    const bounds = StackBounds.init(0x7000, 0x9000, 0x1000, 0x6000, 0x7000).?;
     const unrelated_addr: usize = 0x5000_0000;
 
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, bounds));
@@ -442,6 +456,16 @@ test "classifyFault uses only exact stack data" {
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x5000, 0x5ff0, bounds));
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x6800, null, bounds));
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, null));
+}
+
+test "classifyFault treats a lower stack boundary fault as overflow" {
+    const bounds = StackBounds.init(0x7000, 0x9000, 0x1000, null, null).?;
+
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, 0x7000, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6000, 0x7000, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5ff0, 0x7000, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x6ff0, 0x8001, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1000_1000, 0x7000, bounds));
 }
 
 test "installForCurrentThread records current stack bounds" {
