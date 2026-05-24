@@ -572,8 +572,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const ret_reg_1: GeneralReg = if (arch == .x86_64) .RDX else .X1;
         const ret_reg_2: GeneralReg = if (arch == .x86_64) .RCX else .X2;
 
-        /// CallBuilder type alias for this architecture's emit type
-        const Builder = CallingConventionMod.CallBuilder(@TypeOf(@as(CodeGen, undefined).emit));
+        /// Emit/calling-convention types for this architecture.
+        const EmitType = @TypeOf(@as(CodeGen, undefined).emit);
+        const Builder = CallingConventionMod.CallBuilder(EmitType);
+        const abi_shadow_space: i32 = @intCast(EmitType.CC.SHADOW_SPACE);
+        const incoming_stack_arg_base_offset: i32 = 16 + abi_shadow_space;
+        const outgoing_stack_arg_base_offset: i32 = abi_shadow_space;
+        const max_arg_regs: u8 = @intCast(EmitType.CC.PARAM_REGS.len);
 
         allocator: Allocator,
 
@@ -7555,29 +7560,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Get the register used for argument N in the calling convention
+        /// Get the register used for argument N in the calling convention.
         fn getArgumentRegister(_: *Self, index: u8) GeneralReg {
-            if (comptime target.toCpuArch() == .aarch64) {
-                // AArch64: X0-X7 for arguments
-                if (index >= 8) {
-                    unreachable;
+            if (index >= max_arg_regs) {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "dev backend ABI invariant violated: argument register index {d} exceeds available register count {d}",
+                        .{ index, max_arg_regs },
+                    );
                 }
-                return @enumFromInt(index);
-            } else if (comptime target.isWindows()) {
-                // Windows x64: RCX, RDX, R8, R9
-                const arg_regs = [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 };
-                if (index >= arg_regs.len) {
-                    unreachable;
-                }
-                return arg_regs[index];
-            } else {
-                // x86_64 System V: RDI, RSI, RDX, RCX, R8, R9
-                const arg_regs = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
-                if (index >= arg_regs.len) {
-                    unreachable;
-                }
-                return arg_regs[index];
+                unreachable;
             }
+            return EmitType.CC.PARAM_REGS[index];
         }
 
         /// Get the register used for return values
@@ -12156,7 +12150,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Compute stack_spill_size.
             // When pass_by_ptr is provided, multi-reg args that would overflow are
             // already converted to pointers — account for that.
-            var stack_spill_size: i32 = 0;
+            var stack_arg_bytes: i32 = 0;
             {
                 var reg_count: u8 = if (config.needs_ret_ptr) 1 else 0;
                 for (arg_infos, 0..) |ai, i| {
@@ -12171,31 +12165,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (reg_count + nr <= max_arg_regs) {
                         reg_count += nr;
                     } else {
-                        stack_spill_size += @as(i32, nr) * 8;
+                        stack_arg_bytes += @as(i32, nr) * 8;
                         reg_count = max_arg_regs;
                     }
                 }
                 // Account for roc_ops needing a slot
                 if (config.emit_roc_ops) {
                     if (reg_count + 1 > max_arg_regs) {
-                        stack_spill_size += 8;
+                        stack_arg_bytes += 8;
                     }
                 }
             }
 
-            // Keep the outgoing spill area ABI-aligned. Padding sits above the
-            // final spilled arg so stack arg 0 remains at spill offset 0.
-            if (stack_spill_size > 0) {
-                stack_spill_size = @intCast(std.mem.alignForward(
+            var stack_space_size = outgoing_stack_arg_base_offset + stack_arg_bytes;
+
+            // Keep the outgoing argument area ABI-aligned. Padding sits above the
+            // final spilled arg so stack arg 0 remains at its ABI-defined offset.
+            if (stack_space_size > 0) {
+                stack_space_size = @intCast(std.mem.alignForward(
                     u32,
-                    @intCast(stack_spill_size),
+                    @intCast(stack_space_size),
                     call_stack_alignment,
                 ));
             }
 
             // Allocate stack space for spilled arguments
-            if (stack_spill_size > 0) {
-                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_spill_size);
+            if (stack_space_size > 0) {
+                try self.emitSubImm(.w64, stack_ptr, stack_ptr, stack_space_size);
             }
 
             const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
@@ -12216,7 +12212,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Place arguments in registers or on stack
             var reg_idx: u8 = 0;
-            var stack_arg_offset: i32 = 0;
+            var stack_arg_offset: i32 = outgoing_stack_arg_base_offset;
 
             // If return-by-pointer, load the hidden return buffer pointer as arg 0
             if (config.needs_ret_ptr) {
@@ -12239,7 +12235,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitLeaStack(arg_reg, frozen.stack_offset);
                         reg_idx += 1;
                     } else {
-                        try self.codegen.emitLoadImm(scratch_reg, 0);
                         try self.emitLeaStack(scratch_reg, frozen.stack_offset);
                         try self.spillArgToStack(.{ .general_reg = scratch_reg }, null, stack_arg_offset, 1);
                         stack_arg_offset += 8;
@@ -12312,15 +12307,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            return stack_spill_size;
+            return stack_space_size;
         }
 
         /// Bind lambda parameters from argument registers.
         /// Similar to bindProcParams but works with pattern spans.
         /// Handles stack spilling when arguments exceed available registers.
-        /// Windows x64 has 4 arg regs (RCX, RDX, R8, R9), System V has 6 (RDI, RSI, RDX, RCX, R8, R9)
-        const max_arg_regs: u8 = if (target.toCpuArch() == .aarch64) 8 else if (target.isWindows()) 4 else 6;
-
         /// Calculate the number of registers a parameter needs based on its layout.
         fn calcParamRegCount(self: *Self, layout_idx: layout.Idx) u8 {
             const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(layout_idx);
@@ -12349,8 +12341,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Copy parameter data from caller's stack frame to local stack.
         /// caller_offset is the offset from RBP/FP to the caller's argument.
-        /// For x86_64: first stack arg is at [RBP+16], second at [RBP+24], etc.
-        /// For aarch64: first stack arg is at [FP+16], second at [FP+24], etc.
+        /// For System V and aarch64: first stack arg is at [RBP/FP+16].
+        /// For Windows x64: the 32-byte caller shadow space sits before stack args,
+        /// so the first stack arg is at [RBP+48].
         fn copyFromCallerStack(self: *Self, caller_offset: i32, local_offset: i32, num_regs: u8) Allocator.Error!void {
             const temp_reg: GeneralReg = scratch_reg;
             var ri: u8 = 0;
@@ -12501,7 +12494,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var reg_idx: u8 = initial_reg_idx;
-            var stack_arg_offset: i32 = 16;
+            var stack_arg_offset: i32 = incoming_stack_arg_base_offset;
 
             for (locals, 0..) |local, param_idx| {
                 const num_regs = param_num_regs[param_idx];
@@ -12512,10 +12505,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 if (param_pass_by_ptr[param_idx]) {
-                    const temp_reg: GeneralReg = scratch_reg;
+                    var ptr_reg: GeneralReg = undefined;
+                    if (reg_idx < max_arg_regs) {
+                        ptr_reg = self.getArgumentRegister(reg_idx);
+                        reg_idx += 1;
+                    } else {
+                        ptr_reg = scratch_reg;
+                        try self.emitLoad(.w64, ptr_reg, frame_ptr, stack_arg_offset);
+                        stack_arg_offset += 8;
+                        reg_idx = max_arg_regs;
+                    }
+
+                    const temp_reg: GeneralReg = if (ptr_reg == scratch_reg) ret_reg_0 else scratch_reg;
                     const size: u32 = @as(u32, num_regs) * 8;
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
-                    const ptr_reg = self.getArgumentRegister(reg_idx);
                     var ri: u8 = 0;
                     while (ri < num_regs) : (ri += 1) {
                         const off: i32 = @as(i32, ri) * 8;
@@ -12524,7 +12527,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
                     try self.local_locations.put(localKey(local), stable_loc);
-                    reg_idx += 1;
                     continue;
                 }
 
@@ -14139,6 +14141,38 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "Windows internal proc ABI reads stack arguments after shadow space" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const WinCodeGen = LirCodeGen(.x64win);
+    try std.testing.expectEqual(@as(i32, 48), WinCodeGen.incoming_stack_arg_base_offset);
+    try std.testing.expectEqual(@as(i32, 32), WinCodeGen.outgoing_stack_arg_base_offset);
+
+    const list_layout = try test_state.layout_store.insertLayout(layout.Layout.list(.u64));
+
+    const a = try addLocal(&store, .u64);
+    const b = try addLocal(&store, .u64);
+    const c = try addLocal(&store, .u64);
+    const d = try addLocal(&store, .u64);
+    const list = try addLocal(&store, list_layout);
+    const args = try store.addLocalSpan(&.{ a, b, c, d, list });
+
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, null);
+    defer codegen.deinit();
+
+    const InnerCodeGen = @TypeOf(codegen.codegen);
+    codegen.codegen.stack_offset = -InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
+
+    try codegen.bindProcParams(args, 0);
+
+    _ = codegen.local_locations.get(@intFromEnum(list)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(codegen.codegen.getCode().len > 0);
 }
 
 test "two-arg proc list join loop returns full length" {
