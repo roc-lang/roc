@@ -411,10 +411,11 @@ const Lifter = struct {
         defer self.popFunctionMaps(saved_maps);
         const body = try self.lowerExpr(lambda.body);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        const args = try self.copyTypedLocalSpan(lambda.args);
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = self.symbols.fresh(),
             .source = lambda.source,
-            .args = try self.copyTypedLocalSpan(lambda.args),
+            .args = args,
             .captures = capture_span,
             .body = .{ .roc = body },
             .ret = functionRet(&self.output.types, ty),

@@ -290,10 +290,12 @@ const Lowerer = struct {
         };
         const ret = try self.lowerType(func.ret);
 
+        const args_span = try self.program.addTypedLocalSpan(args.items);
+        const symbol = self.program.fns.items[@intFromEnum(out_id)].symbol;
         self.program.fns.items[@intFromEnum(out_id)] = .{
-            .symbol = self.program.fns.items[@intFromEnum(out_id)].symbol,
+            .symbol = symbol,
             .source = fn_.source,
-            .args = try self.program.addTypedLocalSpan(args.items),
+            .args = args_span,
             .body = body,
             .ret = ret,
         };

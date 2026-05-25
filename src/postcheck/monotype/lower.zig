@@ -1702,10 +1702,11 @@ const Builder = struct {
         const arg_expr = try self.localExpr(arg_local, value_ty);
         const body = try self.inspectBody(arg_expr, value_ty, value_ty, str_ty);
 
+        const args = try self.program.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = value_ty }});
         self.program.defs.items[@intFromEnum(def_id)] = .{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
-            .args = try self.program.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = value_ty }}),
+            .args = args,
             .body = .{ .roc = body },
             .ret = str_ty,
         };
@@ -3196,8 +3197,9 @@ const BodyContext = struct {
         const args = try self.reserveTypeSlice(function.args);
         defer self.allocator.free(args);
         const ret = try self.reserveType(function.ret);
+        const args_span = try self.builder.program.types.addSpan(args);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .func = .{
-            .args = try self.builder.program.types.addSpan(args),
+            .args = args_span,
             .ret = ret,
         } };
         try self.finishTypeSlice(function.args);
@@ -3211,8 +3213,9 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         const reserved_items = try self.reserveTypeSlice(items);
         defer self.allocator.free(reserved_items);
+        const tuple_items = try self.builder.program.types.addSpan(reserved_items);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .tuple = try self.builder.program.types.addSpan(reserved_items),
+            .tuple = tuple_items,
         };
         try self.finishTypeSlice(items);
     }
@@ -3228,8 +3231,9 @@ const BodyContext = struct {
         defer checked_fields.deinit(self.allocator);
         try self.appendReservedRecordFields(&lowered, &checked_fields, fields);
         std.mem.sort(Type.Field, lowered.items, self.builder, recordFieldLessThan);
+        const record_fields = try self.builder.program.types.addFields(lowered.items);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .record = try self.builder.program.types.addFields(lowered.items),
+            .record = record_fields,
         };
         try self.finishTypeList(checked_fields.items);
     }
@@ -3276,8 +3280,9 @@ const BodyContext = struct {
 
         std.mem.sort(Type.Field, fields.items, self.builder, recordFieldLessThan);
         assertNoDuplicateRecordFields(self.builder, fields.items, "checked record row had duplicate fields at Monotype lowering");
+        const record_fields = try self.builder.program.types.addFields(fields.items);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .record = try self.builder.program.types.addFields(fields.items),
+            .record = record_fields,
         };
         try self.finishTypeList(checked_fields.items);
     }
@@ -3335,8 +3340,9 @@ const BodyContext = struct {
 
         std.mem.sort(Type.Tag, tags.items, self.builder, tagLessThan);
         assertNoDuplicateTags(self.builder, tags.items, "checked tag-union row had duplicate tags at Monotype lowering");
+        const tag_span = try self.builder.program.types.addTags(tags.items);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .tag_union = try self.builder.program.types.addTags(tags.items),
+            .tag_union = tag_span,
         };
         try self.finishTypeList(checked_payloads.items);
     }
@@ -3368,11 +3374,13 @@ const BodyContext = struct {
         const args = try self.reserveTypeSlice(alias.args);
         defer self.allocator.free(args);
         const backing = try self.reserveType(alias.backing);
+        const def = try self.builder.typeDef(self.view, alias.origin_module, alias.name);
+        const args_span = try self.builder.program.types.addSpan(args);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
-            .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name),
+            .def = def,
             .kind = .alias,
-            .args = try self.builder.program.types.addSpan(args),
+            .args = args_span,
             .backing = .{
                 .ty = backing,
                 .use = .inspectable,
@@ -3424,12 +3432,14 @@ const BodyContext = struct {
                 .use = backing_use,
             },
         };
+        const def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name);
+        const args_span = try self.builder.program.types.addSpan(args);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
-            .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name),
+            .def = def,
             .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = builtinOwner(nominal.builtin),
-            .args = try self.builder.program.types.addSpan(args),
+            .args = args_span,
             .backing = backing,
         } };
         try self.finishTypeSlice(nominal.args);
