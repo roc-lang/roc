@@ -3400,9 +3400,6 @@ fn rocBuildNative(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     if (!args.suppress_build_status) {
         const stdout = ctx.io.stdout();
         try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
-            try stdout.print(" with {}% cache hit", .{cache_percent});
-        }
         try stdout.writeAll(" (checked-artifact native backend)\n");
 
         if (args.verbose) {
@@ -3741,9 +3738,6 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     if (!args.suppress_build_status) {
         const stdout = ctx.io.stdout();
         try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
-            try stdout.print(" with {}% cache hit", .{cache_percent});
-        }
         try stdout.writeAll(" (checked-artifact embedded interpreter)\n");
 
         if (args.verbose) {
@@ -5078,9 +5072,6 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     // Flush stderr to ensure all error output is visible
     ctx.io.flush();
 
-    // Compute cache hit percentage
-    const cache_percent = cacheHitPercent(check_result.cache_hits, check_result.cache_misses);
-
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
         stderr.writeAll("\n") catch {};
         stderr.print("Found {} error(s) and {} warning(s) in ", .{
@@ -5088,10 +5079,6 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
             check_result.warning_count,
         }) catch {};
         formatElapsedTimeMs(stderr, elapsed) catch {};
-        // Include inline cache stats summary
-        if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
-            stderr.print(" with {}% cache hit", .{cache_percent}) catch {};
-        }
         stderr.print(" for {s}.\n", .{args.path}) catch {};
 
         // Print verbose stats if requested
@@ -5111,10 +5098,6 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     } else {
         stdout.print("No errors found in ", .{}) catch {};
         formatElapsedTimeMs(stdout, elapsed) catch {};
-        // Include inline cache stats summary
-        if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
-            stdout.print(" with {}% cache hit", .{cache_percent}) catch {};
-        }
         stdout.print(" for {s}\n", .{args.path}) catch {};
 
         // Print verbose stats if requested

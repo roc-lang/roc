@@ -15660,6 +15660,56 @@ pub fn loweringViewWithRelations(
     };
 }
 
+pub const CheckedModuleKeyInputs = struct {
+    imports: []const PublishImportArtifact = &.{},
+    platform_requirement_context: ?PlatformRequirementContextKey = null,
+    platform_app_relation: ?PlatformAppRelationKey = null,
+};
+
+pub fn checkedModuleKeyFromTypedModule(
+    allocator: Allocator,
+    modules: *const TypedCIR.Modules,
+    module_idx: u32,
+    inputs: CheckedModuleKeyInputs,
+) Allocator.Error!CheckedModuleArtifactKey {
+    const module = modules.module(module_idx);
+    const module_env = module.moduleEnvConst();
+    const idents = module.identStoreConst();
+
+    var canonical_names = canonical.CanonicalNameStore.init(allocator);
+    defer canonical_names.deinit();
+    const module_name = try canonical_names.internModuleName(module_env.module_name);
+    const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
+    const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
+    const module_identity = ModuleIdentity{
+        .stable_hash = computeStableModuleIdentityHash(module_env),
+        .module_idx = module_idx,
+        .module_name = module_name,
+        .display_module_name = display_module_name,
+        .qualified_module_name = qualified_module_name,
+        .kind = module_env.module_kind,
+    };
+
+    var checking_context_identity = try CheckingContextIdentity.fromModule(
+        allocator,
+        module,
+        inputs.imports,
+        inputs.platform_requirement_context,
+        inputs.platform_app_relation,
+    );
+    defer checking_context_identity.deinit(allocator);
+
+    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    defer allocator.free(direct_import_artifact_keys);
+
+    return CheckedModuleArtifactKey.compute(
+        module_env.getSourceAll(),
+        module_identity,
+        checking_context_identity,
+        direct_import_artifact_keys,
+    );
+}
+
 /// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,

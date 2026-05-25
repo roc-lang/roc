@@ -176,10 +176,8 @@ pub fn currentThreadStackBoundsForTest() ?StackBounds {
     return thread_stack_bounds;
 }
 
-/// Classify a fault from its address, interrupted stack pointer, and stack range.
-pub fn classifyFault(fault_addr: usize, interrupted_sp: ?usize, bounds: ?StackBounds) FaultKind {
-    _ = interrupted_sp;
-
+/// Classify a fault from its address and stack range.
+pub fn classifyFault(fault_addr: usize, bounds: ?StackBounds) FaultKind {
     const stack_bounds = bounds orelse return .access_violation;
 
     if (stack_bounds.containsGuardAddress(fault_addr)) return .stack_overflow;
@@ -264,11 +262,10 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
     ExitProcess(139);
 }
 
-fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, context: ?*anyopaque) callconv(.c) void {
+fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     const fault_addr = getFaultAddress(info);
-    const interrupted_sp = getInterruptedStackPointer(context);
 
-    switch (classifyFault(fault_addr, interrupted_sp, thread_stack_bounds)) {
+    switch (classifyFault(fault_addr, thread_stack_bounds)) {
         .stack_overflow => {
             if (stack_overflow_callback) |callback| callback();
             posix.exit(134);
@@ -302,54 +299,6 @@ fn getFaultAddress(info: *const posix.siginfo_t) usize {
     } else {
         return 0;
     }
-}
-
-fn getInterruptedStackPointer(context: ?*anyopaque) ?usize {
-    const context_ptr = context orelse return null;
-
-    if (comptime posix.ucontext_t == void) {
-        return null;
-    }
-
-    const unaligned: *align(1) posix.ucontext_t = @ptrCast(context_ptr);
-    var ctx = unaligned.*;
-
-    if (comptime builtin.os.tag == .macos or
-        builtin.os.tag == .ios or
-        builtin.os.tag == .tvos or
-        builtin.os.tag == .watchos or
-        builtin.os.tag == .visionos)
-    {
-        if (comptime builtin.cpu.arch == .aarch64) {
-            ctx.__mcontext_data = @as(*align(1) extern struct {
-                onstack: c_int,
-                sigmask: std.c.sigset_t,
-                stack: std.c.stack_t,
-                link: ?*std.c.ucontext_t,
-                mcsize: u64,
-                mcontext: *std.c.mcontext_t,
-                __mcontext_data: std.c.mcontext_t align(@sizeOf(usize)),
-            }, @ptrCast(unaligned)).__mcontext_data;
-        }
-        ctx.mcontext = &ctx.__mcontext_data;
-
-        return switch (builtin.cpu.arch) {
-            .aarch64 => @intCast(ctx.mcontext.ss.sp),
-            .x86_64 => @intCast(ctx.mcontext.ss.rsp),
-            else => null,
-        };
-    }
-
-    if (comptime builtin.os.tag == .linux) {
-        return switch (builtin.cpu.arch) {
-            .x86_64 => ctx.mcontext.gregs[std.os.linux.REG.RSP],
-            .x86 => ctx.mcontext.gregs[std.os.linux.REG.ESP],
-            .aarch64 => ctx.mcontext.sp,
-            else => null,
-        };
-    }
-
-    return null;
 }
 
 fn queryCurrentThreadStackBounds() ?StackBounds {
@@ -446,24 +395,24 @@ test "classifyFault uses only exact stack data" {
     const bounds = StackBounds.init(0x7000, 0x9000, 0x1000, 0x6000, 0x7000).?;
     const unrelated_addr: usize = 0x5000_0000;
 
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x9000, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x5ff0, bounds));
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6800, 0x8000, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5000, 0x5ff0, bounds));
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6800, null, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, null));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6800, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5000, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6800, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, null));
 }
 
 test "classifyFault treats a lower stack boundary fault as overflow" {
     const bounds = StackBounds.init(0x7000, 0x9000, 0x1000, null, null).?;
 
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, 0x7000, bounds));
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6000, 0x7000, bounds));
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, 0x8001, bounds));
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, null, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5ff0, 0x7000, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1000_1000, 0x7000, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6000, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5ff0, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1000_1000, bounds));
 }
 
 test "installForCurrentThread records current stack bounds" {
