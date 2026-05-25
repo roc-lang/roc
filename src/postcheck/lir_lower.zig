@@ -461,7 +461,7 @@ const Lowerer = struct {
                     try self.callablePayloadLayout(value_layout, type_variants.len, @intCast(index), capture_ty)
                 else
                     .zst,
-                .template = constFnTemplateFromMono(self.fnTemplateForSymbol(variant.lambda)),
+                .template = constFnTemplateFromMono(self.fnTemplateForFn(variant.target)),
                 .captures = captures,
             };
             captures_owned = false;
@@ -500,9 +500,9 @@ const Lowerer = struct {
             errdefer if (captures_owned) self.allocator.free(captures);
 
             entries[index] = .{
-                .entry = self.fnLirProcForSymbol(member.lambda),
+                .entry = self.fn_map[@intFromEnum(member.target)],
                 .capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst,
-                .template = constFnTemplateFromMono(self.fnTemplateForSymbol(member.lambda)),
+                .template = constFnTemplateFromMono(self.fnTemplateForFn(member.target)),
                 .captures = captures,
             };
             captures_owned = false;
@@ -558,20 +558,11 @@ const Lowerer = struct {
         return slots;
     }
 
-    fn fnTemplateForSymbol(self: *Lowerer, symbol: Common.Symbol) Mono.FnTemplate {
-        for (self.program.fns.items) |fn_| {
-            if (fn_.symbol != symbol) continue;
-            return fn_.source orelse Common.invariant("function result referenced a generated function without checked source identity");
-        }
-        Common.invariant("function result referenced a missing function symbol");
-    }
-
-    fn fnLirProcForSymbol(self: *Lowerer, symbol: Common.Symbol) LIR.LirProcSpecId {
-        for (self.program.fns.items, 0..) |fn_, index| {
-            if (fn_.symbol != symbol) continue;
-            return self.fn_map[index];
-        }
-        Common.invariant("erased function entry referenced a missing function symbol");
+    fn fnTemplateForFn(self: *Lowerer, fn_id: LambdaMono.FnId) Mono.FnTemplate {
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.program.fns.items.len) Common.invariant("function result referenced a missing function");
+        return self.program.fns.items[raw].source orelse
+            Common.invariant("function result referenced a generated function without checked source identity");
     }
 
     fn writeRuntimeSchemas(self: *Lowerer) Common.LowerError!void {

@@ -43,15 +43,67 @@ const CaptureBinding = struct {
     ty: Type.TypeId,
 };
 
-const FnCaptureParam = union(enum) {
-    none,
-    finite: CaptureRecord,
-    erased: ?CaptureRecord,
+const CaptureAbi = enum {
+    finite,
+    erased,
 };
 
-const CaptureRecord = struct {
-    ty: Type.TypeId,
-    captures: []const SolvedType.Capture,
+const CaptureSpanId = struct {
+    start: u32,
+    len: u32,
+
+    fn from(span: SolvedType.Span) CaptureSpanId {
+        return .{ .start = span.start, .len = span.len };
+    }
+};
+
+const FnSpec = struct {
+    source: Lifted.FnId,
+    solved_fn_ty: SolvedType.TypeVarId,
+    abi: CaptureAbi,
+    captures: CaptureSpanId,
+    capture_ty: ?Type.TypeId,
+};
+
+const FnSpecContext = struct {
+    pub fn hash(_: FnSpecContext, spec: FnSpec) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, @intFromEnum(spec.source));
+        std.hash.autoHash(&hasher, @intFromEnum(spec.solved_fn_ty));
+        std.hash.autoHash(&hasher, spec.abi);
+        std.hash.autoHash(&hasher, spec.captures.start);
+        std.hash.autoHash(&hasher, spec.captures.len);
+        if (spec.capture_ty) |capture_ty| {
+            std.hash.autoHash(&hasher, @intFromEnum(capture_ty));
+        } else {
+            std.hash.autoHash(&hasher, @as(u32, std.math.maxInt(u32)));
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: FnSpecContext, lhs: FnSpec, rhs: FnSpec) bool {
+        return lhs.source == rhs.source and
+            lhs.solved_fn_ty == rhs.solved_fn_ty and
+            lhs.abi == rhs.abi and
+            lhs.captures.start == rhs.captures.start and
+            lhs.captures.len == rhs.captures.len and
+            lhs.capture_ty == rhs.capture_ty;
+    }
+};
+
+const CaptureTypeMap = std.HashMap(CaptureSpanId, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
+
+const CaptureSpanContext = struct {
+    pub fn hash(_: CaptureSpanContext, span: CaptureSpanId) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, span.start);
+        std.hash.autoHash(&hasher, span.len);
+        return hasher.final();
+    }
+
+    pub fn eql(_: CaptureSpanContext, lhs: CaptureSpanId, rhs: CaptureSpanId) bool {
+        return lhs.start == rhs.start and lhs.len == rhs.len;
+    }
 };
 
 const Lowerer = struct {
@@ -63,8 +115,11 @@ const Lowerer = struct {
     expr_map: []?Ast.ExprId,
     pat_map: []?Ast.PatId,
     stmt_map: []?Ast.StmtId,
-    fn_map: []Ast.FnId,
-    fn_written: []bool,
+    fn_specs: std.ArrayList(FnSpec),
+    fn_spec_map: std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
+    fn_written: std.ArrayList(bool),
+    source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
+    capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
@@ -86,13 +141,6 @@ const Lowerer = struct {
         errdefer allocator.free(stmt_map);
         @memset(stmt_map, null);
 
-        const fn_map = try allocator.alloc(Ast.FnId, solved.lifted.fns.items.len);
-        errdefer allocator.free(fn_map);
-
-        const fn_written = try allocator.alloc(bool, solved.lifted.fns.items.len);
-        errdefer allocator.free(fn_written);
-        @memset(fn_written, false);
-
         return .{
             .allocator = allocator,
             .solved = solved,
@@ -102,8 +150,11 @@ const Lowerer = struct {
             .expr_map = expr_map,
             .pat_map = pat_map,
             .stmt_map = stmt_map,
-            .fn_map = fn_map,
-            .fn_written = fn_written,
+            .fn_specs = .empty,
+            .fn_spec_map = std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
+            .fn_written = .empty,
+            .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
+            .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
         };
@@ -111,9 +162,12 @@ const Lowerer = struct {
 
     fn deinit(self: *Lowerer) void {
         self.captures.deinit();
+        self.capture_types.deinit();
+        self.source_symbols.deinit();
+        self.fn_written.deinit(self.allocator);
+        self.fn_spec_map.deinit();
+        self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
-        self.allocator.free(self.fn_written);
-        self.allocator.free(self.fn_map);
         self.allocator.free(self.stmt_map);
         self.allocator.free(self.pat_map);
         self.allocator.free(self.expr_map);
@@ -121,19 +175,12 @@ const Lowerer = struct {
     }
 
     fn lower(self: *Lowerer) Allocator.Error!void {
-        try self.reserveFns();
-        for (self.solved.lifted.fns.items, 0..) |fn_, index| {
-            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            try self.lowerFn(fn_id, fn_);
-        }
+        try self.indexSourceFns();
 
-        for (self.fn_written) |written| {
-            if (!written) Common.invariant("Lambda Mono function reservation was not filled");
-        }
-
+        try self.program.roots.ensureTotalCapacity(self.allocator, self.solved.lifted.roots.items.len);
         for (self.solved.lifted.roots.items) |root| {
             try self.program.roots.append(self.allocator, .{
-                .fn_id = self.fn_map[@intFromEnum(root.fn_id)],
+                .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                 .request = root.request,
             });
         }
@@ -153,24 +200,38 @@ const Lowerer = struct {
                 .ty = try self.lowerType(request.ty),
             });
         }
+
+        try self.lowerQueuedFns();
     }
 
-    fn reserveFns(self: *Lowerer) Allocator.Error!void {
-        try self.program.fns.ensureTotalCapacity(self.allocator, self.solved.lifted.fns.items.len);
-        for (self.solved.lifted.fns.items, 0..) |_, index| {
-            const id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
-            self.fn_map[index] = id;
-            try self.program.fns.append(self.allocator, undefined);
+    fn indexSourceFns(self: *Lowerer) Allocator.Error!void {
+        for (self.solved.lifted.fns.items, 0..) |fn_, index| {
+            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const result = try self.source_symbols.getOrPut(fn_.symbol);
+            if (result.found_existing) Common.invariant("two lifted functions had the same symbol");
+            result.value_ptr.* = fn_id;
         }
     }
 
-    fn lowerFn(self: *Lowerer, fn_id: Lifted.FnId, fn_: Lifted.Fn) Allocator.Error!void {
+    fn lowerQueuedFns(self: *Lowerer) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.fn_specs.items.len) : (index += 1) {
+            if (self.fn_written.items[index]) continue;
+            const out_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            try self.lowerFnSpec(out_id, self.fn_specs.items[index]);
+        }
+    }
+
+    fn lowerFnSpec(self: *Lowerer, out_id: Ast.FnId, spec: FnSpec) Allocator.Error!void {
+        const fn_id = spec.source;
+        const fn_ = self.solved.lifted.fns.items[@intFromEnum(fn_id)];
         self.captures.clearRetainingCapacity();
+        @memset(self.local_map, null);
         @memset(self.expr_map, null);
         @memset(self.pat_map, null);
         @memset(self.stmt_map, null);
 
-        const solved_fn_ty = self.solved.fn_tys.items[@intFromEnum(fn_id)];
+        const solved_fn_ty = spec.solved_fn_ty;
         const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
             .func => |func| func,
             else => Common.invariant("Lambda Mono function table contains a non-function type"),
@@ -189,35 +250,36 @@ const Lowerer = struct {
             try args.append(self.allocator, .{ .local = local, .ty = arg_ty });
         }
 
-        switch (try self.captureParamForFn(fn_id)) {
-            .none => {},
-            .finite => |capture_record| {
-                const capture_local = try self.program.addLocal(self.symbols.fresh(), capture_record.ty);
-                const capture_expr = try self.program.addExpr(.{
-                    .ty = capture_record.ty,
-                    .data = .{ .local = capture_local },
-                });
-                try args.append(self.allocator, .{ .local = capture_local, .ty = capture_record.ty });
-                try self.bindCaptureRecord(capture_record, capture_expr);
+        switch (spec.abi) {
+            .finite => {
+                if (spec.capture_ty) |capture_ty| {
+                    const capture_local = try self.program.addLocal(self.symbols.fresh(), capture_ty);
+                    const capture_expr = try self.program.addExpr(.{
+                        .ty = capture_ty,
+                        .data = .{ .local = capture_local },
+                    });
+                    try args.append(self.allocator, .{ .local = capture_local, .ty = capture_ty });
+                    try self.bindCaptureRecord(spec.captures, capture_ty, capture_expr);
+                }
             },
-            .erased => |maybe_capture_record| {
+            .erased => {
                 const capture_ptr_ty = try self.erasedCapturePtrType();
                 const capture_ptr_local = try self.program.addLocal(self.symbols.fresh(), capture_ptr_ty);
-                const capture_ptr_expr = try self.program.addExpr(.{
+                const capture_expr = try self.program.addExpr(.{
                     .ty = capture_ptr_ty,
                     .data = .{ .local = capture_ptr_local },
                 });
                 try args.append(self.allocator, .{ .local = capture_ptr_local, .ty = capture_ptr_ty });
 
-                if (maybe_capture_record) |capture_record| {
-                    const capture_expr = try self.program.addExpr(.{
-                        .ty = capture_record.ty,
+                if (spec.capture_ty) |capture_ty| {
+                    const loaded = try self.program.addExpr(.{
+                        .ty = capture_ty,
                         .data = .{ .low_level = .{
                             .op = .erased_capture_load,
-                            .args = try self.program.addExprSpan(&.{capture_ptr_expr}),
+                            .args = try self.program.addExprSpan(&.{capture_expr}),
                         } },
                     });
-                    try self.bindCaptureRecord(capture_record, capture_expr);
+                    try self.bindCaptureRecord(spec.captures, capture_ty, loaded);
                 }
             },
         }
@@ -228,60 +290,119 @@ const Lowerer = struct {
         };
         const ret = try self.lowerType(func.ret);
 
-        const out_id = self.fn_map[@intFromEnum(fn_id)];
         self.program.fns.items[@intFromEnum(out_id)] = .{
-            .symbol = fn_.symbol,
+            .symbol = self.program.fns.items[@intFromEnum(out_id)].symbol,
             .source = fn_.source,
             .args = try self.program.addTypedLocalSpan(args.items),
             .body = body,
             .ret = ret,
         };
-        self.fn_written[@intFromEnum(fn_id)] = true;
+        self.fn_written.items[@intFromEnum(out_id)] = true;
     }
 
-    fn captureParamForFn(self: *Lowerer, fn_id: Lifted.FnId) Allocator.Error!FnCaptureParam {
+    fn ensureOwnFnSpec(self: *Lowerer, fn_id: Lifted.FnId, abi: CaptureAbi) Allocator.Error!Ast.FnId {
+        const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
+        const solved_fn_ty = self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(fn_id)]);
+        const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
+            .func => |func| func,
+            else => Common.invariant("Lambda Mono function table contains a non-function type"),
+        };
+
+        const callable = self.solved.types.rootContent(func.callable);
+        const members = switch (callable) {
+            .lambda_set => |members| members,
+            .erased => |erased| erased.members,
+            else => Common.invariant("function callable slot was unresolved before Lambda Mono"),
+        };
+
+        for (self.solved.types.memberSpan(members)) |member| {
+            if (member.lambda != fn_symbol) continue;
+            return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, member.captures);
+        }
+
+        if (std.meta.activeTag(callable) == .erased) {
+            return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, .empty());
+        }
+        Common.invariant("function callable slot did not contain its own lambda member");
+    }
+
+    fn ensureFnSpec(
+        self: *Lowerer,
+        source: Lifted.FnId,
+        solved_fn_ty: SolvedType.TypeVarId,
+        abi: CaptureAbi,
+        captures: SolvedType.Span,
+    ) Allocator.Error!Ast.FnId {
+        const capture_items = self.solved.types.captureSpan(captures);
+        const spec = FnSpec{
+            .source = source,
+            .solved_fn_ty = self.solved.types.root(solved_fn_ty),
+            .abi = abi,
+            .captures = CaptureSpanId.from(captures),
+            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures),
+        };
+
+        const result = try self.fn_spec_map.getOrPut(spec);
+        if (result.found_existing) return result.value_ptr.*;
+
+        const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
+        const source_fn = self.solved.lifted.fns.items[@intFromEnum(source)];
+        try self.program.fns.append(self.allocator, .{
+            .symbol = self.symbols.fresh(),
+            .source = source_fn.source,
+            .args = .empty(),
+            .body = .hosted,
+            .ret = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
+                .func => |func| func.ret,
+                else => Common.invariant("Lambda Mono function table contains a non-function type"),
+            }),
+        });
+        try self.fn_specs.append(self.allocator, spec);
+        try self.fn_written.append(self.allocator, false);
+        result.value_ptr.* = fn_id;
+        return fn_id;
+    }
+
+    fn sourceFnForSymbol(self: *Lowerer, symbol: Common.Symbol) Lifted.FnId {
+        return self.source_symbols.get(symbol) orelse
+            Common.invariant("Lambda Mono callable member referenced a missing lifted function symbol");
+    }
+
+    fn bindCaptureRecord(self: *Lowerer, captures_id: CaptureSpanId, capture_ty: Type.TypeId, capture_expr: Ast.ExprId) Allocator.Error!void {
+        const captures = self.solved.types.captureSpan(.{ .start = captures_id.start, .len = captures_id.len });
+        const fields = switch (self.program.types.get(capture_ty)) {
+            .capture_record => |fields| self.program.types.captureFieldSpan(fields),
+            else => Common.invariant("function capture argument was not a capture record"),
+        };
+        if (captures.len != fields.len) Common.invariant("function capture argument arity differed from capture slots");
+
+        for (captures, fields) |capture, field| {
+            if (capture.symbol != field.symbol or capture.binder != field.binder) {
+                Common.invariant("function capture argument fields differed from capture slots");
+            }
+            try self.captures.put(capture.local, .{
+                .record = capture_expr,
+                .symbol = capture.symbol,
+                .ty = field.ty,
+            });
+        }
+    }
+
+    fn capturesForFn(self: *Lowerer, fn_id: Lifted.FnId) SolvedType.Span {
         const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
         const func = switch (self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)])) {
             .func => |func| func,
             else => Common.invariant("Lambda Mono function table contains a non-function type"),
         };
-        return switch (self.solved.types.rootContent(func.callable)) {
-            .lambda_set => |members| {
-                for (self.solved.types.memberSpan(members)) |member| {
-                    if (member.lambda != fn_symbol) continue;
-                    const captures = self.solved.types.captureSpan(member.captures);
-                    if (captures.len == 0) return .none;
-                    return .{ .finite = .{
-                        .ty = try self.captureRecordType(member.captures),
-                        .captures = captures,
-                    } };
-                }
-                Common.invariant("function callable slot did not contain its own lambda member");
-            },
-            .erased => |erased| {
-                for (self.solved.types.memberSpan(erased.members)) |member| {
-                    if (member.lambda != fn_symbol) continue;
-                    const captures = self.solved.types.captureSpan(member.captures);
-                    if (captures.len == 0) return .{ .erased = null };
-                    return .{ .erased = .{
-                        .ty = try self.captureRecordType(member.captures),
-                        .captures = captures,
-                    } };
-                }
-                return .{ .erased = null };
-            },
-            else => Common.invariant("function callable slot was unresolved before Lambda Mono"),
+        const callable = switch (self.solved.types.rootContent(func.callable)) {
+            .lambda_set => |members| members,
+            .erased => |erased| erased.members,
+            else => Common.invariant("callable value did not have a resolved callable slot"),
         };
-    }
-
-    fn bindCaptureRecord(self: *Lowerer, capture_record: CaptureRecord, capture_expr: Ast.ExprId) Allocator.Error!void {
-        for (capture_record.captures) |capture| {
-            try self.captures.put(capture.local, .{
-                .record = capture_expr,
-                .symbol = capture.symbol,
-                .ty = try self.lowerType(capture.ty),
-            });
+        for (self.solved.types.memberSpan(callable)) |member| {
+            if (member.lambda == fn_symbol) return member.captures;
         }
+        return .empty();
     }
 
     fn erasedCapturePtrType(self: *Lowerer) Allocator.Error!Type.TypeId {
@@ -318,10 +439,10 @@ const Lowerer = struct {
                 .value = try self.lowerExpr(let_.value),
                 .rest = try self.lowerExpr(let_.rest),
             } },
-            .fn_ref => |target| try self.lowerCallableValue(target, ty),
+            .fn_ref => |target| try self.lowerCallableValue(expr_id, target, ty),
             .call_value => |call| try self.lowerValueCall(ty, call),
             .call_proc => |call| .{ .direct_call = .{
-                .target = self.fn_map[@intFromEnum(call.callee)],
+                .target = try self.ensureOwnFnSpec(call.callee, .finite),
                 .args = try self.lowerDirectCallArgs(call.callee, call.args),
             } },
             .low_level => |call| .{ .low_level = .{
@@ -381,16 +502,17 @@ const Lowerer = struct {
         return .{ .local = try self.localFor(local, ty) };
     }
 
-    fn lowerCallableValue(self: *Lowerer, fn_id: Lifted.FnId, ty: Type.TypeId) Allocator.Error!Ast.ExprData {
+    fn lowerCallableValue(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId, ty: Type.TypeId) Allocator.Error!Ast.ExprData {
+        const captures = self.memberCapturesForExpr(expr_id, fn_id);
         return switch (self.program.types.get(ty)) {
             .callable => |variants| blk: {
                 const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
                 for (self.program.types.fnVariantSpan(variants)) |variant| {
-                    if (variant.lambda != fn_symbol) continue;
+                    if (variant.source != fn_symbol) continue;
                     break :blk .{ .callable = .{
                         .ty = ty,
                         .variant = variant.id,
-                        .payload = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecord(fn_id, capture_ty) else null,
+                        .payload = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecord(captures, capture_ty) else null,
                     } };
                 }
                 Common.invariant("finite callable type did not contain referenced function");
@@ -398,10 +520,10 @@ const Lowerer = struct {
             .erased_fn => |erased| blk: {
                 const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
                 for (self.program.types.fnVariantSpan(erased.members)) |variant| {
-                    if (variant.lambda != fn_symbol) continue;
+                    if (variant.source != fn_symbol) continue;
                     break :blk .{ .packed_erased_fn = .{
-                        .target = self.fn_map[@intFromEnum(fn_id)],
-                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecord(fn_id, capture_ty) else null,
+                        .target = variant.target,
+                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecord(captures, capture_ty) else null,
                     } };
                 }
                 Common.invariant("erased callable type did not contain referenced function");
@@ -410,20 +532,37 @@ const Lowerer = struct {
         };
     }
 
+    fn memberCapturesForExpr(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId) SolvedType.Span {
+        const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
+        const expr_ty = self.solved.expr_tys.items[@intFromEnum(expr_id)];
+        const callable = switch (self.solved.types.rootContent(expr_ty)) {
+            .func => |func| func.callable,
+            .lambda_set, .erased => expr_ty,
+            else => Common.invariant("function reference expression had no callable Lambda Solved type"),
+        };
+        const members = switch (self.solved.types.rootContent(callable)) {
+            .lambda_set => |members| members,
+            .erased => |erased| erased.members,
+            else => Common.invariant("function reference callable slot was unresolved before Lambda Mono"),
+        };
+        for (self.solved.types.memberSpan(members)) |member| {
+            if (member.lambda == fn_symbol) return member.captures;
+        }
+        Common.invariant("function reference callable slot did not contain referenced function");
+    }
+
     fn lowerDirectCallArgs(self: *Lowerer, fn_id: Lifted.FnId, args_span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
         const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
         defer self.allocator.free(args);
 
-        switch (try self.captureParamForFn(fn_id)) {
-            .none => {},
-            .finite => |capture_record| {
-                const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
-                defer self.allocator.free(call_args);
-                @memcpy(call_args[0..args.len], args);
-                call_args[args.len] = try self.buildCaptureRecord(fn_id, capture_record.ty);
-                return try self.program.addExprSpan(call_args);
-            },
-            .erased => Common.invariant("direct call targeted an erased-callable ABI function"),
+        const captures = self.capturesForFn(fn_id);
+        if (captures.len != 0) {
+            const capture_ty = try self.captureRecordType(captures);
+            const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
+            defer self.allocator.free(call_args);
+            @memcpy(call_args[0..args.len], args);
+            call_args[args.len] = try self.buildCaptureRecord(captures, capture_ty);
+            return try self.program.addExprSpan(call_args);
         }
 
         return try self.program.addExprSpan(args);
@@ -472,7 +611,7 @@ const Lowerer = struct {
                         .body = try self.program.addExpr(.{
                             .ty = ty,
                             .data = .{ .direct_call = .{
-                                .target = self.fnIdForSymbol(variant.lambda),
+                                .target = variant.target,
                                 .args = try self.program.addExprSpan(call_args),
                             } },
                         }),
@@ -492,36 +631,30 @@ const Lowerer = struct {
         };
     }
 
-    fn buildCaptureRecord(self: *Lowerer, fn_id: Lifted.FnId, capture_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const func = switch (self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)])) {
-            .func => |func| func,
-            else => Common.invariant("Lambda Mono function table contains a non-function type"),
+    fn buildCaptureRecord(self: *Lowerer, capture_span: SolvedType.Span, capture_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const captures = self.solved.types.captureSpan(capture_span);
+        const fields = switch (self.program.types.get(capture_ty)) {
+            .capture_record => |fields| self.program.types.captureFieldSpan(fields),
+            else => Common.invariant("callable capture payload was not a capture record"),
         };
-        const callable = switch (self.solved.types.rootContent(func.callable)) {
-            .lambda_set => |members| members,
-            .erased => |erased| erased.members,
-            else => Common.invariant("callable value did not have a resolved callable slot"),
-        };
-        const fn_symbol = self.solved.lifted.fns.items[@intFromEnum(fn_id)].symbol;
-        for (self.solved.types.memberSpan(callable)) |member| {
-            if (member.lambda != fn_symbol) continue;
-            const captures = self.solved.types.captureSpan(member.captures);
-            const values = try self.allocator.alloc(Ast.ExprId, captures.len);
-            defer self.allocator.free(values);
-            for (captures, 0..) |capture, i| {
-                values[i] = try self.lowerCapturedValue(capture);
+        if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
+
+        const values = try self.allocator.alloc(Ast.ExprId, captures.len);
+        defer self.allocator.free(values);
+        for (captures, fields, 0..) |capture, field, i| {
+            if (capture.symbol != field.symbol or capture.binder != field.binder) {
+                Common.invariant("callable capture payload fields differed from captured locals");
             }
-            return try self.program.addExpr(.{
-                .ty = capture_ty,
-                .data = .{ .capture_record = try self.program.addExprSpan(values) },
-            });
+            values[i] = try self.lowerCapturedValue(capture.local, field.ty);
         }
-        Common.invariant("finite callable slot did not contain referenced function");
+        return try self.program.addExpr(.{
+            .ty = capture_ty,
+            .data = .{ .capture_record = try self.program.addExprSpan(values) },
+        });
     }
 
-    fn lowerCapturedValue(self: *Lowerer, capture: SolvedType.Capture) Allocator.Error!Ast.ExprId {
-        const ty = try self.lowerType(capture.ty);
-        const data = try self.lowerLocalExpr(capture.local, ty);
+    fn lowerCapturedValue(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const data = try self.lowerLocalExpr(local, ty);
         return try self.program.addExpr(.{ .ty = ty, .data = data });
     }
 
@@ -608,7 +741,7 @@ const Lowerer = struct {
             .zst => .zst,
             .erased => |erased| .{ .erased_fn = .{
                 .source_fn_ty = erased.source_fn_ty,
-                .members = try self.lowerFnMembers(erased.members),
+                .members = try self.lowerFnMembers(erased.members, .erased),
             } },
             .func => |func| return self.program.types.get(try self.lowerType(func.callable)),
             .list => |elem| .{ .list = try self.lowerType(elem) },
@@ -656,20 +789,28 @@ const Lowerer = struct {
                 } };
             },
             .lambda_set => |members| blk: {
-                break :blk .{ .callable = try self.lowerFnMembers(members) };
+                break :blk .{ .callable = try self.lowerFnMembers(members, .finite) };
             },
         };
     }
 
-    fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span) Allocator.Error!Type.Span {
+    fn lowerFnMembers(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Allocator.Error!Type.Span {
         const solved_members = self.solved.types.memberSpan(members);
         const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
         defer self.allocator.free(variants);
         for (solved_members, 0..) |member, i| {
             const captures = self.solved.types.captureSpan(member.captures);
+            const source = self.sourceFnForSymbol(member.lambda);
+            const target = try self.ensureFnSpec(
+                source,
+                self.solved.types.root(self.solved.fn_tys.items[@intFromEnum(source)]),
+                abi,
+                member.captures,
+            );
             variants[i] = .{
                 .id = undefined, // assigned by addFnVariants before the variant is stored
-                .lambda = member.lambda,
+                .source = member.lambda,
+                .target = target,
                 .capture_ty = if (captures.len == 0) null else try self.captureRecordType(member.captures),
             };
         }
@@ -677,6 +818,9 @@ const Lowerer = struct {
     }
 
     fn captureRecordType(self: *Lowerer, captures: SolvedType.Span) Allocator.Error!Type.TypeId {
+        const id = CaptureSpanId.from(captures);
+        if (self.capture_types.get(id)) |existing| return existing;
+
         const capture_items = self.solved.types.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
@@ -687,7 +831,9 @@ const Lowerer = struct {
                 .ty = try self.lowerType(capture.ty),
             };
         }
-        return try self.program.types.add(.{ .capture_record = try self.program.types.addCaptureFields(fields) });
+        const ty = try self.program.types.add(.{ .capture_record = try self.program.types.addCaptureFields(fields) });
+        try self.capture_types.put(id, ty);
+        return ty;
     }
 
     fn lowerTypeSpan(self: *Lowerer, items: []const SolvedType.TypeVarId) Allocator.Error![]Type.TypeId {
@@ -805,13 +951,6 @@ const Lowerer = struct {
             };
         }
         return try self.program.addIfBranchSpan(lowered);
-    }
-
-    fn fnIdForSymbol(self: *Lowerer, symbol: Common.Symbol) Ast.FnId {
-        for (self.solved.lifted.fns.items, 0..) |fn_, index| {
-            if (fn_.symbol == symbol) return self.fn_map[index];
-        }
-        Common.invariant("Lambda Mono callable variant referenced a missing function symbol");
     }
 };
 

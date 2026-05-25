@@ -24,7 +24,7 @@ pub const PatId = enum(u32) { _ };
 /// Identifier for a statement in Lambda Mono IR.
 pub const StmtId = enum(u32) { _ };
 /// Identifier for a function body in Lambda Mono IR.
-pub const FnId = enum(u32) { _ };
+pub const FnId = Type.FnId;
 /// Identifier for a local binding in Lambda Mono IR.
 pub const LocalId = enum(u32) { _ };
 /// Owned string literal id shared with the lifted stage.
