@@ -127,8 +127,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 12), env.common.line_starts.items.items[1]);
     try testing.expectEqual(@as(u32, 24), env.common.line_starts.items.items[2]);
 
-    // TODO restore source using CommonEnv
-    // try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqualStrings(source, env.common.source);
     try testing.expectEqualStrings("TestModule", env.module_name);
 
     // Verify imports were preserved after deserialization

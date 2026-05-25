@@ -3025,6 +3025,10 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/echo_platform/echo_native.zig"),
                 .target = target,
                 .optimize = optimize,
+                // CoreCtx.default's OS vtable pulls in std.c.getenv (and
+                // transitively std.net's getaddrinfo); Zig 0.16 requires
+                // libc to be linked explicitly when std.c.* is referenced.
+                .link_libc = true,
             }),
         });
         configureBackend(echo_native_exe, target);

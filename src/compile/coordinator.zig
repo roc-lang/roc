@@ -693,10 +693,20 @@ pub const Coordinator = struct {
         self.workers.deinit(self.gpa);
     }
 
-    /// Set the I/O implementation (or reset to OS default).
-    pub fn setCoreCtx(self: *Coordinator, roc_ctx: ?CoreCtx) void {
-        self.roc_ctx = roc_ctx orelse CoreCtx.default(self.roc_ctx.gpa, self.roc_ctx.arena, self.roc_ctx.std_io);
+    /// Set the I/O / core context implementation. Callers must supply a fully
+    /// initialised `CoreCtx` — there is intentionally no fallback to
+    /// `CoreCtx.default(...)` here because the existing context may have been
+    /// constructed via `CoreCtx.testing(undefined, undefined)` (see
+    /// `cache_config.zig`), in which case snapshotting its fields into a
+    /// `default()` vtable would invoke UB the first time the OS-backed
+    /// vtable dereferenced `std_io`.
+    pub fn setCoreCtx(self: *Coordinator, roc_ctx: CoreCtx) void {
+        self.roc_ctx = roc_ctx;
     }
+
+    /// Back-compat alias for the documented embedding contract
+    /// (`coord.setIo(my_io)` in `src/compile/README.md`).
+    pub const setIo = setCoreCtx;
 
     /// Get the allocator to use for module data.
     /// - In multi-threaded mode: smp_allocator (per-thread freelists)

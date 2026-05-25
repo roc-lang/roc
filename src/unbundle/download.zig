@@ -27,21 +27,28 @@ fn generateRandomSuffix(io: std.Io, buf: *[RANDOM_SUFFIX_LEN]u8) void {
 
 /// Get a handle to the system temp directory.
 /// Checks TMPDIR (Unix), TEMP, TMP environment variables, falls back to /tmp on Unix.
-fn getTempDir(io: std.Io) !std.Io.Dir {
+fn getTempDir(allocator: std.mem.Allocator, io: std.Io) !std.Io.Dir {
+    // Try a named env var; returns an opened dir or null if env var is unset.
+    const tryEnv = struct {
+        fn call(alloc: std.mem.Allocator, io_inner: std.Io, name: []const u8) !?std.Io.Dir {
+            const path = std.process.getEnvVarOwned(alloc, name) catch |err| switch (err) {
+                error.EnvironmentVariableNotFound => return null,
+                error.InvalidWtf8 => return null,
+                error.OutOfMemory => return error.FileError,
+            };
+            defer alloc.free(path);
+            return std.Io.Dir.cwd().openDir(io_inner, path, .{}) catch return error.FileError;
+        }
+    }.call;
+
     // Check TMPDIR first (standard on Unix)
-    if (std.posix.getenv("TMPDIR")) |tmpdir| {
-        return std.Io.Dir.cwd().openDir(io, tmpdir, .{}) catch return error.FileError;
-    }
+    if (try tryEnv(allocator, io, "TMPDIR")) |dir| return dir;
 
     // Check TEMP (common on Windows)
-    if (std.posix.getenv("TEMP")) |temp| {
-        return std.Io.Dir.cwd().openDir(io, temp, .{}) catch return error.FileError;
-    }
+    if (try tryEnv(allocator, io, "TEMP")) |dir| return dir;
 
     // Check TMP (fallback on Windows)
-    if (std.posix.getenv("TMP")) |tmp| {
-        return std.Io.Dir.cwd().openDir(io, tmp, .{}) catch return error.FileError;
-    }
+    if (try tryEnv(allocator, io, "TMP")) |dir| return dir;
 
     // Fall back to /tmp on Unix-like systems
     if (comptime builtin.os.tag != .windows) {
@@ -261,7 +268,7 @@ pub fn downloadAndExtractToBuffer(
     };
 
     // Use a temp directory for downloading
-    var tmp_dir = getTempDir(io) catch {
+    var tmp_dir = getTempDir(allocator.*, io) catch {
         return error.FileError;
     };
     defer tmp_dir.close(io);

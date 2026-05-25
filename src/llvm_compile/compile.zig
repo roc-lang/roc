@@ -288,7 +288,7 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
 
 /// Compile LLVM bitcode to a native shared library and return its path.
 /// Caller owns the returned path and is responsible for deleting the file.
-pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
+pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
     const object_path = createTempPath(allocator, objectExtension()) catch return Error.TempFileError;
     defer {
         std.Io.Dir.cwd().deleteFile(std.mem.sliceTo(object_path, 0)) catch {};
@@ -317,7 +317,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, option
         ) catch {};
     } else |_| {}
 
-    try linkSharedLibrary(allocator, object_path, shared_lib_path);
+    try linkSharedLibrary(allocator, io, object_path, shared_lib_path);
 
     if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_DYLIB")) |keep_path| {
         defer allocator.free(keep_path);
@@ -334,11 +334,12 @@ pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, option
 
 fn linkSharedLibrary(
     allocator: Allocator,
+    io: std.Io,
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
     if (builtin.os.tag == .macos) {
-        return linkSharedLibraryMacos(allocator, object_path, shared_lib_path);
+        return linkSharedLibraryMacos(allocator, io, object_path, shared_lib_path);
     }
 
     var arena_impl = std.heap.ArenaAllocator.init(allocator);
@@ -393,11 +394,11 @@ fn linkSharedLibrary(
 
 fn linkSharedLibraryMacos(
     allocator: Allocator,
+    io: std.Io,
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
-    const result = std.process.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, io, .{
         .argv = &.{
             "cc",
             "-dynamiclib",
@@ -413,7 +414,7 @@ fn linkSharedLibraryMacos(
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) return;
         },
         else => {},

@@ -991,6 +991,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
         .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
 
@@ -1998,7 +1999,7 @@ pub fn buildLirRuntimeImageWithCoordinator(
         &builtin_modules,
         build_options.compiler_version,
         null, // no cache for IPC
-        CoreCtx.default(ctx.gpa, ctx.arena, ctx.io.std_io),
+        ctx.coreCtx(),
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
@@ -2044,7 +2045,10 @@ pub fn buildLirRuntimeImageWithCoordinator(
     }
 
     try coord.enqueueParseTask("app", app_module_id);
-    try coord.coordinatorLoop();
+    coord.coordinatorLoop() catch |err| {
+        _ = renderCoordinatorReports(ctx, &coord, roc_file_path);
+        return err;
+    };
 
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0) {
@@ -3097,6 +3101,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const cache_config = CacheConfig{
         .enabled = true,
         .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
@@ -3120,6 +3125,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
+            .roc_ctx = ctx.coreCtx(),
         }, ctx.coreCtx());
         build_env.setCacheManager(build_cache_manager);
     }
@@ -3469,6 +3475,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const cache_config = CacheConfig{
         .enabled = true,
         .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
@@ -3492,6 +3499,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         build_cache_manager.* = CacheManager.init(ctx.gpa, .{
             .enabled = true,
             .verbose = args.verbose,
+            .roc_ctx = ctx.coreCtx(),
         }, ctx.coreCtx());
         build_env.setCacheManager(build_cache_manager);
     }
@@ -3957,6 +3965,47 @@ const CliTestRunSummary = struct {
 
 const cli_test_cache_magic = "ROC_TEST_RESULTS_V3";
 
+/// Magic identifier for the whole-run replay cache. Stored at the head of
+/// every replay payload to validate the format before decoding.
+const cli_test_replay_magic = "ROC_TEST_REPLAY_V1";
+
+/// Cache key for the full `roc test` replay cache.
+///
+/// The key intentionally mixes everything that can change the rendered
+/// output of a run: compiler version, source bytes, optimisation level,
+/// verbose flag, the resolved entry path, the explicit `--main` arg, and a
+/// reserved filter-expression slot. The filter slot is empty today; once
+/// `roc test --filter <expr>` (or similar test-selection flags) lands the
+/// caller just has to plumb the filter string through, no key format change.
+fn cliTestReplayCacheKey(
+    source: []const u8,
+    compiler_version: []const u8,
+    opt: cli_args.OptLevel,
+    verbose: bool,
+    entry_path: []const u8,
+    main_arg: ?[]const u8,
+    filter: []const u8,
+) [32]u8 {
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    hasher.update(cli_test_replay_magic);
+    hasher.update(std.mem.asBytes(&compiler_version.len));
+    hasher.update(compiler_version);
+    hasher.update(@tagName(opt));
+    hasher.update(if (verbose) &[_]u8{1} else &[_]u8{0});
+    hasher.update(std.mem.asBytes(&entry_path.len));
+    hasher.update(entry_path);
+    const main_bytes = main_arg orelse "";
+    hasher.update(std.mem.asBytes(&main_bytes.len));
+    hasher.update(main_bytes);
+    hasher.update(std.mem.asBytes(&filter.len));
+    hasher.update(filter);
+    hasher.update(std.mem.asBytes(&source.len));
+    hasher.update(source);
+    var out: [32]u8 = undefined;
+    hasher.final(&out);
+    return out;
+}
+
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) !void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, value, .little);
@@ -4334,18 +4383,35 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
         null;
     defer if (source) |s| ctx.gpa.free(s);
 
-    if (source) |src| {
-        {
-            const cache_key = CacheManager.generateCacheKey(src, build_options.compiler_version);
-            const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
-            if (test_cache_dir) |dir| {
-                defer ctx.gpa.free(dir);
-                var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-                if (test_cache_manager.loadRawBytes(cache_key, dir)) |cached_data| {
-                    // TODO: replayTestCache not yet implemented in zig-16 branch
-                    ctx.gpa.free(cached_data);
-                    // Fall through to normal path
+    // Cache key for the whole-run replay cache. Filter is empty today —
+    // when `roc test` grows a `--filter`/test-selection flag, thread its
+    // value through here so different filters yield distinct cache entries.
+    const replay_filter: []const u8 = "";
+    const replay_cache_key: ?[32]u8 = if (source) |src|
+        cliTestReplayCacheKey(
+            src,
+            build_options.compiler_version,
+            args.opt,
+            args.verbose,
+            args.path,
+            args.main,
+            replay_filter,
+        )
+    else
+        null;
+
+    if (source != null and replay_cache_key != null) {
+        const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
+        if (test_cache_dir) |dir| {
+            defer ctx.gpa.free(dir);
+            var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+            if (test_cache_manager.loadRawBytes(replay_cache_key.?, dir)) |cached_data| {
+                defer ctx.gpa.free(cached_data);
+                if (try replayTestRun(ctx, cached_data, start_time)) |outcome| {
+                    if (outcome == .failed) return error.TestsFailed;
+                    return;
                 }
+                // Malformed payload: fall through to recompile.
             }
         }
     }
@@ -4436,51 +4502,178 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
     else
         "";
 
+    // Render the per-module bodies once into in-memory buffers so we can
+    // both print them now and stash them in the replay cache verbatim.
+    var stdout_body = std.Io.Writer.Allocating.init(ctx.gpa);
+    defer stdout_body.deinit();
+    var stderr_body = std.Io.Writer.Allocating.init(ctx.gpa);
+    defer stderr_body.deinit();
+
+    try renderTestResultBodies(
+        &stdout_body.writer,
+        &stderr_body.writer,
+        module_results.items,
+        args.verbose,
+    );
+
+    // Persist the whole-run replay cache so a subsequent `roc test` against
+    // the same source/opt/verbose/main/filter can skip compilation entirely.
+    if (cache_config.enabled and replay_cache_key != null and source != null) {
+        const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
+        if (test_cache_dir) |dir| {
+            defer ctx.gpa.free(dir);
+            var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+            storeTestReplayCache(
+                ctx,
+                &test_cache_manager,
+                dir,
+                replay_cache_key.?,
+                total,
+                stdout_body.written(),
+                stderr_body.written(),
+            ) catch {};
+        }
+    }
+
     // Report results
     if (total.failed == 0) {
-        // Success case: print summary
-        {
-            try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
-        }
-        if (args.verbose) {
-            for (module_results.items) |module_result| {
-                for (module_result.results) |result| {
-                    const region_info = module_result.env.calcRegionInfo(result.region);
-                    if (result.result == .passed) {
-                        try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
-                    }
-                }
-            }
-        }
+        try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
+        try stdout.writeAll(stdout_body.written());
         return;
     }
 
     const total_tests = total.passed + total.failed;
     try stderr.print("Ran {} tests{s} in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, cached_suffix, elapsed_ms, total.passed, total.failed });
+    try stdout.writeAll(stdout_body.written());
+    try stderr.writeAll(stderr_body.written());
 
-    for (module_results.items) |module_result| {
+    return error.TestsFailed;
+}
+
+/// Walk the per-module test results and write the per-test body output to
+/// the supplied writers. Verbose PASS lines go to `stdout_body`; FAIL
+/// blocks (and verbose PASS lines for partially-failing runs) go to
+/// `stderr_body`. The summary line is rendered separately by the caller so
+/// fresh timing can be substituted on cache replay.
+fn renderTestResultBodies(
+    stdout_body: *std.Io.Writer,
+    stderr_body: *std.Io.Writer,
+    module_results: []const CliModuleTestResult,
+    verbose: bool,
+) !void {
+    // Verbose PASS lines go to stdout in every case; FAIL blocks go to
+    // stderr. This matches the pre-refactor layout.
+    for (module_results) |module_result| {
         for (module_result.results) |result| {
             const region_info = module_result.env.calcRegionInfo(result.region);
-            if (result.result == .passed) {
-                if (args.verbose) {
-                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
-                }
-            } else {
-                try printTestFailure(
-                    stderr,
-                    module_result.path,
-                    module_result.env,
-                    result.region,
-                    region_info,
-                    result.failure_detail,
-                    result.failure_detail_visibility,
-                    args.verbose,
-                );
+            switch (result.result) {
+                .passed => {
+                    if (!verbose) continue;
+                    try stdout_body.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
+                },
+                .failed => {
+                    try printTestFailure(
+                        stderr_body,
+                        module_result.path,
+                        module_result.env,
+                        result.region,
+                        region_info,
+                        result.failure_detail,
+                        result.failure_detail_visibility,
+                        verbose,
+                    );
+                },
             }
         }
     }
+}
 
-    return error.TestsFailed;
+const ReplayOutcome = enum { passed, failed };
+
+/// Write a replay payload to the test cache directory. Layout:
+///   magic[len(cli_test_replay_magic)]
+///   u32 passed
+///   u32 failed
+///   u32 modules_with_tests
+///   u32 stdout_body_len
+///   stdout_body_len bytes
+///   u32 stderr_body_len
+///   stderr_body_len bytes
+fn storeTestReplayCache(
+    ctx: *CliCtx,
+    manager: *CacheManager,
+    entries_dir: []const u8,
+    cache_key: [32]u8,
+    summary: CliTestRunSummary,
+    stdout_body: []const u8,
+    stderr_body: []const u8,
+) !void {
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(ctx.gpa);
+    try bytes.appendSlice(ctx.gpa, cli_test_replay_magic);
+    try appendU32(&bytes, ctx.gpa, summary.passed);
+    try appendU32(&bytes, ctx.gpa, summary.failed);
+    try appendU32(&bytes, ctx.gpa, summary.modules_with_tests);
+    try appendU32(&bytes, ctx.gpa, @intCast(stdout_body.len));
+    try bytes.appendSlice(ctx.gpa, stdout_body);
+    try appendU32(&bytes, ctx.gpa, @intCast(stderr_body.len));
+    try bytes.appendSlice(ctx.gpa, stderr_body);
+    manager.storeRawBytes(cache_key, bytes.items, entries_dir);
+}
+
+/// Parse a replay payload and print it to the live stdout/stderr,
+/// substituting the live elapsed-time into the summary line and tagging the
+/// output `(cached)` so users can see the run was a cache hit.
+///
+/// Returns the run outcome on a clean hit, or null if the payload is
+/// malformed (caller should fall through to a real compilation in that
+/// case).
+fn replayTestRun(
+    ctx: *CliCtx,
+    data: []const u8,
+    start_time: i128,
+) !?ReplayOutcome {
+    var offset: usize = 0;
+    if (data.len < cli_test_replay_magic.len) return null;
+    if (!std.mem.eql(u8, data[0..cli_test_replay_magic.len], cli_test_replay_magic)) return null;
+    offset += cli_test_replay_magic.len;
+
+    const passed = readU32(data, &offset) orelse return null;
+    const failed = readU32(data, &offset) orelse return null;
+    _ = readU32(data, &offset) orelse return null; // modules_with_tests, unused on replay
+    const stdout_len = readU32(data, &offset) orelse return null;
+    const stdout_len_usize: usize = @intCast(stdout_len);
+    if (offset + stdout_len_usize > data.len) return null;
+    const stdout_body = data[offset..][0..stdout_len_usize];
+    offset += stdout_len_usize;
+    const stderr_len = readU32(data, &offset) orelse return null;
+    const stderr_len_usize: usize = @intCast(stderr_len);
+    if (offset + stderr_len_usize > data.len) return null;
+    const stderr_body = data[offset..][0..stderr_len_usize];
+    offset += stderr_len_usize;
+    if (offset != data.len) return null;
+
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
+    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+
+    if (failed == 0) {
+        try stdout.print("All ({}) tests passed in {d:.1} ms. (cached)\n", .{ passed, elapsed_ms });
+        try stdout.writeAll(stdout_body);
+        return .passed;
+    }
+
+    const total_tests = passed + failed;
+    try stderr.print(
+        "Ran {} tests (cached) in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n",
+        .{ total_tests, elapsed_ms, passed, failed },
+    );
+    try stdout.writeAll(stdout_body);
+    try stderr.writeAll(stderr_body);
+    return .failed;
 }
 
 /// Prints a formatted test failure to stderr, including the source snippet,
@@ -5070,6 +5263,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) !void {
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
         .verbose = args.verbose,
+        .roc_ctx = ctx.coreCtx(),
     };
 
     // Use BuildEnv to check the file
@@ -5207,13 +5401,155 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
     }
 }
 
-/// Start an HTTP server to serve the generated documentation
-fn serveDocumentation(ctx: *CliCtx, _: []const u8) !void {
+/// Start an HTTP server to serve the generated documentation.
+///
+/// Single-threaded blocking accept loop on 127.0.0.1:8080. GET-only.
+/// Files are streamed up to a 10 MB cap; anything larger returns 500.
+fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) !void {
     const stdout = ctx.io.stdout();
+    const io = ctx.io.std_io;
 
-    // TODO: Zig 0.16 removed std.net — needs migration to std.Io networking API
-    stdout.print("Error: Documentation server not yet supported with Zig 0.16\n", .{}) catch {};
-    return error.Unexpected;
+    var address = try std.Io.net.IpAddress.parse("127.0.0.1", 8080);
+    var server = try address.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    stdout.print("Visit http://localhost:8080 to view the docs at ./{s}/\n", .{docs_dir}) catch {};
+    stdout.print("Press Ctrl+C to stop the server\n", .{}) catch {};
+    ctx.io.flush();
+
+    while (true) {
+        const stream = server.accept(io) catch |err| {
+            ctx.io.stderr().print("Error accepting connection: {}\n", .{err}) catch {};
+            ctx.io.flush();
+            continue;
+        };
+        handleConnection(ctx, stream, docs_dir) catch |err| {
+            ctx.io.stderr().print("Error handling connection: {}\n", .{err}) catch {};
+            ctx.io.flush();
+        };
+    }
+}
+
+/// Handle a single HTTP connection. Closes the stream before returning.
+fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u8) !void {
+    const io = ctx.io.std_io;
+    defer stream.close(io);
+
+    var read_buffer: [4096]u8 = undefined;
+    var conn_reader = stream.reader(io, &read_buffer);
+
+    // Read whatever the client has sent so far (we only care about the
+    // request line; the body of a GET is empty).
+    var request_buf: [4096]u8 = undefined;
+    var slices = [_][]u8{request_buf[0..]};
+    const bytes_read = std.Io.Reader.readVec(&conn_reader.interface, &slices) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        error.ReadFailed => return conn_reader.err orelse error.Unexpected,
+    };
+    if (bytes_read == 0) return;
+
+    const request = request_buf[0..bytes_read];
+
+    // Parse the request line: "METHOD PATH HTTP/x.y\r\n..."
+    var lines = std.mem.splitSequence(u8, request, "\r\n");
+    const request_line = lines.next() orelse return;
+
+    var parts = std.mem.splitSequence(u8, request_line, " ");
+    const method = parts.next() orelse return;
+    const path = parts.next() orelse return;
+
+    if (!std.mem.eql(u8, method, "GET")) {
+        try sendResponse(io, stream, "405 Method Not Allowed", "text/plain", "Method Not Allowed");
+        return;
+    }
+
+    // Resolve the URL path to a filesystem path under docs_dir.
+    const file_path = try resolveFilePath(ctx.gpa, docs_dir, path);
+    defer ctx.gpa.free(file_path);
+
+    // Read the file (10 MB cap per response).
+    const file_content = std.Io.Dir.cwd().readFileAlloc(io, file_path, ctx.gpa, .limited(10 * 1024 * 1024)) catch |err| {
+        switch (err) {
+            error.FileNotFound => try sendResponse(io, stream, "404 Not Found", "text/plain", "File Not Found"),
+            else => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
+        }
+        return;
+    };
+    defer ctx.gpa.free(file_content);
+
+    const content_type = getContentType(file_path);
+    try sendResponse(io, stream, "200 OK", content_type, file_content);
+}
+
+/// Resolve the URL path against `docs_dir`, expanding directory paths to
+/// their `index.html`. Caller owns the returned slice.
+fn resolveFilePath(gpa: Allocator, docs_dir: []const u8, url_path: []const u8) ![]const u8 {
+    const clean_path = if (url_path.len > 0 and url_path[0] == '/')
+        url_path[1..]
+    else
+        url_path;
+
+    // Empty or trailing-slash paths serve the directory's index.html.
+    if (clean_path.len == 0 or clean_path[clean_path.len - 1] == '/') {
+        return try std.fmt.allocPrint(gpa, "{s}/{s}index.html", .{ docs_dir, clean_path });
+    }
+
+    // If the last path component has an extension, serve it directly;
+    // otherwise treat the path as a directory and serve its index.html.
+    const last_slash = std.mem.lastIndexOfScalar(u8, clean_path, '/') orelse 0;
+    const last_component = clean_path[last_slash..];
+    const has_extension = std.mem.indexOfScalar(u8, last_component, '.') != null;
+
+    if (has_extension) {
+        return try std.fmt.allocPrint(gpa, "{s}/{s}", .{ docs_dir, clean_path });
+    } else {
+        return try std.fmt.allocPrint(gpa, "{s}/{s}/index.html", .{ docs_dir, clean_path });
+    }
+}
+
+/// Map a file extension to its HTTP Content-Type.
+fn getContentType(file_path: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, file_path, ".html")) {
+        return "text/html; charset=utf-8";
+    } else if (std.mem.endsWith(u8, file_path, ".css")) {
+        return "text/css";
+    } else if (std.mem.endsWith(u8, file_path, ".js")) {
+        return "application/javascript";
+    } else if (std.mem.endsWith(u8, file_path, ".json")) {
+        return "application/json";
+    } else if (std.mem.endsWith(u8, file_path, ".png")) {
+        return "image/png";
+    } else if (std.mem.endsWith(u8, file_path, ".jpg") or std.mem.endsWith(u8, file_path, ".jpeg")) {
+        return "image/jpeg";
+    } else if (std.mem.endsWith(u8, file_path, ".svg")) {
+        return "image/svg+xml";
+    } else {
+        return "text/plain";
+    }
+}
+
+/// Send a full HTTP/1.1 response (headers + body) over a stream.
+fn sendResponse(
+    io: std.Io,
+    stream: std.Io.net.Stream,
+    status: []const u8,
+    content_type: []const u8,
+    body: []const u8,
+) !void {
+    var write_buffer: [4096]u8 = undefined;
+    var stream_writer = stream.writer(io, &write_buffer);
+    const w = &stream_writer.interface;
+
+    try w.print(
+        "HTTP/1.1 {s}\r\n" ++
+            "Content-Type: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n" ++
+            "\r\n",
+        .{ status, content_type, body.len },
+    );
+    try w.writeAll(body);
+    try w.flush();
 }
 
 fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) !void {
@@ -5229,6 +5565,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) !void {
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
         .verbose = args.verbose,
+        .roc_ctx = ctx.coreCtx(),
     };
 
     // Use BuildEnv to check the file, preserving the BuildEnv for docs generation

@@ -55,7 +55,7 @@ pub const SyntaxChecker = struct {
     snapshot_envs: std.StringHashMapUnmanaged(*BuildEnvHandle) = .{},
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
-    cache_config: CacheConfig = .{},
+    cache_config: CacheConfig,
     log_file: ?std.Io.File = null,
     debug: DebugFlags,
 
@@ -69,6 +69,7 @@ pub const SyntaxChecker = struct {
             .allocator = allocator,
             .std_io = std_io,
             .dependency_graph = DependencyGraph.init(allocator),
+            .cache_config = .{ .roc_ctx = CoreCtx.default(allocator, allocator, std_io) },
             .debug = debug,
             .log_file = log_file,
         };

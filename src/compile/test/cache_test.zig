@@ -10,7 +10,10 @@ test "getTestCacheDir returns test subdirectory" {
     const allocator = testing.allocator;
     // Use an explicit cache_dir so the test does not depend on HOME/XDG env vars
     // (the default testing CoreCtx returns EnvironmentVariableMissing for all vars).
-    const config = CacheConfig{ .cache_dir = "/tmp/roc_test_cache" };
+    const config = CacheConfig{
+        .cache_dir = "/tmp/roc_test_cache",
+        .roc_ctx = CoreCtx.testing(testing.allocator, testing.allocator),
+    };
 
     const version_dir = try config.getVersionCacheDir(allocator);
     defer allocator.free(version_dir);
@@ -27,8 +30,8 @@ test "getTestCacheDir returns test subdirectory" {
 
 test "computeCacheFilePath uses subdirectory splitting" {
     const allocator = testing.allocator;
-    const config = CacheConfig{};
     const filesystem = CoreCtx.testing(std.testing.allocator, std.testing.allocator);
+    const config = CacheConfig{ .roc_ctx = filesystem };
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -59,8 +62,8 @@ test "storeRawBytes and loadRawBytes round-trip" {
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    const config = CacheConfig{};
     const filesystem = CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io);
+    const config = CacheConfig{ .roc_ctx = filesystem };
 
     var manager = CacheManager.init(allocator, config, filesystem);
 
@@ -89,8 +92,8 @@ test "loadRawBytes returns null on miss" {
     const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    const config = CacheConfig{};
     const filesystem = CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io);
+    const config = CacheConfig{ .roc_ctx = filesystem };
 
     var manager = CacheManager.init(allocator, config, filesystem);
 

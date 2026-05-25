@@ -18,12 +18,19 @@ const Allocator = std.mem.Allocator;
 const Diagnostics = runner.Diagnostics;
 const ExtraFile = runner.ExtraFile;
 
-const Io = compile.Io;
+const CoreCtx = compile.CoreCtx;
 
 // --- Diagnostics: write to real stderr ---
+//
+// The diagnostics vtable doesn't carry a `std.Io`, so we capture the process
+// I/O instance into a file-scope variable in `main` before installing the
+// vtable. All diagnostic writes happen after `main` has run, so the variable
+// is guaranteed to be initialized at the time it is read.
+var process_io: std.Io = undefined;
 
 fn stderrWrite(_: ?*anyopaque, msg: []const u8) void {
-    std.fs.File.stderr().writeAll(msg) catch {};
+    const stderr_file: std.Io.File = .stderr();
+    stderr_file.writeStreamingAll(process_io, msg) catch {};
 }
 
 fn stderrEmitReport(_: ?*anyopaque, gpa: Allocator, report: *reporting.Report) void {
@@ -32,7 +39,8 @@ fn stderrEmitReport(_: ?*anyopaque, gpa: Allocator, report: *reporting.Report) v
     reporting.renderReport(report, &diag_writer.writer, .color_terminal) catch return;
     const output = diag_writer.written();
     if (output.len > 0) {
-        std.fs.File.stderr().writeAll(output) catch {};
+        const stderr_file: std.Io.File = .stderr();
+        stderr_file.writeStreamingAll(process_io, output) catch {};
     }
 }
 
@@ -55,15 +63,19 @@ fn printUsageAndExit() noreturn {
         \\Each --with-file registers an extra module accessible as `import Name`.
         \\
     ;
-    std.fs.File.stderr().writeAll(msg) catch {};
+    const stderr_file: std.Io.File = .stderr();
+    stderr_file.writeStreamingAll(process_io, msg) catch {};
     std.process.exit(2);
 }
 
 /// CLI entry point. Parses argv, reads the app source (and any
 /// `--with-file` modules), then drives `runner.runEcho` against a
 /// 128 MiB FixedBufferAllocator. Exits with the Roc program's exit code.
-pub fn main() !void {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    process_io = init.io;
+    const io = init.io;
+
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
@@ -71,7 +83,7 @@ pub fn main() !void {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    const args = try std.process.argsAlloc(arena);
+    const args = try init.minimal.args.toSlice(arena);
     if (args.len < 2) printUsageAndExit();
 
     const app_path = args[1];
@@ -79,29 +91,31 @@ pub fn main() !void {
     var extras = std.ArrayList(ExtraFile).empty;
     defer extras.deinit(arena);
 
+    const stderr_file: std.Io.File = .stderr();
+
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (!std.mem.eql(u8, arg, "--with-file")) {
-            std.fs.File.stderr().writeAll("unknown argument: ") catch {};
-            std.fs.File.stderr().writeAll(arg) catch {};
-            std.fs.File.stderr().writeAll("\n") catch {};
+            stderr_file.writeStreamingAll(io, "unknown argument: ") catch {};
+            stderr_file.writeStreamingAll(io, arg) catch {};
+            stderr_file.writeStreamingAll(io, "\n") catch {};
             printUsageAndExit();
         }
         i += 1;
         if (i >= args.len) printUsageAndExit();
         const spec = args[i];
         const eq = std.mem.findScalar(u8, spec, '=') orelse {
-            std.fs.File.stderr().writeAll("--with-file value must be Name=path\n") catch {};
+            stderr_file.writeStreamingAll(io, "--with-file value must be Name=path\n") catch {};
             std.process.exit(2);
         };
         const name = spec[0..eq];
         const path = spec[eq + 1 ..];
-        const content = try std.fs.cwd().readFileAlloc(arena, path, std.math.maxInt(usize));
+        const content = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
         try extras.append(arena, .{ .name = name, .content = content });
     }
 
-    const source = try std.fs.cwd().readFileAlloc(arena, app_path, std.math.maxInt(usize));
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, app_path, gpa, .unlimited);
 
     // Use a 128 MiB FBA so the pipeline behaves like the wasm case (single
     // contiguous heap) — this is also what the runtime-image migration in
@@ -115,19 +129,29 @@ pub fn main() !void {
     // through the same target_usize=.u32 path the wasm uses, while still
     // running the interpreter natively. Useful to isolate wasm-runtime bugs
     // from wasm32-target compilation bugs.
-    const target_choice = std.posix.getenv("ECHO_NATIVE_TARGET") orelse "native";
+    //
+    // In Zig 0.16 `std.process.getEnvVarOwned` was removed; on POSIX we read
+    // from `init.minimal.environ` via `Environ.getPosix` (no alloc). The
+    // echo native CLI is only built for POSIX targets, so the Windows branch
+    // is just a defensive default.
+    const target_choice: []const u8 = blk: {
+        if (@import("builtin").os.tag == .windows) break :blk "native";
+        const v = std.process.Environ.getPosix(init.minimal.environ, "ECHO_NATIVE_TARGET");
+        break :blk if (v) |s| s else "native";
+    };
     const is_wasm_target = std.mem.eql(u8, target_choice, "wasm32");
 
     const code = runner.runEcho(.{
         .runtime_fba = &runtime_fba,
-        .fallback_io = Io.default(),
+        .fallback_io = CoreCtx.default(gpa, arena, io),
+        .std_io = io,
         .source = source,
         .extras = extras.items,
         .diagnostics = stderrDiagnostics(),
         .roc_target = if (is_wasm_target) .wasm32 else roc_target.RocTarget.detectNative(),
         .target_usize = if (is_wasm_target) .u32 else .native,
     }) catch |err| {
-        std.fs.File.stderr().writeAll("echo_native: pipeline returned error\n") catch {};
+        stderr_file.writeStreamingAll(io, "echo_native: pipeline returned error\n") catch {};
         return err;
     };
 

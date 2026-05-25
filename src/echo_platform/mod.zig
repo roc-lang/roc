@@ -30,8 +30,15 @@ pub const EchoEnv = struct {
 };
 
 /// Echo host function: reads a RocStr arg and prints it + newline to stdout.
-/// Arguments are borrowed — refcounting is handled by the caller (RC insertion pass).
+/// Ownership of `roc_str` transfers to this host function — the RC insertion
+/// pass emits zero RC ops for hosted-call args (see test in `src/lir/arc.zig`
+/// "RC hosted call transfers unused refcounted arg to host", and the test
+/// platform host in `test/fx/platform/host.zig` which decrefs every RocStr
+/// arg). Without this decref every `echo!` call leaks one heap RocStr.
 pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
+    const ops: *host_abi.RocOps = @ptrCast(@alignCast(ops_ptr));
+    defer roc_str.decref(ops);
+
     const message = roc_str.asSlice();
 
     if (comptime is_wasm) {
@@ -40,7 +47,6 @@ pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c
         };
         js.js_echo(message.ptr, message.len);
     } else {
-        const ops: *host_abi.RocOps = @ptrCast(@alignCast(ops_ptr));
         const env: *EchoEnv = @ptrCast(@alignCast(ops.env));
         const stdout_file: std.Io.File = .stdout();
         stdout_file.writeStreamingAll(env.std_io, message) catch |err| handleStdoutError(err);

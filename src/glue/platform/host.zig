@@ -890,8 +890,15 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) !c_int {
                 return 1;
             };
 
+            // For real filesystem writes (createDirPath / writeFile) we need the
+            // full threaded std.Io vtable rather than the minimal shim_io one,
+            // which only implements stdio + futex + a few read helpers. The glue
+            // host is a build-time tool (invoked during `zig build` to generate
+            // glue code), so pulling in std.Io.Threaded here is fine.
+            const fs_io = std.Io.Threaded.global_single_threaded.io();
+
             // Create output directory if needed
-            std.Io.Dir.cwd().createDirPath(host_env.std_io, out_dir) catch |err| {
+            std.Io.Dir.cwd().createDirPath(fs_io, out_dir) catch |err| {
                 stderr.writeStreamingAll(host_env.std_io, "Error: Could not create output directory: ") catch {};
                 var err_buf: [256]u8 = undefined;
                 const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
@@ -909,7 +916,7 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) !c_int {
                 };
                 defer allocator.free(file_path);
 
-                std.Io.Dir.cwd().writeFile(host_env.std_io, .{
+                std.Io.Dir.cwd().writeFile(fs_io, .{
                     .sub_path = file_path,
                     .data = file.content.asSlice(),
                 }) catch |err| {

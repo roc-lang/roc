@@ -19,6 +19,10 @@ pub fn io() std.Io {
             .userdata = null,
             .vtable = &macos_vtable,
         },
+        // Any other host (FreeBSD/NetBSD/OpenBSD/Solaris/etc.) falls through to
+        // std.Io.failing, whose vtable panics on every method call. This is a
+        // trap rather than working IO — those targets aren't supported by the
+        // shim yet and need their own vtable added above.
         else => std.Io.failing,
     };
 }
@@ -101,7 +105,7 @@ fn linuxOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!s
     return switch (operation) {
         .file_read_streaming => |op| .{ .file_read_streaming = linuxFileReadStreaming(op.file, op.data) },
         .file_write_streaming => |op| .{ .file_write_streaming = linuxFileWriteStreaming(op.file, op.header, op.data, op.splat) },
-        .device_io_control => std.Io.failing.vtable.operate(null, operation) catch unreachable,
+        .device_io_control => @panic("device_io_control unsupported in shim"),
         .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
     };
 }
@@ -354,6 +358,8 @@ const windows_vtable: std.Io.VTable = blk: {
     vtable.tryLockStderr = windowsTryLockStderr;
     vtable.unlockStderr = windowsUnlockStderr;
     vtable.swapCancelProtection = windowsSwapCancelProtection;
+    vtable.dirOpenFile = windowsDirOpenFile;
+    vtable.fileReadPositional = windowsFileReadPositional;
     vtable.fileClose = windowsFileClose;
     break :blk vtable;
 };
@@ -363,6 +369,7 @@ const win = struct {
     const DWORD = std.os.windows.DWORD;
     const HANDLE = std.os.windows.HANDLE;
     const SRWLOCK = std.os.windows.SRWLOCK;
+    const SECURITY_ATTRIBUTES = std.os.windows.SECURITY_ATTRIBUTES;
 
     const OVERLAPPED = extern struct {
         Internal: usize,
@@ -373,6 +380,25 @@ const win = struct {
         },
         hEvent: ?HANDLE,
     };
+
+    // CreateFileW dwDesiredAccess
+    const GENERIC_READ: DWORD = 0x80000000;
+    const GENERIC_WRITE: DWORD = 0x40000000;
+
+    // CreateFileW dwShareMode
+    const FILE_SHARE_READ: DWORD = 0x00000001;
+    const FILE_SHARE_WRITE: DWORD = 0x00000002;
+    const FILE_SHARE_DELETE: DWORD = 0x00000004;
+
+    // CreateFileW dwCreationDisposition
+    const OPEN_EXISTING: DWORD = 3;
+
+    // CreateFileW dwFlagsAndAttributes
+    const FILE_ATTRIBUTE_NORMAL: DWORD = 0x00000080;
+    const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
+
+    // Returned on failure.
+    const INVALID_HANDLE_VALUE: HANDLE = @ptrFromInt(std.math.maxInt(usize));
 
     extern "kernel32" fn WriteFile(
         hFile: HANDLE,
@@ -397,6 +423,16 @@ const win = struct {
         lpFilename: [*]u16,
         nSize: DWORD,
     ) callconv(.winapi) DWORD;
+
+    extern "kernel32" fn CreateFileW(
+        lpFileName: [*:0]const u16,
+        dwDesiredAccess: DWORD,
+        dwShareMode: DWORD,
+        lpSecurityAttributes: ?*SECURITY_ATTRIBUTES,
+        dwCreationDisposition: DWORD,
+        dwFlagsAndAttributes: DWORD,
+        hTemplateFile: ?HANDLE,
+    ) callconv(.winapi) HANDLE;
 };
 
 var windows_stderr_writer: std.Io.File.Writer = undefined;
@@ -438,7 +474,7 @@ fn windowsOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable
     return switch (operation) {
         .file_read_streaming => |op| .{ .file_read_streaming = windowsFileReadStreaming(op.file, op.data) },
         .file_write_streaming => |op| .{ .file_write_streaming = windowsFileWriteStreaming(op.file, op.header, op.data, op.splat) },
-        .device_io_control => std.Io.failing.vtable.operate(null, operation) catch unreachable,
+        .device_io_control => @panic("device_io_control unsupported in shim"),
         .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
     };
 }
@@ -568,6 +604,111 @@ fn windowsWrite(handle: std.posix.fd_t, buffer: []const u8) std.Io.Operation.Fil
     return written;
 }
 
+fn windowsDirOpenFile(
+    _: ?*anyopaque,
+    dir: std.Io.Dir,
+    sub_path: []const u8,
+    options: std.Io.Dir.OpenFileOptions,
+) std.Io.File.OpenError!std.Io.File {
+    // sub_path is WTF-8 on Windows; convert to a NUL-terminated WTF-16 path.
+    // We use the simple Win32 CreateFileW path (rather than NtCreateFile) to
+    // keep the shim small. Relative paths are resolved against the process cwd
+    // rather than `dir.handle`; this is sufficient for the small coordination
+    // file the shim needs, which is always specified by absolute path.
+    _ = dir;
+
+    var path_w_buf: [std.os.windows.PATH_MAX_WIDE + 1]u16 = undefined;
+    const path_w_len = std.unicode.wtf8ToWtf16Le(&path_w_buf, sub_path) catch return error.BadPathName;
+    if (path_w_len >= path_w_buf.len) return error.NameTooLong;
+    path_w_buf[path_w_len] = 0;
+    const path_w: [*:0]const u16 = @ptrCast(&path_w_buf);
+
+    var desired_access: win.DWORD = 0;
+    switch (options.mode) {
+        .read_only => desired_access |= win.GENERIC_READ,
+        .write_only => desired_access |= win.GENERIC_WRITE,
+        .read_write => desired_access |= win.GENERIC_READ | win.GENERIC_WRITE,
+    }
+
+    const share_mode = win.FILE_SHARE_READ | win.FILE_SHARE_WRITE | win.FILE_SHARE_DELETE;
+
+    var flags_and_attrs: win.DWORD = win.FILE_ATTRIBUTE_NORMAL;
+    if (options.allow_directory) flags_and_attrs |= win.FILE_FLAG_BACKUP_SEMANTICS;
+
+    const handle = win.CreateFileW(
+        path_w,
+        desired_access,
+        share_mode,
+        null,
+        win.OPEN_EXISTING,
+        flags_and_attrs,
+        null,
+    );
+    if (handle == win.INVALID_HANDLE_VALUE) {
+        return switch (std.os.windows.GetLastError()) {
+            .FILE_NOT_FOUND, .PATH_NOT_FOUND => error.FileNotFound,
+            .ACCESS_DENIED => error.AccessDenied,
+            .SHARING_VIOLATION => error.FileBusy,
+            .PIPE_BUSY => error.PipeBusy,
+            .INVALID_NAME, .BAD_PATHNAME => error.BadPathName,
+            // ERROR_DIRECTORY = "The directory name is invalid"; closest match
+            // for the OpenError set is NotDir.
+            .DIRECTORY => error.NotDir,
+            .NOT_ENOUGH_MEMORY, .OUTOFMEMORY => error.SystemResources,
+            .TOO_MANY_OPEN_FILES => error.ProcessFdQuotaExceeded,
+            .NETNAME_DELETED, .BAD_NETPATH => error.NetworkNotFound,
+            else => error.Unexpected,
+        };
+    }
+    return .{
+        .handle = handle,
+        .flags = .{ .nonblocking = false },
+    };
+}
+
+fn windowsFileReadPositional(
+    _: ?*anyopaque,
+    file: std.Io.File,
+    data: []const []u8,
+    offset: u64,
+) std.Io.File.ReadPositionalError!usize {
+    var total: usize = 0;
+    for (data) |buffer| {
+        if (buffer.len == 0) continue;
+        const n = try windowsPread(file.handle, buffer, offset + total);
+        total += n;
+        if (n < buffer.len) break;
+    }
+    return total;
+}
+
+fn windowsPread(handle: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
+    const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
+    var overlapped: win.OVERLAPPED = .{
+        .Internal = 0,
+        .InternalHigh = 0,
+        .DUMMY = .{ .Offset = .{
+            .Low = @truncate(offset),
+            .High = @truncate(offset >> 32),
+        } },
+        .hEvent = null,
+    };
+    var read_count: win.DWORD = 0;
+    if (win.ReadFile(handle, buffer.ptr, want, &read_count, &overlapped) == .FALSE) {
+        return switch (std.os.windows.GetLastError()) {
+            .HANDLE_EOF, .BROKEN_PIPE => 0,
+            .INVALID_HANDLE => error.NotOpenForReading,
+            .ACCESS_DENIED => error.AccessDenied,
+            .LOCK_VIOLATION => error.LockViolation,
+            .IO_DEVICE, .CRC, .NET_WRITE_FAULT => error.InputOutput,
+            .NO_DATA => error.WouldBlock,
+            .OPERATION_ABORTED => error.Unexpected,
+            else => error.Unexpected,
+        };
+    }
+    return read_count;
+}
+
 fn windowsFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
     for (files) |file| {
         _ = win.CloseHandle(file.handle);
@@ -638,7 +779,7 @@ fn macosOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!s
     return switch (operation) {
         .file_read_streaming => |op| .{ .file_read_streaming = macosFileReadStreaming(op.file, op.data) },
         .file_write_streaming => |op| .{ .file_write_streaming = macosFileWriteStreaming(op.file, op.header, op.data, op.splat) },
-        .device_io_control => std.Io.failing.vtable.operate(null, operation) catch unreachable,
+        .device_io_control => @panic("device_io_control unsupported in shim"),
         .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
     };
 }

@@ -83,6 +83,13 @@ pub const RunOptions = struct {
     /// Fallback Io that handles everything not served by EchoCtx (i.e. paths
     /// not in `Paths` and not in `extras`).
     fallback_io: Io,
+    /// `std.Io` instance used for any real OS I/O on native targets — passed
+    /// to `BuildEnv.init`, the WasmFilesystem fallback, and stored in
+    /// `EchoEnv` so `echoHostedFn` can call `writeStreamingAll`. On WASM
+    /// builds the value is unused (freestanding stubs trap), but callers
+    /// must still pass a value; `compile.CoreCtx.default(...).std_io` on
+    /// freestanding is a valid sentinel.
+    std_io: std.Io,
     /// The headerless user source (the body of the synthetic app).
     source: []const u8,
     /// Extra user-supplied modules, available as `import <name>`.
@@ -131,7 +138,12 @@ pub fn runEcho(opts: RunOptions) !u8 {
         .fallback = opts.fallback_io,
     };
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, undefined) catch |err| {
+    // BuildEnv stores std_io for any real-OS reads its workers initiate.
+    // On WASM the echo pipeline only touches synthetic / extra paths served
+    // by EchoCtx, so the std_io is never actually dereferenced — but the
+    // field still must be a concrete value (no `undefined`) to avoid UB if
+    // a future refactor adds a real-OS call path.
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io) catch |err| {
         diag.step("BuildEnv.init", err);
         return err;
     };
@@ -229,7 +241,7 @@ pub fn runEcho(opts: RunOptions) !u8 {
         return err;
     };
 
-    return runEchoView(allocator, &view, diag) catch |err| {
+    return runEchoView(allocator, &view, diag, opts.std_io) catch |err| {
         diag.step("runEchoView", err);
         return err;
     };
@@ -239,6 +251,7 @@ fn runEchoView(
     allocator: Allocator,
     view: *const lir.RuntimeImage.ProgramView,
     diag: Diagnostics,
+    std_io: std.Io,
 ) !u8 {
     // HostedFn array order matters: the interpreter calls
     // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
@@ -247,7 +260,7 @@ fn runEchoView(
     // trivially correct — but additions must respect alphabetical order or
     // the wrong function will be called silently. See README "Host functions".
     var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
-    var echo_env: echo_platform.EchoEnv = .{ .std_io = undefined };
+    var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
     var cli_args_list = echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;

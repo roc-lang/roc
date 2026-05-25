@@ -184,8 +184,8 @@ enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
 /// I/O for file operations (e.g., file imports).
-/// Defaults to undefined — callers that need file imports must provide a real CoreCtx.
-roc_ctx: CoreCtx = undefined,
+/// Required — callers must provide a real CoreCtx (use a testing one if file imports are not needed).
+roc_ctx: CoreCtx,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top

@@ -407,13 +407,29 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
     while (true) {
         var read_buf: [4096]u8 = undefined;
         const bytes = std.c.read(pipe_read, &read_buf, read_buf.len);
-        if (bytes <= 0) break;
+        if (bytes == 0) break; // EOF
+        if (bytes < 0) {
+            // std.c.read does not retry on EINTR like std.posix.read did; do
+            // it ourselves so a signal during readout doesn't truncate the
+            // child's error message.
+            if (@as(std.c.E, @enumFromInt(std.c._errno().*)) == .INTR) continue;
+            break;
+        }
         buf.appendSlice(allocator, read_buf[0..@intCast(bytes)]) catch break;
     }
     _ = std.c.close(pipe_read);
 
     var status: c_int = 0;
-    _ = std.c.waitpid(fork_result, &status, 0);
+    // std.c.waitpid does not retry on EINTR like std.posix.waitpid did. If we
+    // don't loop here, an interrupted wait returns -1 with `status` left at 0,
+    // which would then be misread below as "child exited cleanly with code 0"
+    // and a real crash would be silently reported as success.
+    while (true) {
+        const rc = std.c.waitpid(fork_result, &status, 0);
+        if (rc >= 0) break;
+        if (@as(std.c.E, @enumFromInt(std.c._errno().*)) == .INTR) continue;
+        return .fork_unavailable;
+    }
     const sig: u8 = @truncate(@as(u32, @bitCast(status)) & 0x7f);
     if (sig != 0) {
         return .{ .crashed = sig };
@@ -874,4 +890,63 @@ test "Builtin.roc doc code blocks check and evaluate" {
         );
         return error.UpdateExpectedDocBlockFailureCount;
     }
+}
+
+/// Used by `runInChild EINTR regression` to mark that the test's signal
+/// handler actually fired. File-scope because the C-ABI signal handler
+/// cannot capture state any other way.
+var eintr_test_signal_fired: std.atomic.Value(u32) = .init(0);
+
+fn eintrTestSignalHandler(_: std.c.SIG) callconv(.c) void {
+    _ = eintr_test_signal_fired.fetchAdd(1, .seq_cst);
+}
+
+/// Child-side work fn for the EINTR regression test. Sends SIGUSR1 to the
+/// parent to interrupt its `waitpid`, then crashes via `abort()`. The parent
+/// must report `.crashed` — without the EINTR retry, `waitpid` would return
+/// -1 with `status` left at 0 and the harness would falsely report `.success`.
+fn eintrTestChildWork(_: Allocator, _: []const u8) anyerror!?[]u8 {
+    if (comptime !has_fork) return null;
+    const fifty_ms: std.c.timespec = .{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+    // Give the parent a moment to enter waitpid before we interrupt it.
+    _ = std.c.nanosleep(&fifty_ms, null);
+    const ppid = std.c.getppid();
+    _ = std.c.kill(ppid, .USR1);
+    // Brief pause so the signal is delivered before we crash; then abort,
+    // which terminates via SIGABRT so the parent sees `.crashed`.
+    _ = std.c.nanosleep(&fifty_ms, null);
+    std.c.abort();
+}
+
+test "runInChild retries waitpid on EINTR" {
+    if (comptime !has_fork) return error.SkipZigTest;
+
+    // Install a SIGUSR1 handler without SA_RESTART so the syscall is
+    // interrupted (rather than auto-restarted by the kernel).
+    var new_action: std.c.Sigaction = .{
+        .handler = .{ .handler = eintrTestSignalHandler },
+        .mask = std.mem.zeroes(std.c.sigset_t),
+        .flags = 0,
+    };
+    var old_action: std.c.Sigaction = undefined;
+    if (std.c.sigaction(.USR1, &new_action, &old_action) != 0) {
+        return error.SigactionFailed;
+    }
+    defer _ = std.c.sigaction(.USR1, &old_action, null);
+
+    eintr_test_signal_fired.store(0, .seq_cst);
+
+    const outcome = runInChild(std.testing.allocator, eintrTestChildWork, "");
+    // Free any owned message regardless of outcome shape.
+    switch (outcome) {
+        .failed => |msg| std.testing.allocator.free(msg),
+        else => {},
+    }
+
+    // Sanity: the child actually managed to signal us (otherwise the EINTR
+    // path was never exercised and this test is vacuous).
+    try testing.expect(eintr_test_signal_fired.load(.seq_cst) >= 1);
+
+    // The real assertion: the harness saw the crash, not a phantom success.
+    try testing.expect(outcome == .crashed);
 }
