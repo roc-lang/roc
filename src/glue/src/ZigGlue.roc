@@ -215,15 +215,27 @@ generate_roc_list_generic =
 	\\            return self.length == 0;
 	\\        }
 	\\
-	\\        /// Return true if this list is a whole-program-lifetime static literal
-	\\        /// (elements live in read-only memory; no refcount to adjust, no allocation to free).
-	\\        pub fn isStatic(self: Self) bool {
-	\\            return self.capacity_or_alloc_ptr == 0;
+	\\        /// Return true if this list is a seamless slice into another allocation.
+	\\        /// Slices share the rc slot with their backing allocation; the alloc ptr is
+	\\        /// encoded in `capacity_or_alloc_ptr` with the high bit set.
+	\\        pub fn isSeamlessSlice(self: Self) bool {
+	\\            return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
 	\\        }
 	\\
 	\\        /// Return an empty RocList.
 	\\        pub fn empty() Self {
 	\\            return .{ .elements_ptr = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+	\\        }
+	\\
+	\\        /// Resolve `self` to the start of its backing allocation (the element block
+	\\        /// just after the rc slot). Returns `null` for empty lists. Handles both
+	\\        /// whole-backing and seamless-slice forms.
+	\\        fn getAllocationPtr(self: Self) ?[*]u8 {
+	\\            if (self.isSeamlessSlice()) {
+	\\                return @as(?[*]u8, @ptrFromInt(self.capacity_or_alloc_ptr << 1));
+	\\            }
+	\\            const ptr = self.elements_ptr orelse return null;
+	\\            return @ptrCast(ptr);
 	\\        }
 	\\
 	\\        /// Allocate a new list with space for `length` elements.
@@ -260,10 +272,10 @@ generate_roc_list_generic =
 	\\
 	\\        /// Decrement the reference count; frees the allocation when it reaches zero.
 	\\        pub fn decref(self: Self, roc_ops: *RocOps) void {
-	\\            const ptr = self.elements_ptr orelse return;
-	\\            if (self.isStatic()) return;
-	\\            const data_addr = @intFromPtr(ptr);
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
+	\\            const data_addr = @intFromPtr(alloc_ptr);
 	\\            const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
+	\\            if (rc.* == 0) return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
 	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\            if (prev == 1) {
 	\\                const base: *anyopaque = @ptrFromInt(data_addr - header_bytes);
@@ -277,17 +289,17 @@ generate_roc_list_generic =
 	\\
 	\\        /// Increment the reference count by `amount`.
 	\\        pub fn incref(self: Self, amount: isize) void {
-	\\            const ptr = self.elements_ptr orelse return;
-	\\            if (self.isStatic()) return;
-	\\            const rc: *isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
+	\\            const rc: *isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\            if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
 	\\            _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\        }
 	\\
 	\\        /// Return true if this list has a reference count of exactly one.
 	\\        pub fn isUnique(self: Self) bool {
-	\\            const ptr = self.elements_ptr orelse return true;
-	\\            if (self.isStatic()) return true;
-	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return true;
+	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\            if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
 	\\            return rc.* == 1;
 	\\        }
 	\\    };
@@ -1012,12 +1024,6 @@ generate_roc_str =
 	\\        return @as(isize, @bitCast(self.length)) < 0;
 	\\    }
 	\\
-	\\    /// Return true if this string is a whole-program-lifetime static literal
-	\\    /// (bytes live in read-only memory; no refcount to adjust, no allocation to free).
-	\\    pub fn isStatic(self: Self) bool {
-	\\        return self.capacity_or_alloc_ptr == 0;
-	\\    }
-	\\
 	\\    /// Return true if this string is a seamless slice into another allocation.
 	\\    pub fn isSeamlessSlice(self: Self) bool {
 	\\        return !self.isSmallStr() and (self.capacity_or_alloc_ptr & seamless_slice_tag) != 0;
@@ -1071,10 +1077,10 @@ generate_roc_str =
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
 	\\    pub fn decref(self: Self, roc_ops: *RocOps) void {
 	\\        if (self.isSmallStr()) return;
-	\\        if (self.isStatic()) return;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const data_addr = @intFromPtr(alloc_ptr);
 	\\        const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
+	\\        if (rc.* == 0) return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
 	\\        const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\        if (prev == 1) {
 	\\            const ptr_width = @sizeOf(usize);
@@ -1087,18 +1093,18 @@ generate_roc_str =
 	\\    /// Increment the reference count by `amount`.
 	\\    pub fn incref(self: Self, amount: isize) void {
 	\\        if (self.isSmallStr()) return;
-	\\        if (self.isStatic()) return;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const rc: *isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\        if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
 	\\        _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\    }
 	\\
 	\\    /// Return true if this string has a reference count of exactly one.
 	\\    pub fn isUnique(self: Self) bool {
 	\\        if (self.isSmallStr()) return true;
-	\\        if (self.isStatic()) return true;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return true;
 	\\        const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\        if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
 	\\        return rc.* == 1;
 	\\    }
 	\\

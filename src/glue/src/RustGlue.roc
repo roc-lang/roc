@@ -805,13 +805,6 @@ generate_rust_roc_str =
 	\\        (self.length as isize) < 0
 	\\    }
 	\\
-	\\    /// Return true if this string is a whole-program-lifetime static literal
-	\\    /// (bytes live in read-only memory; no refcount to adjust, no allocation to free).
-	\\    #[inline]
-	\\    pub fn is_static(&self) -> bool {
-	\\        self.capacity_or_alloc_ptr == 0
-	\\    }
-	\\
 	\\    /// Return true if this string is a seamless slice into another allocation.
 	\\    #[inline]
 	\\    pub fn is_seamless_slice(&self) -> bool {
@@ -897,9 +890,6 @@ generate_rust_roc_str =
 	\\        if self.is_small_str() {
 	\\            return;
 	\\        }
-	\\        if self.is_static() {
-	\\            return;
-	\\        }
 	\\        let alloc_ptr = self.get_allocation_ptr();
 	\\        if alloc_ptr.is_null() {
 	\\            return;
@@ -907,6 +897,9 @@ generate_rust_roc_str =
 	\\        unsafe {
 	\\            let rc = (alloc_ptr as *mut isize).sub(1);
 	\\            let prev = *rc;
+	\\            if prev == 0 {
+	\\                return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
+	\\            }
 	\\            *rc = prev - 1;
 	\\            if prev == 1 {
 	\\                let ptr_width = core::mem::size_of::<usize>();
@@ -983,11 +976,23 @@ generate_rust_roc_list =
 	\\        self.length == 0
 	\\    }
 	\\
-	\\    /// Return true if this list is a whole-program-lifetime static literal
-	\\    /// (elements live in read-only memory; no refcount to adjust, no allocation to free).
+	\\    /// Return true if this list is a seamless slice into another allocation.
+	\\    /// Slices share the rc slot with their backing allocation; the alloc ptr is
+	\\    /// encoded in `capacity_or_alloc_ptr` with the high bit set.
 	\\    #[inline]
-	\\    pub fn is_static(&self) -> bool {
-	\\        self.capacity_or_alloc_ptr == 0
+	\\    pub fn is_seamless_slice(&self) -> bool {
+	\\        (self.capacity_or_alloc_ptr as isize) < 0
+	\\    }
+	\\
+	\\    /// Resolve `self` to the start of its backing allocation (the element block
+	\\    /// just after the rc slot). Returns `null` for empty lists. Handles both
+	\\    /// whole-backing and seamless-slice forms.
+	\\    fn get_allocation_ptr(&self) -> *mut u8 {
+	\\        if self.is_seamless_slice() {
+	\\            (self.capacity_or_alloc_ptr << 1) as *mut u8
+	\\        } else {
+	\\            self.elements as *mut u8
+	\\        }
 	\\    }
 	\\
 	\\    /// Return the list elements as a slice.
@@ -1043,17 +1048,21 @@ generate_rust_roc_list =
 	\\        if self.elements.is_null() {
 	\\            return;
 	\\        }
-	\\        if self.is_static() {
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
 	\\            return;
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
 	\\        let header_bytes = Self::header_bytes();
 	\\        unsafe {
-	\\            let rc = (self.elements as *mut isize).sub(1);
+	\\            let rc = (alloc_ptr as *mut isize).sub(1);
 	\\            let prev = *rc;
+	\\            if prev == 0 {
+	\\                return; // REFCOUNT_STATIC_DATA — elements are in read-only memory
+	\\            }
 	\\            *rc = prev - 1;
 	\\            if prev == 1 {
-	\\                let base = (self.elements as *mut u8).sub(header_bytes) as *mut c_void;
+	\\                let base = alloc_ptr.sub(header_bytes) as *mut c_void;
 	\\                roc_ops.dealloc(base, align);
 	\\            }
 	\\        }
