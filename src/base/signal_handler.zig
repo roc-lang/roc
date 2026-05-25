@@ -126,15 +126,11 @@ pub const StackBounds = struct {
         return addr >= guard_low and addr < guard_high;
     }
 
-    pub fn containsLowerBoundaryFault(self: StackBounds, fault_addr: usize, sp: usize) bool {
+    pub fn containsLowerBoundaryAddress(self: StackBounds, fault_addr: usize) bool {
         const boundary_low = self.low -| self.page_size;
         const boundary_high = self.low;
-        const lowest_stack_page_high = self.low +| self.page_size;
 
-        return fault_addr >= boundary_low and
-            fault_addr < boundary_high and
-            sp >= self.low and
-            sp <= lowest_stack_page_high;
+        return fault_addr >= boundary_low and fault_addr < boundary_high;
     }
 };
 
@@ -182,12 +178,12 @@ pub fn currentThreadStackBoundsForTest() ?StackBounds {
 
 /// Classify a fault from its address, interrupted stack pointer, and stack range.
 pub fn classifyFault(fault_addr: usize, interrupted_sp: ?usize, bounds: ?StackBounds) FaultKind {
-    const stack_bounds = bounds orelse return .access_violation;
-    const sp = interrupted_sp orelse return .access_violation;
+    _ = interrupted_sp;
 
-    if (sp < stack_bounds.low) return .stack_overflow;
+    const stack_bounds = bounds orelse return .access_violation;
+
     if (stack_bounds.containsGuardAddress(fault_addr)) return .stack_overflow;
-    if (stack_bounds.containsLowerBoundaryFault(fault_addr, sp)) return .stack_overflow;
+    if (stack_bounds.containsLowerBoundaryAddress(fault_addr)) return .stack_overflow;
     return .access_violation;
 }
 
@@ -452,9 +448,10 @@ test "classifyFault uses only exact stack data" {
 
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, bounds));
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x9000, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x5ff0, bounds));
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6800, 0x8000, bounds));
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x5000, 0x5ff0, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x6800, null, bounds));
+    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5000, 0x5ff0, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6800, null, bounds));
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(unrelated_addr, 0x8000, null));
 }
 
@@ -463,8 +460,9 @@ test "classifyFault treats a lower stack boundary fault as overflow" {
 
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, 0x7000, bounds));
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6000, 0x7000, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, 0x8001, bounds));
+    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x6ff0, null, bounds));
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5ff0, 0x7000, bounds));
-    try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x6ff0, 0x8001, bounds));
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x1000_1000, 0x7000, bounds));
 }
 
