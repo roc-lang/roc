@@ -622,14 +622,6 @@ const Solver = struct {
         return self.program.types.root(ty);
     }
 
-    fn patSlot(self: *Solver, pat_id: Lifted.PatId) Allocator.Error!Type.TypeVarId {
-        const index = @intFromEnum(pat_id);
-        if (self.pat_tys[index]) |ty| return ty;
-        const ty = try self.lowerTypeFresh(self.program.lifted.pats.items[index].ty);
-        self.pat_tys[index] = ty;
-        return ty;
-    }
-
     fn expectPat(self: *Solver, pat_id: Lifted.PatId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
         const index = @intFromEnum(pat_id);
         if (self.pat_tys[index]) |ty| {
@@ -646,14 +638,6 @@ const Solver = struct {
         try self.unify(ty, expected);
         self.pat_tys[index] = ty;
         return self.program.types.root(ty);
-    }
-
-    fn inferExprSpan(self: *Solver, span: Lifted.Span(Lifted.ExprId)) Allocator.Error![]Type.TypeVarId {
-        const exprs = self.program.lifted.exprSpan(span);
-        const tys = try self.allocator.alloc(Type.TypeVarId, exprs.len);
-        errdefer self.allocator.free(tys);
-        for (exprs, 0..) |expr, i| tys[i] = try self.inferExpr(expr);
-        return tys;
     }
 
     fn functionShape(self: *Solver, ty: Type.TypeVarId) Allocator.Error!FunctionShape {

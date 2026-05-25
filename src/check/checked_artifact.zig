@@ -7087,7 +7087,7 @@ pub const ResolvedValueRefTable = struct {
                 }
                 unreachable;
             };
-            try attachUseTypePayload(allocator, artifact_key, &checked_types.store, &resolved_ref, checked_type_key, checked_ty);
+            try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
@@ -7186,25 +7186,16 @@ fn categorizeValueRef(
 }
 
 fn attachUseTypePayload(
-    allocator: Allocator,
-    artifact_key: CheckedModuleArtifactKey,
-    checked_types: *const CheckedTypeStore,
     ref: *ResolvedValueRef,
     key: canonical.CanonicalTypeKey,
     checked_ty: CheckedTypeId,
 ) Allocator.Error!void {
     switch (ref.*) {
         .top_level_const => |*use| {
-            _ = allocator;
-            _ = artifact_key;
-            _ = checked_types;
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
         },
         .imported_const => |*use| {
-            _ = allocator;
-            _ = artifact_key;
-            _ = checked_types;
             use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
         },

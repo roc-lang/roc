@@ -347,8 +347,14 @@ const Lowerer = struct {
 
         const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(source)];
-        try self.program.fns.append(self.allocator, .{
-            .symbol = self.symbols.fresh(),
+        const symbol = self.symbols.fresh();
+        try self.program.fns.append(self.allocator, undefined);
+        try self.fn_specs.append(self.allocator, spec);
+        try self.fn_written.append(self.allocator, false);
+        result.value_ptr.* = fn_id;
+
+        self.program.fns.items[@intFromEnum(fn_id)] = .{
+            .symbol = symbol,
             .source = source_fn.source,
             .args = .empty(),
             .body = .hosted,
@@ -356,10 +362,7 @@ const Lowerer = struct {
                 .func => |func| func.ret,
                 else => Common.invariant("Lambda Mono function table contains a non-function type"),
             }),
-        });
-        try self.fn_specs.append(self.allocator, spec);
-        try self.fn_written.append(self.allocator, false);
-        result.value_ptr.* = fn_id;
+        };
         return fn_id;
     }
 
