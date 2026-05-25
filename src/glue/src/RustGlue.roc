@@ -805,6 +805,13 @@ generate_rust_roc_str =
 	\\        (self.length as isize) < 0
 	\\    }
 	\\
+	\\    /// Return true if this string is a whole-program-lifetime static literal
+	\\    /// (bytes live in read-only memory; no refcount to adjust, no allocation to free).
+	\\    #[inline]
+	\\    pub fn is_static(&self) -> bool {
+	\\        self.capacity_or_alloc_ptr == 0
+	\\    }
+	\\
 	\\    /// Return true if this string is a seamless slice into another allocation.
 	\\    #[inline]
 	\\    pub fn is_seamless_slice(&self) -> bool {
@@ -890,6 +897,9 @@ generate_rust_roc_str =
 	\\        if self.is_small_str() {
 	\\            return;
 	\\        }
+	\\        if self.is_static() {
+	\\            return;
+	\\        }
 	\\        let alloc_ptr = self.get_allocation_ptr();
 	\\        if alloc_ptr.is_null() {
 	\\            return;
@@ -973,6 +983,13 @@ generate_rust_roc_list =
 	\\        self.length == 0
 	\\    }
 	\\
+	\\    /// Return true if this list is a whole-program-lifetime static literal
+	\\    /// (elements live in read-only memory; no refcount to adjust, no allocation to free).
+	\\    #[inline]
+	\\    pub fn is_static(&self) -> bool {
+	\\        self.capacity_or_alloc_ptr == 0
+	\\    }
+	\\
 	\\    /// Return the list elements as a slice.
 	\\    pub fn as_slice(&self) -> &[T] {
 	\\        if self.elements.is_null() {
@@ -1024,6 +1041,9 @@ generate_rust_roc_list =
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
 	\\    pub fn decref(&self, roc_ops: &RocOps) {
 	\\        if self.elements.is_null() {
+	\\            return;
+	\\        }
+	\\        if self.is_static() {
 	\\            return;
 	\\        }
 	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());

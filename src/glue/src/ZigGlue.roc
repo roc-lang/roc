@@ -215,6 +215,12 @@ generate_roc_list_generic =
 	\\            return self.length == 0;
 	\\        }
 	\\
+	\\        /// Return true if this list is a whole-program-lifetime static literal
+	\\        /// (elements live in read-only memory; no refcount to adjust, no allocation to free).
+	\\        pub fn isStatic(self: Self) bool {
+	\\            return self.capacity_or_alloc_ptr == 0;
+	\\        }
+	\\
 	\\        /// Return an empty RocList.
 	\\        pub fn empty() Self {
 	\\            return .{ .elements_ptr = null, .length = 0, .capacity_or_alloc_ptr = 0 };
@@ -255,6 +261,7 @@ generate_roc_list_generic =
 	\\        /// Decrement the reference count; frees the allocation when it reaches zero.
 	\\        pub fn decref(self: Self, roc_ops: *RocOps) void {
 	\\            const ptr = self.elements_ptr orelse return;
+	\\            if (self.isStatic()) return;
 	\\            const data_addr = @intFromPtr(ptr);
 	\\            const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
 	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
@@ -271,6 +278,7 @@ generate_roc_list_generic =
 	\\        /// Increment the reference count by `amount`.
 	\\        pub fn incref(self: Self, amount: isize) void {
 	\\            const ptr = self.elements_ptr orelse return;
+	\\            if (self.isStatic()) return;
 	\\            const rc: *isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
 	\\            _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\        }
@@ -278,7 +286,7 @@ generate_roc_list_generic =
 	\\        /// Return true if this list has a reference count of exactly one.
 	\\        pub fn isUnique(self: Self) bool {
 	\\            const ptr = self.elements_ptr orelse return true;
-	\\            if (self.capacity_or_alloc_ptr == 0) return true;
+	\\            if (self.isStatic()) return true;
 	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
 	\\            return rc.* == 1;
 	\\        }
@@ -1004,6 +1012,12 @@ generate_roc_str =
 	\\        return @as(isize, @bitCast(self.length)) < 0;
 	\\    }
 	\\
+	\\    /// Return true if this string is a whole-program-lifetime static literal
+	\\    /// (bytes live in read-only memory; no refcount to adjust, no allocation to free).
+	\\    pub fn isStatic(self: Self) bool {
+	\\        return self.capacity_or_alloc_ptr == 0;
+	\\    }
+	\\
 	\\    /// Return true if this string is a seamless slice into another allocation.
 	\\    pub fn isSeamlessSlice(self: Self) bool {
 	\\        return !self.isSmallStr() and (self.capacity_or_alloc_ptr & seamless_slice_tag) != 0;
@@ -1057,6 +1071,7 @@ generate_roc_str =
 	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
 	\\    pub fn decref(self: Self, roc_ops: *RocOps) void {
 	\\        if (self.isSmallStr()) return;
+	\\        if (self.isStatic()) return;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const data_addr = @intFromPtr(alloc_ptr);
 	\\        const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
@@ -1072,6 +1087,7 @@ generate_roc_str =
 	\\    /// Increment the reference count by `amount`.
 	\\    pub fn incref(self: Self, amount: isize) void {
 	\\        if (self.isSmallStr()) return;
+	\\        if (self.isStatic()) return;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const rc: *isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
 	\\        _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
@@ -1080,7 +1096,7 @@ generate_roc_str =
 	\\    /// Return true if this string has a reference count of exactly one.
 	\\    pub fn isUnique(self: Self) bool {
 	\\        if (self.isSmallStr()) return true;
-	\\        if (self.capacity_or_alloc_ptr == 0) return true;
+	\\        if (self.isStatic()) return true;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return true;
 	\\        const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
 	\\        return rc.* == 1;
