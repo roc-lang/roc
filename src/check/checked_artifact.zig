@@ -15660,12 +15660,16 @@ pub fn loweringViewWithRelations(
     };
 }
 
+/// Inputs from imported modules and platform relation checking that participate
+/// in the checked module cache identity.
 pub const CheckedModuleKeyInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
 };
 
+/// Compute the checked module cache identity for a checked typed module and the
+/// checked data it depends on.
 pub fn checkedModuleKeyFromTypedModule(
     allocator: Allocator,
     modules: *const TypedCIR.Modules,
