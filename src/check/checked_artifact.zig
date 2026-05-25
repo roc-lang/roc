@@ -645,7 +645,8 @@ pub const RootRequestTable = struct {
         }
 
         for (compile_time_roots.roots) |root| {
-            if (root.kind != .expect and !try checkedTypeIsConcreteCompileTimeRoot(allocator, &checked_types.store, root.checked_type)) {
+            const concrete = root.kind == .expect or try checkedTypeIsConcreteCompileTimeRoot(allocator, &checked_types.store, root.checked_type);
+            if (!concrete) {
                 continue;
             }
             if (compileTimeRootDependsOnUnboundPlatformRequirement(
@@ -752,16 +753,33 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
     }
     return switch (checked_types.payloads[index]) {
         .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
-        .flex, .rigid => |variable| variable.row_default != null,
+        .flex,
+        .rigid,
+        => false,
         .empty_record,
         .empty_tag_union,
         => true,
-        .alias => |alias| checkedTypeIsConcreteCompileTimeRootInner(checked_types, alias.backing, active),
+        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, alias.args, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(checked_types, alias.backing, active),
         .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(checked_types, record.fields, active)) and
             try checkedTypeIsConcreteCompileTimeRootInner(checked_types, record.ext, active),
         .record_unbound => |fields| checkedFieldTypesAreConcreteCompileTimeRoots(checked_types, fields, active),
         .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, items, active),
-        .nominal => |nominal| checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, nominal.args, active),
+        .nominal => |nominal| blk: {
+            if (!try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, nominal.args, active)) break :blk false;
+            switch (nominal.representation) {
+                .builtin => |builtin_type| switch (builtinRuntimeEncoding(builtin_type)) {
+                    .primitive,
+                    .list,
+                    .box,
+                    => break :blk true,
+                    .bool_tag_union => {},
+                },
+                .opaque_without_backing => break :blk true,
+                else => {},
+            }
+            break :blk try checkedTypeIsConcreteCompileTimeRootInner(checked_types, nominal.backing, active);
+        },
         .function => |function| !function.needs_instantiation and
             (try checkedTypeSpanIsConcreteCompileTimeRoot(checked_types, function.args, active)) and
             try checkedTypeIsConcreteCompileTimeRootInner(checked_types, function.ret, active),
@@ -7069,7 +7087,7 @@ pub const ResolvedValueRefTable = struct {
                 }
                 unreachable;
             };
-            try attachUseTypePayload(allocator, artifact_key, &checked_types.store, &resolved_ref, checked_type_key, checked_ty);
+            try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
 
             const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
             try records.append(allocator, .{
@@ -7168,23 +7186,18 @@ fn categorizeValueRef(
 }
 
 fn attachUseTypePayload(
-    allocator: Allocator,
-    artifact_key: CheckedModuleArtifactKey,
-    checked_types: *const CheckedTypeStore,
     ref: *ResolvedValueRef,
     key: canonical.CanonicalTypeKey,
     checked_ty: CheckedTypeId,
 ) Allocator.Error!void {
     switch (ref.*) {
         .top_level_const => |*use| {
-            const request = try constUseRequestPayload(allocator, artifact_key, checked_types, use.const_ref, key, checked_ty);
-            use.requested_source_ty_template = request.key;
-            use.requested_source_ty_payload = request.payload;
+            use.requested_source_ty_template = key;
+            use.requested_source_ty_payload = checked_ty;
         },
         .imported_const => |*use| {
-            const request = try constUseRequestPayload(allocator, artifact_key, checked_types, use.const_ref, key, checked_ty);
-            use.requested_source_ty_template = request.key;
-            use.requested_source_ty_payload = request.payload;
+            use.requested_source_ty_template = key;
+            use.requested_source_ty_payload = checked_ty;
         },
         .platform_required_const => |*required| {
             if (required.const_use.requested_source_ty_payload == null) {
@@ -7220,118 +7233,6 @@ fn attachUseTypePayload(
         .platform_required_declaration,
         => {},
     }
-}
-
-const ConstUseRequestPayload = struct {
-    key: canonical.CanonicalTypeKey,
-    payload: CheckedTypeId,
-};
-
-fn constUseRequestPayload(
-    allocator: Allocator,
-    artifact_key: CheckedModuleArtifactKey,
-    checked_types: *const CheckedTypeStore,
-    const_ref: ConstRef,
-    use_key: canonical.CanonicalTypeKey,
-    use_payload: CheckedTypeId,
-) Allocator.Error!ConstUseRequestPayload {
-    if (!std.meta.eql(const_ref.artifact.bytes, artifact_key.bytes)) {
-        return .{ .key = use_key, .payload = use_payload };
-    }
-
-    const scheme = checked_types.schemeForKey(const_ref.source_scheme) orelse {
-        checkedArtifactInvariant("local const use referenced a missing producer source scheme", .{});
-    };
-    const concrete_producer = try checkedTypeIsConcreteConstProducerScheme(allocator, checked_types, scheme.root);
-    if (!concrete_producer) {
-        return .{ .key = use_key, .payload = use_payload };
-    }
-
-    return .{
-        .key = checked_types.roots[@intFromEnum(scheme.root)].key,
-        .payload = scheme.root,
-    };
-}
-
-fn checkedTypeIsConcreteConstProducerScheme(
-    allocator: Allocator,
-    checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
-) Allocator.Error!bool {
-    var active = std.AutoHashMap(CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    return try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, root, &active);
-}
-
-fn checkedTypeIsConcreteConstProducerSchemeInner(
-    checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    if (active.contains(root)) return true;
-    try active.put(root, {});
-    defer _ = active.remove(root);
-
-    const index = @intFromEnum(root);
-    if (index >= checked_types.payloads.len) {
-        checkedArtifactInvariant("const producer checked type id is out of range", .{});
-    }
-    return switch (checked_types.payloads[index]) {
-        .pending => checkedArtifactInvariant("const producer checked type was pending", .{}),
-        .flex, .rigid => |variable| variable.row_default != null,
-        .empty_record,
-        .empty_tag_union,
-        => true,
-        .alias => |alias| (try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, alias.backing, active)) and
-            try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, alias.args, active),
-        .record => |record| (try checkedFieldTypesAreConcreteConstProducerScheme(checked_types, record.fields, active)) and
-            try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, record.ext, active),
-        .record_unbound => |fields| checkedFieldTypesAreConcreteConstProducerScheme(checked_types, fields, active),
-        .tuple => |items| checkedTypeSpanIsConcreteConstProducerScheme(checked_types, items, active),
-        .nominal => |nominal| blk: {
-            if (!try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, nominal.args, active)) break :blk false;
-            if (nominal.builtin != null) break :blk true;
-            break :blk try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, nominal.backing, active);
-        },
-        .function => |function| !function.needs_instantiation and
-            (try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, function.args, active)) and
-            try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, function.ret, active),
-        .tag_union => |tag_union| (try checkedTagsAreConcreteConstProducerScheme(checked_types, tag_union.tags, active)) and
-            try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, tag_union.ext, active),
-    };
-}
-
-fn checkedTypeSpanIsConcreteConstProducerScheme(
-    checked_types: *const CheckedTypeStore,
-    items: []const CheckedTypeId,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (items) |item| {
-        if (!try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, item, active)) return false;
-    }
-    return true;
-}
-
-fn checkedFieldTypesAreConcreteConstProducerScheme(
-    checked_types: *const CheckedTypeStore,
-    fields: []const CheckedRecordField,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (fields) |field| {
-        if (!try checkedTypeIsConcreteConstProducerSchemeInner(checked_types, field.ty, active)) return false;
-    }
-    return true;
-}
-
-fn checkedTagsAreConcreteConstProducerScheme(
-    checked_types: *const CheckedTypeStore,
-    tags: []const CheckedTag,
-    active: *std.AutoHashMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (tags) |tag| {
-        if (!try checkedTypeSpanIsConcreteConstProducerScheme(checked_types, tag.args, active)) return false;
-    }
-    return true;
 }
 
 fn categorizeLocalValueRef(
@@ -15757,6 +15658,60 @@ pub fn loweringViewWithRelations(
         .roots = &artifact.root_requests,
         .relation_modules = relation_artifacts,
     };
+}
+
+/// Inputs from imported modules and platform relation checking that participate
+/// in the checked module cache identity.
+pub const CheckedModuleKeyInputs = struct {
+    imports: []const PublishImportArtifact = &.{},
+    platform_requirement_context: ?PlatformRequirementContextKey = null,
+    platform_app_relation: ?PlatformAppRelationKey = null,
+};
+
+/// Compute the checked module cache identity for a checked typed module and the
+/// checked data it depends on.
+pub fn checkedModuleKeyFromTypedModule(
+    allocator: Allocator,
+    modules: *const TypedCIR.Modules,
+    module_idx: u32,
+    inputs: CheckedModuleKeyInputs,
+) Allocator.Error!CheckedModuleArtifactKey {
+    const module = modules.module(module_idx);
+    const module_env = module.moduleEnvConst();
+    const idents = module.identStoreConst();
+
+    var canonical_names = canonical.CanonicalNameStore.init(allocator);
+    defer canonical_names.deinit();
+    const module_name = try canonical_names.internModuleName(module_env.module_name);
+    const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
+    const qualified_module_name = try canonical_names.internModuleIdent(idents, module_env.qualified_module_ident);
+    const module_identity = ModuleIdentity{
+        .stable_hash = computeStableModuleIdentityHash(module_env),
+        .module_idx = module_idx,
+        .module_name = module_name,
+        .display_module_name = display_module_name,
+        .qualified_module_name = qualified_module_name,
+        .kind = module_env.module_kind,
+    };
+
+    var checking_context_identity = try CheckingContextIdentity.fromModule(
+        allocator,
+        module,
+        inputs.imports,
+        inputs.platform_requirement_context,
+        inputs.platform_app_relation,
+    );
+    defer checking_context_identity.deinit(allocator);
+
+    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    defer allocator.free(direct_import_artifact_keys);
+
+    return CheckedModuleArtifactKey.compute(
+        module_env.getSourceAll(),
+        module_identity,
+        checking_context_identity,
+        direct_import_artifact_keys,
+    );
 }
 
 /// Public `publishFromTypedModule` function.

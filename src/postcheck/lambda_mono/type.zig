@@ -16,6 +16,8 @@ const static_dispatch = check.StaticDispatchRegistry;
 
 /// Identifier for a Lambda Mono type in this store.
 pub const TypeId = enum(u32) { _ };
+/// Identifier for a Lambda Mono function body.
+pub const FnId = enum(u32) { _ };
 /// Identifier for a callable variant in this store.
 pub const FnVariantId = enum(u32) { _ };
 
@@ -52,7 +54,8 @@ pub const Tag = struct {
 /// Callable variant entry.
 pub const FnVariant = struct {
     id: FnVariantId,
-    lambda: Common.Symbol,
+    source: Common.Symbol,
+    target: FnId,
     capture_ty: ?TypeId,
 };
 
@@ -256,7 +259,8 @@ pub const Store = struct {
                 const variant_slice = self.fnVariantSpan(variants);
                 writeU32(hasher, @intCast(variant_slice.len));
                 for (variant_slice) |variant| {
-                    writeU32(hasher, @intFromEnum(variant.lambda));
+                    writeU32(hasher, @intFromEnum(variant.source));
+                    writeU32(hasher, @intFromEnum(variant.target));
                     if (variant.capture_ty) |capture_ty| {
                         writeBytes(hasher, "capture");
                         self.writeTypeDigest(name_store, hasher, capture_ty);
@@ -279,7 +283,8 @@ pub const Store = struct {
                 const variant_slice = self.fnVariantSpan(erased.members);
                 writeU32(hasher, @intCast(variant_slice.len));
                 for (variant_slice) |variant| {
-                    writeU32(hasher, @intFromEnum(variant.lambda));
+                    writeU32(hasher, @intFromEnum(variant.source));
+                    writeU32(hasher, @intFromEnum(variant.target));
                     if (variant.capture_ty) |capture_ty| {
                         writeBytes(hasher, "capture");
                         self.writeTypeDigest(name_store, hasher, capture_ty);
@@ -334,8 +339,8 @@ test "lambda mono callable variants receive store-local ids" {
 
     const capture_ty = try store.add(.zst);
     const variants = try store.addFnVariants(&.{
-        .{ .id = @enumFromInt(99), .lambda = @enumFromInt(7), .capture_ty = capture_ty },
-        .{ .id = @enumFromInt(99), .lambda = @enumFromInt(8), .capture_ty = null },
+        .{ .id = @enumFromInt(99), .source = @enumFromInt(7), .target = @enumFromInt(70), .capture_ty = capture_ty },
+        .{ .id = @enumFromInt(99), .source = @enumFromInt(8), .target = @enumFromInt(80), .capture_ty = null },
     });
     const callable = try store.add(.{ .callable = variants });
 
@@ -354,7 +359,7 @@ test "lambda mono empty spans use shared empty descriptor" {
     const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
     const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(3), .checked_name = @enumFromInt(3), .payloads = nonempty_span }});
-    const nonempty_variants = try store.addFnVariants(&.{.{ .id = @enumFromInt(99), .lambda = @enumFromInt(4), .capture_ty = unit }});
+    const nonempty_variants = try store.addFnVariants(&.{.{ .id = @enumFromInt(99), .source = @enumFromInt(4), .target = @enumFromInt(40), .capture_ty = unit }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);
     try std.testing.expect(nonempty_capture_fields.len == 1);

@@ -659,6 +659,12 @@ checked type relations provide concrete evidence. This is ordinary type solving
 inside one stage. Once Monotype IR is output, no open cell remains and no
 later stage may change a type.
 
+Monotype type cells are addressed by the owning checked module id and the exact
+checked type id. They are not addressed by `TypeDigest`. A digest can identify
+closed structural type content for specialization and comparison, but it cannot
+distinguish two different open checked variables with the same shape. Treating
+those variables as the same cell is a compiler bug.
+
 Generated helper code for an empty tag union, such as an inspector requested
 only because a container type mentions the empty tag union, has an unreachable
 body. Reaching that helper means a runtime value of an uninhabited type existed,
@@ -1063,12 +1069,14 @@ become ordinary value representations:
 const LambdaMonoType = union(enum) {
     primitive: Primitive,
     record: Span(Field),
+    capture_record: Span(CaptureField),
     tag_union: Span(Tag),
     tuple: Span(TypeId),
     list: TypeId,
     box: TypeId,
     named: NamedType,
-    erased,
+    callable: Span(FnVariant),
+    erased_fn: ErasedFn,
 };
 ```
 
@@ -1077,23 +1085,30 @@ gets one generated tag. If the member captures values, the tag payload is a
 generated record containing those captures. If it captures nothing, the tag is a
 zero-payload variant.
 
-The generated tag-union type carries the callable member identity needed by the
-LIR builder. The identity is part of the type node, not a separate
-representation table:
+The generated callable type carries the source member and the exact Lambda Mono
+function target. The target is part of the type node. The LIR builder never
+finds a function by scanning symbols or by rebuilding a specialization choice:
 
 ```zig
-const FnTag = struct {
-    variant: FnVariantId,
-    display_name: ?TagLabelId,
-    member: FnMember,
+const FnVariant = struct {
+    id: FnVariantId,
+    source: Symbol,
+    target: FnId,
     capture_record: ?TypeId,
 };
-
-const FnMember = struct {
-    lambda: Symbol,
-    source_fn_ty: TypeDigest,
-};
 ```
+
+`source` is the original lifted function symbol and is used only while lowering
+a `fn_ref` expression into the correct callable variant. `target` is the exact
+Lambda Mono function specialization to call for that variant. `capture_record`
+is the exact payload type for finite callable values and the exact capture
+argument type for erased callable entries.
+
+When Lambda Mono lowers a function reference, it reads the capture span from the
+Lambda Solved function value type at that expression site. It then builds a
+capture record with those exact slots and stores it in the callable value. It
+does not use the source function's own function type as a proxy for the
+expression-site callable type.
 
 ### Lambda Mono Expressions
 
@@ -1137,18 +1152,18 @@ turn that state into concrete jumps, blocks, or backend-friendly loop control.
 
 Lambda Mono IR has no `call_value` node. A call through a finite lambda set is
 lowered to a match over the generated callable tag union; each branch makes a
-`direct_call` to the specialized function for that member. A call through an
-erased callable becomes `indirect_erased_call`.
+`direct_call` to the variant's `target`. A call through an erased callable
+becomes `indirect_erased_call`.
 
-Generated callable variants are stage-local ids created by Lambda Mono. Any
-`display_name` exists only for dumps or diagnostics. The runtime discriminant
-and variant slot are chosen later by LIR layout commitment and then output
-explicitly in the LIR result.
+Generated callable variants are stage-local ids created by Lambda Mono. The
+runtime discriminant and variant slot are chosen later by LIR layout commitment
+and then output explicitly in the LIR result.
 
-Lambda Mono specialization identity includes the called function symbol, its solved
-function type, and the capture shape required by the callable representation.
-This is a normal stage-local specialization queue, driven only by explicit
-callable flow in Lambda Solved IR.
+Lambda Mono specialization is queued by exact function source id, solved
+function type, callable ABI, and capture shape. The queue is driven only by
+explicit callable flow in Lambda Solved IR. Each `FnVariant.target` names the
+queued result directly, so later stages consume a direct function id instead of
+looking up a symbol.
 
 For a finite callable member with captures, the specialized function receives
 the original Roc arguments followed by one compiler-created capture-record

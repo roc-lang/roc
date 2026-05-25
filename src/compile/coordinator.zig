@@ -40,6 +40,7 @@ const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const base = @import("base");
+const collections = @import("collections");
 const build_options = @import("build_options");
 
 const CIR = can.CIR;
@@ -51,6 +52,8 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const CacheManager = cache_manager_mod.CacheManager;
+const CacheConfig = @import("cache_config.zig").CacheConfig;
+const CacheStats = @import("cache_config.zig").CacheStats;
 const app_header_mod = @import("app_header.zig");
 const roc_target = @import("roc_target");
 
@@ -59,9 +62,11 @@ const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.tr
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
+const CompactWriter = collections.CompactWriter;
 const Report = reporting.Report;
 const AST = parse.AST;
 const BuiltinModules = eval.BuiltinModules;
+const CheckedModules = check.TypedCIR.Modules;
 
 const WorkerTask = messages.WorkerTask;
 const WorkerResult = messages.WorkerResult;
@@ -102,6 +107,84 @@ const thread_safe_allocator: Allocator = if (threads_available)
     std.heap.smp_allocator
 else
     std.heap.page_allocator;
+
+const checked_module_cache_magic = "roc-mod-cache-v1";
+const checked_module_cache_format_version: u64 = 1;
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32;
+
+fn writeU64Little(buf: []u8, value: u64) void {
+    std.debug.assert(buf.len == 8);
+    buf[0] = @truncate(value);
+    buf[1] = @truncate(value >> 8);
+    buf[2] = @truncate(value >> 16);
+    buf[3] = @truncate(value >> 24);
+    buf[4] = @truncate(value >> 32);
+    buf[5] = @truncate(value >> 40);
+    buf[6] = @truncate(value >> 48);
+    buf[7] = @truncate(value >> 56);
+}
+
+fn readU64Little(buf: []const u8) u64 {
+    std.debug.assert(buf.len == 8);
+    return @as(u64, buf[0]) |
+        (@as(u64, buf[1]) << 8) |
+        (@as(u64, buf[2]) << 16) |
+        (@as(u64, buf[3]) << 24) |
+        (@as(u64, buf[4]) << 32) |
+        (@as(u64, buf[5]) << 40) |
+        (@as(u64, buf[6]) << 48) |
+        (@as(u64, buf[7]) << 56);
+}
+
+fn hashCacheBody(body: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(body);
+    return hasher.finalResult();
+}
+
+fn encodeCheckedModuleCacheEntry(
+    allocator: Allocator,
+    key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    body: []const u8,
+) Allocator.Error![]u8 {
+    const bytes = try allocator.alloc(u8, checked_module_cache_header_len + body.len);
+    errdefer allocator.free(bytes);
+
+    var offset: usize = 0;
+    @memcpy(bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
+    offset += checked_module_cache_magic.len;
+    writeU64Little(bytes[offset..][0..8], checked_module_cache_format_version);
+    offset += 8;
+    @memcpy(bytes[offset..][0..32], &key.bytes);
+    offset += 32;
+    const body_hash = hashCacheBody(body);
+    @memcpy(bytes[offset..][0..32], &body_hash);
+    offset += 32;
+    @memcpy(bytes[offset..], body);
+
+    return bytes;
+}
+
+fn decodeCheckedModuleCacheEntry(
+    key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    bytes: []const u8,
+) ?[]const u8 {
+    if (bytes.len < checked_module_cache_header_len) return null;
+    var offset: usize = 0;
+    if (!std.mem.eql(u8, bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
+    offset += checked_module_cache_magic.len;
+    if (readU64Little(bytes[offset..][0..8]) != checked_module_cache_format_version) return null;
+    offset += 8;
+    if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
+    offset += 32;
+    const stored_hash = bytes[offset..][0..32];
+    offset += 32;
+    const body = bytes[offset..];
+    const actual_hash = hashCacheBody(body);
+    if (!std.mem.eql(u8, stored_hash, &actual_hash)) return null;
+    if (body.len < @sizeOf(ModuleEnv.Serialized)) return null;
+    return body;
+}
 
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
@@ -539,7 +622,7 @@ pub const Coordinator = struct {
     /// Compiler version for cache keys
     compiler_version: []const u8,
 
-    /// Optional cache manager for disk caching (not yet integrated)
+    /// Optional cache manager for transparent checked-module disk caching.
     cache_manager: ?*CacheManager,
 
     /// Cross-package dependents: when module (pkg, id) completes, notify these modules
@@ -1658,6 +1741,223 @@ pub const Coordinator = struct {
         return semantic;
     }
 
+    fn serializeModuleEnvForCache(self: *Coordinator, env: *const ModuleEnv) Allocator.Error![]u8 {
+        const allocator = self.cache_manager.?.allocator;
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var writer = CompactWriter.init();
+        defer writer.deinit(arena_alloc);
+
+        const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+        try serialized.serialize(env, arena_alloc, &writer);
+
+        const body = try allocator.alloc(u8, writer.total_bytes);
+        errdefer allocator.free(body);
+        _ = writer.writeToBuffer(body) catch unreachable;
+        return body;
+    }
+
+    fn checkedModuleCacheKey(
+        self: *Coordinator,
+        env: *ModuleEnv,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+    ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
+        var imported_source_count: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (std.mem.eql(u8, env.module_name, "Builtin") and
+                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            imported_source_count += 1;
+        }
+
+        var source_modules = try self.gpa.alloc(CheckedModules.SourceModule, imported_source_count + 1);
+        defer self.gpa.free(source_modules);
+
+        var source_index: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (std.mem.eql(u8, env.module_name, "Builtin") and
+                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            source_modules[source_index] = .{ .precompiled = imported_env };
+            source_index += 1;
+        }
+
+        const module_idx: u32 = @intCast(imported_source_count);
+        source_modules[imported_source_count] = .{ .precompiled = env };
+
+        var typed_modules = try CheckedModules.init(self.gpa, source_modules);
+        defer typed_modules.deinit();
+
+        return check.CheckedArtifact.checkedModuleKeyFromTypedModule(
+            self.gpa,
+            &typed_modules,
+            module_idx,
+            .{ .imports = imported_artifacts },
+        );
+    }
+
+    fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled) return;
+
+        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(entries_dir);
+
+        const body = self.serializeModuleEnvForCache(artifact.moduleEnvConst()) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(body);
+
+        const entry = encodeCheckedModuleCacheEntry(manager.allocator, artifact.key, body) catch {
+            manager.stats.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(entry);
+
+        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
+    }
+
+    fn tryLoadCachedCheckedModule(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        available_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    ) bool {
+        const manager = self.cache_manager orelse return false;
+        if (!manager.config.enabled) return false;
+
+        const current_env = mod.moduleEnv() orelse return false;
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts) catch return false;
+
+        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
+            manager.stats.recordMiss();
+            return false;
+        };
+        defer manager.allocator.free(entries_dir);
+
+        const entry = manager.loadRawBytes(cache_key.bytes, entries_dir) orelse return false;
+        defer manager.allocator.free(entry);
+
+        const body = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+
+        const module_alloc = self.getModuleAllocator();
+        const buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, body.len) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        @memcpy(buffer, body);
+        var buffer_owned = true;
+        defer if (buffer_owned) module_alloc.free(buffer);
+
+        const source = module_alloc.dupe(u8, current_env.common.source) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        var source_owned = true;
+        defer if (source_owned) module_alloc.free(source);
+
+        const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+        const cached_env = serialized_ptr.deserializeWithMutableTypes(
+            @intFromPtr(buffer.ptr),
+            module_alloc,
+            source,
+            mod.name,
+        ) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        var cached_env_owned = true;
+        defer if (cached_env_owned) {
+            cached_env.deinitCachedModule();
+            module_alloc.destroy(cached_env);
+        };
+
+        var artifact = compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
+            module_alloc,
+            cached_env,
+            .{ .cached_buffer = .{
+                .env = cached_env,
+                .buffer = buffer,
+                .source = source,
+            } },
+            imported_envs,
+            imported_artifacts,
+            .{ .available_artifacts = available_artifacts },
+        ) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        cached_env_owned = false;
+        buffer_owned = false;
+        source_owned = false;
+        var artifact_owned = true;
+        defer if (artifact_owned) artifact.deinit(artifact.canonical_names.allocator);
+
+        if (!std.mem.eql(u8, &artifact.key.bytes, &cache_key.bytes)) {
+            manager.stats.recordInvalidation();
+            return false;
+        }
+
+        const old_env = current_env;
+        const old_env_alloc = old_env.gpa;
+        const old_source = old_env.common.source;
+
+        if (mod.semantic) |*semantic| {
+            semantic.module_env = cached_env;
+            semantic.checked_artifact = artifact;
+        } else {
+            return false;
+        }
+
+        self.registerCheckedArtifact(pkg, mod) catch {
+            if (mod.semantic) |*semantic| {
+                semantic.module_env = old_env;
+                semantic.checked_artifact = null;
+            }
+            manager.stats.recordInvalidation();
+            return false;
+        };
+
+        old_env.deinit();
+        old_env_alloc.destroy(old_env);
+        if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
+
+        artifact_owned = false;
+        return true;
+    }
+
+    fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) !void {
+        const module_time = mod.compile_time_ns;
+        if (module_time < self.module_time_min_ns) self.module_time_min_ns = module_time;
+        if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
+        self.module_time_sum_ns += module_time;
+
+        mod.phase = .Done;
+        mod.visit_color = .black;
+
+        self.cache_hits += 1;
+
+        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
+        if (self.total_remaining > 0) self.total_remaining -= 1;
+
+        for (mod.dependents.items) |dep_id| {
+            try self.tryUnblock(pkg, dep_id);
+        }
+
+        const module_id = pkg.getModuleId(mod.name) orelse return;
+        try self.wakeCrossPackageDependents(pkg.name, module_id);
+    }
+
     /// Write a BUG diagnostic to stderr via the injected Io. No-op in release builds.
     fn bugReport(self: *Coordinator, comptime fmt: []const u8, args: anytype) void {
         if (comptime builtin.mode == .Debug) {
@@ -1854,6 +2154,24 @@ pub const Coordinator = struct {
         self.total_canonicalize_ns += result.canonicalize_ns;
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
         mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
+
+        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod);
+        errdefer self.gpa.free(imported_envs);
+        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod);
+        errdefer self.gpa.free(imported_artifacts);
+        const available_artifacts = try self.collectAvailableArtifactViews(self.gpa);
+        errdefer self.gpa.free(available_artifacts);
+
+        if (mod.reports.items.len == 0 and
+            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, available_artifacts))
+        {
+            self.gpa.free(imported_envs);
+            self.gpa.free(imported_artifacts);
+            self.gpa.free(available_artifacts);
+            try self.finishCachedModule(pkg, mod);
+            return;
+        }
+
         mod.phase = .TypeCheck;
         mod.visit_color = .black;
         try self.enqueueTask(.{
@@ -1863,9 +2181,9 @@ pub const Coordinator = struct {
                 .module_name = mod.name,
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
-                .imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod),
-                .imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod),
-                .available_artifacts = try self.collectAvailableArtifactViews(self.gpa),
+                .imported_envs = imported_envs,
+                .imported_artifacts = imported_artifacts,
+                .available_artifacts = available_artifacts,
             },
         });
     }
@@ -1898,6 +2216,9 @@ pub const Coordinator = struct {
             self.unregisterCheckedArtifact(mod);
             mod.replaceCheckedArtifact(artifact);
             try self.registerCheckedArtifact(pkg, mod);
+            if (mod.checkedArtifact()) |cached_artifact| {
+                self.storeCheckedModuleInCache(cached_artifact);
+            }
         } else if (mod.semantic) |*semantic| {
             self.unregisterCheckedArtifact(mod);
             if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
@@ -2454,10 +2775,9 @@ pub const Coordinator = struct {
             };
         };
 
-        // Note: Cache checking now happens in enqueueParseTask (coordinator level)
-        // before tasks are dispatched. This works for both single and multi-threaded modes.
-
         // Parse, canonicalize, type-check
+        // Checked-module disk cache lookup happens after canonicalization,
+        // when the coordinator has the exact module identity and import keys.
 
         // Create ModuleEnv using the long-lived module allocator.
         const module_alloc = self.getModuleAllocator();
@@ -2814,6 +3134,110 @@ pub const Coordinator = struct {
         }
     }
 };
+
+const CheckedModuleCacheRunStats = struct {
+    build: compile_build.BuildEnv.BuildStats,
+    cache: CacheStats,
+};
+
+fn compileAppWithCheckedModuleCache(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+) !CheckedModuleCacheRunStats {
+    var cache_manager = CacheManager.init(allocator, .{
+        .enabled = true,
+        .cache_dir = cache_dir,
+    }, Io.default());
+
+    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        &cache_manager,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    return .{
+        .build = coord.getBuildStats(),
+        .cache = cache_manager.stats,
+    };
+}
+
+fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) !usize {
+    var dir = try std.fs.cwd().openDir(absolute_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var overwritten: usize = 0;
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        try dir.writeFile(.{ .sub_path = entry.path, .data = contents });
+        overwritten += 1;
+    }
+    return overwritten;
+}
+
+test "Coordinator checked module cache hits on second compile" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_dir = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(cache_dir);
+
+    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
+    try std.testing.expectEqual(@as(u32, 0), first.build.cache_hits);
+    try std.testing.expect(first.build.modules_compiled > 0);
+    try std.testing.expect(first.cache.stores > 0);
+    try std.testing.expectEqual(@as(u64, 0), first.cache.store_failures);
+
+    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
+    try std.testing.expect(second.build.cache_hits > 0);
+    try std.testing.expect(second.build.modules_compiled < first.build.modules_compiled);
+    try std.testing.expect(second.cache.hits > 0);
+}
+
+test "Coordinator corrupt checked module cache entries compile from source" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_dir = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(cache_dir);
+
+    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
+    try std.testing.expect(first.cache.stores > 0);
+
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
+    defer allocator.free(checked_module_cache_dir);
+    const overwritten = try overwriteFilesUnderDir(allocator, checked_module_cache_dir, "not a checked module cache entry");
+    try std.testing.expect(overwritten > 0);
+
+    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
+    try std.testing.expectEqual(@as(u32, 0), second.build.cache_hits);
+    try std.testing.expect(second.build.modules_compiled > 0);
+    try std.testing.expect(second.cache.invalidations > 0);
+}
 
 test "Coordinator basic initialization" {
     const allocator = std.testing.allocator;

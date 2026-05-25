@@ -1436,18 +1436,38 @@ test "roc test runs expects in Parser type module (interpreter)" {
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
-    // 3. Should have run 2 tests (extract count from "(N)" in output)
+    // 3. Should have run 5 tests (extract count from "(N)" in output)
     const count = blk: {
         const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
         const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
-    try testing.expect(count == 2);
+    try testing.expect(count == 5);
 }
 
 test "roc test runs expects in Parser type module (dev)" {
-    // TODO: dev backend compilation fails for test/package_simple_parser/Parser.roc
-    return error.SkipZigTest;
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=dev", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // 2. Output indicates tests passed
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try testing.expect(has_passed);
+
+    // 3. Should have run 5 tests (extract count from "(N)" in output)
+    const count = blk: {
+        const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
+        const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
+        break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
+    };
+    try testing.expect(count == 5);
 }
 
 test "roc test polymorphic list reverse with numeric literal does not overflow (interpreter)" {

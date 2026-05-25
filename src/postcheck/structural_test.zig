@@ -189,7 +189,7 @@ test "stage-local expression maps are scoped to one function" {
     try expectContains(lift_lambda, "defer self.popFunctionMaps(saved_maps);");
 
     const lambda_mono_source = @embedFile("lambda_mono/lower.zig");
-    const lower_fn = sourceSliceBetween(lambda_mono_source, "fn lowerFn", "fn captureParamForFn");
+    const lower_fn = sourceSliceBetween(lambda_mono_source, "fn lowerFnSpec", "fn ensureOwnFnSpec");
     try expectContains(lower_fn, "self.captures.clearRetainingCapacity();");
     try expectContains(lower_fn, "@memset(self.expr_map, null);");
     try expectContains(lower_fn, "@memset(self.pat_map, null);");

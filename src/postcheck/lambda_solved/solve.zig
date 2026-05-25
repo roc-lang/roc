@@ -54,6 +54,12 @@ const Solver = struct {
     return_tys: std.ArrayList(Type.TypeVarId),
     active_unifications: std.AutoHashMap(UnifyPair, void),
 
+    const FunctionShape = struct {
+        args: Type.Span,
+        callable: Type.TypeVarId,
+        ret: Type.TypeVarId,
+    };
+
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Solver {
         const local_tys = try allocator.alloc(?Type.TypeVarId, program.lifted.locals.items.len);
         errdefer allocator.free(local_tys);
@@ -179,8 +185,11 @@ const Solver = struct {
         const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
         defer self.allocator.free(args);
         for (arg_locals, 0..) |arg, i| {
-            args[i] = try self.lowerTypeFresh(arg.ty);
-            try self.unify(args[i], self.localTy(arg.local));
+            const local = self.program.lifted.locals.items[@intFromEnum(arg.local)];
+            if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
+                Common.invariant("Lambda Solved function argument type differed from its local type");
+            }
+            args[i] = self.localTy(arg.local);
         }
 
         const capture_locals = self.program.lifted.typedLocalSpan(fn_.captures);
@@ -239,8 +248,7 @@ const Solver = struct {
 
         switch (fn_.body) {
             .roc => |body| {
-                const body_ty = try self.inferExpr(body);
-                try self.unify(body_ty, func.ret);
+                _ = try self.expectExpr(body, func.ret);
             },
             .hosted => {},
         }
@@ -372,7 +380,7 @@ const Solver = struct {
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
                 for (self.program.lifted.exprSpan(items)) |child| {
-                    try self.unify(try self.inferExpr(child), elem_ty);
+                    _ = try self.expectExpr(child, elem_ty);
                 }
             },
             .tuple => |items| {
@@ -381,12 +389,12 @@ const Solver = struct {
                 if (item_tys.count() != children.len) Common.invariant("tuple expression arity differs from its checked type");
                 for (children, 0..) |child, i| {
                     const item_ty = self.program.types.spanItem(item_tys, i);
-                    try self.unify(try self.inferExpr(child), item_ty);
+                    _ = try self.expectExpr(child, item_ty);
                 }
             },
             .record => |fields| {
                 for (self.program.lifted.fieldExprSpan(fields)) |field| {
-                    try self.unify(try self.inferExpr(field.value), try self.recordField(expected, field.name));
+                    _ = try self.expectExpr(field.value, try self.recordField(expected, field.name));
                 }
             },
             .tag => |tag| {
@@ -395,13 +403,12 @@ const Solver = struct {
                 if (payload_tys.count() != payloads.len) Common.invariant("tag expression payload arity differs from its checked type");
                 for (payloads, 0..) |payload, i| {
                     const expected_payload_ty = self.program.types.spanItem(payload_tys, i);
-                    const payload_ty = try self.inferExpr(payload);
-                    try self.unify(payload_ty, expected_payload_ty);
+                    _ = try self.expectExpr(payload, expected_payload_ty);
                 }
             },
             .nominal => |backing| {
                 if (try self.namedBacking(expected)) |backing_ty| {
-                    try self.unify(try self.inferExpr(backing), backing_ty);
+                    _ = try self.expectExpr(backing, backing_ty);
                 } else {
                     _ = try self.inferExpr(backing);
                 }
@@ -409,30 +416,26 @@ const Solver = struct {
             .let_ => |let_| {
                 const value_ty = try self.inferExpr(let_.value);
                 try self.bindPattern(let_.bind, value_ty);
-                try self.unify(expected, try self.inferExpr(let_.rest));
+                _ = try self.expectExpr(let_.rest, expected);
             },
             .fn_ref => |fn_id| try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_id)]),
             .call_value => |call| {
-                const args = try self.inferExprSpan(call.args);
-                defer self.allocator.free(args);
-                const callable = try self.program.types.add(.unbound);
-                const wanted = try self.program.types.add(.{ .func = .{
-                    .args = try self.program.types.addSpan(args),
-                    .callable = callable,
-                    .ret = expected,
-                } });
-                try self.unify(try self.inferExpr(call.callee), wanted);
+                const func = try self.functionShape(try self.inferExpr(call.callee));
+                const args = self.program.lifted.exprSpan(call.args);
+                if (func.args.count() != args.len) Common.invariant("value call arity differs from its checked type");
+                try self.unify(expected, func.ret);
+                for (args, 0..) |arg, i| {
+                    _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
+                }
             },
             .call_proc => |call| {
-                const args = try self.inferExprSpan(call.args);
-                defer self.allocator.free(args);
-                const callable = try self.program.types.add(.unbound);
-                const wanted = try self.program.types.add(.{ .func = .{
-                    .args = try self.program.types.addSpan(args),
-                    .callable = callable,
-                    .ret = expected,
-                } });
-                try self.unify(self.program.fn_tys.items[@intFromEnum(call.callee)], wanted);
+                const func = try self.functionShape(self.program.fn_tys.items[@intFromEnum(call.callee)]);
+                const args = self.program.lifted.exprSpan(call.args);
+                if (func.args.count() != args.len) Common.invariant("procedure call arity differs from its checked type");
+                try self.unify(expected, func.ret);
+                for (args, 0..) |arg, i| {
+                    _ = try self.expectExpr(arg, self.program.types.spanItem(func.args, i));
+                }
             },
             .low_level => |call| {
                 const args = self.program.lifted.exprSpan(call.args);
@@ -463,19 +466,19 @@ const Solver = struct {
                 for (self.program.lifted.branchSpan(match.branches)) |branch| {
                     try self.bindPattern(branch.pat, scrutinee_ty);
                     if (branch.guard) |guard| _ = try self.inferExpr(guard);
-                    try self.unify(expected, try self.inferExpr(branch.body));
+                    _ = try self.expectExpr(branch.body, expected);
                 }
             },
             .if_ => |if_| {
                 for (self.program.lifted.ifBranchSpan(if_.branches)) |branch| {
                     _ = try self.inferExpr(branch.cond);
-                    try self.unify(expected, try self.inferExpr(branch.body));
+                    _ = try self.expectExpr(branch.body, expected);
                 }
-                try self.unify(expected, try self.inferExpr(if_.final_else));
+                _ = try self.expectExpr(if_.final_else, expected);
             },
             .block => |block| {
                 for (self.program.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
-                try self.unify(expected, try self.inferExpr(block.final_expr));
+                _ = try self.expectExpr(block.final_expr, expected);
             },
             .loop_ => |loop| {
                 const params = self.program.lifted.typedLocalSpan(loop.params);
@@ -485,17 +488,17 @@ const Solver = struct {
                 defer self.allocator.free(param_tys);
                 for (params, 0..) |param, i| {
                     param_tys[i] = self.localTy(param.local);
-                    try self.unify(param_tys[i], try self.inferExpr(initials[i]));
+                    _ = try self.expectExpr(initials[i], param_tys[i]);
                 }
                 try self.loop_results.append(self.allocator, expected);
                 try self.loop_params.append(self.allocator, try self.program.types.addSpan(param_tys));
                 defer _ = self.loop_params.pop();
                 defer _ = self.loop_results.pop();
-                try self.unify(expected, try self.inferExpr(loop.body));
+                _ = try self.expectExpr(loop.body, expected);
             },
             .break_ => |maybe| {
                 if (maybe) |value| {
-                    try self.unify(self.currentLoopResult(), try self.inferExpr(value));
+                    _ = try self.expectExpr(value, self.currentLoopResult());
                 }
             },
             .continue_ => |continue_| {
@@ -504,10 +507,10 @@ const Solver = struct {
                 if (params.count() != values.len) Common.invariant("continue value count differs from loop parameter count");
                 for (values, 0..) |value, i| {
                     const param_ty = self.program.types.spanItem(params, i);
-                    try self.unify(param_ty, try self.inferExpr(value));
+                    _ = try self.expectExpr(value, param_ty);
                 }
             },
-            .return_ => |value| try self.unify(self.currentReturnTy(), try self.inferExpr(value)),
+            .return_ => |value| _ = try self.expectExpr(value, self.currentReturnTy()),
             .dbg,
             .expect,
             => |child| _ = try self.inferExpr(child),
@@ -525,15 +528,14 @@ const Solver = struct {
             .expect,
             .dbg,
             => |expr| _ = try self.inferExpr(expr),
-            .return_ => |expr| try self.unify(self.currentReturnTy(), try self.inferExpr(expr)),
+            .return_ => |expr| _ = try self.expectExpr(expr, self.currentReturnTy()),
             .crash => {},
         }
     }
 
     fn bindPattern(self: *Solver, pat_id: Lifted.PatId, value_ty: Type.TypeVarId) Allocator.Error!void {
         const pat = self.program.lifted.pats.items[@intFromEnum(pat_id)];
-        const pat_ty = try self.patSlot(pat_id);
-        try self.unify(value_ty, pat_ty);
+        const pat_ty = try self.expectPat(pat_id, value_ty);
         switch (pat.data) {
             .bind => |local| try self.unify(self.localTy(local), pat_ty),
             .wildcard,
@@ -580,33 +582,69 @@ const Solver = struct {
         }
     }
 
+    fn expectExpr(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        const slot = try self.expectExprSlot(expr_id, expected);
+        const inferred = try self.inferExpr(expr_id);
+        try self.unify(slot, inferred);
+        return self.program.types.root(slot);
+    }
+
     fn exprSlot(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
         const index = @intFromEnum(expr_id);
         if (self.expr_tys[index]) |ty| return ty;
 
         const expr = self.program.lifted.exprs.items[index];
         const ty = switch (expr.data) {
+            .local => |local| self.localTy(local),
             .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
+            .call_proc => |call| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(call.callee)])).ret,
             else => try self.lowerTypeFresh(expr.ty),
         };
         self.expr_tys[index] = ty;
         return ty;
     }
 
-    fn patSlot(self: *Solver, pat_id: Lifted.PatId) Allocator.Error!Type.TypeVarId {
-        const index = @intFromEnum(pat_id);
-        if (self.pat_tys[index]) |ty| return ty;
-        const ty = try self.lowerTypeFresh(self.program.lifted.pats.items[index].ty);
-        self.pat_tys[index] = ty;
-        return ty;
+    fn expectExprSlot(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        const index = @intFromEnum(expr_id);
+        if (self.expr_tys[index]) |ty| {
+            try self.unify(ty, expected);
+            return self.program.types.root(ty);
+        }
+
+        const expr = self.program.lifted.exprs.items[index];
+        const ty = switch (expr.data) {
+            .local => |local| self.localTy(local),
+            .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
+            else => expected,
+        };
+        try self.unify(ty, expected);
+        self.expr_tys[index] = ty;
+        return self.program.types.root(ty);
     }
 
-    fn inferExprSpan(self: *Solver, span: Lifted.Span(Lifted.ExprId)) Allocator.Error![]Type.TypeVarId {
-        const exprs = self.program.lifted.exprSpan(span);
-        const tys = try self.allocator.alloc(Type.TypeVarId, exprs.len);
-        errdefer self.allocator.free(tys);
-        for (exprs, 0..) |expr, i| tys[i] = try self.inferExpr(expr);
-        return tys;
+    fn expectPat(self: *Solver, pat_id: Lifted.PatId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        const index = @intFromEnum(pat_id);
+        if (self.pat_tys[index]) |ty| {
+            try self.unify(ty, expected);
+            return self.program.types.root(ty);
+        }
+
+        const pat = self.program.lifted.pats.items[index];
+        const ty = switch (pat.data) {
+            .bind => |local| self.localTy(local),
+            .as => |as| self.localTy(as.local),
+            else => expected,
+        };
+        try self.unify(ty, expected);
+        self.pat_tys[index] = ty;
+        return self.program.types.root(ty);
+    }
+
+    fn functionShape(self: *Solver, ty: Type.TypeVarId) Allocator.Error!FunctionShape {
+        return switch (try self.shapeContent(ty)) {
+            .func => |func| .{ .args = func.args, .callable = func.callable, .ret = func.ret },
+            else => Common.invariant("call expression had a non-function checked type"),
+        };
     }
 
     fn localTy(self: *Solver, local: Lifted.LocalId) Type.TypeVarId {
@@ -897,9 +935,7 @@ const Solver = struct {
                     }
                     self.program.types.set(b, .{ .link = a });
                 },
-                else => {
-                    Common.invariant("primitive type failed Lambda Solved unification");
-                },
+                else => Common.invariant("primitive type failed Lambda Solved unification"),
             },
             .zst => switch (right) {
                 .zst => self.program.types.set(b, .{ .link = a }),
