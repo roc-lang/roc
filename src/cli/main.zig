@@ -368,10 +368,14 @@ else
 /// Floor for the retry loop in `createSharedMemory`. Set to the
 /// macOS/Windows reservation — documented as "ample headroom for real
 /// programs" — so a smaller reservation still produces a usable arena. On
-/// 32-bit and `-Dshared-memory-size` builds the preferred size is already
-/// smaller; the allocator clamps `min_size` down to the preferred size in
-/// that case.
-const SHARED_MEMORY_MIN_SIZE: usize = 8 * 1024 * 1024 * 1024;
+/// 32-bit targets the preferred size is already smaller than 8 GiB and an
+/// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
+/// itself (single attempt, no retry); `-Dshared-memory-size` builds are
+/// likewise handled by the allocator clamping `min_size` to the preferred.
+const SHARED_MEMORY_MIN_SIZE: usize = if (@sizeOf(usize) < 8)
+    SHARED_MEMORY_SIZE
+else
+    8 * 1024 * 1024 * 1024;
 
 fn configuredSharedMemorySize() usize {
     if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
