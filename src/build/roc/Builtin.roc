@@ -252,6 +252,9 @@ Builtin :: [].{
 		## With [Str.reserve], the chain only needs one allocation up front:
 		##
 		## ```roc
+		## greeting = "Hello and welcome to Roc"
+		## subject = "Awesome Programmer"
+		##
 		## hello_world =
 		##     greeting
 		##         .reserve(21)

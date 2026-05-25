@@ -1,48 +1,157 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Roc Echo Platform</title>
-  <style>
-    body { font-family: monospace; max-width: 720px; margin: 2em auto; }
-    .file { margin-bottom: 1em; }
-    .file label { display: block; font-weight: bold; margin-bottom: 0.25em; }
-    textarea { width: 100%; height: 8em; font-family: inherit; font-size: 14px; tab-size: 4; }
-    #output { background: #111; color: #0f0; padding: 1em; min-height: 2em; white-space: pre-wrap; }
-    #errors { padding: 0.5em 0; }
-    button { margin: 0.5em 0; padding: 0.4em 1.2em; font-size: 14px; }
-    .report { border-left: 3px solid #ccc; padding: 0.5em 1em; margin: 0.5em 0; font-size: 13px; }
-    .report.error { border-color: #e55; background: #fee; }
-    .report.warning { border-color: #ea0; background: #ffe; }
-    .report.info { border-color: #48f; background: #eef; }
-    .report h1 { font-size: 14px; margin: 0 0 0.25em; }
-    .report pre { margin: 0.25em 0; white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-  <h1>Roc Echo Platform</h1>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Roc Echo Platform</title>
+        <style>
+            body {
+                font-family: monospace;
+                max-width: 720px;
+                margin: 2em auto;
+                padding: 0 1em;
+            }
+            h1 {
+                margin: 0 0 1em;
+            }
+            h2 {
+                font-size: 1.1em;
+                margin: 1.5em 0 0.5em;
+            }
+            .card {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 0.75em;
+                margin-bottom: 0.75em;
+                background: #fafafa;
+            }
+            .card-header {
+                display: flex;
+                align-items: center;
+                gap: 0.5em;
+                margin-bottom: 0.4em;
+            }
+            .card-header label {
+                font-weight: bold;
+            }
+            .card-header input.module-name {
+                flex: 1;
+                font-family: inherit;
+                font-size: 14px;
+                padding: 0.2em 0.4em;
+            }
+            .card-header .remove {
+                padding: 0.2em 0.6em;
+                font-size: 12px;
+            }
+            textarea {
+                width: 100%;
+                height: 8em;
+                font-family: inherit;
+                font-size: 14px;
+                tab-size: 4;
+                box-sizing: border-box;
+            }
+            #source {
+                height: 10em;
+            }
+            #output {
+                background: #111;
+                color: #0f0;
+                padding: 1em;
+                min-height: 2em;
+                white-space: pre-wrap;
+            }
+            #errors {
+                padding: 0.5em 0;
+            }
+            button {
+                padding: 0.4em 1.2em;
+                font-size: 14px;
+            }
+            button:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            #run {
+                margin-top: 0.5em;
+            }
+            #add-module {
+                margin-bottom: 0.5em;
+            }
+            .report {
+                border-left: 3px solid #ccc;
+                padding: 0.5em 1em;
+                margin: 0.5em 0;
+                font-size: 13px;
+            }
+            .report.error {
+                border-color: #e55;
+                background: #fee;
+            }
+            .report.warning {
+                border-color: #ea0;
+                background: #ffe;
+            }
+            .report.info {
+                border-color: #48f;
+                background: #eef;
+            }
+            .report h1 {
+                font-size: 14px;
+                margin: 0 0 0.25em;
+            }
+            .report pre {
+                margin: 0.25em 0;
+                white-space: pre-wrap;
+            }
+            .skip-notice {
+                color: #a60;
+                font-size: 13px;
+                padding: 0.25em 0;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Roc Echo Platform</h1>
 
-  <div class="file">
-    <label>Greeting.roc</label>
-    <textarea data-module="Greeting">Greeting := [].{
-    msg : Str
-    msg = "Hello from the Greeting module!"
-}</textarea>
-  </div>
-
-  <div class="file">
-    <label>main (headerless app)</label>
-    <textarea id="source">import Greeting
+        <section>
+            <h2>main (headerless app)</h2>
+            <textarea id="source">
+import Greeting
 
 main! = |_| {
     echo!(Greeting.msg)
     Ok({})
-}</textarea>
-  </div>
+}</textarea
+            >
+            <button id="run" disabled>Run</button>
+        </section>
 
-  <button id="run" disabled>Run</button>
-  <div id="errors"></div>
-  <pre id="output"></pre>
-  <script src="app.js"></script>
-</body>
+        <section>
+            <h2>Modules</h2>
+            <div id="modules-list"></div>
+            <button id="add-module">+ Add module</button>
+        </section>
+
+        <div id="errors"></div>
+        <pre id="output"></pre>
+
+        <template id="module-template">
+            <div class="card module-card">
+                <div class="card-header">
+                    <label>Name:</label>
+                    <input
+                        class="module-name"
+                        type="text"
+                        spellcheck="false"
+                        autocomplete="off"
+                    />
+                    <button class="remove" type="button">Remove</button>
+                </div>
+                <textarea class="module-content"></textarea>
+            </div>
+        </template>
+
+        <script src="app.js"></script>
+    </body>
 </html>

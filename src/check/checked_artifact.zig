@@ -17112,6 +17112,51 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
+    /// Look up the root request with the given metadata order.
+    /// Returns null if not found (callers that rely on an invariant can assert).
+    pub fn lookupRootRequestByOrder(self: *const CheckedModuleArtifact, order: u32) ?RootRequest {
+        for (self.root_requests.requests) |request| {
+            if (request.order == order) return request;
+        }
+        return null;
+    }
+
+    /// Name of a `provided_export` root's published FFI symbol, or null if absent.
+    pub fn providedEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
+        const def_idx = switch (root.source) {
+            .def => |def| def,
+            else => return null,
+        };
+        const top_level = self.top_level_values.lookupByDef(def_idx) orelse return null;
+        for (self.provides_requires.provides) |entry| {
+            if (entry.source_name == top_level.source_name) {
+                return self.canonical_names.externalSymbolNameText(entry.ffi_symbol);
+            }
+        }
+        return null;
+    }
+
+    /// Name of a `platform_required_binding` root's exported symbol, or null if absent.
+    pub fn requiredEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
+        const binding_id = switch (root.source) {
+            .required_binding => |id| id,
+            else => return null,
+        };
+        const binding = self.platform_required_bindings.lookupByBindingId(binding_id) orelse return null;
+        const declaration = self.platform_required_declarations.lookupByDeclarationId(binding.declaration) orelse return null;
+        return self.canonical_names.exportNameText(declaration.platform_name);
+    }
+
+    /// Dispatch to the right name lookup based on the root kind. Returns null
+    /// if the root kind isn't an entrypoint kind or the lookup fails.
+    pub fn entrypointNameForRoot(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
+        return switch (root.kind) {
+            .provided_export => self.providedEntrypointName(root),
+            .platform_required_binding => self.requiredEntrypointName(root),
+            else => null,
+        };
+    }
+
     pub fn appendPromotedCallableWrapper(
         self: *CheckedModuleArtifact,
         allocator: Allocator,
