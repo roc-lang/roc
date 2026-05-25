@@ -520,7 +520,10 @@ pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) !void {
 
 fn osReadFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(std_io, path, allocator, .limited(max_file_size)) catch |err| return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
         error.OutOfMemory => error.OutOfMemory,
+        error.StreamTooLong => error.StreamTooLong,
         else => error.IoError,
     };
 }
