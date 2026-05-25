@@ -41,7 +41,7 @@ fn openRuntimeState(gpa: Allocator) !RuntimeState {
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(shm.base_ptr + header_offset));
-    const view = try lir.LirImage.viewMappedImage(header, shm.base_ptr, shm.total_size);
+    const view = try lir.LirImage.viewMappedImage(gpa, header, shm.base_ptr, shm.total_size);
 
     return .{
         .shm = shm,
@@ -162,7 +162,7 @@ fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) 
 
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(image_base));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    return lir.LirImage.viewMappedImage(header, base_ptr, image_len) catch {
+    return lir.LirImage.viewMappedImage(allocator(), header, base_ptr, image_len) catch {
         ops.crash("Interpreter shim could not view the embedded LIR image");
         return error.LirImageUnavailable;
     };

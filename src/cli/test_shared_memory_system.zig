@@ -152,7 +152,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
 
     const header = compiled.lowered.image_header;
-    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used);
+    const child_view = try lir.LirImage.viewMappedImage(testing.allocator, header, compiled.lowered.shm.base_ptr, used);
     try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
     try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);

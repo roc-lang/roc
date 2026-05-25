@@ -881,7 +881,7 @@ pub fn lowerCheckedModuleSetToLir(
     );
     shm.updateHeader();
 
-    const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize());
+    const view = try LirImage.viewMappedImage(allocator, image_header, shm.base_ptr, shm.getUsedSize());
     return .{
         .shm = shm,
         .image_header = image_header,

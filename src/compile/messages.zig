@@ -65,6 +65,8 @@ pub const ParseTask = struct {
     path: []const u8,
     /// Dependency depth from root
     depth: u32,
+    /// Retained-data allocator for this module.
+    module_allocator: ?Allocator = null,
 };
 
 /// Task to canonicalize a parsed module
@@ -83,6 +85,8 @@ pub const CanonicalizeTask = struct {
     depth: u32,
     /// Module environment (ownership transferred from coordinator)
     module_env: *ModuleEnv,
+    /// Retained-data allocator for this module.
+    module_allocator: ?Allocator = null,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
     /// Real imported semantic envs available to canonicalization
@@ -101,6 +105,8 @@ pub const TypeCheckTask = struct {
     path: []const u8,
     /// Module environment (ownership transferred)
     module_env: *ModuleEnv,
+    /// Retained-data allocator for this module.
+    module_allocator: ?Allocator = null,
     /// Imported module environments (read-only pointers to completed modules)
     imported_envs: []const *ModuleEnv,
     /// Published checked artifact keys for direct imports, keyed by typed-CIR module index

@@ -80,6 +80,9 @@ pub fn runWasmStr(
         return error.WasmExecFailed;
     };
 
+    // Bytebox's Stack VM allocates byte buffers and then casts them to VM/stack
+    // pointer types internally. That requires page-aligned backing memory until
+    // Bytebox requests the needed alignment itself.
     var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch |err| {
         if (std.debug.runtime_safety) {
             debugPrint("wasm instance create failed: {s}\n", .{@errorName(err)});

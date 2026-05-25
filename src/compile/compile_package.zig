@@ -964,8 +964,8 @@ pub const PackageEnv = struct {
         // IMPORTANT: Use st.moduleEnv().?.common (not local env.common) so the AST's pointer
         // to CommonEnv remains valid after this function returns.
         var allocators: base.Allocators = undefined;
-        allocators.initInPlace(self.gpa);
-        // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
+        allocators.initFromTaskMemory(base.TaskMemory.fromAllocator(self.gpa));
+        defer allocators.deinit();
         const parse_ast = parse.parse(&allocators, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             st.phase = .Canonicalize;

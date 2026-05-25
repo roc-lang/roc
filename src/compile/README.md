@@ -92,6 +92,7 @@ try lir.LirImage.fillHeaderInBuffer(
     entrypoints,
 );
 const view = try lir.LirImage.viewMappedImage(
+    gpa,
     image_header,
     runtime_buffer.ptr,
     runtime_fba.end_index,
@@ -120,6 +121,29 @@ const had_errors = coord.hasUserErrors();
 ```
 
 Skip `finalizeExecutableArtifacts`, LIR lowering, and execution entirely.
+
+### Compiler task memory
+
+The coordinator routes compiler phase allocations through `base.TaskMemory`.
+That bundle separates:
+
+- `control`: coordinator-owned queues, results, and handoff slices.
+- `persistent`: data retained after a phase returns, such as `ModuleEnv`,
+  parsed AST data, and checked module data.
+- `scratch`: task-local temporary data that can be reset after the task.
+- `reports`: diagnostics retained until rendered or moved.
+
+Retained module data is currently owned by `base.ModuleMemory`, a stable-address
+arena stored on `ModuleState`. This gives LSP-like callers a natural future
+hook for module-by-module reclamation, and it makes batch compilation cheap by
+turning most phase `deinit` work into arena teardown rather than per-allocation
+freeing.
+
+Worker arenas are used only for scratch/control memory today. Do not put
+retained module data in a per-worker arena unless the scheduler also guarantees
+all phases for that module run on the same worker, or the phase internals stop
+allocating retained data through `ModuleEnv.gpa`. Without one of those
+guarantees, two workers can mutate the same arena through a module environment.
 
 ### Runtime arena
 

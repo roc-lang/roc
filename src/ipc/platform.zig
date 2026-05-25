@@ -226,16 +226,10 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
         },
         .macos, .freebsd, .openbsd, .netbsd => {
             // Use shm_open with a random name
-            const random_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}, 0) catch {
+            var shm_name_buf: ["/roc_shm_".len + 20 + 1]u8 = undefined;
+            const shm_name_null_terminated = std.fmt.bufPrintZ(&shm_name_buf, "/roc_shm_{}", .{std.crypto.random.int(u64)}) catch {
                 return error.OutOfMemory;
             };
-            defer std.heap.page_allocator.free(random_name);
-
-            const shm_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{s}", .{random_name}, 0) catch {
-                return error.OutOfMemory;
-            };
-            defer std.heap.page_allocator.free(shm_name);
-            const shm_name_null_terminated = shm_name[0.. :0];
             const fd = posix.shm_open(
                 shm_name_null_terminated,
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),

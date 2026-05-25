@@ -137,6 +137,7 @@ test "embedding API: full canonical sequence on simple_success app" {
     //    viewMappedImage now accepts `[*]align(1) const u8` so no
     //    @constCast is needed on the buffer pointer.
     const view = try lir.LirImage.viewMappedImage(
+        gpa,
         image_header,
         runtime_buffer.ptr,
         runtime_fba.end_index,

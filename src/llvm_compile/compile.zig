@@ -104,6 +104,7 @@ pub const CompileOptions = struct {
 };
 
 fn emitMergedBitcodeToObjectFile(
+    allocator: Allocator,
     bitcode: []const u32,
     options: CompileOptions,
     output_path: [:0]const u8,
@@ -111,8 +112,8 @@ fn emitMergedBitcodeToObjectFile(
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
-    if (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_LLVM_KEEP_BITCODE")) |keep_path| {
-        defer std.heap.page_allocator.free(keep_path);
+    if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_BITCODE")) |keep_path| {
+        defer allocator.free(keep_path);
         std.fs.cwd().writeFile(.{
             .sub_path = keep_path,
             .data = bitcode_bytes,
@@ -263,7 +264,7 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
     const temp_path = createTempPath(allocator, ".o") catch return Error.TempFileError;
     defer allocator.free(temp_path);
 
-    try emitMergedBitcodeToObjectFile(bitcode, options, temp_path);
+    try emitMergedBitcodeToObjectFile(allocator, bitcode, options, temp_path);
 
     // Read the object file back into memory
     const object_bytes = std.fs.cwd().readFileAlloc(
@@ -305,7 +306,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, option
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
 
-    try emitMergedBitcodeToObjectFile(bitcode, pic_options, object_path);
+    try emitMergedBitcodeToObjectFile(allocator, bitcode, pic_options, object_path);
 
     if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
         defer allocator.free(keep_path);

@@ -39,8 +39,9 @@ pub fn Scratch(comptime T: type) type {
         }
 
         /// Check if a value is in the array starting from a given position.
-        /// Note: If checking multiple values against the same range, use `setViewFrom()`
-        /// to build a SetView once and call `contains()` on it multiple times.
+        /// Note: If checking multiple values against the same range, use
+        /// `setViewFrom()` to build a SetView once and call `contains()` on it
+        /// multiple times.
         pub fn containsFrom(self: *const Self, start: u32, val: T) bool {
             const range = self.items.items[@intCast(start)..];
             for (range) |item| {
@@ -56,27 +57,25 @@ pub fn Scratch(comptime T: type) type {
         pub const SetView = struct {
             range: []const T,
             set: ?std.AutoHashMapUnmanaged(T, void),
+            allocator: std.mem.Allocator,
 
             const hash_threshold = 16;
 
-            pub fn init(items: []const T) SetView {
+            pub fn init(allocator: std.mem.Allocator, items: []const T) std.mem.Allocator.Error!SetView {
                 if (items.len <= hash_threshold) {
-                    return .{ .range = items, .set = null };
+                    return .{ .range = items, .set = null, .allocator = allocator };
                 }
                 var set = std.AutoHashMapUnmanaged(T, void){};
-                set.ensureTotalCapacity(std.heap.page_allocator, @intCast(items.len)) catch {
-                    // Fall back to linear scan on allocation failure
-                    return .{ .range = items, .set = null };
-                };
+                try set.ensureTotalCapacity(allocator, @intCast(items.len));
                 for (items) |item| {
                     set.putAssumeCapacity(item, {});
                 }
-                return .{ .range = items, .set = set };
+                return .{ .range = items, .set = set, .allocator = allocator };
             }
 
             pub fn deinit(self: *SetView) void {
                 if (self.set) |*set| {
-                    set.deinit(std.heap.page_allocator);
+                    set.deinit(self.allocator);
                 }
             }
 
@@ -97,8 +96,8 @@ pub fn Scratch(comptime T: type) type {
         /// For small ranges, the SetView uses linear scan.
         /// For larger ranges, it builds a hash set for O(1) lookups.
         /// Remember to call deinit() on the returned SetView when done.
-        pub fn setViewFrom(self: *const Self, start: u32) SetView {
-            return SetView.init(self.items.items[@intCast(start)..]);
+        pub fn setViewFrom(self: *const Self, allocator: std.mem.Allocator, start: u32) std.mem.Allocator.Error!SetView {
+            return try SetView.init(allocator, self.items.items[@intCast(start)..]);
         }
 
         /// Places a new index of type `T` in the scratch

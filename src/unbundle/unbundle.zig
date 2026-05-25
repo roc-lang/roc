@@ -326,26 +326,13 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
             };
         }
 
-        // Use stack buffer for small components to avoid allocation
-        var upper_buf: [256]u8 = undefined;
-        const upper_component = if (component.len <= upper_buf.len) blk: {
-            for (component, 0..) |c, i| {
-                upper_buf[i] = std.ascii.toUpper(c);
-            }
-            break :blk upper_buf[0..component.len];
-        } else blk: {
-            break :blk std.ascii.allocUpperString(std.heap.page_allocator, component) catch component;
-        };
-        defer if (component.len > upper_buf.len and upper_component.ptr != component.ptr)
-            std.heap.page_allocator.free(upper_component);
-
-        const base_name = if (std.mem.indexOfScalar(u8, upper_component, '.')) |dot_pos|
-            upper_component[0..dot_pos]
+        const base_name = if (std.mem.indexOfScalar(u8, component, '.')) |dot_pos|
+            component[0..dot_pos]
         else
-            upper_component;
+            component;
 
         for (WINDOWS_RESERVED_NAMES) |reserved| {
-            if (std.mem.eql(u8, base_name, reserved)) {
+            if (std.ascii.eqlIgnoreCase(base_name, reserved)) {
                 return PathValidationError{
                     .path = path,
                     .reason = .windows_reserved_name,

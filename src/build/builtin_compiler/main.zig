@@ -256,7 +256,7 @@ pub fn main() !void {
 
     // Validate that BuiltinIndices contains all type declarations under Builtin
     // This ensures BuiltinIndices stays in sync with the actual Builtin module content
-    try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
+    try validateBuiltinIndicesCompleteness(gpa, builtin_env, builtin_indices);
 
     try serializeBuiltinIndices(builtin_indices, builtin_indices_path);
 }
@@ -264,10 +264,10 @@ pub fn main() !void {
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
 /// Iterates through all statements and ensures every s_nominal_decl is present in BuiltinIndices,
 /// with the exception of "Num" which is a container type, not an auto-imported type.
-fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinIndices) !void {
+fn validateBuiltinIndicesCompleteness(allocator: Allocator, env: *const ModuleEnv, indices: BuiltinIndices) !void {
     // Collect all statement indices from BuiltinIndices using reflection
     // Only check Statement.Idx fields (skip Ident.Idx fields)
-    var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(std.heap.page_allocator);
+    var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(allocator);
     defer indexed_stmts.deinit();
 
     const fields = @typeInfo(BuiltinIndices).@"struct".fields;

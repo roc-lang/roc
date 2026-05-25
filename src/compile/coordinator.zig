@@ -87,62 +87,10 @@ const is_freestanding = threading.is_freestanding;
 const threads_available = !is_freestanding;
 const Thread = threading.Thread;
 
-/// Thread-safe allocator used for worker-thread allocations and shared
-/// coordinator buffers (channels, per-package maps) when running multi-threaded.
-///
-/// On platforms with threads, `std.heap.smp_allocator` is used: it maintains
-/// per-thread freelists backed by a shared global pool, avoiding the per-call
-/// `mmap`/`munmap` serialization on the kernel VM lock that `page_allocator`
-/// incurs (the prior cause of the multi-threaded performance cliff).
-///
-/// On wasm/freestanding (no threads), `smp_allocator` is unreachable at
-/// runtime but the constant must still compile, so it resolves to
-/// `page_allocator` (which on wasm is backed by `WasmAllocator`).
-const thread_safe_allocator: Allocator = if (threads_available)
-    std.heap.smp_allocator
-else
-    std.heap.page_allocator;
-
-/// Allocators for a worker thread. Each worker has its own instance.
-/// This ensures thread-safe allocations without contention.
-///
-/// Design rationale:
-/// - `gpa`: For long-lived data (ModuleEnv, source). In MT mode, this is
-///   smp_allocator (per-thread freelists backed by a shared global pool).
-///   Data allocated here is stored in ModuleEnv.gpa and freed during module
-///   cleanup.
-/// - `arena`: For temporary allocations within a task (reports, diagnostics).
-///   Reset between tasks to reduce allocation pressure.
-pub const WorkerAllocators = struct {
-    /// General purpose allocator for long-lived data (ModuleEnv, source).
-    /// In multi-threaded mode, this is smp_allocator for thread safety.
-    gpa: Allocator,
-
-    /// Arena for temporary allocations within a task.
-    /// Reset between tasks to reduce allocation pressure.
-    arena: Allocator,
-
-    /// Underlying arena implementation
-    arena_impl: std.heap.ArenaAllocator,
-
-    pub fn init(backing: Allocator) WorkerAllocators {
-        var arena_impl = std.heap.ArenaAllocator.init(backing);
-        return .{
-            .gpa = backing,
-            .arena_impl = arena_impl,
-            .arena = arena_impl.allocator(),
-        };
-    }
-
-    pub fn deinit(self: *WorkerAllocators) void {
-        self.arena_impl.deinit();
-    }
-
-    /// Reset arena between tasks (keeps capacity, frees memory)
-    pub fn resetArena(self: *WorkerAllocators) void {
-        _ = self.arena_impl.reset(.retain_capacity);
-    }
-};
+/// Allocator used for data shared with worker threads.
+fn sharedThreadAllocator(single_thread_allocator: Allocator) Allocator {
+    return if (threads_available) std.heap.smp_allocator else single_thread_allocator;
+}
 
 /// Module compilation phase
 pub const Phase = enum {
@@ -168,6 +116,8 @@ pub const ModuleState = struct {
     path: []const u8,
     /// Source-relative import base override for materialized modules.
     source_dir_override: ?[]const u8 = null,
+    /// Stable retained-data memory for this module.
+    memory: *base.ModuleMemory,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -200,10 +150,11 @@ pub const ModuleState = struct {
         black,
     };
 
-    pub fn init(name: []const u8, path: []const u8) ModuleState {
+    pub fn init(name: []const u8, path: []const u8, memory: *base.ModuleMemory) ModuleState {
         return .{
             .name = name,
             .path = path,
+            .memory = memory,
             .cached_ast = null,
             .phase = .Parse,
             .imports = std.ArrayList(ModuleId).empty,
@@ -339,6 +290,8 @@ pub const ModuleState = struct {
         if (self.source_dir_override) |source_dir| gpa.free(source_dir);
         gpa.free(self.path);
         gpa.free(self.name);
+        self.memory.deinit();
+        gpa.destroy(self.memory);
     }
 };
 
@@ -359,15 +312,15 @@ pub const PackageState = struct {
     /// Package shorthands (alias -> target package name)
     shorthands: std.StringHashMap([]const u8),
 
-    pub fn init(name: []const u8, root_dir: []const u8) PackageState {
+    pub fn init(name: []const u8, root_dir: []const u8, map_allocator: Allocator) PackageState {
         return .{
             .name = name,
             .root_dir = root_dir,
             .modules = std.ArrayList(ModuleState).empty,
-            .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
+            .module_names = std.StringHashMap(ModuleId).init(map_allocator),
             .remaining_modules = 0,
             .root_module_id = null,
-            .shorthands = std.StringHashMap([]const u8).init(thread_safe_allocator),
+            .shorthands = std.StringHashMap([]const u8).init(map_allocator),
         };
     }
 
@@ -408,16 +361,28 @@ pub const PackageState = struct {
     }
 
     /// Ensure a module exists, creating it if necessary
-    pub fn ensureModule(self: *PackageState, gpa: Allocator, name: []const u8, path: []const u8) !ModuleId {
+    pub fn ensureModule(
+        self: *PackageState,
+        gpa: Allocator,
+        module_memory_backing: Allocator,
+        name: []const u8,
+        path: []const u8,
+    ) !ModuleId {
         if (self.module_names.get(name)) |id| {
             return id;
         }
 
         const id: ModuleId = @intCast(self.modules.items.len);
         const owned_name = try gpa.dupe(u8, name);
+        errdefer gpa.free(owned_name);
         const owned_path = try gpa.dupe(u8, path);
+        errdefer gpa.free(owned_path);
+        const module_memory = try gpa.create(base.ModuleMemory);
+        errdefer gpa.destroy(module_memory);
+        module_memory.* = base.ModuleMemory.init(module_memory_backing);
+        errdefer module_memory.deinit();
 
-        try self.modules.append(gpa, ModuleState.init(owned_name, owned_path));
+        try self.modules.append(gpa, ModuleState.init(owned_name, owned_path, module_memory));
         try self.module_names.put(owned_name, id);
 
         return id;
@@ -520,6 +485,12 @@ pub const Coordinator = struct {
     /// Worker threads
     workers: std.ArrayList(Thread),
 
+    /// Memory used by inline execution when no worker threads are running.
+    inline_memory: base.WorkerMemory,
+
+    /// Stable per-worker memory. These arenas outlive package/module state.
+    worker_memories: std.ArrayList(base.WorkerMemory),
+
     /// Number of tasks currently being processed by workers (atomic for thread safety)
     inflight: std.atomic.Value(usize),
 
@@ -570,15 +541,16 @@ pub const Coordinator = struct {
     module_time_max_ns: u64,
     module_time_sum_ns: u64,
 
-    /// Get allocator for worker thread operations.
-    /// In multi-threaded mode, returns smp_allocator (per-thread freelists
-    /// backed by a shared global pool, designed for SMP workloads). In
-    /// single-threaded mode, returns gpa for better performance.
+    /// Get allocator for worker result/control data.
     pub fn getWorkerAllocator(self: *const Coordinator) Allocator {
-        return if (threads_available and self.mode == .multi_threaded)
-            thread_safe_allocator
+        return if (threads_available and self.mode == .multi_threaded and self.max_threads > 1)
+            std.heap.smp_allocator
         else
             self.gpa;
+    }
+
+    pub fn moduleMemoryBacking(self: *const Coordinator) Allocator {
+        return sharedThreadAllocator(self.gpa);
     }
 
     /// Initialize a `Coordinator`.
@@ -599,11 +571,9 @@ pub const Coordinator = struct {
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
     ) !Coordinator {
-        // Both channels use smp_allocator in multi-threaded mode because their
-        // buffers may be grown (task_channel) or accessed from worker threads.
-        // smp_allocator is thread-safe and avoids the per-allocation mmap/munmap
-        // serialization on the kernel VM lock that page_allocator incurs.
-        const channel_allocator = if (threads_available) thread_safe_allocator else gpa;
+        // Channels may be accessed from worker threads, so threaded builds use
+        // the shared SMP allocator for channel buffers.
+        const channel_allocator = sharedThreadAllocator(gpa);
         const initial_task_capacity = 256;
         return .{
             .gpa = gpa,
@@ -614,6 +584,8 @@ pub const Coordinator = struct {
             .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY),
             .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity),
             .workers = std.ArrayList(Thread).empty,
+            .inline_memory = base.WorkerMemory.init(gpa, gpa),
+            .worker_memories = std.ArrayList(base.WorkerMemory).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
@@ -649,9 +621,9 @@ pub const Coordinator = struct {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
         }
 
-        // Free packages
-        // Note: ModuleEnv stores its own allocator (env.gpa), so deinit will use the correct
-        // allocator for each env. In multi-threaded mode, this is smp_allocator.
+        // Free packages before destroying worker arenas. Retained module data is
+        // owned by each ModuleState's ModuleMemory arena; worker arenas only
+        // provide scratch/control memory for task execution.
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             if (comptime trace_build) {
@@ -690,6 +662,12 @@ pub const Coordinator = struct {
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
+
+        for (self.worker_memories.items) |*memory| {
+            memory.deinit();
+        }
+        self.worker_memories.deinit(self.gpa);
+        self.inline_memory.deinit();
     }
 
     /// Set the I/O implementation (or reset to OS default).
@@ -697,14 +675,9 @@ pub const Coordinator = struct {
         self.io = io orelse Io.default();
     }
 
-    /// Get the allocator to use for module data.
-    /// - In multi-threaded mode: smp_allocator (per-thread freelists)
-    /// - In single-threaded mode: gpa (better performance)
+    /// Get the allocator to use for module data in inline execution.
     pub fn getModuleAllocator(self: *Coordinator) std.mem.Allocator {
-        return if (threads_available and self.mode == .multi_threaded)
-            thread_safe_allocator
-        else
-            self.gpa;
+        return self.inline_memory.taskMemory().persistent;
     }
 
     /// Create or get a package
@@ -714,7 +687,11 @@ pub const Coordinator = struct {
         }
 
         const pkg = try self.gpa.create(PackageState);
-        pkg.* = PackageState.init(try self.gpa.dupe(u8, name), try self.gpa.dupe(u8, root_dir));
+        pkg.* = PackageState.init(
+            try self.gpa.dupe(u8, name),
+            try self.gpa.dupe(u8, root_dir),
+            self.getWorkerAllocator(),
+        );
         try self.packages.put(pkg.name, pkg);
         return pkg;
     }
@@ -765,7 +742,7 @@ pub const Coordinator = struct {
 
         const app_pkg = try self.ensurePackage("app", app_dir);
         const app_module_name = base.module_path.getModuleName(opts.entry_path);
-        const app_module_id = try app_pkg.ensureModule(self.gpa, app_module_name, opts.entry_path);
+        const app_module_id = try app_pkg.ensureModule(self.gpa, self.moduleMemoryBacking(), app_module_name, opts.entry_path);
         if (opts.source_dir_override) |source_dir| {
             app_pkg.modules.items[app_module_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
         }
@@ -817,7 +794,7 @@ pub const Coordinator = struct {
             );
         }
 
-        const pf_module_id = try pf_pkg.ensureModule(self.gpa, "main", platform_main_path);
+        const pf_module_id = try pf_pkg.ensureModule(self.gpa, self.moduleMemoryBacking(), "main", platform_main_path);
         pf_pkg.root_module_id = pf_module_id;
         pf_pkg.modules.items[pf_module_id].depth = 1;
         pf_pkg.remaining_modules += 1;
@@ -1419,10 +1396,19 @@ pub const Coordinator = struct {
         if (comptime !is_freestanding) {
             const n = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads;
 
+            std.debug.assert(self.worker_memories.items.len == 0);
+            try self.worker_memories.ensureTotalCapacity(self.gpa, n);
+            while (self.worker_memories.items.len < n) {
+                try self.worker_memories.append(
+                    self.gpa,
+                    base.WorkerMemory.init(std.heap.smp_allocator, std.heap.smp_allocator),
+                );
+            }
+
             try self.workers.ensureTotalCapacity(self.gpa, n);
             var i: usize = 0;
             while (i < n) : (i += 1) {
-                const th = try std.Thread.spawn(.{}, workerThread, .{self});
+                const th = try std.Thread.spawn(.{}, workerThread, .{ self, i });
                 try self.workers.append(self.gpa, th);
             }
         }
@@ -1500,6 +1486,7 @@ pub const Coordinator = struct {
                 .module_name = mod.name,
                 .path = mod.path,
                 .depth = mod.depth,
+                .module_allocator = mod.memory.allocator(),
             },
         });
     }
@@ -1513,7 +1500,8 @@ pub const Coordinator = struct {
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
                 if (self.task_channel.tryRecv()) |task| {
-                    const result = self.executeTaskInline(task);
+                    const result = self.executeTaskInline(task, self.inline_memory.taskMemory());
+                    defer self.inline_memory.resetScratch();
                     try self.handleResult(result);
                     made_progress = true;
                 }
@@ -1636,20 +1624,32 @@ pub const Coordinator = struct {
     }
 
     /// Execute a task inline (for single-threaded mode)
-    fn executeTaskInline(self: *Coordinator, task: WorkerTask) WorkerResult {
+    fn executeTaskInline(self: *Coordinator, task: WorkerTask, memory: base.TaskMemory) WorkerResult {
         return switch (task) {
-            .parse => |t| self.executeParse(t),
-            .canonicalize => |t| self.executeCanonicalize(t),
-            .type_check => |t| self.executeTypeCheck(t),
+            .parse => |t| {
+                var task_memory = memory;
+                if (t.module_allocator) |allocator| task_memory.persistent = allocator;
+                return self.executeParse(t, task_memory);
+            },
+            .canonicalize => |t| {
+                var task_memory = memory;
+                if (t.module_allocator) |allocator| task_memory.persistent = allocator;
+                return self.executeCanonicalize(t, task_memory);
+            },
+            .type_check => |t| {
+                var task_memory = memory;
+                if (t.module_allocator) |allocator| task_memory.persistent = allocator;
+                return self.executeTypeCheck(t, task_memory);
+            },
         };
     }
 
     fn createOwnedSemanticResult(
-        self: *Coordinator,
+        memory: base.TaskMemory,
         env: *ModuleEnv,
         checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact,
     ) *OwnedSemanticModuleData {
-        const allocator = self.getWorkerAllocator();
+        const allocator = memory.control;
         const semantic = allocator.create(OwnedSemanticModuleData) catch @panic("out of memory allocating type-check result");
         semantic.* = .{
             .module_env = env,
@@ -1726,7 +1726,7 @@ pub const Coordinator = struct {
         mod.compile_time_ns += result.parse_ns;
 
         for (result.discovered_local_imports.items) |imp| {
-            const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
+            const child_id = try pkg.ensureModule(self.gpa, self.moduleMemoryBacking(), imp.module_name, imp.path);
             const current_mod = pkg.getModule(result.module_id) orelse {
                 self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in parsed handler (module={s})\n", .{
                     result.module_id, result.package_name, result.module_name,
@@ -1863,6 +1863,7 @@ pub const Coordinator = struct {
                 .module_name = mod.name,
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
+                .module_allocator = mod.memory.allocator(),
                 .imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod),
                 .imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod),
                 .available_artifacts = try self.collectAvailableArtifactViews(self.gpa),
@@ -2230,6 +2231,7 @@ pub const Coordinator = struct {
                 .path = mod.path,
                 .source_dir = mod.canonicalSourceDir(),
                 .module_env = mod.moduleEnv().?,
+                .module_allocator = mod.memory.allocator(),
                 .cached_ast = mod.cached_ast orelse
                     std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
@@ -2272,7 +2274,7 @@ pub const Coordinator = struct {
         const path = try self.resolveModulePath(target_pkg.root_dir, qualified.module);
         defer self.gpa.free(path);
 
-        const module_id = try target_pkg.ensureModule(self.gpa, qualified.module, path);
+        const module_id = try target_pkg.ensureModule(self.gpa, self.moduleMemoryBacking(), qualified.module, path);
         const mod = target_pkg.getModule(module_id).?;
 
         if (comptime trace_build) {
@@ -2426,21 +2428,20 @@ pub const Coordinator = struct {
     }
 
     /// Execute a parse task (pure function)
-    fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
+    fn executeParse(self: *Coordinator, task: ParseTask, memory: base.TaskMemory) WorkerResult {
         const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        const result_alloc = memory.control;
+        const module_alloc = memory.persistent;
 
         // Read source
-        const src = self.readModuleSource(task.path) catch |err| {
-            // Use worker allocator (thread-safe in multi-threaded mode)
-            const worker_alloc = self.getWorkerAllocator();
-            // Pre-allocate to reduce allocation contention in multi-threaded mode
-            var reports = std.ArrayList(Report).initCapacity(worker_alloc, 1) catch std.ArrayList(Report).empty;
-            var rep = Report.init(worker_alloc, "FILE NOT FOUND", .fatal);
+        const src = self.readModuleSource(task.path, module_alloc) catch |err| {
+            var reports = std.ArrayList(Report).initCapacity(result_alloc, 1) catch std.ArrayList(Report).empty;
+            var rep = Report.init(result_alloc, "FILE NOT FOUND", .fatal);
             // Include the path in the error message for debugging
-            const path_msg = std.fmt.allocPrint(worker_alloc, "{s}: {s}", .{ task.path, @errorName(err) }) catch @errorName(err);
-            defer if (path_msg.ptr != @errorName(err).ptr) worker_alloc.free(path_msg);
+            const path_msg = std.fmt.allocPrint(result_alloc, "{s}: {s}", .{ task.path, @errorName(err) }) catch @errorName(err);
+            defer if (path_msg.ptr != @errorName(err).ptr) result_alloc.free(path_msg);
             rep.addErrorMessage(path_msg) catch {};
-            reports.append(worker_alloc, rep) catch {};
+            reports.append(result_alloc, rep) catch {};
 
             return .{
                 .parse_failed = .{
@@ -2460,7 +2461,6 @@ pub const Coordinator = struct {
         // Parse, canonicalize, type-check
 
         // Create ModuleEnv using the long-lived module allocator.
-        const module_alloc = self.getModuleAllocator();
         const env = module_alloc.create(ModuleEnv) catch {
             module_alloc.free(src);
             return .{
@@ -2508,13 +2508,10 @@ pub const Coordinator = struct {
         env.common.calcLineStarts(module_alloc) catch {};
 
         // Parse
-        // Use worker allocator (thread-safe in multi-threaded mode) for all worker allocations
-        const worker_alloc = self.getWorkerAllocator();
-        // Pre-allocate reports to reduce allocation contention in multi-threaded mode
-        var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
+        var reports = std.ArrayList(Report).initCapacity(result_alloc, 8) catch std.ArrayList(Report).empty;
         var allocators: base.Allocators = undefined;
-        allocators.initInPlace(worker_alloc);
-        // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
+        allocators.initFromTaskMemory(memory);
+        defer allocators.deinit();
         const parse_ast = parse.parse(&allocators, &env.common) catch {
             // Parse failed but we still have partial env
             const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
@@ -2539,54 +2536,54 @@ pub const Coordinator = struct {
 
         // Collect parse diagnostics
         for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            const rep = parse_ast.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            const rep = parse_ast.tokenizeDiagnosticToReport(diagnostic, result_alloc, task.path) catch continue;
+            reports.append(result_alloc, rep) catch {};
         }
         for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            const rep = parse_ast.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            const rep = parse_ast.parseDiagnosticToReport(&env.common, diagnostic, result_alloc, task.path) catch continue;
+            reports.append(result_alloc, rep) catch {};
         }
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
         errdefer {
             for (discovered_local_imports.items) |imp| {
-                worker_alloc.free(imp.module_name);
-                worker_alloc.free(imp.path);
+                result_alloc.free(imp.module_name);
+                result_alloc.free(imp.path);
             }
-            discovered_local_imports.deinit(worker_alloc);
+            discovered_local_imports.deinit(result_alloc);
         }
-        const local_import_names = module_discovery.extractImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
+        const local_import_names = module_discovery.extractImportsFromAST(parse_ast, memory.scratch) catch &[_][]const u8{};
         defer {
-            for (local_import_names) |name| worker_alloc.free(name);
-            worker_alloc.free(local_import_names);
+            for (local_import_names) |name| memory.scratch.free(name);
+            memory.scratch.free(local_import_names);
         }
         const module_dir = std.fs.path.dirname(task.path) orelse "";
         for (local_import_names) |module_name| {
-            const path = self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc) catch continue;
-            discovered_local_imports.append(worker_alloc, .{
-                .module_name = worker_alloc.dupe(u8, module_name) catch {
-                    worker_alloc.free(path);
+            const path = self.resolveModulePathWithAllocator(module_dir, module_name, result_alloc) catch continue;
+            discovered_local_imports.append(result_alloc, .{
+                .module_name = result_alloc.dupe(u8, module_name) catch {
+                    result_alloc.free(path);
                     continue;
                 },
                 .path = path,
             }) catch {
-                worker_alloc.free(path);
+                result_alloc.free(path);
             };
         }
 
         var discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty;
         errdefer {
-            for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
-            discovered_external_imports.deinit(worker_alloc);
+            for (discovered_external_imports.items) |imp| result_alloc.free(imp.import_name);
+            discovered_external_imports.deinit(result_alloc);
         }
-        const qualified_import_names = module_discovery.extractQualifiedImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
+        const qualified_import_names = module_discovery.extractQualifiedImportsFromAST(parse_ast, memory.scratch) catch &[_][]const u8{};
         defer {
-            for (qualified_import_names) |name| worker_alloc.free(name);
-            worker_alloc.free(qualified_import_names);
+            for (qualified_import_names) |name| memory.scratch.free(name);
+            memory.scratch.free(qualified_import_names);
         }
         for (qualified_import_names) |import_name| {
-            discovered_external_imports.append(worker_alloc, .{
-                .import_name = worker_alloc.dupe(u8, import_name) catch continue,
+            discovered_external_imports.append(result_alloc, .{
+                .import_name = result_alloc.dupe(u8, import_name) catch continue,
             }) catch {};
         }
 
@@ -2609,14 +2606,13 @@ pub const Coordinator = struct {
     }
 
     /// Execute a canonicalize task (pure function)
-    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
+    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, memory: base.TaskMemory) WorkerResult {
         const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
 
         const env = task.module_env;
         const ast = task.cached_ast;
-        const canon_alloc = self.getWorkerAllocator();
         var allocators: base.Allocators = undefined;
-        allocators.initInPlace(canon_alloc);
+        allocators.initFromTaskMemory(memory);
         defer allocators.deinit();
         compile_package.PackageEnv.canonicalizeModuleWithImports(
             &allocators,
@@ -2633,16 +2629,14 @@ pub const Coordinator = struct {
 
         // Collect diagnostics
         const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
-        // Use worker allocator (thread-safe in multi-threaded mode) for result data
-        const worker_alloc = self.getWorkerAllocator();
-        // Pre-allocate to reduce allocation contention in multi-threaded mode
-        var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
+        const result_alloc = memory.control;
+        var reports = std.ArrayList(Report).initCapacity(result_alloc, 8) catch std.ArrayList(Report).empty;
         const diags = env.getDiagnostics() catch &[_]CIR.Diagnostic{};
         // Free with env.gpa since that's what getDiagnostics uses for allocation.
         defer env.gpa.free(diags);
         for (diags) |d| {
-            const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            const rep = env.diagnosticToReport(d, result_alloc, task.path) catch continue;
+            reports.append(result_alloc, rep) catch {};
         }
         const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
 
@@ -2666,13 +2660,13 @@ pub const Coordinator = struct {
     }
 
     /// Execute a type-check task (pure function)
-    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
+    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, memory: base.TaskMemory) WorkerResult {
         const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
 
         const env = task.module_env;
 
-        // Type check - use worker allocator for thread safety
-        const check_alloc = self.getWorkerAllocator();
+        const result_alloc = memory.control;
+        const check_alloc = memory.persistent;
         var typecheck_output = compile_package.PackageEnv.typeCheckModule(
             check_alloc,
             env,
@@ -2692,7 +2686,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .semantic = self.createOwnedSemanticResult(env, null),
+                    .semantic = createOwnedSemanticResult(memory, env, null),
                     .reports = std.ArrayList(Report).empty,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
@@ -2705,13 +2699,10 @@ pub const Coordinator = struct {
 
         // Collect diagnostics
         const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
-        // Use worker allocator (thread-safe in multi-threaded mode) for result data
-        const worker_alloc = self.getWorkerAllocator();
-        // Pre-allocate to reduce allocation contention in multi-threaded mode
-        var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
+        var reports = std.ArrayList(Report).initCapacity(result_alloc, 8) catch std.ArrayList(Report).empty;
 
         var rb = check.ReportBuilder.init(
-            worker_alloc,
+            result_alloc,
             env,
             env,
             &typecheck_output.checker.snapshots,
@@ -2731,7 +2722,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .semantic = self.createOwnedSemanticResult(env, null),
+                    .semantic = createOwnedSemanticResult(memory, env, null),
                     .reports = reports,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
@@ -2742,7 +2733,7 @@ pub const Coordinator = struct {
 
         for (typecheck_output.checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            reports.append(result_alloc, rep) catch {};
         }
 
         const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
@@ -2758,7 +2749,8 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .semantic = self.createOwnedSemanticResult(
+                .semantic = createOwnedSemanticResult(
+                    memory,
                     env,
                     if (typecheck_output.checked_artifact != null) typecheck_output.takeCheckedArtifact() else null,
                 ),
@@ -2770,8 +2762,7 @@ pub const Coordinator = struct {
     }
 
     /// Read module source using the Io abstraction.
-    fn readModuleSource(self: *Coordinator, path: []const u8) ![]u8 {
-        const module_alloc = self.getModuleAllocator();
+    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) ![]u8 {
         const data = self.io.readFile(path, module_alloc) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
@@ -2783,15 +2774,9 @@ pub const Coordinator = struct {
     }
 
     /// Worker thread main function
-    fn workerThread(self: *Coordinator) void {
+    fn workerThread(self: *Coordinator, worker_index: usize) void {
         _ = base.stack_overflow.installForCurrentThread();
-
-        // Each worker has its own allocators for thread safety.
-        // - gpa: smp_allocator for long-lived data (ModuleEnv, source)
-        // - arena: for temporary allocations, reset between tasks
-        const backing = if (threads_available) thread_safe_allocator else self.gpa;
-        var worker_allocs = WorkerAllocators.init(backing);
-        defer worker_allocs.deinit();
+        const worker_memory = &self.worker_memories.items[worker_index];
 
         while (true) {
             // Check shutdown flag before blocking on the next task.
@@ -2804,10 +2789,10 @@ pub const Coordinator = struct {
             const t = self.task_channel.recv() orelse break;
 
             // Execute task
-            const result = self.executeTaskInline(t);
+            const result = self.executeTaskInline(t, worker_memory.taskMemory());
 
             // Reset arena between tasks to reclaim temporary allocations
-            worker_allocs.resetArena();
+            worker_memory.resetScratch();
 
             // Send result
             self.result_channel.send(result) catch break;
@@ -2876,7 +2861,7 @@ test "Coordinator module creation" {
 
     // Create package and module
     const pkg = try coord.ensurePackage("app", "/test/app");
-    const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
+    const module_id = try pkg.ensureModule(allocator, allocator, "Main", "/test/app/Main.roc");
 
     try std.testing.expectEqual(@as(ModuleId, 0), module_id);
 
@@ -2903,7 +2888,7 @@ test "Coordinator task queue" {
 
     // Create package and module
     const pkg = try coord.ensurePackage("app", "/test/app");
-    _ = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
+    _ = try pkg.ensureModule(allocator, allocator, "Main", "/test/app/Main.roc");
 
     // Enqueue a task directly
     try coord.enqueueTask(.{
@@ -3155,7 +3140,7 @@ test "Coordinator enqueueParseTask flow" {
     const pkg = try coord.ensurePackage("app", "/test/app");
 
     // Create module
-    const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
+    const module_id = try pkg.ensureModule(allocator, allocator, "Main", "/test/app/Main.roc");
 
     // Set up remaining count (simulating buildWithCoordinator)
     pkg.remaining_modules = 1;
@@ -3191,7 +3176,7 @@ test "Coordinator single-threaded loop with mock result" {
 
     // Create package and module
     const pkg = try coord.ensurePackage("app", "/test/app");
-    const module_id = try pkg.ensureModule(allocator, "Main", "/test/app/Main.roc");
+    const module_id = try pkg.ensureModule(allocator, allocator, "Main", "/test/app/Main.roc");
 
     // Set up remaining count
     pkg.remaining_modules = 1;
@@ -3242,18 +3227,18 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
     const sh_val = try allocator.dupe(u8, "pf");
     try app_pkg.shorthands.put(sh_key, sh_val);
 
-    const app_mod_id = try app_pkg.ensureModule(allocator, "expect_with_main", "/test/app/expect_with_main.roc");
+    const app_mod_id = try app_pkg.ensureModule(allocator, allocator, "expect_with_main", "/test/app/expect_with_main.roc");
     app_pkg.remaining_modules = 1;
     coord.total_remaining = 1;
 
     // Set up "pf" package
     const pf_pkg = try coord.ensurePackage("pf", "/test/pf");
-    const pf_main_id = try pf_pkg.ensureModule(allocator, "main", "/test/pf/main.roc");
-    const pf_stdout_id = try pf_pkg.ensureModule(allocator, "Stdout", "/test/pf/Stdout.roc");
-    const pf_stderr_id = try pf_pkg.ensureModule(allocator, "Stderr", "/test/pf/Stderr.roc");
-    const pf_stdin_id = try pf_pkg.ensureModule(allocator, "Stdin", "/test/pf/Stdin.roc");
-    const pf_builder_id = try pf_pkg.ensureModule(allocator, "Builder", "/test/pf/Builder.roc");
-    const pf_host_id = try pf_pkg.ensureModule(allocator, "Host", "/test/pf/Host.roc");
+    const pf_main_id = try pf_pkg.ensureModule(allocator, allocator, "main", "/test/pf/main.roc");
+    const pf_stdout_id = try pf_pkg.ensureModule(allocator, allocator, "Stdout", "/test/pf/Stdout.roc");
+    const pf_stderr_id = try pf_pkg.ensureModule(allocator, allocator, "Stderr", "/test/pf/Stderr.roc");
+    const pf_stdin_id = try pf_pkg.ensureModule(allocator, allocator, "Stdin", "/test/pf/Stdin.roc");
+    const pf_builder_id = try pf_pkg.ensureModule(allocator, allocator, "Builder", "/test/pf/Builder.roc");
+    const pf_host_id = try pf_pkg.ensureModule(allocator, allocator, "Host", "/test/pf/Host.roc");
     pf_pkg.remaining_modules = 6;
     coord.total_remaining += 6;
 
@@ -3356,7 +3341,7 @@ test "Coordinator handleParseFailed advances module to Done" {
 
     // Create package and module
     const pkg = try coord.ensurePackage("app", "/test/app");
-    const module_id = try pkg.ensureModule(allocator, "Builder", "/test/app/Builder.roc");
+    const module_id = try pkg.ensureModule(allocator, allocator, "Builder", "/test/app/Builder.roc");
     pkg.remaining_modules = 1;
     coord.total_remaining = 1;
 

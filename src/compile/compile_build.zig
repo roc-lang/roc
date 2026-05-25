@@ -233,16 +233,6 @@ pub const BuildEnv = struct {
             std.debug.print("[DEINIT] builtin_modules done\n", .{});
         }
 
-        // Deinit coordinator if present
-        if (self.coordinator) |coord| {
-            coord.deinit();
-            self.gpa.destroy(coord);
-        }
-
-        if (comptime trace_build) {
-            std.debug.print("[DEINIT] coordinator done\n", .{});
-        }
-
         // Deinit cache manager if present
         if (self.cache_manager) |cm| {
             self.gpa.destroy(cm);
@@ -297,6 +287,18 @@ pub const BuildEnv = struct {
             std.debug.print("[DEINIT] all scheduler deinits done, freeing hashmap...\n", .{});
         }
         self.schedulers.deinit(self.gpa);
+
+        // Deinit coordinator after schedulers. transferCoordinatorResults moves
+        // checked module data into schedulers, but the memory for that data is
+        // still owned by coordinator module arenas.
+        if (self.coordinator) |coord| {
+            coord.deinit();
+            self.gpa.destroy(coord);
+        }
+
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] coordinator done\n", .{});
+        }
 
         if (comptime trace_build) {
             std.debug.print("[DEINIT] schedulers done, deinitializing packages...\n", .{});
@@ -544,7 +546,7 @@ pub const BuildEnv = struct {
         // Queue root module in coordinator
         const coord_pkg = coord.getPackage(pkg_name).?;
         const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
-        const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
+        const root_id = try coord_pkg.ensureModule(self.gpa, coord.moduleMemoryBacking(), module_name, pkg_root_file);
         coord_pkg.modules.items[root_id].depth = 0;
         coord_pkg.root_module_id = root_id;
         coord_pkg.remaining_modules += 1;
@@ -566,7 +568,7 @@ pub const BuildEnv = struct {
             if (pf_pkg.kind == .platform) {
                 if (coord.getPackage(pf_entry.key_ptr.*)) |platform_coord_pkg| {
                     const plat_module_name = PackageEnv.moduleNameFromPath(pf_pkg.root_file);
-                    const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, plat_module_name, pf_pkg.root_file);
+                    const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, coord.moduleMemoryBacking(), plat_module_name, pf_pkg.root_file);
                     if (platform_coord_pkg.modules.items[plat_root_id].phase == .Parse) {
                         platform_coord_pkg.modules.items[plat_root_id].depth = 1;
                         platform_coord_pkg.root_module_id = plat_root_id;

@@ -94,10 +94,13 @@ pub const ApplyRelocationsError = error{
 /// Apply relocations to a mutable code buffer.
 /// The buffer should be writable. After this returns, the buffer can be
 /// made executable via ExecutableMemory.
+/// The allocator owns any copied local data; it must live at least as long
+/// as the patched code can reference that data.
 ///
 /// For x86_64 call instructions, this patches the 4-byte relative offset
 /// after the E8 opcode.
 pub fn applyRelocations(
+    allocator: std.mem.Allocator,
     code: []u8,
     code_base_addr: usize,
     relocations: []const Relocation,
@@ -118,7 +121,7 @@ pub fn applyRelocations(
                 try patchLinkedDataRelocation(code, code_base_addr, data_reloc.offset, target_addr, data_reloc.kind);
             },
             .local_data => |local_reloc| {
-                const owned_data = try std.heap.page_allocator.dupe(u8, local_reloc.data);
+                const owned_data = try allocator.dupe(u8, local_reloc.data);
                 const target_addr = @intFromPtr(owned_data.ptr);
                 try patchLinkedDataRelocation(code, code_base_addr, local_reloc.offset, target_addr, .abs64);
             },
@@ -346,7 +349,7 @@ test "applyRelocations patches x86_64 linked_function call" {
         .{ .linked_function = .{ .offset = 1, .name = "callee" } },
     };
 
-    try applyRelocations(&code, code_base, &relocs, resolver);
+    try applyRelocations(std.testing.allocator, &code, code_base, &relocs, resolver);
 
     const patched = std.mem.readInt(i32, code[1..5], .little);
     try std.testing.expectEqual(@as(i32, 27), patched); // 0x1020 - (0x1000 + 5)
@@ -368,7 +371,7 @@ test "applyRelocations patches aarch64 linked_function bl" {
         .{ .linked_function = .{ .offset = 0, .name = "callee" } },
     };
 
-    try applyRelocations(&code, code_base, &relocs, resolver);
+    try applyRelocations(std.testing.allocator, &code, code_base, &relocs, resolver);
 
     const inst = std.mem.readInt(u32, &code, .little);
     try std.testing.expectEqual(@as(u32, 0b100101), inst >> 26);
@@ -390,19 +393,21 @@ test "applyRelocations patches linked_data absolute pointer operand" {
         .{ .linked_data = .{ .offset = 4, .name = "global_data" } },
     };
 
-    try applyRelocations(&code, 0, &relocs, resolver);
+    try applyRelocations(std.testing.allocator, &code, 0, &relocs, resolver);
     try std.testing.expectEqual(target_addr, readPointerFromCode(code[4..]));
 }
 
 test "applyRelocations patches local_data pointer and stores bytes" {
     var code = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     const bytes = [_]u8{ 'a', 'b', 'c' };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
     const relocs = [_]Relocation{
         .{ .local_data = .{ .offset = 0, .data = &bytes } },
     };
 
-    try applyRelocations(&code, 0, &relocs, testNullResolver);
+    try applyRelocations(arena.allocator(), &code, 0, &relocs, testNullResolver);
 
     const ptr_value = readPointerFromCode(code[0..]);
     try std.testing.expect(ptr_value != 0);
@@ -426,7 +431,7 @@ test "applyRelocations patches x86_64 jmp_to_return" {
         },
     };
 
-    try applyRelocations(&code, 0, &relocs, testNullResolver);
+    try applyRelocations(std.testing.allocator, &code, 0, &relocs, testNullResolver);
     try std.testing.expectEqual(@as(i32, 1), std.mem.readInt(i32, code[1..5], .little));
 }
 
@@ -445,7 +450,7 @@ test "applyRelocations patches aarch64 jmp_to_return" {
         } },
     };
 
-    try applyRelocations(&code, 0, &relocs, testNullResolver);
+    try applyRelocations(std.testing.allocator, &code, 0, &relocs, testNullResolver);
 
     const inst = std.mem.readInt(u32, code[0..4], .little);
     try std.testing.expectEqual(@as(u32, 0b000101), inst >> 26); // B

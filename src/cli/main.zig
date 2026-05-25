@@ -490,20 +490,9 @@ pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
     return error.FailedToCreateUniqueTempDir;
 }
 
-/// Write shared memory coordination file (.txt) next to the executable.
+/// Write shared memory coordination file (.txt).
 /// This is the file that the child process reads to find the shared memory fd.
-pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
-    // The coordination file is at {temp_dir}.txt where temp_dir is the directory containing the exe
-    const temp_dir = std.fs.path.dirname(temp_exe_path) orelse return error.InvalidPath;
-
-    // Ensure we have no trailing slashes
-    var dir_path = temp_dir;
-    while (dir_path.len > 0 and (dir_path[dir_path.len - 1] == '/' or dir_path[dir_path.len - 1] == '\\')) {
-        dir_path = dir_path[0 .. dir_path.len - 1];
-    }
-
-    const fd_file_path = try std.fmt.allocPrint(ctx.arena, "{s}.txt", .{dir_path});
-
+pub fn writeFdCoordinationFile(ctx: *CliContext, fd_file_path: []const u8, shm_handle: SharedMemoryHandle) !void {
     // Create the file (exclusive - fail if exists to detect collisions)
     const fd_file = std.fs.cwd().createFile(fd_file_path, .{ .exclusive = true }) catch |err| {
         // Error is handled by caller with ctx.fail()
@@ -677,17 +666,14 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
     // Start background cache cleanup on a separate thread.
     // This is a fire-and-forget thread that:
-    // - Cleans up stale temp directories (>5 min old)
+    // - Cleans up stale temp runtime entries (>24 hours old)
     // - Cleans up old persistent cache files (>30 days old)
     // - Exits automatically when done
     //
     // We intentionally don't join the thread. If the main process exits before
     // cleanup completes, the OS will automatically terminate the cleanup thread.
     // This ensures cleanup never delays compilation or execution.
-    //
-    // Uses page_allocator instead of GPA to avoid leak detection false positives
-    // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, FsIo.default())) |_| {
+    if (compile.CacheCleanup.startBackgroundCleanup()) |_| {
         // Thread started successfully, will run in background
     } else |_| {
         // Non-fatal: cleanup failure shouldn't prevent compilation
@@ -1012,6 +998,12 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
+    const coordination_file_path: ?[]const u8 = if (comptime is_windows)
+        null
+    else
+        std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir_path}) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        };
 
     // The executable is built directly in the temp dir with the display name
     const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
@@ -1299,11 +1291,11 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     if (comptime is_windows) {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
-        try runWithWindowsHandleInheritance(ctx, exe_path, shm_handle, args.app_args);
+        try runWithWindowsHandleInheritance(ctx, exe_path, temp_dir_path, coordination_file_path, shm_handle, args.app_args);
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
+        try runWithPosixFdInheritance(ctx, exe_path, temp_dir_path, coordination_file_path.?, shm_handle, args.app_args);
     }
     std.log.debug("Interpreter execution completed", .{});
 
@@ -1429,7 +1421,7 @@ fn rocRunDefaultApp(ctx: *CliContext, args: cli_args.RunArgs, original_source: [
         return error.TypeCheckingFailed;
     }
 
-    const view = try viewLirImageFromHandle(shm_result.handle);
+    const view = try viewLirImageFromHandle(ctx.gpa, shm_result.handle);
 
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
@@ -1494,7 +1486,14 @@ fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const
 }
 
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
-fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (CliError || error{OutOfMemory})!void {
+fn runWithWindowsHandleInheritance(
+    ctx: *CliContext,
+    exe_path: []const u8,
+    temp_dir_path: []const u8,
+    coordination_file_path: ?[]const u8,
+    shm_handle: SharedMemoryHandle,
+    app_args: []const []const u8,
+) (CliError || error{OutOfMemory})!void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
         return ctx.fail(.{ .shared_memory_failed = .{
@@ -1615,10 +1614,8 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
 
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
-    if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
-        std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
-    }
+    compile.CacheCleanup.deleteTempDir(temp_dir_path, coordination_file_path);
+    std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
 
     // Check exit code and propagate to parent
     if (exit_code != 0) {
@@ -1643,16 +1640,20 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
 /// The exe_path should already be in a unique temp directory created by createUniqueTempDir.
-fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (CliError || error{OutOfMemory})!void {
+fn runWithPosixFdInheritance(
+    ctx: *CliContext,
+    exe_path: []const u8,
+    temp_dir_path: []const u8,
+    coordination_file_path: []const u8,
+    shm_handle: SharedMemoryHandle,
+    app_args: []const []const u8,
+) (CliError || error{OutOfMemory})!void {
     // Write the coordination file (.txt) next to the executable
     // The executable is already in a unique temp directory
     std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
-    writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
-        // Get the actual .txt file path for error reporting
-        const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
-        const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
+    writeFdCoordinationFile(ctx, coordination_file_path, shm_handle) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{
-            .path = fd_file_path,
+            .path = coordination_file_path,
             .err = err,
         } });
     };
@@ -1737,10 +1738,8 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     // We wait until after child exits because the child needs to read the coordination
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
-    if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
-        std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
-    }
+    compile.CacheCleanup.deleteTempDir(temp_dir_path, coordination_file_path);
+    std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
 
     // Check the termination status
     switch (term) {
@@ -1866,10 +1865,10 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
-fn viewLirImageFromHandle(handle: SharedMemoryHandle) lir.LirImage.ImageError!lir.LirImage.ProgramView {
+fn viewLirImageFromHandle(allocator: Allocator, handle: SharedMemoryHandle) lir.LirImage.ImageError!lir.LirImage.ProgramView {
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    return lir.LirImage.viewMappedImage(header, base_ptr, handle.size);
+    return lir.LirImage.viewMappedImage(allocator, header, base_ptr, handle.size);
 }
 
 fn argLayoutsForProc(
@@ -2002,7 +2001,7 @@ pub fn buildLirImageWithCoordinator(
 
     const app_pkg = try coord.ensurePackage("app", app_dir);
     const app_module_name = base.module_path.getModuleName(roc_file_path);
-    const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
+    const app_module_id = try app_pkg.ensureModule(ctx.gpa, coord.moduleMemoryBacking(), app_module_name, roc_file_path);
     if (source_dir_override) |source_dir| {
         app_pkg.modules.items[app_module_id].source_dir_override = try ctx.gpa.dupe(u8, source_dir);
     }

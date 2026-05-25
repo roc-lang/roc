@@ -92,7 +92,7 @@ pub const LirStoreImage = extern struct {
         };
     }
 
-    fn view(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!LirStore {
+    fn view(self: LirStoreImage, allocator: std.mem.Allocator, base_ptr: [*]align(1) u8, image_size: usize) ImageError!LirStore {
         return .{
             .cf_stmts = try arrayListFromRef(LIR.CFStmt, base_ptr, image_size, self.cf_stmts),
             .cf_switch_branches = try arrayListFromRef(LIR.CFSwitchBranch, base_ptr, image_size, self.cf_switch_branches),
@@ -101,7 +101,7 @@ pub const LirStoreImage = extern struct {
             .local_ids = try arrayListFromRef(LIR.LocalId, base_ptr, image_size, self.local_ids),
             .proc_specs = try arrayListFromRef(LIR.LirProcSpec, base_ptr, image_size, self.proc_specs),
             .strings = try self.strings.view(base_ptr, image_size),
-            .allocator = std.heap.page_allocator,
+            .allocator = allocator,
             .next_synthetic_symbol = self.next_synthetic_symbol,
         };
     }
@@ -148,12 +148,13 @@ pub const LayoutStoreImage = extern struct {
 
     fn view(
         self: LayoutStoreImage,
+        allocator: std.mem.Allocator,
         base_ptr: [*]align(1) u8,
         image_size: usize,
         target_usize: base.target.TargetUsize,
     ) ImageError!layout_mod.Store {
         return .{
-            .allocator = std.heap.page_allocator,
+            .allocator = allocator,
             .layouts = try safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts),
             .resolved_list_layouts = try arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
             .tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
@@ -161,7 +162,7 @@ pub const LayoutStoreImage = extern struct {
             .struct_data = try safeListFromRef(layout_mod.StructData, base_ptr, image_size, self.struct_data),
             .tag_union_variants = try safeMultiListFromRef(layout_mod.TagUnionVariant, base_ptr, image_size, self.tag_union_variants),
             .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
-            .interned_layouts = std.StringHashMap(layout_mod.Idx).init(std.heap.page_allocator),
+            .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
             .scratch_intern_key = .empty,
             .target_usize = target_usize,
         };
@@ -222,7 +223,12 @@ pub fn fillHeaderInSharedMemory(
 /// hold the buffer behind a `const` pointer (e.g. a `FixedBufferAllocator`
 /// backed by `gpa.alignedAlloc` whose owning slice is `const`) pass it
 /// directly without a manual `@constCast`.
-pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, mapped_size: usize) ImageError!ProgramView {
+pub fn viewMappedImage(
+    allocator: std.mem.Allocator,
+    header: *const Header,
+    base_ptr: [*]align(1) const u8,
+    mapped_size: usize,
+) ImageError!ProgramView {
     if (mapped_size < @sizeOf(Header)) return error.InvalidLirImage;
 
     if (header.magic != MAGIC) return error.InvalidLirImage;
@@ -241,8 +247,8 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, ma
     const mutable_base: [*]align(1) u8 = @constCast(base_ptr);
 
     return .{
-        .store = try header.store.view(mutable_base, @intCast(header.image_size)),
-        .layouts = try header.layouts.view(mutable_base, @intCast(header.image_size), target_usize),
+        .store = try header.store.view(allocator, mutable_base, @intCast(header.image_size)),
+        .layouts = try header.layouts.view(allocator, mutable_base, @intCast(header.image_size), target_usize),
         .root_procs = try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.root_procs),
         .platform_entrypoints = try sliceFromRef(PlatformEntrypoint, mutable_base, @intCast(header.image_size), header.platform_entrypoints),
         .target_usize = target_usize,

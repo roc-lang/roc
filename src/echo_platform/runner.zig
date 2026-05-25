@@ -221,6 +221,7 @@ pub fn runEcho(opts: RunOptions) !u8 {
     };
 
     const view = lir.LirImage.viewMappedImage(
+        allocator,
         image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
