@@ -353,15 +353,17 @@ const Lowerer = struct {
         try self.fn_written.append(self.allocator, false);
         result.value_ptr.* = fn_id;
 
+        const ret_ty = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
+            .func => |func| func.ret,
+            else => Common.invariant("Lambda Mono function table contains a non-function type"),
+        });
+
         self.program.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = symbol,
             .source = source_fn.source,
             .args = .empty(),
             .body = .hosted,
-            .ret = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
-                .func => |func| func.ret,
-                else => Common.invariant("Lambda Mono function table contains a non-function type"),
-            }),
+            .ret = ret_ty,
         };
         return fn_id;
     }
