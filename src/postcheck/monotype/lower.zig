@@ -3175,7 +3175,10 @@ const BodyContext = struct {
             .tag_union => |tag_union| try self.fillTagUnionRowType(mono_ty, tag_union.tags, tag_union.ext),
             .alias => |alias| try self.fillAliasType(checked_ty, mono_ty, alias),
             .nominal => |nominal| try self.fillNominalType(checked_ty, mono_ty, nominal),
-            else => self.builder.program.types.types.items[@intFromEnum(mono_ty)] = try self.lowerTypePayload(checked_ty, payload),
+            else => {
+                const lowered = try self.lowerTypePayload(checked_ty, payload);
+                self.builder.program.types.types.items[@intFromEnum(mono_ty)] = lowered;
+            },
         }
 
         const binding = self.type_bindings.getPtr(address) orelse Common.invariant("checked type finished without a monotype binding");
