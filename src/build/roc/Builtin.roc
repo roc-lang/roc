@@ -351,6 +351,24 @@ Builtin :: [].{
 		## ```
 		join_with : List(Str), Str -> Str
 
+		## Split a string into two parts at the last occurrence of a specified delimiter substring, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
+		## ```roc
+		## expect "a.b.c".split_last(".") == Ok({ before: "a.b", after: "c" })
+		## expect "abc".split_last(",") == Err(NotFound)
+		## ```
+		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_last = |str, delim| {
+			parts = str.split_on(delim)
+			if parts.len() <= 1 {
+				Err(NotFound)
+			} else {
+				match parts.last() {
+					Ok(after) => Ok({ before: parts.drop_last(1).join_with(delim), after })
+					Err(_) => Err(NotFound)
+				}
+			}
+		}
+
 		## Returns `True` if the two strings are exactly the same.
 		is_eq : Str, Str -> Bool
 
