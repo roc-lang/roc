@@ -108,6 +108,19 @@ const thread_safe_allocator: Allocator = if (threads_available)
 else
     std.heap.page_allocator;
 
+const StageTimer = if (threads_available) std.time.Timer else void;
+
+fn startStageTimer() ?StageTimer {
+    if (comptime !threads_available) return null;
+    return std.time.Timer.start() catch null;
+}
+
+fn readStageTimer(timer: *?StageTimer) u64 {
+    if (comptime !threads_available) return 0;
+    if (timer.*) |*active| return active.read();
+    return 0;
+}
+
 const checked_module_cache_magic = "roc-mod-cache-v1";
 const checked_module_cache_format_version: u64 = 1;
 const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 8 + 32 + 32;
@@ -2748,7 +2761,7 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        var parse_timer = startStageTimer();
 
         // Read source
         const src = self.readModuleSource(task.path) catch |err| {
@@ -2837,7 +2850,6 @@ pub const Coordinator = struct {
         // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
         const parse_ast = parse.parse(&allocators, &env.common) catch {
             // Parse failed but we still have partial env
-            const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
             return .{
                 .parsed = .{
                     .package_name = task.package_name,
@@ -2849,7 +2861,7 @@ pub const Coordinator = struct {
                     .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
                     .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
                     .reports = reports,
-                    .parse_ns = if (threads_available) @intCast(end_time - start_time) else 0,
+                    .parse_ns = readStageTimer(&parse_timer),
                 },
             };
         };
@@ -2910,8 +2922,6 @@ pub const Coordinator = struct {
             }) catch {};
         }
 
-        const end_time = if (threads_available) std.time.nanoTimestamp() else 0;
-
         return .{
             .parsed = .{
                 .package_name = task.package_name,
@@ -2923,14 +2933,14 @@ pub const Coordinator = struct {
                 .discovered_local_imports = discovered_local_imports,
                 .discovered_external_imports = discovered_external_imports,
                 .reports = reports,
-                .parse_ns = if (threads_available) @intCast(end_time - start_time) else 0,
+                .parse_ns = readStageTimer(&parse_timer),
             },
         };
     }
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        var canonicalize_timer = startStageTimer();
 
         const env = task.module_env;
         const ast = task.cached_ast;
@@ -2949,10 +2959,10 @@ pub const Coordinator = struct {
         ) catch {};
         self.gpa.free(task.imported_modules);
 
-        const canon_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const canonicalize_ns = readStageTimer(&canonicalize_timer);
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
+        var diagnostics_timer = startStageTimer();
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -2964,7 +2974,7 @@ pub const Coordinator = struct {
             const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
             reports.append(worker_alloc, rep) catch {};
         }
-        const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diagnostics_ns = readStageTimer(&diagnostics_timer);
 
         // Free AST - deinit now handles both internal cleanup and self-destruction
         ast.deinit();
@@ -2979,15 +2989,15 @@ pub const Coordinator = struct {
                 .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
                 .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
                 .reports = reports,
-                .canonicalize_ns = if (threads_available) @intCast(canon_end - start_time) else 0,
-                .canonicalize_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,
+                .canonicalize_ns = canonicalize_ns,
+                .canonicalize_diagnostics_ns = diagnostics_ns,
             },
         };
     }
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
-        const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
+        var check_timer = startStageTimer();
 
         const env = task.module_env;
 
@@ -3021,10 +3031,10 @@ pub const Coordinator = struct {
         };
         defer typecheck_output.deinit();
 
-        const check_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const type_check_ns = readStageTimer(&check_timer);
 
         // Collect diagnostics
-        const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
+        var diagnostics_timer = startStageTimer();
         // Use worker allocator (thread-safe in multi-threaded mode) for result data
         const worker_alloc = self.getWorkerAllocator();
         // Pre-allocate to reduce allocation contention in multi-threaded mode
@@ -3065,7 +3075,7 @@ pub const Coordinator = struct {
             reports.append(worker_alloc, rep) catch {};
         }
 
-        const diag_end = if (threads_available) std.time.nanoTimestamp() else 0;
+        const diagnostics_ns = readStageTimer(&diagnostics_timer);
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
@@ -3083,8 +3093,8 @@ pub const Coordinator = struct {
                     if (typecheck_output.checked_artifact != null) typecheck_output.takeCheckedArtifact() else null,
                 ),
                 .reports = reports,
-                .type_check_ns = if (threads_available) @intCast(check_end - start_time) else 0,
-                .check_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,
+                .type_check_ns = type_check_ns,
+                .check_diagnostics_ns = diagnostics_ns,
             },
         };
     }
