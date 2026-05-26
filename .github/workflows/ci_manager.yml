@@ -36,6 +36,7 @@ jobs:
               - '.github/workflows/ci_zig_benchmarks.yml'
               - '.github/actions/flaky-retry/action.yml'
               - 'ci/zig_lints.sh'
+              - 'ci/tidy.zig'
               - 'ci/check_test_wiring.zig'
               - 'ci/custom_valgrind.sh'
               - 'ci/valgrind.supp'

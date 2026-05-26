@@ -2006,6 +2006,58 @@ const TidyStep = struct {
     }
 };
 
+const GitLintsStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *GitLintsStep {
+        const self = b.allocator.create(GitLintsStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "git-lints-inner",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        std.debug.print("---- git-lints: running Git-backed code checks ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, b.graph.zig_exe);
+        try child_argv.append(b.allocator, "run");
+        try child_argv.append(b.allocator, "ci/tidy.zig");
+        try child_argv.append(b.allocator, "--");
+        try child_argv.append(b.allocator, "--git-lints");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Git lints failed. Run 'zig run ci/tidy.zig -- --git-lints' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("zig run ci/tidy.zig -- --git-lints terminated abnormally", .{});
+            },
+        }
+    }
+};
+
 const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
@@ -2450,6 +2502,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all Zig tests");
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
     const tidy_step = b.step("tidy", "Run code tidiness checks (control chars, line length, etc.)");
+    const git_lints_step = b.step("git-lints", "Run Git-backed code checks");
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
@@ -3313,6 +3366,10 @@ pub fn build(b: *std.Build) void {
     // Tidy step: run code tidiness checks
     const tidy_inner = TidyStep.create(b);
     tidy_step.dependOn(&tidy_inner.step);
+
+    // Git lints step: run checks that require Git metadata
+    const git_lints_inner = GitLintsStep.create(b);
+    git_lints_step.dependOn(&git_lints_inner.step);
 
     const stack_overflow_test_helper_exe = b.addExecutable(.{
         .name = "stack_overflow_test_helper",
