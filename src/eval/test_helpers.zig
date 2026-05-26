@@ -64,6 +64,10 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         };
     }
 
+    fn createWithMinSize(preferred_size: usize, _: usize, page_size: usize) !@This() {
+        return create(preferred_size, page_size);
+    }
+
     fn deinit(self: *@This(), _: Allocator) void {
         std.heap.wasm_allocator.free(self.buffer);
     }
@@ -182,6 +186,10 @@ pub const ParsedResources = struct {
 // throughput because every parallel worker reserves its own region: keeping
 // it modest (1 GB) lets MapViewOfFile complete quickly and lets us scale to
 // many workers without tripping system address-space accounting.
+//
+// If the OS rejects the preferred reservation (e.g. aarch64 Linux with
+// CONFIG_ARM64_VA_BITS=39 — default on 64-bit Raspberry Pi OS — caps user
+// VA at ~256 GiB), the allocator halves down to `EVAL_SHARED_MEMORY_MIN_SIZE`.
 const EVAL_SHARED_MEMORY_SIZE: usize = if (builtin.target.os.tag == .freestanding)
     8 * 1024 * 1024
 else if (build_options.has_shared_memory_size)
@@ -194,6 +202,12 @@ else if (builtin.os.tag == .windows)
     256 * 1024 * 1024 // 256 MB on Windows — reservation cost matters for parallel workers
 else
     2 * 1024 * 1024 * 1024 * 1024;
+
+// Floor for the retry loop. Eval tests need very little arena, so 256 MB is
+// plenty; any 64-bit Linux kernel can fit this even with reduced VA bits. The
+// allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE` for targets whose
+// preferred size is smaller.
+const EVAL_SHARED_MEMORY_MIN_SIZE: usize = 256 * 1024 * 1024;
 
 fn configuredSharedMemorySize() usize {
     if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
@@ -859,7 +873,7 @@ pub fn lowerCheckedModuleSetToLir(
     }
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(EVAL_SHARED_MEMORY_SIZE, page_size);
+    var shm = try SharedMemoryAllocator.createWithMinSize(EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
     errdefer shm.deinit(allocator);
 
     const shm_allocator = shm.allocator();

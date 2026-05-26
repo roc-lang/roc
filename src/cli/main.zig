@@ -371,6 +371,11 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// Test builds may provide an explicit size with `-Dshared-memory-size`.
 /// This keeps production Linux at 2TB while allowing Valgrind CI to use a
 /// smaller arena that Memcheck can map.
+///
+/// If the OS rejects the preferred reservation (e.g. aarch64 Linux kernels
+/// built with CONFIG_ARM64_VA_BITS=39 cap user VA at ~256 GiB and refuse a
+/// 2 TiB mmap with ENOMEM), `createSharedMemory` halves the request down to
+/// `SHARED_MEMORY_MIN_SIZE` before giving up. See `createWithMinSize`.
 const SHARED_MEMORY_SIZE: usize = if (build_options.has_shared_memory_size)
     configuredSharedMemorySize()
 else if (@sizeOf(usize) < 8)
@@ -382,6 +387,18 @@ else if (builtin.os.tag == .windows)
 else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
 
+/// Floor for the retry loop in `createSharedMemory`. Set to the
+/// macOS/Windows reservation — documented as "ample headroom for real
+/// programs" — so a smaller reservation still produces a usable arena. On
+/// 32-bit targets the preferred size is already smaller than 8 GiB and an
+/// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
+/// itself (single attempt, no retry); `-Dshared-memory-size` builds are
+/// likewise handled by the allocator clamping `min_size` to the preferred.
+const SHARED_MEMORY_MIN_SIZE: usize = if (@sizeOf(usize) < 8)
+    SHARED_MEMORY_SIZE
+else
+    8 * 1024 * 1024 * 1024;
+
 fn configuredSharedMemorySize() usize {
     if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
         @compileError("-Dshared-memory-size does not fit in usize for this target");
@@ -391,10 +408,11 @@ fn configuredSharedMemorySize() usize {
 }
 
 /// Create the shared-memory arena used for the parent-produced LIR runtime
-/// image. Allocation failure is reported directly; the compiler must not
-/// silently switch to a smaller arena that changes capacity assumptions.
+/// image. Tries the preferred size first and halves down to
+/// `SHARED_MEMORY_MIN_SIZE` if the OS rejects the reservation; see
+/// `SHARED_MEMORY_SIZE` for details.
 fn createSharedMemory(page_size: usize) !SharedMemoryAllocator {
-    return SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
+    return SharedMemoryAllocator.createWithMinSize(SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
