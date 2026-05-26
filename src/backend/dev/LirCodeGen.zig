@@ -8006,8 +8006,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCmpImm(tag_reg, 0);
             const done_patch = try self.emitJumpIfEqual();
 
-            try self.codegen.emitLoadImm(tag_reg, -2);
-            try self.emitAndRegs(.w64, out_reg, tag_reg, cap_reg);
+            try self.codegen.emitLoadImm(out_reg, -2);
+            try self.emitAndRegs(.w64, out_reg, out_reg, cap_reg);
             self.codegen.patchJump(done_patch, self.codegen.currentOffset());
         }
 
