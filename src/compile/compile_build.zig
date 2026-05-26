@@ -662,13 +662,17 @@ pub const BuildEnv = struct {
                     }
 
                     const env = coord_semantic.module_env;
-                    const checked_artifact = coord_semantic.checked_artifact;
+                    const checked_artifact_ptr = coord_semantic.checked_artifact;
                     sched_mod.semantic = .{
-                        .module_env = if (checked_artifact == null) env else null,
-                        .checked_artifact = checked_artifact,
+                        .module_env = if (checked_artifact_ptr == null) env else null,
+                        .checked_artifact = if (checked_artifact_ptr) |artifact| artifact.* else null,
                     };
 
-                    coord_semantic.checked_artifact = null;
+                    if (checked_artifact_ptr) |artifact| {
+                        const artifact_allocator = artifact.canonical_names.allocator;
+                        artifact_allocator.destroy(artifact);
+                        coord_semantic.checked_artifact = null;
+                    }
 
                     // Clear coordinator ownership to prevent double-free during deinit.
                     coord_mod.semantic = null;

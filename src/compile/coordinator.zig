@@ -80,7 +80,6 @@ const CanonicalizedResult = messages.CanonicalizedResult;
 const TypeCheckedResult = messages.TypeCheckedResult;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
-const OwnedSemanticModuleData = messages.OwnedSemanticModuleData;
 
 const Channel = channel.Channel;
 const Io = @import("io").Io;
@@ -91,6 +90,40 @@ const Mode = compile_package.Mode;
 const is_freestanding = threading.is_freestanding;
 const threads_available = !is_freestanding;
 const Thread = threading.Thread;
+
+const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
+
+fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: bool) void {
+    const allocator = artifact.canonical_names.allocator;
+    if (retain_module_env) {
+        artifact.deinitRetainingModuleEnv(allocator);
+    } else {
+        artifact.deinit(allocator);
+    }
+    allocator.destroy(artifact);
+}
+
+const OwnedSemanticModuleData = struct {
+    module_env: *ModuleEnv,
+    checked_artifact: ?*CheckedModuleArtifact = null,
+
+    fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.checked_artifact) |artifact| {
+            destroyCheckedArtifact(artifact, false);
+            self.checked_artifact = null;
+        }
+    }
+};
+
+const RetiredCheckedArtifact = struct {
+    artifact: *CheckedModuleArtifact,
+    retain_module_env: bool,
+
+    fn deinit(self: *RetiredCheckedArtifact) void {
+        destroyCheckedArtifact(self.artifact, self.retain_module_env);
+        self.artifact = undefined;
+    }
+};
 
 /// Thread-safe allocator used for worker-thread allocations and shared
 /// coordinator buffers (channels, per-package maps) when running multi-threaded.
@@ -314,7 +347,7 @@ pub const ModuleState = struct {
 
     fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
         if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*artifact| return artifact.moduleEnv();
+            if (semantic.checked_artifact) |artifact| return artifact.moduleEnv();
             return semantic.module_env;
         }
         return null;
@@ -322,7 +355,7 @@ pub const ModuleState = struct {
 
     fn moduleEnvStorage(self: *ModuleState) ?check.CheckedArtifact.ModuleEnvStorage {
         if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*artifact| return artifact.module_env;
+            if (semantic.checked_artifact) |artifact| return artifact.module_env;
             return .{ .checked_source = semantic.module_env };
         }
         return null;
@@ -330,7 +363,7 @@ pub const ModuleState = struct {
 
     fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
         if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*artifact| return artifact;
+            if (semantic.checked_artifact) |artifact| return artifact;
         }
         return null;
     }
@@ -358,19 +391,37 @@ pub const ModuleState = struct {
         return self.source_dir_override orelse (std.fs.path.dirname(self.path) orelse "");
     }
 
-    fn replaceCheckedArtifact(self: *ModuleState, artifact: check.CheckedArtifact.CheckedModuleArtifact) void {
+    fn replaceCheckedArtifact(
+        self: *ModuleState,
+        artifact: *CheckedModuleArtifact,
+        retired_artifacts: *std.ArrayList(RetiredCheckedArtifact),
+        allocator: Allocator,
+    ) Allocator.Error!void {
         if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            if (semantic.checked_artifact) |existing| {
+                try retired_artifacts.append(allocator, .{
+                    .artifact = existing,
+                    .retain_module_env = @intFromPtr(existing.moduleEnv()) == @intFromPtr(artifact.moduleEnv()),
+                });
+            }
             semantic.checked_artifact = artifact;
             return;
         }
         std.debug.panic("compile.coordinator.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
     }
 
-    fn replaceRepublishedCheckedArtifact(self: *ModuleState, artifact: check.CheckedArtifact.CheckedModuleArtifact) void {
+    fn replaceRepublishedCheckedArtifact(
+        self: *ModuleState,
+        artifact: *CheckedModuleArtifact,
+        retired_artifacts: *std.ArrayList(RetiredCheckedArtifact),
+        allocator: Allocator,
+    ) Allocator.Error!void {
         if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*existing| {
-                existing.deinitRetainingModuleEnv(existing.canonical_names.allocator);
+            if (semantic.checked_artifact) |existing| {
+                try retired_artifacts.append(allocator, .{
+                    .artifact = existing,
+                    .retain_module_env = true,
+                });
             }
             semantic.checked_artifact = artifact;
             return;
@@ -379,9 +430,6 @@ pub const ModuleState = struct {
     }
 
     pub fn deinit(self: *ModuleState, gpa: Allocator) void {
-        if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
-        }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: starting, semantic={}, ast={}\n", .{
                 self.name,
@@ -400,6 +448,7 @@ pub const ModuleState = struct {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact != null) {
                 // The checked artifact owns the ModuleEnv after publication.
+                semantic.deinit();
             } else {
                 const env = semantic.module_env;
                 // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
@@ -646,6 +695,10 @@ pub const Coordinator = struct {
     /// does not own artifacts; it points at the module storage that owns them.
     checked_artifact_index: std.AutoHashMap([32]u8, ModuleRef),
 
+    /// Checked artifacts that have been replaced but may still be referenced by
+    /// `ImportedModuleView`s already handed to worker threads.
+    retired_checked_artifacts: std.ArrayList(RetiredCheckedArtifact),
+
     /// Whether to run hosted compiler transformation after canonicalization.
     /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
@@ -719,6 +772,7 @@ pub const Coordinator = struct {
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
+            .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
@@ -784,6 +838,11 @@ pub const Coordinator = struct {
 
         self.checked_artifact_index.deinit();
 
+        for (self.retired_checked_artifacts.items) |*retired| {
+            retired.deinit();
+        }
+        self.retired_checked_artifacts.deinit(self.gpa);
+
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
     }
@@ -801,6 +860,13 @@ pub const Coordinator = struct {
             thread_safe_allocator
         else
             self.gpa;
+    }
+
+    fn allocateCheckedArtifact(artifact: CheckedModuleArtifact) Allocator.Error!*CheckedModuleArtifact {
+        const allocator = artifact.canonical_names.allocator;
+        const owned = try allocator.create(CheckedModuleArtifact);
+        owned.* = artifact;
+        return owned;
     }
 
     /// Create or get a package
@@ -1391,9 +1457,15 @@ pub const Coordinator = struct {
             imported_artifacts,
             publication_with_availability,
         );
-        errdefer artifact.deinit(self.gpa);
+        var artifact_owned = true;
+        errdefer if (artifact_owned) artifact.deinit(self.gpa);
+        const artifact_ptr = try allocateCheckedArtifact(artifact);
+        var artifact_ptr_owned = true;
+        errdefer if (artifact_ptr_owned) destroyCheckedArtifact(artifact_ptr, false);
+        artifact_owned = false;
         self.unregisterCheckedArtifact(mod);
-        mod.replaceRepublishedCheckedArtifact(artifact);
+        try mod.replaceRepublishedCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
+        artifact_ptr_owned = false;
         try self.registerCheckedArtifact(pkg, mod);
     }
 
@@ -1744,9 +1816,9 @@ pub const Coordinator = struct {
         self: *Coordinator,
         env: *ModuleEnv,
         checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact,
-    ) *OwnedSemanticModuleData {
+    ) *messages.OwnedSemanticModuleData {
         const allocator = self.getWorkerAllocator();
-        const semantic = allocator.create(OwnedSemanticModuleData) catch @panic("out of memory allocating type-check result");
+        const semantic = allocator.create(messages.OwnedSemanticModuleData) catch @panic("out of memory allocating type-check result");
         semantic.* = .{
             .module_env = env,
             .checked_artifact = checked_artifact,
@@ -1920,15 +1992,33 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         }
+        const artifact_ptr = allocateCheckedArtifact(artifact) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        artifact_owned = false;
 
         const old_env = current_env;
         const old_env_alloc = old_env.gpa;
         const old_source = old_env.common.source;
+        const old_had_artifact = mod.checkedArtifact() != null;
 
+        self.unregisterCheckedArtifact(mod);
         if (mod.semantic) |*semantic| {
+            if (semantic.checked_artifact) |existing| {
+                self.retired_checked_artifacts.append(self.gpa, .{
+                    .artifact = existing,
+                    .retain_module_env = @intFromPtr(existing.moduleEnv()) == @intFromPtr(artifact_ptr.moduleEnv()),
+                }) catch {
+                    destroyCheckedArtifact(artifact_ptr, false);
+                    manager.stats.recordInvalidation();
+                    return false;
+                };
+            }
             semantic.module_env = cached_env;
-            semantic.checked_artifact = artifact;
+            semantic.checked_artifact = artifact_ptr;
         } else {
+            destroyCheckedArtifact(artifact_ptr, false);
             return false;
         }
 
@@ -1937,15 +2027,17 @@ pub const Coordinator = struct {
                 semantic.module_env = old_env;
                 semantic.checked_artifact = null;
             }
+            destroyCheckedArtifact(artifact_ptr, false);
             manager.stats.recordInvalidation();
             return false;
         };
 
-        old_env.deinit();
-        old_env_alloc.destroy(old_env);
-        if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
+        if (!old_had_artifact) {
+            old_env.deinit();
+            old_env_alloc.destroy(old_env);
+            if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
+        }
 
-        artifact_owned = false;
         return true;
     }
 
@@ -2227,14 +2319,24 @@ pub const Coordinator = struct {
         mod.replaceModuleEnv(result.semantic.module_env);
         if (result.semantic.checked_artifact) |artifact| {
             self.unregisterCheckedArtifact(mod);
-            mod.replaceCheckedArtifact(artifact);
+            const artifact_ptr = try allocateCheckedArtifact(artifact);
+            var artifact_ptr_owned = true;
+            errdefer if (artifact_ptr_owned) destroyCheckedArtifact(artifact_ptr, false);
+            result.semantic.checked_artifact = null;
+            try mod.replaceCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
+            artifact_ptr_owned = false;
             try self.registerCheckedArtifact(pkg, mod);
             if (mod.checkedArtifact()) |cached_artifact| {
                 self.storeCheckedModuleInCache(cached_artifact);
             }
         } else if (mod.semantic) |*semantic| {
             self.unregisterCheckedArtifact(mod);
-            if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            if (semantic.checked_artifact) |existing| {
+                try self.retired_checked_artifacts.append(self.gpa, .{
+                    .artifact = existing,
+                    .retain_module_env = @intFromPtr(existing.moduleEnv()) == @intFromPtr(semantic.module_env),
+                });
+            }
             semantic.checked_artifact = null;
         }
         result.semantic.checked_artifact = null;

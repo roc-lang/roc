@@ -18,10 +18,13 @@ jobs:
         include:
           - os: macos-15
             target_flag: ''
+            nix_ci_mode: ''
           - os: ubuntu-24.04
             target_flag: -Dtarget=x86_64-linux-musl
+            nix_ci_mode: --build-only
           - os: ubuntu-24.04-arm
             target_flag: ''
+            nix_ci_mode: ''
 
     steps:
       - name: Checkout
@@ -34,7 +37,7 @@ jobs:
       - name: Build inside a nix dev shell
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'nix develop ./src/ -c bash -c \"zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}\"'
+          command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}'
           error_string_contains: "double roundtrip bundle|build.zig.zon"
           retry_count: 3
 
