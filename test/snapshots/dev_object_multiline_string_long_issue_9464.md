@@ -1,0 +1,657 @@
+# META
+~~~ini
+description=Multiline string with many lines (regression test for stack overflow, #9464)
+type=dev_object
+~~~
+# SOURCE
+## app.roc
+~~~roc
+app [data] { pf: platform "./platform.roc" }
+
+data =
+    \\Line 000
+    \\Line 001
+    \\Line 002
+    \\Line 003
+    \\Line 004
+    \\Line 005
+    \\Line 006
+    \\Line 007
+    \\Line 008
+    \\Line 009
+    \\Line 010
+    \\Line 011
+    \\Line 012
+    \\Line 013
+    \\Line 014
+    \\Line 015
+    \\Line 016
+    \\Line 017
+    \\Line 018
+    \\Line 019
+    \\Line 020
+    \\Line 021
+    \\Line 022
+    \\Line 023
+    \\Line 024
+    \\Line 025
+    \\Line 026
+    \\Line 027
+    \\Line 028
+    \\Line 029
+    \\Line 030
+    \\Line 031
+    \\Line 032
+    \\Line 033
+    \\Line 034
+    \\Line 035
+    \\Line 036
+    \\Line 037
+    \\Line 038
+    \\Line 039
+    \\Line 040
+    \\Line 041
+    \\Line 042
+    \\Line 043
+    \\Line 044
+    \\Line 045
+    \\Line 046
+    \\Line 047
+    \\Line 048
+    \\Line 049
+    \\Line 050
+    \\Line 051
+    \\Line 052
+    \\Line 053
+    \\Line 054
+    \\Line 055
+    \\Line 056
+    \\Line 057
+    \\Line 058
+    \\Line 059
+    \\Line 060
+    \\Line 061
+    \\Line 062
+    \\Line 063
+    \\Line 064
+    \\Line 065
+    \\Line 066
+    \\Line 067
+    \\Line 068
+    \\Line 069
+    \\Line 070
+    \\Line 071
+    \\Line 072
+    \\Line 073
+    \\Line 074
+    \\Line 075
+    \\Line 076
+    \\Line 077
+    \\Line 078
+    \\Line 079
+    \\Line 080
+    \\Line 081
+    \\Line 082
+    \\Line 083
+    \\Line 084
+    \\Line 085
+    \\Line 086
+    \\Line 087
+    \\Line 088
+    \\Line 089
+    \\Line 090
+    \\Line 091
+    \\Line 092
+    \\Line 093
+    \\Line 094
+    \\Line 095
+    \\Line 096
+    \\Line 097
+    \\Line 098
+    \\Line 099
+    \\Line 100
+    \\Line 101
+    \\Line 102
+    \\Line 103
+    \\Line 104
+    \\Line 105
+    \\Line 106
+    \\Line 107
+    \\Line 108
+    \\Line 109
+    \\Line 110
+    \\Line 111
+    \\Line 112
+    \\Line 113
+    \\Line 114
+    \\Line 115
+    \\Line 116
+    \\Line 117
+    \\Line 118
+    \\Line 119
+    \\Line 120
+    \\Line 121
+    \\Line 122
+    \\Line 123
+    \\Line 124
+    \\Line 125
+    \\Line 126
+    \\Line 127
+    \\Line 128
+    \\Line 129
+    \\Line 130
+    \\Line 131
+    \\Line 132
+    \\Line 133
+    \\Line 134
+    \\Line 135
+    \\Line 136
+    \\Line 137
+    \\Line 138
+    \\Line 139
+    \\Line 140
+    \\Line 141
+    \\Line 142
+    \\Line 143
+    \\Line 144
+    \\Line 145
+    \\Line 146
+    \\Line 147
+    \\Line 148
+    \\Line 149
+    \\Line 150
+    \\Line 151
+    \\Line 152
+    \\Line 153
+    \\Line 154
+    \\Line 155
+    \\Line 156
+    \\Line 157
+    \\Line 158
+    \\Line 159
+    \\Line 160
+    \\Line 161
+    \\Line 162
+    \\Line 163
+    \\Line 164
+    \\Line 165
+    \\Line 166
+    \\Line 167
+    \\Line 168
+    \\Line 169
+    \\Line 170
+    \\Line 171
+    \\Line 172
+    \\Line 173
+    \\Line 174
+    \\Line 175
+    \\Line 176
+    \\Line 177
+    \\Line 178
+    \\Line 179
+    \\Line 180
+    \\Line 181
+    \\Line 182
+    \\Line 183
+    \\Line 184
+    \\Line 185
+    \\Line 186
+    \\Line 187
+    \\Line 188
+    \\Line 189
+    \\Line 190
+    \\Line 191
+    \\Line 192
+    \\Line 193
+    \\Line 194
+    \\Line 195
+    \\Line 196
+    \\Line 197
+    \\Line 198
+    \\Line 199
+    \\Line 200
+    \\Line 201
+    \\Line 202
+    \\Line 203
+    \\Line 204
+    \\Line 205
+    \\Line 206
+    \\Line 207
+    \\Line 208
+    \\Line 209
+    \\Line 210
+    \\Line 211
+    \\Line 212
+    \\Line 213
+    \\Line 214
+    \\Line 215
+    \\Line 216
+    \\Line 217
+    \\Line 218
+    \\Line 219
+    \\Line 220
+    \\Line 221
+    \\Line 222
+    \\Line 223
+    \\Line 224
+    \\Line 225
+    \\Line 226
+    \\Line 227
+    \\Line 228
+    \\Line 229
+    \\Line 230
+    \\Line 231
+    \\Line 232
+    \\Line 233
+    \\Line 234
+    \\Line 235
+    \\Line 236
+    \\Line 237
+    \\Line 238
+    \\Line 239
+    \\Line 240
+    \\Line 241
+    \\Line 242
+    \\Line 243
+    \\Line 244
+    \\Line 245
+    \\Line 246
+    \\Line 247
+    \\Line 248
+    \\Line 249
+    \\Line 250
+    \\Line 251
+    \\Line 252
+    \\Line 253
+    \\Line 254
+    \\Line 255
+    \\Line 256
+    \\Line 257
+    \\Line 258
+    \\Line 259
+    \\Line 260
+    \\Line 261
+    \\Line 262
+    \\Line 263
+    \\Line 264
+    \\Line 265
+    \\Line 266
+    \\Line 267
+    \\Line 268
+    \\Line 269
+    \\Line 270
+    \\Line 271
+    \\Line 272
+    \\Line 273
+    \\Line 274
+    \\Line 275
+    \\Line 276
+    \\Line 277
+    \\Line 278
+    \\Line 279
+    \\Line 280
+    \\Line 281
+    \\Line 282
+    \\Line 283
+    \\Line 284
+    \\Line 285
+    \\Line 286
+    \\Line 287
+    \\Line 288
+    \\Line 289
+    \\Line 290
+    \\Line 291
+    \\Line 292
+    \\Line 293
+    \\Line 294
+    \\Line 295
+    \\Line 296
+    \\Line 297
+    \\Line 298
+    \\Line 299
+~~~
+## platform.roc
+~~~roc
+platform ""
+    requires {} { data : Str }
+    exposes []
+    packages {}
+    provides { data_for_host: "data" }
+    targets: {
+        files: "targets/",
+        exe: {
+            x64glibc: [app],
+        }
+    }
+
+data_for_host : Str
+data_for_host = data
+~~~
+# MONO
+~~~roc
+# platform
+data_for_host = <required>
+
+# app
+data = "Line 000
+Line 001
+Line 002
+Line 003
+Line 004
+Line 005
+Line 006
+Line 007
+Line 008
+Line 009
+Line 010
+Line 011
+Line 012
+Line 013
+Line 014
+Line 015
+Line 016
+Line 017
+Line 018
+Line 019
+Line 020
+Line 021
+Line 022
+Line 023
+Line 024
+Line 025
+Line 026
+Line 027
+Line 028
+Line 029
+Line 030
+Line 031
+Line 032
+Line 033
+Line 034
+Line 035
+Line 036
+Line 037
+Line 038
+Line 039
+Line 040
+Line 041
+Line 042
+Line 043
+Line 044
+Line 045
+Line 046
+Line 047
+Line 048
+Line 049
+Line 050
+Line 051
+Line 052
+Line 053
+Line 054
+Line 055
+Line 056
+Line 057
+Line 058
+Line 059
+Line 060
+Line 061
+Line 062
+Line 063
+Line 064
+Line 065
+Line 066
+Line 067
+Line 068
+Line 069
+Line 070
+Line 071
+Line 072
+Line 073
+Line 074
+Line 075
+Line 076
+Line 077
+Line 078
+Line 079
+Line 080
+Line 081
+Line 082
+Line 083
+Line 084
+Line 085
+Line 086
+Line 087
+Line 088
+Line 089
+Line 090
+Line 091
+Line 092
+Line 093
+Line 094
+Line 095
+Line 096
+Line 097
+Line 098
+Line 099
+Line 100
+Line 101
+Line 102
+Line 103
+Line 104
+Line 105
+Line 106
+Line 107
+Line 108
+Line 109
+Line 110
+Line 111
+Line 112
+Line 113
+Line 114
+Line 115
+Line 116
+Line 117
+Line 118
+Line 119
+Line 120
+Line 121
+Line 122
+Line 123
+Line 124
+Line 125
+Line 126
+Line 127
+Line 128
+Line 129
+Line 130
+Line 131
+Line 132
+Line 133
+Line 134
+Line 135
+Line 136
+Line 137
+Line 138
+Line 139
+Line 140
+Line 141
+Line 142
+Line 143
+Line 144
+Line 145
+Line 146
+Line 147
+Line 148
+Line 149
+Line 150
+Line 151
+Line 152
+Line 153
+Line 154
+Line 155
+Line 156
+Line 157
+Line 158
+Line 159
+Line 160
+Line 161
+Line 162
+Line 163
+Line 164
+Line 165
+Line 166
+Line 167
+Line 168
+Line 169
+Line 170
+Line 171
+Line 172
+Line 173
+Line 174
+Line 175
+Line 176
+Line 177
+Line 178
+Line 179
+Line 180
+Line 181
+Line 182
+Line 183
+Line 184
+Line 185
+Line 186
+Line 187
+Line 188
+Line 189
+Line 190
+Line 191
+Line 192
+Line 193
+Line 194
+Line 195
+Line 196
+Line 197
+Line 198
+Line 199
+Line 200
+Line 201
+Line 202
+Line 203
+Line 204
+Line 205
+Line 206
+Line 207
+Line 208
+Line 209
+Line 210
+Line 211
+Line 212
+Line 213
+Line 214
+Line 215
+Line 216
+Line 217
+Line 218
+Line 219
+Line 220
+Line 221
+Line 222
+Line 223
+Line 224
+Line 225
+Line 226
+Line 227
+Line 228
+Line 229
+Line 230
+Line 231
+Line 232
+Line 233
+Line 234
+Line 235
+Line 236
+Line 237
+Line 238
+Line 239
+Line 240
+Line 241
+Line 242
+Line 243
+Line 244
+Line 245
+Line 246
+Line 247
+Line 248
+Line 249
+Line 250
+Line 251
+Line 252
+Line 253
+Line 254
+Line 255
+Line 256
+Line 257
+Line 258
+Line 259
+Line 260
+Line 261
+Line 262
+Line 263
+Line 264
+Line 265
+Line 266
+Line 267
+Line 268
+Line 269
+Line 270
+Line 271
+Line 272
+Line 273
+Line 274
+Line 275
+Line 276
+Line 277
+Line 278
+Line 279
+Line 280
+Line 281
+Line 282
+Line 283
+Line 284
+Line 285
+Line 286
+Line 287
+Line 288
+Line 289
+Line 290
+Line 291
+Line 292
+Line 293
+Line 294
+Line 295
+Line 296
+Line 297
+Line 298
+Line 299"
+
+~~~
+# DEV OUTPUT
+~~~ini
+x64mac=91ae7f26602192663d2023d35cf1a873579d72c25dfa566d6ba38633eecdab9c
+x64win=1055a2d3aa2fc80586a261bcf2e2e48339eeb7dbc413e7576a94e74cdcc03e7a
+x64freebsd=2f9d40076dca6dcfcf46d891bf405eab3b8b325de294afe0b212fe43f3a0936f
+x64openbsd=2f9d40076dca6dcfcf46d891bf405eab3b8b325de294afe0b212fe43f3a0936f
+x64netbsd=2f9d40076dca6dcfcf46d891bf405eab3b8b325de294afe0b212fe43f3a0936f
+x64musl=2f9d40076dca6dcfcf46d891bf405eab3b8b325de294afe0b212fe43f3a0936f
+x64glibc=2f9d40076dca6dcfcf46d891bf405eab3b8b325de294afe0b212fe43f3a0936f
+x64linux=2f9d40076dca6dcfcf46d891bf405eab3b8b325de294afe0b212fe43f3a0936f
+x64elf=2f9d40076dca6dcfcf46d891bf405eab3b8b325de294afe0b212fe43f3a0936f
+arm64mac=8d6f71dbb980fad1e08184ee28ed0f4d1f1aaa9edc5a308d87d4dd71ff2f1f6a
+arm64win=032091a737376763a37130205dfda11c5a3a158f4482a8ee1adf48e412d3ece2
+arm64linux=e2c4c1e8f93aa5cc1b99fa7aafe4f29b59224e2a614087c213305bab0b8cfc07
+arm64musl=e2c4c1e8f93aa5cc1b99fa7aafe4f29b59224e2a614087c213305bab0b8cfc07
+arm64glibc=e2c4c1e8f93aa5cc1b99fa7aafe4f29b59224e2a614087c213305bab0b8cfc07
+arm32linux=NOT_IMPLEMENTED
+arm32musl=NOT_IMPLEMENTED
+wasm32=NOT_IMPLEMENTED
+~~~
