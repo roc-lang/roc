@@ -39,7 +39,7 @@ pub fn main() noreturn {
 }
 
 fn triggerHighAccessViolation() noreturn {
-    const bad_addr: usize = 0x1_0000_1000;
+    const bad_addr: usize = if (comptime @bitSizeOf(usize) >= 64) 0x1_0000_1000 else 0x1000;
     const ptr: *volatile u8 = @ptrFromInt(bad_addr);
     ptr.* = 1;
     std.process.exit(96);

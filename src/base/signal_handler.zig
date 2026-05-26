@@ -462,7 +462,9 @@ test "classifyFault treats interrupted stack pointer below stack as overflow" {
     const bounds = StackBounds.init(0x7000, 0x9000, 0x1000, null, null).?;
 
     try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0x5000_0000, 0x5000, bounds));
-    try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0xffff_fd1f_fea0, 0x5000, bounds));
+    if (comptime @bitSizeOf(usize) >= 64) {
+        try std.testing.expectEqual(FaultKind.stack_overflow, classifyFault(0xffff_fd1f_fea0, 0x5000, bounds));
+    }
     try std.testing.expectEqual(FaultKind.access_violation, classifyFault(0x5000_0000, 0x9000, bounds));
 }
 
