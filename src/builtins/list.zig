@@ -23,6 +23,7 @@ const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 
 /// The low bit tags whether a List is a seamless slice.
 pub const SEAMLESS_SLICE_TAG: usize = 1;
+/// Deprecated compatibility alias for the seamless-slice tag bit.
 pub const SEAMLESS_SLICE_BIT: usize = SEAMLESS_SLICE_TAG;
 
 /// Runtime representation of Roc's List type with reference counting and seamless slice optimization.

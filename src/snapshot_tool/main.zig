@@ -524,6 +524,13 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
     .backing_allocator = std.heap.page_allocator,
 };
 
+const default_snapshot_max_threads = 4;
+
+fn defaultSnapshotThreadCount() usize {
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @min(cpu_count, default_snapshot_max_threads);
+}
+
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
@@ -623,7 +630,7 @@ pub fn main() !void {
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --linecol       Include line/column information in output
-                \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
+                \\  --threads <n>   Number of threads to use (0 = auto, capped at 4; 1 = single-threaded). Default: 0.
                 \\  --check-expected     Validate that EXPECTED/DEV OUTPUT sections match actual output
                 \\  --update-expected    Update EXPECTED/DEV OUTPUT sections with actual output
                 \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
@@ -651,6 +658,12 @@ pub fn main() !void {
     // Force single-threaded mode in debug mode
     if (debug_mode and max_threads == 0) {
         max_threads = 1;
+    }
+
+    if (max_threads == 0) {
+        // Each snapshot can compile and evaluate a complete program. Bound auto
+        // mode so peak memory stays stable on machines with many cores.
+        max_threads = defaultSnapshotThreadCount();
     }
 
     // Validate --trace-eval flag usage
@@ -753,7 +766,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     }
     try collectWorkItems(gpa, snapshots_dir, &work_list);
 
-    const result = try processWorkItems(gpa, work_list, 0, false, &config);
+    const result = try processWorkItems(gpa, work_list, defaultSnapshotThreadCount(), false, &config);
     return result.failed == 0;
 }
 

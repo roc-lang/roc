@@ -1819,6 +1819,14 @@ const MiniCiStep = struct {
         const b = step.owner;
         std.debug.print("---- minici: checking for snapshot changes ----\n", .{});
 
+        std.fs.cwd().access(".git", .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("Skipping snapshot change check outside a Git worktree.\n", .{});
+                return;
+            },
+            else => return err,
+        };
+
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
 

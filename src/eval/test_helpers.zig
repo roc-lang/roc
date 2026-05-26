@@ -32,6 +32,7 @@ const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
 const LirImage = lir.LirImage;
 
+/// Captures an eval backend's string output and host allocation count.
 pub const EvalRunResult = struct {
     output: []u8,
     allocation_count: u32,

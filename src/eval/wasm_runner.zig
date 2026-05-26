@@ -65,6 +65,7 @@ const WasmStr = struct {
     is_small: bool,
 };
 
+/// Captures a wasm eval run's string output and host-observed allocation count.
 pub const RunWasmStrResult = struct {
     output: []u8,
     allocation_count: u32,
