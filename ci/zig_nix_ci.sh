@@ -8,6 +8,12 @@ heartbeat() {
     done
 }
 
+build_only=0
+if [[ "${1:-}" == "--build-only" ]]; then
+    build_only=1
+    shift
+fi
+
 heartbeat &
 heartbeat_pid=$!
 
@@ -18,5 +24,10 @@ cleanup() {
 trap cleanup EXIT
 
 zig build "$@"
+if [[ "$build_only" -eq 1 ]]; then
+    printf 'Skipping snapshot/test in this Nix leg; the regular Zig target matrix covers them for: %s\n' "$*"
+    exit 0
+fi
+
 zig build snapshot "$@"
 zig build test "$@"

@@ -849,8 +849,7 @@ pub const Coordinator = struct {
             self.gpa;
     }
 
-    fn allocateCheckedArtifact(self: *Coordinator, artifact: CheckedModuleArtifact) Allocator.Error!*CheckedModuleArtifact {
-        _ = self;
+    fn allocateCheckedArtifact(artifact: CheckedModuleArtifact) Allocator.Error!*CheckedModuleArtifact {
         const allocator = artifact.canonical_names.allocator;
         const owned = try allocator.create(CheckedModuleArtifact);
         owned.* = artifact;
@@ -1447,7 +1446,7 @@ pub const Coordinator = struct {
         );
         var artifact_owned = true;
         errdefer if (artifact_owned) artifact.deinit(self.gpa);
-        const artifact_ptr = try self.allocateCheckedArtifact(artifact);
+        const artifact_ptr = try allocateCheckedArtifact(artifact);
         var artifact_ptr_owned = true;
         errdefer if (artifact_ptr_owned) destroyCheckedArtifact(artifact_ptr, false);
         artifact_owned = false;
@@ -1980,7 +1979,7 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         }
-        const artifact_ptr = self.allocateCheckedArtifact(artifact) catch {
+        const artifact_ptr = allocateCheckedArtifact(artifact) catch {
             manager.stats.recordInvalidation();
             return false;
         };
@@ -2307,7 +2306,7 @@ pub const Coordinator = struct {
         mod.replaceModuleEnv(result.semantic.module_env);
         if (result.semantic.checked_artifact) |artifact| {
             self.unregisterCheckedArtifact(mod);
-            const artifact_ptr = try self.allocateCheckedArtifact(artifact);
+            const artifact_ptr = try allocateCheckedArtifact(artifact);
             var artifact_ptr_owned = true;
             errdefer if (artifact_ptr_owned) destroyCheckedArtifact(artifact_ptr, false);
             result.semantic.checked_artifact = null;
