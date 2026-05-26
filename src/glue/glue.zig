@@ -1496,7 +1496,7 @@ const GlueRocValueWriter = struct {
         }
         if (elem_size == 0) {
             return .{
-                .list = .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = len },
+                .list = .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(len) },
                 .bytes = null,
                 .elem_layout = elem_layout,
                 .elem_size = elem_size,
@@ -1517,7 +1517,7 @@ const GlueRocValueWriter = struct {
             .list = .{
                 .bytes = bytes,
                 .length = len,
-                .capacity_or_alloc_ptr = len,
+                .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(len),
             },
             .bytes = bytes,
             .elem_layout = elem_layout,

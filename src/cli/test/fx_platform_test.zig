@@ -845,6 +845,21 @@ test "drop_prefix match use-after-free regression" {
     }
 }
 
+test "str seamless slice rc uses original allocation pointer" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/str_seamless_slice_rc.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+    try testing.expectEqualStrings("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n", run_result.stdout);
+    if (std.mem.indexOf(u8, run_result.stderr, "[Roc Memory Info]") != null) {
+        std.debug.print("Detected leaked allocation in seamless-slice RC regression:\n{s}\n", .{run_result.stderr});
+        return error.SeamlessSliceRcLeak;
+    }
+}
+
 test "multiline string split_on" {
     // Tests splitting a multiline string and iterating over the lines.
     // This is a regression test to ensure split_on works correctly with

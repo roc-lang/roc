@@ -66,6 +66,44 @@ const core_tests = [_]TestCase{
         .expected = .{ .problem = {} },
     },
 
+    .{
+        .name = "allocation - Str.drop_prefix returns seamless slice without allocating copy",
+        .source =
+        \\{
+        \\    prefix = "WASM_SEAMLESS_SLICE_PREFIX:"
+        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
+        \\    source = Str.concat(prefix, payload)
+        \\
+        \\    Str.drop_prefix(source, prefix)
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 2,
+        } },
+    },
+
+    .{
+        .name = "allocation - List.sublist returns seamless slice without allocating copy",
+        .source =
+        \\{
+        \\    prefix = [76, 73, 83, 84, 95, 83, 69, 65, 77, 76, 69, 83, 83, 95, 83, 76, 73, 67, 69, 95, 80, 82, 69, 70, 73, 88, 58]
+        \\    payload = [97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90]
+        \\    source = List.concat(prefix, payload)
+        \\    slice = List.sublist(source, { start: List.len(prefix), len: List.len(payload) })
+        \\
+        \\    match Str.from_utf8(slice) {
+        \\        Ok(str) => str
+        \\        Err(_) => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 3,
+        } },
+    },
+
     // Basic expressions and control flow
     .{ .name = "inspect: integer literal", .source = "42", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "inspect: negative integer literal", .source = "-1234", .expected = .{ .inspect_str = "-1234.0" } },

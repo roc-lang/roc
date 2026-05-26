@@ -413,7 +413,7 @@ const StaticDataBuilder = struct {
         };
         self.writeTargetWord(bytes, base_offset, 0);
         self.writeTargetWord(bytes, base_offset + self.word_size, @intCast(items.len));
-        self.writeTargetWord(bytes, base_offset + self.word_size * 2, @intCast(items.len));
+        self.writeTargetWord(bytes, base_offset + self.word_size * 2, self.encodeRocListCapacity(items.len));
         if (items.len == 0) return;
 
         const list_layout = self.layoutValue(list_layout_idx);
@@ -900,6 +900,13 @@ const StaticDataBuilder = struct {
         const target_capacity: u64 = @intCast(capacity);
         const max_capacity = self.targetWordMax() >> 1;
         if (target_capacity > max_capacity) staticDataInvariant("static string exceeds RocStr capacity limit for target");
+        return target_capacity << 1;
+    }
+
+    fn encodeRocListCapacity(self: *StaticDataBuilder, capacity: usize) u64 {
+        const target_capacity: u64 = @intCast(capacity);
+        const max_capacity = self.targetWordMax() >> 1;
+        if (target_capacity > max_capacity) staticDataInvariant("static list exceeds RocList capacity limit for target");
         return target_capacity << 1;
     }
 

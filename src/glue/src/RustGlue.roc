@@ -978,10 +978,10 @@ generate_rust_roc_list =
 	\\
 	\\    /// Return true if this list is a seamless slice into another allocation.
 	\\    /// Slices share the rc slot with their backing allocation; the alloc ptr is
-	\\    /// encoded in `capacity_or_alloc_ptr` with the high bit set.
+	\\    /// encoded in `capacity_or_alloc_ptr` with the low bit set.
 	\\    #[inline]
 	\\    pub fn is_seamless_slice(&self) -> bool {
-	\\        (self.capacity_or_alloc_ptr as isize) < 0
+	\\        (self.capacity_or_alloc_ptr & 1) != 0
 	\\    }
 	\\
 	\\    /// Resolve `self` to the start of its backing allocation (the element block
@@ -989,7 +989,7 @@ generate_rust_roc_list =
 	\\    /// whole-backing and seamless-slice forms.
 	\\    fn get_allocation_ptr(&self) -> *mut u8 {
 	\\        if self.is_seamless_slice() {
-	\\            (self.capacity_or_alloc_ptr << 1) as *mut u8
+	\\            (self.capacity_or_alloc_ptr & !1) as *mut u8
 	\\        } else {
 	\\            self.elements as *mut u8
 	\\        }
@@ -1023,7 +1023,7 @@ generate_rust_roc_list =
 	\\        Self {
 	\\            elements: data_ptr as *mut T,
 	\\            length,
-	\\            capacity_or_alloc_ptr: length,
+	\\            capacity_or_alloc_ptr: length << 1,
 	\\        }
 	\\    }
 	\\

@@ -583,7 +583,7 @@ fn parseTypesJson(
             break :blk RocList{
                 .bytes = funcs_bytes,
                 .length = mod.functions.len,
-                .capacity_or_alloc_ptr = mod.functions.len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(mod.functions.len),
             };
         } else RocList.empty();
 
@@ -611,7 +611,7 @@ fn parseTypesJson(
             break :blk RocList{
                 .bytes = hosted_bytes,
                 .length = mod.hosted_functions.len,
-                .capacity_or_alloc_ptr = mod.hosted_functions.len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(mod.hosted_functions.len),
             };
         } else RocList.empty();
 
@@ -626,7 +626,7 @@ fn parseTypesJson(
     return RocList{
         .bytes = modules_bytes,
         .length = modules.len,
-        .capacity_or_alloc_ptr = modules.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(modules.len),
     };
 }
 
@@ -783,7 +783,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     const entrypoints_list = RocList{
         .bytes = entrypoints_bytes,
         .length = entry_point_names.len,
-        .capacity_or_alloc_ptr = entry_point_names.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(entry_point_names.len),
     };
 
     // Parse types_json to create modules list
@@ -815,7 +815,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
         break :pblk RocList{
             .bytes = prov_bytes,
             .length = entry_point_names.len,
-            .capacity_or_alloc_ptr = entry_point_names.len,
+            .capacity_or_alloc_ptr = RocList.encodeCapacity(entry_point_names.len),
         };
     } else RocList.empty();
 
@@ -842,7 +842,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     var types_list = RocList{
         .bytes = types_inner_bytes,
         .length = 1,
-        .capacity_or_alloc_ptr = 1,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(1),
     };
 
     // Call the Roc glue spec

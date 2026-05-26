@@ -2857,7 +2857,7 @@ pub const Interpreter = struct {
         return self.rocListToValue(.{
             .bytes = elem_data,
             .length = elem_locals.len,
-            .capacity_or_alloc_ptr = elem_locals.len,
+            .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(elem_locals.len),
         }, list_layout);
     }
 

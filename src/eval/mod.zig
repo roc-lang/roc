@@ -89,8 +89,16 @@ pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 /// Bytebox runner for wasm modules.
 pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     pub const EvalError = error{WasmExecFailed};
+    pub const RunWasmStrResult = struct {
+        output: []u8,
+        allocation_count: u32,
+    };
 
     pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: bool) EvalError![]u8 {
+        return error.WasmExecFailed;
+    }
+
+    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: bool) EvalError!RunWasmStrResult {
         return error.WasmExecFailed;
     }
 } else @import("wasm_runner.zig");

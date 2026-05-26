@@ -31,6 +31,11 @@ const LayoutStore = @import("layout").Store;
 const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
 const LirImage = lir.LirImage;
+
+pub const EvalRunResult = struct {
+    output: []u8,
+    allocation_count: u32,
+};
 const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct {
     base_ptr: [*]align(1) u8,
     buffer: []align(collections.max_roc_alignment.toByteUnits()) u8,
@@ -1189,6 +1194,12 @@ pub fn zeroedEntrypointArgBuffer(
 
 /// Public `lirInterpreterInspectedStr` function.
 pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+    const result = try lirInterpreterStrWithStats(allocator, lowered);
+    return result.output;
+}
+
+/// Public `lirInterpreterStrWithStats` function.
+pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -1212,17 +1223,27 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
         else => return err,
     };
     const ret_layout = lowered.view.store.getProcSpec(lowered.mainProc()).ret_layout;
-    return copyReturnedRocStr(
+    const output = try copyReturnedRocStr(
         allocator,
         &lowered.view.layouts,
         ret_layout,
         result.value.ptr,
         null,
     );
+    return .{
+        .output = output,
+        .allocation_count = runtime_env.allocationCallCount(),
+    };
 }
 
 /// Public `devEvaluatorInspectedStr` function.
 pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+    const result = try devEvaluatorStrWithStats(allocator, lowered);
+    return result.output;
+}
+
+/// Public `devEvaluatorStrWithStats` function.
+pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
@@ -1278,18 +1299,28 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
             .crashed => return error.Crash,
         }
 
-        return copyReturnedRocStr(
+        const output = try copyReturnedRocStr(
             allocator,
             &lowered.view.layouts,
             ret_layout,
             ret_buf.ptr,
             runtime_env.get_ops(),
         );
+        return .{
+            .output = output,
+            .allocation_count = runtime_env.allocationCallCount(),
+        };
     }
 }
 
 /// Public `wasmEvaluatorInspectedStr` function.
 pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+    const result = try wasmEvaluatorStrWithStats(allocator, lowered);
+    return result.output;
+}
+
+/// Public `wasmEvaluatorStrWithStats` function.
+pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
     var codegen = backend.wasm.WasmCodeGen.init(
         allocator,
@@ -1302,7 +1333,11 @@ pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     const wasm_result = codegen.generateModule(lowered.mainProc(), proc.ret_layout) catch return error.OutOfMemory;
     defer allocator.free(wasm_result.wasm_bytes);
 
-    return @import("wasm_runner.zig").runWasmStr(allocator, wasm_result.wasm_bytes, wasm_result.has_imports);
+    const result = try @import("wasm_runner.zig").runWasmStrWithStats(allocator, wasm_result.wasm_bytes, wasm_result.has_imports);
+    return .{
+        .output = result.output,
+        .allocation_count = result.allocation_count,
+    };
 }
 
 fn copyReturnedRocStr(

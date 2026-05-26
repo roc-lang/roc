@@ -22,9 +22,9 @@ const max_text_file_size = 4 * MiB;
 /// Binary file extensions that should be skipped entirely (not read into the buffer).
 /// These are compiled artifacts, images, and other non-text files.
 const binary_extensions: []const []const u8 = &.{
-    ".ico",  ".png",   ".webp", ".jpg", ".jpeg", ".gif",   ".bin",
-    ".o",    ".a",     ".lib",  ".dll", ".so",   ".dylib", ".wasm",
-    ".rlib", ".rmeta",
+    ".ico",   ".png",  ".webp", ".jpg",   ".jpeg", ".gif", ".bin",
+    ".o",     ".obj",  ".bc",   ".a",     ".lib",  ".dll", ".so",
+    ".dylib", ".wasm", ".rlib", ".rmeta",
 };
 
 const TermColor = struct {

@@ -127,7 +127,7 @@ pub const RocStr = extern struct {
             // Rare case, we can take over the original list.
             return RocStr{
                 .bytes = start_byte,
-                .capacity_or_alloc_ptr = encodeCapacity(list.capacity_or_alloc_ptr), // This is guaranteed to be a proper capacity.
+                .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr, // RocStr and RocList share owned capacity encoding.
                 .length = count,
             };
         } else {
@@ -1104,15 +1104,15 @@ inline fn strToBytes(
 
         @memcpy(ptr[0..length], arg.asU8ptr()[0..length]);
 
-        return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = length };
+        return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = RocList.encodeCapacity(length) };
     } else {
         // The returned list shares the same underlying allocation as the string.
         // We must incref the allocation since there's now an additional reference to it.
         arg.incref(1, roc_ops);
         const list_capacity_or_alloc_ptr = if (arg.isSeamlessSlice()) blk: {
             const alloc_ptr = arg.getAllocationPtr() orelse return RocList.empty();
-            break :blk (@intFromPtr(alloc_ptr) >> 1) | @import("list.zig").SEAMLESS_SLICE_BIT;
-        } else arg.getCapacity();
+            break :blk RocList.encodeSliceAllocationPtr(alloc_ptr);
+        } else arg.capacity_or_alloc_ptr;
         return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = list_capacity_or_alloc_ptr };
     }
 }
@@ -1391,7 +1391,7 @@ pub fn validateUtf8Bytes(
     length: usize,
     roc_ops: *RocOps,
 ) FromUtf8Try {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable, roc_ops);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = RocList.encodeCapacity(length) }, .Immutable, roc_ops);
 }
 
 /// TODO
@@ -2723,7 +2723,7 @@ test "RocStr.joinWith: result is big" {
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
     const list = RocListStr{
         .list_length = 3,
-        .list_capacity_or_alloc_ptr = 3,
+        .list_capacity_or_alloc_ptr = RocList.encodeCapacity(3),
         .list_elements = @as([*]RocStr, @ptrCast(&elements)),
     };
 

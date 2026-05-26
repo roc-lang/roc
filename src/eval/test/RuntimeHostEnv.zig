@@ -110,6 +110,7 @@ active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
+allocation_call_count: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
     // The allocation_tracker grows from inside rocAllocFn, which on Windows
@@ -141,11 +142,17 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
 pub fn resetAllocationTracker(self: *RuntimeHostEnv) void {
     self.freeRemainingAllocations();
     self.allocation_tracker.clearRetainingCapacity();
+    self.allocation_call_count = 0;
 }
 
 /// Public function `checkForLeaks`.
 pub fn checkForLeaks(self: *RuntimeHostEnv) LeakError!void {
     if (self.allocation_tracker.count() > 0) return error.MemoryLeak;
+}
+
+/// Public function `allocationCallCount`.
+pub fn allocationCallCount(self: *const RuntimeHostEnv) u32 {
+    return self.allocation_call_count;
 }
 
 /// Public function `get_ops`.
@@ -264,6 +271,7 @@ fn rocCrashedFn(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) v
 
 fn rocAllocFn(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
+    self.allocation_call_count += 1;
     const alloc_ptr = allocateTrackedBytes(self.allocator, alloc_args.length, alloc_args.alignment);
     alloc_args.answer = @ptrCast(alloc_ptr);
     self.allocation_tracker.put(@intFromPtr(alloc_ptr), .{
@@ -291,6 +299,7 @@ fn rocDeallocFn(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
 
 fn rocReallocFn(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
+    self.allocation_call_count += 1;
     const old_alloc_ptr = @intFromPtr(realloc_args.answer);
     const old_info = self.allocation_tracker.fetchRemove(old_alloc_ptr) orelse {
         std.debug.panic("RuntimeHostEnv: realloc of untracked memory at ptr=0x{x}", .{old_alloc_ptr});
