@@ -279,6 +279,15 @@ fn preflightForTypeChecking(
     cir: *ModuleEnv,
 ) std.mem.Allocator.Error!void {
     try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
+    // Type checking rewrites some expressions into dispatch calls, which can
+    // append argument spans to the CIR index store. Existing CIR spans are valid
+    // by index, but many checker paths borrow them as slices while recursively
+    // checking child expressions. Reserve enough room for one appended index per
+    // existing node so those borrows cannot be invalidated by dispatch rewrites.
+    const index_count: usize = @intCast(cir.store.index_data.len());
+    const node_count: usize = @intCast(cir.store.nodes.len());
+    try cir.store.index_data.items.ensureTotalCapacity(cir.gpa, index_count + node_count);
+
     const import_count: usize = @intCast(cir.imports.imports.items.items.len);
     for (0..import_count) |i| {
         const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
@@ -1546,18 +1555,17 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // First, iterate over the builtin statements, generating types for each type declaration
     // Note that any types generated will be generalized
-    const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
-    for (builtin_stmts_slice) |builtin_stmt_idx| {
+    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
+        const builtin_stmt_idx = self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset);
         // If the statement is a type declaration, then generate the it's type
         // The resulting generalized type is saved at the type var slot at `stmt_idx`
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
-    const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
-
     // First pass: generate types for each type declaration
     // Note that any types generated will be generalized
-    for (stmts_slice) |stmt_idx| {
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
@@ -1584,8 +1592,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Next, capture all top level defs
     // This is used to support out-of-order defs
-    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
-    for (defs_slice) |def_idx| {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def = self.cir.store.getDef(def_idx);
         try self.top_level_ptrns.put(def.pattern, DefProcessed{
             .def_idx = def_idx,
@@ -1603,7 +1611,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.processRequiresTypes(&env);
 
     // Then, iterate over defs again, inferring types
-    for (defs_slice) |def_idx| {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.checkDef(def_idx, &env);
 
         // Ensure that after processing a def, checkDef correctly restores the
@@ -1614,7 +1623,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Finally, type-check top-level statements (like expect)
     // These are separate from defs and need to be checked after all defs are processed
     // so that lookups can find their definitions
-    for (stmts_slice) |stmt_idx| {
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
         const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
@@ -1655,7 +1665,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.validateToInspectMethodTypes(&env);
 
     // After solving all deferred constraints, check for infinite types
-    for (defs_slice) |def_idx| {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
@@ -1785,8 +1796,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     std.debug.assert(env.rank() == .generalized);
 
     // First, iterate over the statements, generating types for each type declaration
-    const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
-    for (stms_slice) |stmt_idx| {
+    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset);
         // If the statement is a type declaration, then generate the it's type
         // The resulting generalized type is saved at the type var slot at `stmt_idx`
         try self.generateStmtTypeDeclType(stmt_idx, &env);
@@ -1835,14 +1846,14 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // First, iterate over the statements, generating types for each type declaration
     // Note that any types generated will be generalized
-    const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
-    for (stms_slice) |stmt_idx| {
+    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset);
         try self.generateStmtTypeDeclType(stmt_idx, &env);
     }
 
     // Initialize top_level_ptrns with any defs from local type declarations
-    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
-    for (defs_slice) |def_idx| {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def = self.cir.store.getDef(def_idx);
         try self.top_level_ptrns.put(def.pattern, DefProcessed{
             .def_idx = def_idx,
@@ -1856,7 +1867,8 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     std.debug.assert(env.rank() == .outermost);
 
     // Type-check defs from local type declarations (their associated blocks)
-    for (defs_slice) |def_idx| {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.checkDef(def_idx, &env);
 
         // Ensure that after processing a def, checkDef correctly restores the
@@ -1884,7 +1896,8 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     }
 
     // After solving all deferred constraints, check for infinite types
-    for (defs_slice) |def_idx| {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
@@ -4171,8 +4184,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // block //
         .e_block => |block| {
             // Check all statements in the block
-            const statements = self.cir.store.sliceStatements(block.stmts);
-            const stmt_result = try self.checkBlockStatements(statements, env, expr_region);
+            const stmt_result = try self.checkBlockStatements(block.stmts, env, expr_region);
             does_fx = stmt_result.does_fx or does_fx;
 
             // Check the final expression
@@ -4221,9 +4233,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check the argument patterns
             // This must happen *before* checking against the expected type so
             // all the pattern types are inferred
-            const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
+            const arg_count = lambda.args.span.len;
+            const arg_vars = try self.gpa.alloc(Var, arg_count);
+            defer self.gpa.free(arg_vars);
             const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
-            for (arg_pattern_idxs) |pattern_idx| {
+            for (0..arg_count) |i| {
+                const pattern_idx = self.cir.store.patternAt(lambda.args, i);
+                arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
                 try self.checkPattern(pattern_idx, pattern_ctx, env);
             }
 
@@ -4235,7 +4251,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const anno_func_args_len = anno_func_args_range.len();
 
                 // Next, check if the arguments arities match
-                if (anno_func_args_len == arg_pattern_idxs.len) {
+                if (anno_func_args_len == arg_count) {
                     // If so, check each argument, passing in the expected type
 
                     // First, find all the rigid variables in a the function's type
@@ -4263,8 +4279,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // type have the same rigid variable! So, we unify
                                 // the corresponding *lambda args*
 
-                                const arg_1 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[i]));
-                                const arg_2 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[j]));
+                                const arg_1 = arg_vars[i];
+                                const arg_2 = arg_vars[j];
 
                                 const unify_result = try self.unifyInContext(arg_1, arg_2, env, .{
                                     .fn_args_bound_var = .{
@@ -4273,7 +4289,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                         .second_arg_var = arg_2,
                                         .first_arg_index = @intCast(i),
                                         .second_arg_index = @intCast(j),
-                                        .num_args = @intCast(arg_pattern_idxs.len),
+                                        .num_args = @intCast(arg_count),
                                     },
                                 });
                                 if (unify_result.isProblem()) {
@@ -4288,9 +4304,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                     // Then, lastly, we unify the annotation types against the
                     // actual type
-                    for (arg_pattern_idxs, 0..) |pattern_idx, i| {
+                    for (arg_vars, 0..) |arg_var, i| {
                         const expected_arg_var = self.types.getVarAt(anno_func_args_range, @intCast(i));
-                        _ = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .type_annotation);
+                        _ = try self.unifyInContext(expected_arg_var, arg_var, env, .type_annotation);
                     }
                 } else {
                     // This means the expected type and the actual lambda have
@@ -4299,7 +4315,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             }
 
-            const arg_vars: []Var = @ptrCast(arg_pattern_idxs);
             const body_var = ModuleEnv.varFrom(lambda.body);
 
             // Check the the body of the expr
@@ -5248,13 +5263,14 @@ const BlockStatementsResult = struct {
 
 /// Given a slice of stmts, type check each one
 /// Returns whether any statement has effects and whether the block diverges (return/crash)
-fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env: *Env, _: Region) std.mem.Allocator.Error!BlockStatementsResult {
+fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, _: Region) std.mem.Allocator.Error!BlockStatementsResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     var does_fx = false;
     var diverges = false;
-    for (statements) |stmt_idx| {
+    for (0..statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(statements, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
         const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));

@@ -3332,9 +3332,20 @@ pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataS
     return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
 }
 
+/// Retrieve one item from a span without borrowing the backing index storage.
+pub fn getFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan, offset: usize) T {
+    std.debug.assert(offset < span.len);
+    return @as(T, @enumFromInt(store.index_data.items.items[span.start + offset]));
+}
+
 /// Returns a slice of definitions from the store.
 pub fn sliceDefs(store: *const NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
     return store.sliceFromSpan(CIR.Def.Idx, span.span);
+}
+
+/// Returns a single definition index from a span.
+pub fn defAt(store: *const NodeStore, span: CIR.Def.Span, offset: usize) CIR.Def.Idx {
+    return store.getFromSpan(CIR.Def.Idx, span.span, offset);
 }
 
 /// Returns a slice of expressions from the store.
@@ -3342,9 +3353,19 @@ pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
 }
 
+/// Returns a single expression index from a span.
+pub fn exprAt(store: *const NodeStore, span: CIR.Expr.Span, offset: usize) CIR.Expr.Idx {
+    return store.getFromSpan(CIR.Expr.Idx, span.span, offset);
+}
+
 /// Returns a slice of `CanIR.Pattern.Idx`
 pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
     return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
+}
+
+/// Returns a single pattern index from a span.
+pub fn patternAt(store: *const NodeStore, span: CIR.Pattern.Span, offset: usize) CIR.Pattern.Idx {
+    return store.getFromSpan(CIR.Pattern.Idx, span.span, offset);
 }
 
 /// Returns a slice of `CIR.Expr.Capture.Idx`
@@ -3355,6 +3376,11 @@ pub fn sliceCaptures(store: *const NodeStore, span: CIR.Expr.Capture.Span) []CIR
 /// Returns a slice of statements from the store.
 pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
     return store.sliceFromSpan(CIR.Statement.Idx, span.span);
+}
+
+/// Returns a single statement index from a span.
+pub fn statementAt(store: *const NodeStore, span: CIR.Statement.Span, offset: usize) CIR.Statement.Idx {
+    return store.getFromSpan(CIR.Statement.Idx, span.span, offset);
 }
 
 /// Returns a slice of record fields from the store.
