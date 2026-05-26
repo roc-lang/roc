@@ -54,6 +54,16 @@ Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
     keep : Parser(input, a), Parser(input, b) -> Parser(input, b)
     keep = |first, second|
         map2(first, second, |_a, b| b)
+
+    ## Try the first parser, then try the second parser if the first fails.
+    alt : Parser(input, a), Parser(input, a) -> Parser(input, a)
+    alt = |first, second| {
+        run: |inp|
+            match parse(first, inp) {
+                Ok(value, rest) => Ok(value, rest)
+                Err(_) => parse(second, inp)
+            }
+    }
 }
 
 ## Tests for the Parser type module
@@ -74,3 +84,8 @@ expect Parser.parse(skip_second, "input") == Ok("a", "input")
 
 keep_second = Parser.keep(Parser.succeed("a"), Parser.succeed("b"))
 expect Parser.parse(keep_second, "input") == Ok("b", "input")
+
+# Regression for issue 9465. The parser value type is unconstrained by both
+# failing branches and is witnessed only by the equality RHS.
+both_fail = Parser.alt(Parser.fail("first"), Parser.fail("second"))
+expect Parser.parse(both_fail, "input") == Err("second")
