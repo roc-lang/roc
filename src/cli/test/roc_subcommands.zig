@@ -1436,13 +1436,13 @@ test "roc test runs expects in Parser type module (interpreter)" {
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
-    // 3. Should have run 6 tests (extract count from "(N)" in output)
+    // 3. Should have run 7 tests (extract count from "(N)" in output)
     const count = blk: {
         const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
         const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
-    try testing.expect(count == 6);
+    try testing.expect(count == 7);
 }
 
 test "roc test runs expects in Parser type module (dev)" {
@@ -1461,13 +1461,13 @@ test "roc test runs expects in Parser type module (dev)" {
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
-    // 3. Should have run 6 tests (extract count from "(N)" in output)
+    // 3. Should have run 7 tests (extract count from "(N)" in output)
     const count = blk: {
         const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
         const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
-    try testing.expect(count == 6);
+    try testing.expect(count == 7);
 }
 
 test "roc test polymorphic list reverse with numeric literal does not overflow (interpreter)" {
@@ -1572,6 +1572,70 @@ test "roc test issue 9392 numeric utility expects are deterministic with no cach
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try expectRocTestAllPassed(result2, "All (11) tests passed");
+}
+
+test "roc run issue 9208 open union tag before Exit matches wildcard" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/fx-open/test_bar_error.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .Exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
+        else => {
+            std.debug.print("roc run terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "exited with other error: Bar") != null);
+}
+
+test "roc build issue 9435 hosted nominal return builds without mono panic" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "hosted_nominal_return" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    const result = try util.runRoc(
+        gpa,
+        &.{ "build", "--opt=dev", "--no-cache", output_arg },
+        "test/hosted_nominal_return/repro.roc",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .Exited => |code| try std.testing.expect(code != 134),
+        .Signal => |sig| {
+            std.debug.print("roc build crashed with signal {}\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.BuildCrashed;
+        },
+        else => {
+            std.debug.print("roc build terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.BuildCrashed;
+        },
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "panic") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "mono nominal materialization") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "published instantiated nominal backing") == null);
 }
 
 test "roc docs Builtin.roc succeeds" {
