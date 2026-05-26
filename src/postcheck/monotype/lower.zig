@@ -946,7 +946,7 @@ const Builder = struct {
             .template = undefined, // type-only context; type lowering does not read the owner template
         });
         defer ctx.deinit();
-        try ctx.constrainNominalDeclarationFormalsToMonoArgs(nominal, mono_args);
+        try ctx.constrainNominalInstantiationArgs(nominal, mono_args);
         return try ctx.lowerType(ctx.nominalBackingRoot(nominal));
     }
 
@@ -1367,7 +1367,7 @@ const Builder = struct {
         try self.program.nested_defs.append(self.allocator, undefined);
         try self.lowered_nested_fns.put(address, nested_id);
 
-        var nested_ctx = try source_ctx.childContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
+        var nested_ctx = try source_ctx.nestedInstantiationContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
         defer nested_ctx.deinit();
         try nested_ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty, "nested function root conflicted with an existing Monotype constraint");
 
@@ -2098,6 +2098,18 @@ const BodyContext = struct {
     }
 
     fn childContext(self: *BodyContext, current_fn_key: names.TypeDigest) Allocator.Error!BodyContext {
+        return try self.childContextWithTypeCells(current_fn_key, true);
+    }
+
+    fn nestedInstantiationContext(self: *BodyContext, current_fn_key: names.TypeDigest) Allocator.Error!BodyContext {
+        return try self.childContextWithTypeCells(current_fn_key, false);
+    }
+
+    fn childContextWithTypeCells(
+        self: *BodyContext,
+        current_fn_key: names.TypeDigest,
+        copy_type_cells: bool,
+    ) Allocator.Error!BodyContext {
         var child = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
@@ -2113,11 +2125,13 @@ const BodyContext = struct {
             try child.local_proc_contexts.put(entry.key_ptr.*, entry.value_ptr.*);
         }
 
-        var type_iter = self.type_cells.iterator();
-        while (type_iter.next()) |entry| {
-            try child.type_cells.put(entry.key_ptr.*, entry.value_ptr.*);
+        if (copy_type_cells) {
+            var type_iter = self.type_cells.iterator();
+            while (type_iter.next()) |entry| {
+                try child.type_cells.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            child.type_cell_revision = self.type_cell_revision;
         }
-        child.type_cell_revision = self.type_cell_revision;
 
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
 
@@ -3427,7 +3441,7 @@ const BodyContext = struct {
 
         const args = try self.reserveTypeSlice(nominal.args);
         defer self.allocator.free(args);
-        try self.constrainNominalDeclarationFormalsToMonoArgs(nominal, args);
+        try self.constrainNominalInstantiationArgs(nominal, args);
         const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
         const backing: ?Type.NamedBacking = switch (nominal.representation) {
             .opaque_without_backing => null,
@@ -3453,17 +3467,17 @@ const BodyContext = struct {
         }
     }
 
-    const NominalDeclarationSource = struct {
+    const NominalInstantiationSource = struct {
         view: ModuleView,
         declaration: checked.CheckedNominalDeclaration,
     };
 
-    fn constrainNominalDeclarationFormalsToMonoArgs(
+    fn constrainNominalInstantiationArgs(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!void {
-        const source = self.nominalDeclarationSource(nominal.representation) orelse return;
+        const source = self.nominalInstantiationSource(nominal.representation) orelse return;
         if (source.declaration.formal_args.len != mono_args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
@@ -3472,15 +3486,15 @@ const BodyContext = struct {
             try self.constrainTypeToMono(
                 current_formal,
                 mono_arg,
-                "checked nominal backing formal type conflicted with an existing Monotype constraint",
+                "checked nominal instantiation formal type conflicted with an existing Monotype constraint",
             );
         }
     }
 
-    fn nominalDeclarationSource(
+    fn nominalInstantiationSource(
         self: *BodyContext,
         representation: anytype,
-    ) ?NominalDeclarationSource {
+    ) ?NominalInstantiationSource {
         return switch (representation) {
             .local_declaration => |id| .{
                 .view = self.view,
@@ -3500,13 +3514,17 @@ const BodyContext = struct {
         nominal: checked.CheckedNominalType,
     ) checked.CheckedTypeId {
         return switch (nominal.representation) {
+            .local_declaration => |id| self.view.types.nominalDeclarationById(id).backing,
+            .imported_declaration => nominal.backing,
             .local_box_payload_capability => |capability| self.view.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty,
             .imported_box_payload_capability => |capability| blk: {
                 const source_view = self.builder.moduleForId(checked.importedBoxPayloadCapabilityModuleId(capability));
                 const backing = source_view.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty;
                 break :blk self.checkedTypeInCurrentView(source_view, backing);
             },
-            else => nominal.backing,
+            .builtin,
+            .opaque_without_backing,
+            => nominal.backing,
         };
     }
 
@@ -5675,7 +5693,7 @@ const BodyContext = struct {
     }
 
     fn lowerLambdaExpr(self: *BodyContext, lambda: anytype, nested: Ast.FnTemplate) Allocator.Error!Ast.ExprData {
-        var lambda_ctx = try self.childContext(Ast.fnTemplateDigest(nested, &self.builder.program.types, &self.builder.program.names));
+        var lambda_ctx = try self.nestedInstantiationContext(Ast.fnTemplateDigest(nested, &self.builder.program.types, &self.builder.program.names));
         defer lambda_ctx.deinit();
         try lambda_ctx.constrainTypeToMono(nested.source_fn_ty, nested.mono_fn_ty, "lambda function root conflicted with an existing Monotype constraint");
 

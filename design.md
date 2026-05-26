@@ -692,8 +692,48 @@ checked data constrains those cells:
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
-facts that are already present in the checked module. If a required relation is
+data that are already present in the checked module. If a required relation is
 missing from checked output, the producer is incomplete and must be fixed.
+
+Nominal instantiation relies on a stronger CheckedModule invariant than
+"the same source name appears twice." A checked nominal declaration owns an
+explicit declaration template:
+
+- `formal_args` are the checked roots for the declaration header parameters;
+- `backing` is the checked root for the declaration backing template;
+- every rigid occurrence in the backing template that refers to a header
+  parameter must point at the same checked root as that header formal.
+
+This root identity is the long-term ideal because it makes nominal
+instantiation dataflow explicit. `Parser(input, value)` does not require
+Monotype, layout lowering, or a backend to rediscover that the `input` in
+`run : input -> ...` is the first nominal parameter by reading source text or
+matching display names. CheckedModule data stores that relation once, as
+checked root identity. Monotype then constrains declaration formal roots to the
+concrete named arguments for the current specialization and lowers the
+declaration backing through those cells. The result is a backing type in which
+every formal occurrence has the same monomorphic meaning as the named type
+argument that instantiated it.
+
+Monotype must use the declaration backing template for ordinary local nominal
+declarations. For local declarations, the `backing` root on a nominal-use
+payload is not the authority for declaration-template instantiation; the
+declaration template is authoritative because it carries the formal roots that
+connect header parameters to backing occurrences. For imported nominal
+declarations, the current CheckedModule must contain the `backing` root that
+`CheckedTypeProjector` writes on the nominal-use payload, so Monotype can
+consume that root directly without reaching into the source module's
+declaration template. Box payload capabilities remain separate explicit
+representation authorities; their backing roots come from the capability entry
+in checked module data instead of from declaration template lookup.
+
+This solves two classes of bugs:
+
+- generic nominal backings cannot accidentally swap, lose, or default one
+  type parameter while the named node itself has the right arguments;
+- post-check stages do not need syntax-name matching, declaration scanning, or
+  layout inspection to recover how a named type's representation is
+  instantiated.
 
 The instantiation context must be the only owner of checked-type-to-Monotype
 state inside a specialization. Later lowering code must ask the context for the

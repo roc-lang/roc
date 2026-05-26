@@ -2732,6 +2732,23 @@ fn appendCheckedNominalDeclarationFromStatement(
     var formal_args_owned = formal_args.len != 0;
     errdefer if (formal_args_owned) allocator.free(formal_args);
 
+    const declaration_formals = if (header_args.len == 0) &.{} else blk: {
+        const out = try allocator.alloc(DeclarationFormal, header_args.len);
+        errdefer allocator.free(out);
+        for (header_args, formal_args, 0..) |arg_anno, formal_arg, i| {
+            const arg = module_env.store.getTypeAnno(arg_anno);
+            out[i] = .{
+                .name = switch (arg) {
+                    .rigid_var => |rigid| rigid.name,
+                    else => checkedArtifactInvariant("nominal declaration header argument was not a rigid type variable", .{}),
+                },
+                .root = formal_arg,
+            };
+        }
+        break :blk out;
+    };
+    defer if (declaration_formals.len != 0) allocator.free(declaration_formals);
+
     const backing = try appendCheckedTypeRootFromDeclarationAnno(
         allocator,
         module,
@@ -2741,6 +2758,7 @@ fn appendCheckedNominalDeclarationFromStatement(
         payloads,
         active,
         local_type_declarations,
+        declaration_formals,
         anno_idx,
     );
 
@@ -2768,6 +2786,18 @@ fn appendCheckedNominalDeclarationFromStatement(
     try appendCheckedNominalDeclarationFromPayload(allocator, declarations, payloads.items, declaration_root);
 }
 
+const DeclarationFormal = struct {
+    name: Ident.Idx,
+    root: CheckedTypeId,
+};
+
+fn declarationFormalRoot(formals: []const DeclarationFormal, name: Ident.Idx) ?CheckedTypeId {
+    for (formals) |formal| {
+        if (formal.name == name) return formal.root;
+    }
+    return null;
+}
+
 fn appendCheckedTypeRootFromDeclarationAnno(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -2777,6 +2807,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
     local_type_declarations: *const LocalTypeDeclarationIndex,
+    declaration_formals: []const DeclarationFormal,
     anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!CheckedTypeId {
     const module_env = module.moduleEnvConst();
@@ -2792,11 +2823,12 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 payloads,
                 active,
                 local_type_declarations,
+                declaration_formals,
                 tag_union.tags,
             );
             errdefer deinitCheckedTags(allocator, tags);
             const ext = if (tag_union.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, ext_anno)
+                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, declaration_formals, ext_anno)
             else
                 try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .empty_tag_union);
             break :blk try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .{ .tag_union = .{
@@ -2814,11 +2846,12 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 payloads,
                 active,
                 local_type_declarations,
+                declaration_formals,
                 record.fields,
             );
             errdefer allocator.free(fields);
             const ext = if (record.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, ext_anno)
+                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, declaration_formals, ext_anno)
             else
                 try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .empty_record);
             break :blk try appendExplicitCheckedTypePayload(allocator, names, roots, payloads, .{ .record = .{
@@ -2836,6 +2869,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 payloads,
                 active,
                 local_type_declarations,
+                declaration_formals,
                 tuple.elems,
             );
             errdefer allocator.free(elems);
@@ -2851,6 +2885,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 payloads,
                 active,
                 local_type_declarations,
+                declaration_formals,
                 func.args,
             );
             errdefer allocator.free(args);
@@ -2863,6 +2898,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 payloads,
                 active,
                 local_type_declarations,
+                declaration_formals,
                 func.ret,
             );
             const args_need_instantiation = try checkedTypeIdsContainIdentityVariables(allocator, payloads.items, args);
@@ -2886,6 +2922,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             payloads,
             active,
             local_type_declarations,
+            declaration_formals,
             parens.anno,
         ),
         .lookup => |lookup| switch (lookup.base) {
@@ -2918,6 +2955,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 payloads,
                 active,
                 local_type_declarations,
+                declaration_formals,
                 apply.args,
             );
             var actual_args_owned = actual_args.len > 0;
@@ -2952,10 +2990,20 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             }
             break :blk try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(anno_idx));
         },
-        .rigid_var,
-        .rigid_var_lookup,
+        .rigid_var => |rigid| if (declarationFormalRoot(declaration_formals, rigid.name)) |formal|
+            formal
+        else
+            try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(anno_idx)),
         .underscore,
         => try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(anno_idx)),
+        .rigid_var_lookup => |lookup| blk: {
+            const source = module_env.store.getTypeAnno(lookup.ref);
+            switch (source) {
+                .rigid_var => |rigid| if (declarationFormalRoot(declaration_formals, rigid.name)) |formal| break :blk formal,
+                else => {},
+            }
+            break :blk try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, ModuleEnv.varFrom(lookup.ref));
+        },
         .tag,
         .malformed,
         => checkedArtifactInvariant("nominal declaration annotation was not a valid checked template", .{}),
@@ -2971,6 +3019,7 @@ fn checkedTypeIdsFromDeclarationAnnoSpan(
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
     local_type_declarations: *const LocalTypeDeclarationIndex,
+    declaration_formals: []const DeclarationFormal,
     span: CIR.TypeAnno.Span,
 ) Allocator.Error![]const CheckedTypeId {
     const annos = module.moduleEnvConst().store.sliceTypeAnnos(span);
@@ -2978,7 +3027,7 @@ fn checkedTypeIdsFromDeclarationAnnoSpan(
     const out = try allocator.alloc(CheckedTypeId, annos.len);
     errdefer allocator.free(out);
     for (annos, 0..) |anno, i| {
-        out[i] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, anno);
+        out[i] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, declaration_formals, anno);
     }
     return out;
 }
@@ -2992,6 +3041,7 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
     local_type_declarations: *const LocalTypeDeclarationIndex,
+    declaration_formals: []const DeclarationFormal,
     span: CIR.TypeAnno.RecordField.Span,
 ) Allocator.Error![]const CheckedRecordField {
     const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(span);
@@ -3002,7 +3052,7 @@ fn checkedRecordFieldsFromDeclarationAnnoSpan(
         const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
         out[i] = .{
             .name = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
-            .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, field.ty),
+            .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, roots, payloads, active, local_type_declarations, declaration_formals, field.ty),
         };
     }
     return out;
@@ -3017,6 +3067,7 @@ fn checkedTagsFromDeclarationAnnoSpan(
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
     local_type_declarations: *const LocalTypeDeclarationIndex,
+    declaration_formals: []const DeclarationFormal,
     span: CIR.TypeAnno.Span,
 ) Allocator.Error![]const CheckedTag {
     const annos = module.moduleEnvConst().store.sliceTypeAnnos(span);
@@ -3042,6 +3093,7 @@ fn checkedTagsFromDeclarationAnnoSpan(
                 payloads,
                 active,
                 local_type_declarations,
+                declaration_formals,
                 tag.args,
             ),
         };
