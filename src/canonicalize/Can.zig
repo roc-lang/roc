@@ -9131,18 +9131,32 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
     return try self.env.store.exprSpanFrom(start);
 }
 
-/// Extract string segments from parsed multiline string parts, adding newlines between consecutive string parts
+/// Extract string segments from parsed multiline string parts, adding newlines between consecutive string parts.
+///
+/// Adjacent literal parts (and the implicit newlines between consecutive
+/// ones) are fused into a single segment. Later stages lower an `e_str` with
+/// N segments into a left-leaning chain of `str_concat` calls, and that chain
+/// is walked recursively during mono finalization -- without fusion, a long
+/// multiline string blows the stack (issue #9464).
 fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!Expr.Span {
     const start = self.env.store.scratchExprTop();
-    var last_string_part_end: ?Token.Idx = null;
+
+    var buffer: std.ArrayList(u8) = .{};
+    defer buffer.deinit(self.env.gpa);
+    var buffer_region: ?AST.TokenizedRegion = null;
+    // Whether the immediately preceding (un-flushed) part was a string_part,
+    // controlling the implicit newline insertion between consecutive lines.
+    var prev_was_string_part = false;
 
     for (parts) |part| {
         const part_node = self.parse_ir.store.getExpr(part);
         switch (part_node) {
             .string_part => |sp| {
+                const part_region = part_node.to_tokenized_region();
+
                 // Add newline between consecutive string parts
-                if (last_string_part_end != null) {
-                    try self.addStringLiteralToScratch("\n", .{ .start = last_string_part_end.?, .end = part_node.to_tokenized_region().start });
+                if (prev_was_string_part) {
+                    try buffer.append(self.env.gpa, '\n');
                 }
 
                 // Get and process the raw text of the string part (including escape sequences)
@@ -9152,15 +9166,31 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
                     defer if (processed_text.ptr != part_text.ptr) {
                         self.env.gpa.free(processed_text);
                     };
-                    try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
+                    try buffer.appendSlice(self.env.gpa, processed_text);
                 }
-                last_string_part_end = part_node.to_tokenized_region().end;
+
+                if (buffer_region) |*r| {
+                    r.end = part_region.end;
+                } else {
+                    buffer_region = part_region;
+                }
+                prev_was_string_part = true;
             },
             else => {
-                last_string_part_end = null;
+                // Flush any buffered literal text before emitting the interpolation
+                if (buffer.items.len != 0) {
+                    try self.addStringLiteralToScratch(buffer.items, buffer_region.?);
+                    buffer.clearRetainingCapacity();
+                }
+                buffer_region = null;
+                prev_was_string_part = false;
                 try self.addInterpolationToScratch(part, part_node);
             },
         }
+    }
+
+    if (buffer.items.len != 0) {
+        try self.addStringLiteralToScratch(buffer.items, buffer_region.?);
     }
 
     return try self.env.store.exprSpanFrom(start);
