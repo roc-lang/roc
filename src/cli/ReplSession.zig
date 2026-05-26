@@ -61,9 +61,16 @@ pub fn step(self: *ReplSession, input: []const u8) ![]u8 {
             var snapshot = try self.definitions.snapshot(self.allocator);
             errdefer snapshot.deinit(self.allocator);
             try self.addOrReplaceDefinition(line, name, input_info.definition_kind);
-            const valid = self.validateDefinitions() catch false;
-            if (!valid) {
+            const validation = self.validateDefinitions() catch DefinitionValidation{ .valid = false, .error_message = null };
+            if (!validation.valid) {
                 self.definitions.restore(self.allocator, &snapshot);
+                // Drop any pending annotation for this name. A `y : Str` typed before a
+                // failed `y = 5` would otherwise survive and poison every subsequent
+                // REPL turn with "DECLARATION HAS NO VALUE".
+                if (input_info.definition_kind == .value and !self.definitions.hasKind(name, .value)) {
+                    self.definitions.removeByNameAndKind(self.allocator, name, .annotation);
+                }
+                if (validation.error_message) |msg| return msg;
                 return self.allocator.dupe(u8, "Definition failed to compile");
             }
             const message = try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{name});
@@ -175,18 +182,32 @@ fn helpText(self: *ReplSession) ![]u8 {
     );
 }
 
-fn validateDefinitions(self: *ReplSession) !bool {
+const DefinitionValidation = struct {
+    valid: bool,
+    /// Rendered diagnostic reports when invalid; caller owns and must free.
+    error_message: ?[]u8,
+};
+
+fn validateDefinitions(self: *ReplSession) !DefinitionValidation {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
     defer self.allocator.free(source);
 
-    const parsed = eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(self.allocator, .module, source, &.{}) catch {
-        return false;
-    };
-    defer eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
-    return true;
+    if (eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(self.allocator, .module, source, &.{})) |parsed| {
+        eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
+        return .{ .valid = true, .error_message = null };
+    } else |err| switch (err) {
+        error.TypeCheckError => {
+            const msg = eval.test_helpers.renderProblems(self.allocator, .module, source) catch |render_err| switch (render_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return .{ .valid = false, .error_message = null },
+            };
+            return .{ .valid = false, .error_message = msg };
+        },
+        else => return .{ .valid = false, .error_message = null },
+    }
 }
 
 fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
@@ -200,7 +221,10 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
         .interpreter, .dev, .llvm => .native,
         .wasm => .u32,
     };
-    var compiled = try eval.test_helpers.compileInspectedProgramForTarget(self.allocator, .module, source, &.{}, target_usize);
+    var compiled = eval.test_helpers.compileInspectedProgramForTarget(self.allocator, .module, source, &.{}, target_usize) catch |err| switch (err) {
+        error.TypeCheckError => return eval.test_helpers.renderProblems(self.allocator, .module, source),
+        else => return err,
+    };
     defer compiled.deinit(self.allocator);
 
     return switch (self.backend_kind) {
@@ -337,6 +361,26 @@ pub const DefinitionStore = struct {
 
     pub fn count(self: *const DefinitionStore) usize {
         return self.items.items.len;
+    }
+
+    pub fn hasKind(self: *const DefinitionStore, name: []const u8, kind: DefinitionKind) bool {
+        for (self.items.items) |definition| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) return true;
+        }
+        return false;
+    }
+
+    pub fn removeByNameAndKind(self: *DefinitionStore, allocator: Allocator, name: []const u8, kind: DefinitionKind) void {
+        var i: usize = 0;
+        while (i < self.items.items.len) {
+            const definition = &self.items.items[i];
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
+                var removed = self.items.orderedRemove(i);
+                removed.deinit(allocator);
+                return;
+            }
+            i += 1;
+        }
     }
 
     fn addOrReplace(self: *DefinitionStore, allocator: Allocator, source: []const u8, name: []const u8, kind: DefinitionKind) !void {
