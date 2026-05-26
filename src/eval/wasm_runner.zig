@@ -169,7 +169,7 @@ pub fn runWasmStrWithStats(
         }
         env_imports.addHostFunction(
             "roc_str_from_utf8",
-            &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32 },
+            &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32 },
             &[_]bytebox.ValType{},
             hostStrFromUtf8,
             null,
@@ -1380,6 +1380,9 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const index_size: usize = @intCast(params[8].I32);
     const problem_off: usize = @intCast(params[9].I32);
     const problem_size: usize = @intCast(params[10].I32);
+    const inner_disc_offset: usize = @intCast(params[11].I32);
+    const inner_disc_size: usize = @intCast(params[12].I32);
+    const inner_bad_utf8_disc: u32 = @bitCast(params[13].I32);
     if (list_ptr + 12 > buffer.len or result_ptr + result_size > buffer.len) return;
     const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
     const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
@@ -1407,6 +1410,7 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
             };
             index += next_num_bytes;
         }
+        writeWasmTagDiscriminant(buffer, result_ptr, inner_disc_offset, inner_disc_size, inner_bad_utf8_disc);
         writeWasmTagDiscriminant(buffer, result_ptr, disc_offset, disc_size, err_disc);
     }
 }
@@ -1420,6 +1424,7 @@ fn writeWasmTagDiscriminant(
 ) void {
     const dst = base_ptr + disc_offset;
     switch (disc_size) {
+        0 => {},
         1 => buffer[dst] = @intCast(value),
         2 => writeIntLittle(u16, buffer, dst, @intCast(value)),
         4 => writeIntLittle(u32, buffer, dst, value),

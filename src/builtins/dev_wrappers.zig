@@ -241,6 +241,9 @@ pub const StrFromUtf8Layout = extern struct {
     outer_disc_size: u32,
     err_index_offset: u32,
     err_problem_offset: u32,
+    inner_disc_offset: u32,
+    inner_disc_size: u32,
+    inner_bad_utf8_tag: u32,
 };
 
 /// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
@@ -263,6 +266,7 @@ pub fn roc_builtins_str_from_utf8_result(
 
     utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
     utils.writeAs(u8, out + layout.err_problem_offset, @intFromEnum(result.problem_code), @src());
+    writeDiscriminant(out, layout.inner_disc_offset, layout.inner_disc_size, layout.inner_bad_utf8_tag);
     writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
 

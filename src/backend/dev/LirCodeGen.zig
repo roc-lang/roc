@@ -2613,7 +2613,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.callList1RocOpsToStr(list_off, @intFromPtr(&wrapStrFromUtf8Lossy), .str_from_utf8_lossy);
                 },
                 .str_from_utf8 => {
-                    // str_from_utf8(list) -> Result Str [BadUtf8 {problem: Utf8Problem, index: U64}]
+                    // str_from_utf8(list) -> Try(Str, [BadUtf8 {problem: Utf8Problem, index: U64}])
                     if (args.len != 1) unreachable;
                     const list_loc = try self.emitValueLocal(args[0]);
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
@@ -2627,6 +2627,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var ok_disc: ?u16 = null;
                         var err_disc: ?u16 = null;
                         var err_record_idx: ?layout.StructIdx = null;
+                        var inner_disc_offset: u32 = 0;
+                        var inner_disc_size: u32 = 0;
+                        var inner_bad_utf8_disc: u32 = 0;
                         for (0..variants.len) |i| {
                             const v_payload = variants.get(@intCast(i)).payload_layout;
                             const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
@@ -2635,20 +2638,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             } else {
                                 err_disc = @intCast(i);
                                 const err_layout = ls.getLayout(candidate);
-                                err_record_idx = switch (err_layout.tag) {
-                                    .struct_ => err_layout.data.struct_.idx,
-                                    .tag_union => inner: {
+                                switch (err_layout.tag) {
+                                    .struct_ => err_record_idx = err_layout.data.struct_.idx,
+                                    .tag_union => {
                                         const inner_tu = ls.getTagUnionData(err_layout.data.tag_union.idx);
-                                        const inner_v = ls.getTagUnionVariants(inner_tu);
-                                        if (inner_v.len == 0) break :inner null;
-                                        const inner_payload = inner_v.get(0).payload_layout;
-                                        const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
-                                        const inner_layout = ls.getLayout(unwrapped);
-                                        if (inner_layout.tag == .struct_) break :inner inner_layout.data.struct_.idx;
-                                        break :inner null;
+                                        if (self.findBadUtf8Variant(inner_tu)) |info| {
+                                            err_record_idx = info.struct_idx;
+                                            inner_disc_offset = inner_tu.discriminant_offset;
+                                            inner_disc_size = inner_tu.discriminant_size;
+                                            inner_bad_utf8_disc = info.disc;
+                                        }
                                     },
-                                    else => null,
-                                };
+                                    else => {},
+                                }
                             }
                         }
 
@@ -2736,6 +2738,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitStore(.w32, frame_ptr, layout_slot + 24, layout_reg);
                         try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_problem_off))));
                         try self.emitStore(.w32, frame_ptr, layout_slot + 28, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(inner_disc_offset))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 32, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(inner_disc_size))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 36, layout_reg);
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(inner_bad_utf8_disc))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + 40, layout_reg);
                         self.codegen.freeGeneral(layout_reg);
 
                         // Call C builtin that writes the Roc tag union directly.
@@ -10195,6 +10203,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const field = fields.get(0);
             if (field.index != 0) return null;
             return field.layout;
+        }
+
+        fn findBadUtf8Variant(self: *Self, inner_tu: *const layout.TagUnionData) ?struct { disc: u16, struct_idx: layout.StructIdx } {
+            const variants = self.layout_store.getTagUnionVariants(inner_tu);
+            for (0..variants.len) |i| {
+                const payload = variants.get(@intCast(i)).payload_layout;
+                const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
+                const payload_layout = self.layout_store.getLayout(candidate);
+                if (payload_layout.tag != .struct_) continue;
+
+                const struct_idx = payload_layout.data.struct_.idx;
+                const struct_data = self.layout_store.getStructData(struct_idx);
+                const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
+                if (fields.len != 2) continue;
+
+                var has_index_field = false;
+                var has_problem_field = false;
+                for (0..fields.len) |field_i| {
+                    const field = fields.get(field_i);
+                    const field_layout = self.layout_store.getLayout(field.layout);
+                    const field_size = self.layout_store.layoutSizeAlign(field_layout).size;
+                    switch (field.index) {
+                        0 => has_index_field = field_size == 8,
+                        1 => has_problem_field = field_size == 1,
+                        else => {},
+                    }
+                }
+                if (has_index_field and has_problem_field) {
+                    return .{ .disc = @intCast(i), .struct_idx = struct_idx };
+                }
+            }
+
+            return null;
         }
 
         fn coerceImmediateForStackCopy(self: *Self, loc: ValueLocation) Allocator.Error!ValueLocation {

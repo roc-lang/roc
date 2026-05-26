@@ -3420,6 +3420,26 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
+    .{
+        .name = "inspect: chained ? with Str.from_utf8 and I32.from_str (issue 9456)",
+        .source_kind = .module,
+        .source =
+        \\parse = |s| {
+        \\    chars = s.to_utf8()
+        \\    match chars {
+        \\        [] => Err(ParsingError)
+        \\        [_first, .. as rest] => {
+        \\            num_str = Str.from_utf8(rest)?
+        \\            _num = I32.from_str(num_str)?
+        \\            Ok({})
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main = parse("L12")
+        ,
+        .expected = .{ .inspect_str = "Ok({})" },
+    },
 };
 
 pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_93xx_tests.tests ++ interpreter_style_tests.tests;

@@ -440,7 +440,7 @@ fn registerHostImports(self: *Self) !void {
     self.str_with_capacity_import = try self.module.addImport("env", "roc_str_with_capacity", str_unary_type);
 
     const str_from_utf8_type = try self.module.addFuncType(
-        &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 },
+        &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 },
         &.{},
     );
     self.str_from_utf8_import = try self.module.addImport("env", "roc_str_from_utf8", str_from_utf8_type);
@@ -2048,6 +2048,39 @@ fn unwrapSingleFieldPayloadLayout(self: *const Self, layout_idx: layout.Idx) ?la
     const field = fields.get(0);
     if (field.index != 0) return null;
     return field.layout;
+}
+
+fn findBadUtf8Variant(self: *const Self, inner_tu: *const layout.TagUnionData) ?struct { disc: u16, struct_idx: layout.StructIdx } {
+    const ls = self.getLayoutStore();
+    const variants = ls.getTagUnionVariants(inner_tu);
+    for (0..variants.len) |i| {
+        const payload = variants.get(@intCast(i)).payload_layout;
+        const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
+        const payload_layout = ls.getLayout(candidate);
+        if (payload_layout.tag != .struct_) continue;
+
+        const struct_idx = payload_layout.data.struct_.idx;
+        const struct_data = ls.getStructData(struct_idx);
+        const fields = ls.struct_fields.sliceRange(struct_data.getFields());
+        if (fields.len != 2) continue;
+
+        var has_index_field = false;
+        var has_problem_field = false;
+        for (0..fields.len) |field_i| {
+            const field = fields.get(field_i);
+            const field_size = self.layoutStorageByteSize(field.layout);
+            switch (field.index) {
+                0 => has_index_field = field_size == 8,
+                1 => has_problem_field = field_size == 1,
+                else => {},
+            }
+        }
+        if (has_index_field and has_problem_field) {
+            return .{ .disc = @intCast(i), .struct_idx = struct_idx };
+        }
+    }
+
+    return null;
 }
 
 fn shiftBitWidth(layout_idx: layout.Idx) u32 {
@@ -8091,6 +8124,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             var ok_disc: ?u16 = null;
             var err_disc: ?u16 = null;
             var err_record_idx: ?layout.StructIdx = null;
+            var inner_disc_offset: u32 = 0;
+            var inner_disc_size: u32 = 0;
+            var inner_bad_utf8_disc: u32 = 0;
             for (0..variants.len) |i| {
                 const v_payload = variants.get(@intCast(i)).payload_layout;
                 const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
@@ -8099,20 +8135,19 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 } else {
                     err_disc = @intCast(i);
                     const err_layout = ls.getLayout(candidate);
-                    err_record_idx = switch (err_layout.tag) {
-                        .struct_ => err_layout.data.struct_.idx,
-                        .tag_union => inner: {
+                    switch (err_layout.tag) {
+                        .struct_ => err_record_idx = err_layout.data.struct_.idx,
+                        .tag_union => {
                             const inner_tu = ls.getTagUnionData(err_layout.data.tag_union.idx);
-                            const inner_v = ls.getTagUnionVariants(inner_tu);
-                            if (inner_v.len == 0) break :inner null;
-                            const inner_payload = inner_v.get(0).payload_layout;
-                            const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
-                            const inner_layout = ls.getLayout(unwrapped);
-                            if (inner_layout.tag == .struct_) break :inner inner_layout.data.struct_.idx;
-                            break :inner null;
+                            if (self.findBadUtf8Variant(inner_tu)) |info| {
+                                err_record_idx = info.struct_idx;
+                                inner_disc_offset = inner_tu.discriminant_offset;
+                                inner_disc_size = inner_tu.discriminant_size;
+                                inner_bad_utf8_disc = info.disc;
+                            }
                         },
-                        else => null,
-                    };
+                        else => {},
+                    }
                 }
             }
             const resolved_ok = ok_disc orelse wasmInvariantFmt(
@@ -8198,6 +8233,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(problem_offset)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
             WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(resolved_problem_size)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_disc_offset)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_disc_size)) catch return error.OutOfMemory;
+            self.body.append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, &self.body, @intCast(inner_bad_utf8_disc)) catch return error.OutOfMemory;
             self.body.append(self.allocator, Op.call) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, &self.body, import_idx) catch return error.OutOfMemory;
             try self.emitFpOffset(result_offset);
