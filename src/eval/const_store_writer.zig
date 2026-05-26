@@ -65,6 +65,12 @@ pub const Writer = struct {
         root: LirProgram.ConstRootPlan,
         value: Value,
     ) Allocator.Error!checked.CompileTimeRootPayload {
+        // Runtime addresses are only meaningful while storing the current
+        // evaluated root. The interpreter drops each root after storage, so
+        // later roots may reuse those addresses for unrelated values.
+        self.stored_values.clearRetainingCapacity();
+        self.str_backings.clearRetainingCapacity();
+
         const plan = self.constPlan(root.plan);
         try self.collectStrBackings(root.plan, root.ret_layout, value);
         return switch (root.request.kind) {

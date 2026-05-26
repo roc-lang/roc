@@ -1667,12 +1667,8 @@ const MiniCiStep = struct {
         try runSubBuild(step, &.{"test"}, "zig build test");
         try recordTiming(b.allocator, &timings, "zig build test", &timer);
 
-        try runSubBuild(
-            step,
-            &.{ "-Doptimize=ReleaseFast", "test-playground" },
-            "zig build -Doptimize=ReleaseFast test-playground",
-        );
-        try recordTiming(b.allocator, &timings, "zig build -Doptimize=ReleaseFast test-playground", &timer);
+        try runSubBuild(step, &.{"test-playground"}, "zig build test-playground");
+        try recordTiming(b.allocator, &timings, "zig build test-playground", &timer);
 
         try runSubBuild(step, &.{"test-serialization-sizes"}, "zig build test-serialization-sizes");
         try recordTiming(b.allocator, &timings, "zig build test-serialization-sizes", &timer);
