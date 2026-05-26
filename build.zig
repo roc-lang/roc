@@ -3385,6 +3385,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("test/stack_overflow_test_helper.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
     stack_overflow_test_helper_exe.root_module.addImport("base", roc_modules.base);
