@@ -1859,6 +1859,19 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
+			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
+			## ```roc
+			## expect U8.plus_saturated(U8.highest, 1) == U8.highest
+			##
+			## expect U8.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : U8, U8 -> U8
+			plus_saturated = |a, b|
+				if b > highest - a
+					highest
+				else
+					a + b
+
 			## Subtract the second [U8] from the first.
 			## ```roc
 			## expect U8.minus(5, 3) == 2
@@ -2189,6 +2202,23 @@ Builtin :: [].{
 			## expect I8.plus(2, 3) == 5
 			## ```
 			plus : I8, I8 -> I8
+
+			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
+			## ```roc
+			## expect I8.plus_saturated(I8.highest, 1) == I8.highest
+			##
+			## expect I8.plus_saturated(I8.lowest, -1) == I8.lowest
+			##
+			## expect I8.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : I8, I8 -> I8
+			plus_saturated = |a, b|
+				if b > 0 and a > highest - b
+					highest
+				else if b < 0 and a < lowest - b
+					lowest
+				else
+					a + b
 
 			## Subtract the second [I8] from the first.
 			## ```roc
@@ -2569,6 +2599,19 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
+			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
+			## ```roc
+			## expect U16.plus_saturated(U16.highest, 1) == U16.highest
+			##
+			## expect U16.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : U16, U16 -> U16
+			plus_saturated = |a, b|
+				if b > highest - a
+					highest
+				else
+					a + b
+
 			## Subtract the second [U16] from the first.
 			## ```roc
 			## expect U16.minus(5, 3) == 2
@@ -2937,6 +2980,23 @@ Builtin :: [].{
 			## expect I16.plus(2, 3) == 5
 			## ```
 			plus : I16, I16 -> I16
+
+			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
+			## ```roc
+			## expect I16.plus_saturated(I16.highest, 1) == I16.highest
+			##
+			## expect I16.plus_saturated(I16.lowest, -1) == I16.lowest
+			##
+			## expect I16.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : I16, I16 -> I16
+			plus_saturated = |a, b|
+				if b > 0 and a > highest - b
+					highest
+				else if b < 0 and a < lowest - b
+					lowest
+				else
+					a + b
 
 			## Subtract the second [I16] from the first.
 			## ```roc
@@ -3333,6 +3393,19 @@ Builtin :: [].{
 			## expect U32.plus(2, 3) == 5
 			## ```
 			plus : U32, U32 -> U32
+
+			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
+			## ```roc
+			## expect U32.plus_saturated(U32.highest, 1) == U32.highest
+			##
+			## expect U32.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : U32, U32 -> U32
+			plus_saturated = |a, b|
+				if b > highest - a
+					highest
+				else
+					a + b
 
 			## Subtract the second [U32] from the first.
 			## ```roc
@@ -3740,6 +3813,23 @@ Builtin :: [].{
 			## expect I32.plus(2, 3) == 5
 			## ```
 			plus : I32, I32 -> I32
+
+			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
+			## ```roc
+			## expect I32.plus_saturated(I32.highest, 1) == I32.highest
+			##
+			## expect I32.plus_saturated(I32.lowest, -1) == I32.lowest
+			##
+			## expect I32.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : I32, I32 -> I32
+			plus_saturated = |a, b|
+				if b > 0 and a > highest - b
+					highest
+				else if b < 0 and a < lowest - b
+					lowest
+				else
+					a + b
 
 			## Subtract the second [I32] from the first.
 			## ```roc
@@ -4156,6 +4246,19 @@ Builtin :: [].{
 			## expect U64.plus(2, 3) == 5
 			## ```
 			plus : U64, U64 -> U64
+
+			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
+			## ```roc
+			## expect U64.plus_saturated(U64.highest, 1) == U64.highest
+			##
+			## expect U64.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : U64, U64 -> U64
+			plus_saturated = |a, b|
+				if b > highest - a
+					highest
+				else
+					a + b
 
 			## Subtract the second [U64] from the first.
 			## ```roc
@@ -4606,6 +4709,23 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
+			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
+			## ```roc
+			## expect I64.plus_saturated(I64.highest, 1) == I64.highest
+			##
+			## expect I64.plus_saturated(I64.lowest, -1) == I64.lowest
+			##
+			## expect I64.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : I64, I64 -> I64
+			plus_saturated = |a, b|
+				if b > 0 and a > highest - b
+					highest
+				else if b < 0 and a < lowest - b
+					lowest
+				else
+					a + b
+
 			## Subtract the second [I64] from the first.
 			## ```roc
 			## expect I64.minus(5, 3) == 2
@@ -5037,6 +5157,19 @@ Builtin :: [].{
 			## expect U128.plus(2, 3) == 5
 			## ```
 			plus : U128, U128 -> U128
+
+			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
+			## ```roc
+			## expect U128.plus_saturated(U128.highest, 1) == U128.highest
+			##
+			## expect U128.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : U128, U128 -> U128
+			plus_saturated = |a, b|
+				if b > highest - a
+					highest
+				else
+					a + b
 
 			## Subtract the second [U128] from the first.
 			## ```roc
@@ -5524,6 +5657,23 @@ Builtin :: [].{
 			## expect I128.plus(2, 3) == 5
 			## ```
 			plus : I128, I128 -> I128
+
+			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
+			## ```roc
+			## expect I128.plus_saturated(I128.highest, 1) == I128.highest
+			##
+			## expect I128.plus_saturated(I128.lowest, -1) == I128.lowest
+			##
+			## expect I128.plus_saturated(2, 3) == 5
+			## ```
+			plus_saturated : I128, I128 -> I128
+			plus_saturated = |a, b|
+				if b > 0 and a > highest - b
+					highest
+				else if b < 0 and a < lowest - b
+					lowest
+				else
+					a + b
 
 			## Subtract the second [I128] from the first.
 			## ```roc
@@ -6023,6 +6173,23 @@ Builtin :: [].{
 			## expect Dec.plus(1.5, 2.5) == 4.0
 			## ```
 			plus : Dec, Dec -> Dec
+
+			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
+			## ```roc
+			## expect Dec.plus_saturated(Dec.highest, 1.0) == Dec.highest
+			##
+			## expect Dec.plus_saturated(Dec.lowest, -1.0) == Dec.lowest
+			##
+			## expect Dec.plus_saturated(1.5, 2.5) == 4.0
+			## ```
+			plus_saturated : Dec, Dec -> Dec
+			plus_saturated = |a, b|
+				if b > 0 and a > highest - b
+					highest
+				else if b < 0 and a < lowest - b
+					lowest
+				else
+					a + b
 
 			## Subtract the second [Dec] from the first.
 			## ```roc
@@ -6540,6 +6707,28 @@ Builtin :: [].{
 			## ```
 			plus : F32, F32 -> F32
 
+			## Add two [F32] values, clamping the result to the finite range
+			## `[F32.lowest, F32.highest]`. An overflow to `inf` or `-inf` is
+			## clamped to [F32.highest] or [F32.lowest] respectively. `NaN` operands
+			## or results pass through unchanged.
+			## ```roc
+			## expect F32.plus_saturated(F32.highest, F32.highest) == F32.highest
+			##
+			## expect F32.plus_saturated(F32.lowest, F32.lowest) == F32.lowest
+			##
+			## expect F32.plus_saturated(1.5, 2.5) == 4.0
+			## ```
+			plus_saturated : F32, F32 -> F32
+			plus_saturated = |a, b| {
+				sum = a + b
+				if sum > highest
+					highest
+				else if sum < lowest
+					lowest
+				else
+					sum
+			}
+
 			## Subtract the second [F32] from the first. Subtraction is subject to
 			## IEEE 754 rounding; the result may be `inf`, `-inf`, or `NaN`.
 			## ```roc
@@ -7006,6 +7195,28 @@ Builtin :: [].{
 			## expect F64.plus(1.5, 2.5).to_str() == "4"
 			## ```
 			plus : F64, F64 -> F64
+
+			## Add two [F64] values, clamping the result to the finite range
+			## `[F64.lowest, F64.highest]`. An overflow to `inf` or `-inf` is
+			## clamped to [F64.highest] or [F64.lowest] respectively. `NaN` operands
+			## or results pass through unchanged.
+			## ```roc
+			## expect F64.plus_saturated(F64.highest, F64.highest) == F64.highest
+			##
+			## expect F64.plus_saturated(F64.lowest, F64.lowest) == F64.lowest
+			##
+			## expect F64.plus_saturated(1.5, 2.5) == 4.0
+			## ```
+			plus_saturated : F64, F64 -> F64
+			plus_saturated = |a, b| {
+				sum = a + b
+				if sum > highest
+					highest
+				else if sum < lowest
+					lowest
+				else
+					sum
+			}
 
 			## Subtract the second [F64] from the first. Subtraction is subject to
 			## IEEE 754 rounding; the result may be `inf`, `-inf`, or `NaN`.
