@@ -12,6 +12,7 @@ const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const lir = @import("lir");
+const reporting = @import("reporting");
 
 const builtin_loading = @import("builtin_loading.zig");
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
@@ -1010,6 +1011,79 @@ fn publishImportKeys(
         };
     }
     return imports;
+}
+
+/// Render diagnostics (tokenize, parse, canonicalize, type-check) for a source as a
+/// terminal-formatted string. Use this on `error.TypeCheckError` to produce the same
+/// nice messages the file-based path prints.
+pub fn renderProblems(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+) ![]u8 {
+    var resources = try parseAndCheckProgramForProblems(allocator, source_kind, source, &.{});
+    defer resources.deinit(allocator);
+
+    return try renderCheckedModuleProblems(allocator, &resources.main, "repl");
+}
+
+fn renderCheckedModuleProblems(
+    allocator: Allocator,
+    main: *const CheckedModule,
+    filename: []const u8,
+) ![]u8 {
+    var reports = std.array_list.Managed(reporting.Report).init(allocator);
+    defer {
+        for (reports.items) |*r| r.deinit();
+        reports.deinit();
+    }
+
+    for (main.parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        const report = try main.parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, filename);
+        try reports.append(report);
+    }
+
+    for (main.parse_ast.parse_diagnostics.items) |diagnostic| {
+        const report = try main.parse_ast.parseDiagnosticToReport(&main.module_env.common, diagnostic, allocator, filename);
+        try reports.append(report);
+    }
+
+    const diagnostics = try main.module_env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        const report = try main.module_env.diagnosticToReport(diagnostic, allocator, filename);
+        try reports.append(report);
+    }
+
+    for (main.checker.problems.problems.items) |problem| {
+        var report_builder = try check.ReportBuilder.init(
+            allocator,
+            main.module_env,
+            main.module_env,
+            &main.checker.snapshots,
+            &main.checker.problems,
+            filename,
+            &.{},
+            &main.checker.import_mapping,
+            &main.checker.regions,
+        );
+        defer report_builder.deinit();
+
+        const report = try report_builder.build(problem);
+        try reports.append(report);
+    }
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    for (reports.items) |report| {
+        try report.render(&out.writer, .color_terminal);
+    }
+    const raw = try out.toOwnedSlice();
+    const trimmed = std.mem.trimRight(u8, raw, "\r\n");
+    if (trimmed.len == raw.len) return raw;
+    const result = try allocator.dupe(u8, trimmed);
+    allocator.free(raw);
+    return result;
 }
 
 fn cleanupCheckedModule(allocator: Allocator, module: CheckedModule) void {
