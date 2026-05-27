@@ -16,7 +16,7 @@ result = add_five(10.I64)
 ~~~
 # MONO
 ~~~roc
-make_adder = |x| |y| x + y
+make_adder = |x| |y| x.plus(y)
 
 add_five : I64 -> I64
 add_five = make_adder(5.I64)
@@ -59,12 +59,12 @@ EndOfFile,
 			(p-ident (raw "add_five"))
 			(e-apply
 				(e-ident (raw "make_adder"))
-				(e-typed-int (raw "5") (type ".I64"))))
+				(e-typed-int (raw "5") (type "I64"))))
 		(s-decl
 			(p-ident (raw "result"))
 			(e-apply
 				(e-ident (raw "add_five"))
-				(e-typed-int (raw "10") (type ".I64"))))))
+				(e-typed-int (raw "10") (type "I64"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -80,20 +80,22 @@ EndOfFile,
 				(e-lambda
 					(args
 						(p-assign (ident "y")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 27)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))))
 	(d-let
 		(p-assign (ident "add_five"))
-		(e-call (constraint-fn-var 46)
+		(e-call (constraint-fn-var 66)
 			(e-lookup-local
 				(p-assign (ident "make_adder")))
 			(e-typed-int (value "5") (type "I64"))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 67)
+		(e-call (constraint-fn-var 107)
 			(e-lookup-local
 				(p-assign (ident "add_five")))
 			(e-typed-int (value "10") (type "I64")))))

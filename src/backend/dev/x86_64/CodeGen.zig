@@ -754,6 +754,18 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) !void {
+            const start = self.currentOffset();
+            try self.emit.leaRegRipRel(dst, 0);
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(start + 3),
+                    .name = symbol_name,
+                    .kind = .rel32,
+                },
+            });
+        }
+
         // Control flow
 
         /// Emit unconditional jump (returns patch location for fixup)

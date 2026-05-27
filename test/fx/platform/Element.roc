@@ -16,7 +16,7 @@ Element := [
     text = |s| Text(s)
 
     process! : Element => {}
-    process! = |elem| {
+    process! = |elem|
         match elem {
             Div(children) => {
                 Stdout.line!("Div branch")
@@ -25,12 +25,7 @@ Element := [
                     Element.process!(child)
                 })
             }
-            Label(_node) => {
-                Stdout.line!("Label branch")
-            }
-            Text(s) => {
-                Stdout.line!("Text branch: ${s}")
-            }
+            Label(_node) => Stdout.line!("Label branch")
+            Text(s) => Stdout.line!("Text branch: ${s}")
         }
-    }
 }

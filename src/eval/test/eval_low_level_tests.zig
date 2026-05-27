@@ -1342,6 +1342,20 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"-42\"" },
     },
     .{
+        .name = "low_level - I8.abs_diff uses signed operand layout",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 120.I8
+        \\b : I8
+        \\b = -120.I8
+        \\x = I8.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "240" },
+    },
+    .{
         .name = "low_level - U16.to_str",
         .source =
         \\{
@@ -3729,6 +3743,22 @@ pub const tests = [_]TestCase{
         \\main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
         ,
         .expected = .{ .inspect_str = "9" },
+    },
+    .{
+        .name = "boxed lambda round trip: boxed callable captures boxed callable",
+        .source_kind = .module,
+        .source =
+        \\make_outer : {} -> Box((I64 -> I64))
+        \\make_outer = |_| {
+        \\    inner = Box.box(|x| x + 1)
+        \\
+        \\    Box.box(|x| Box.unbox(inner)(x) + 1)
+        \\}
+        \\
+        \\main : I64
+        \\main = Box.unbox(make_outer({}))(40)
+        ,
+        .expected = .{ .inspect_str = "42" },
     },
     .{
         .name = "boxed lambda round trip: nested box does not authorize unrelated erasure",

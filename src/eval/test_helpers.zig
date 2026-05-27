@@ -12,6 +12,7 @@ const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const lir = @import("lir");
+const reporting = @import("reporting");
 
 const builtin_loading = @import("builtin_loading.zig");
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
@@ -30,7 +31,13 @@ const ExecutableMemory = backend.ExecutableMemory;
 const LayoutStore = @import("layout").Store;
 const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
-const RuntimeImage = lir.RuntimeImage;
+const LirImage = lir.LirImage;
+
+/// Captures an eval backend's string output and host allocation count.
+pub const EvalRunResult = struct {
+    output: []u8,
+    allocation_count: u32,
+};
 const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct {
     base_ptr: [*]align(1) u8,
     buffer: []align(collections.max_roc_alignment.toByteUnits()) u8,
@@ -56,6 +63,10 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
             .fixed_buffer = std.heap.FixedBufferAllocator.init(buffer),
             .page_size = page_size,
         };
+    }
+
+    fn createWithMinSize(preferred_size: usize, _: usize, page_size: usize) !@This() {
+        return create(preferred_size, page_size);
     }
 
     fn deinit(self: *@This(), _: Allocator) void {
@@ -101,6 +112,11 @@ const AvailableImport = struct {
     statement_idx: ?CIR.Statement.Idx,
 };
 
+const ModuleValidation = enum {
+    roc_check,
+    checked_artifact,
+};
+
 /// Public `CheckedModule` declaration.
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
@@ -108,6 +124,7 @@ pub const CheckedModule = struct {
     can: *Can,
     checker: *Check,
     imported_envs: []*const ModuleEnv,
+    auto_imported_types: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     owned_source: ?[]u8 = null,
     published_owns_module_env: bool = false,
     parse_ns: u64 = 0,
@@ -140,6 +157,7 @@ pub const ParsedResources = struct {
     builtin_module: builtin_loading.LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
     imported_envs: []*const ModuleEnv,
+    auto_imported_types: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     extra_modules: []CheckedModule,
     parse_ns: u64 = 0,
     canonicalize_ns: u64 = 0,
@@ -155,6 +173,8 @@ pub const ParsedResources = struct {
         for (self.import_artifacts) |*artifact| artifact.deinit(allocator);
         allocator.free(self.import_artifacts);
         allocator.free(self.imported_envs);
+        self.auto_imported_types.deinit();
+        allocator.destroy(self.auto_imported_types);
         allocator.destroy(self.checker);
         allocator.destroy(self.can);
     }
@@ -167,6 +187,10 @@ pub const ParsedResources = struct {
 // throughput because every parallel worker reserves its own region: keeping
 // it modest (1 GB) lets MapViewOfFile complete quickly and lets us scale to
 // many workers without tripping system address-space accounting.
+//
+// If the OS rejects the preferred reservation (e.g. aarch64 Linux with
+// CONFIG_ARM64_VA_BITS=39 — default on 64-bit Raspberry Pi OS — caps user
+// VA at ~256 GiB), the allocator halves down to `EVAL_SHARED_MEMORY_MIN_SIZE`.
 const EVAL_SHARED_MEMORY_SIZE: usize = if (builtin.target.os.tag == .freestanding)
     8 * 1024 * 1024
 else if (build_options.has_shared_memory_size)
@@ -180,6 +204,12 @@ else if (builtin.os.tag == .windows)
 else
     2 * 1024 * 1024 * 1024 * 1024;
 
+// Floor for the retry loop. Eval tests need very little arena, so 256 MB is
+// plenty; any 64-bit Linux kernel can fit this even with reduced VA bits. The
+// allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE` for targets whose
+// preferred size is smaller.
+const EVAL_SHARED_MEMORY_MIN_SIZE: usize = 256 * 1024 * 1024;
+
 fn configuredSharedMemorySize() usize {
     if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
         @compileError("-Dshared-memory-size does not fit in usize for this target");
@@ -188,32 +218,32 @@ fn configuredSharedMemorySize() usize {
     return @intCast(build_options.shared_memory_size);
 }
 
-/// Public `RuntimeImageProgram` declaration.
-pub const RuntimeImageProgram = struct {
+/// Public `LirImageProgram` declaration.
+pub const LirImageProgram = struct {
     shm: SharedMemoryAllocator,
-    runtime_header: *RuntimeImage.Header,
-    view: RuntimeImage.ProgramView,
+    image_header: *LirImage.Header,
+    view: LirImage.ProgramView,
 
     /// First explicit LIR root for eval helpers. The root set was selected by
     /// checked-artifact publication and lowering; runtime evaluators must not
     /// rediscover roots from compiler data.
-    pub fn mainProc(self: *const RuntimeImageProgram) LirProcSpecId {
+    pub fn mainProc(self: *const LirImageProgram) LirProcSpecId {
         if (self.view.root_procs.len == 0) {
             if (builtin.mode == .Debug) {
-                std.debug.panic("eval runtime image invariant violated: no root procedures", .{});
+                std.debug.panic("eval LIR image invariant violated: no root procedures", .{});
             }
             unreachable;
         }
         return self.view.root_procs[0];
     }
 
-    pub fn deinit(self: *RuntimeImageProgram, allocator: Allocator) void {
+    pub fn deinit(self: *LirImageProgram, allocator: Allocator) void {
         self.shm.deinit(allocator);
     }
 };
 
 /// Public `LoweredProgram` declaration.
-pub const LoweredProgram = RuntimeImageProgram;
+pub const LoweredProgram = LirImageProgram;
 
 /// Public `CompiledProgram` declaration.
 pub const CompiledProgram = struct {
@@ -297,6 +327,7 @@ pub fn parseAndCheckProgramForProblems(
             import_module.source,
             false,
             true,
+            .checked_artifact,
             &.{},
             builtin_module.env,
             builtin_indices,
@@ -322,6 +353,7 @@ pub fn parseAndCheckProgramForProblems(
         source,
         false,
         false,
+        .checked_artifact,
         &.{},
         builtin_module.env,
         builtin_indices,
@@ -542,6 +574,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
             import_module.source,
             false,
             true,
+            .checked_artifact,
             &.{},
             builtin_module.env,
             builtin_indices,
@@ -581,6 +614,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         source,
         inspect_wrap,
         false,
+        .checked_artifact,
         explicit_eval_root_names,
         builtin_module.env,
         builtin_indices,
@@ -672,6 +706,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
         .imported_envs = main_checked.imported_envs,
+        .auto_imported_types = main_checked.auto_imported_types,
         .extra_modules = try extra_modules.toOwnedSlice(allocator),
         .parse_ns = main_checked.parse_ns,
         .canonicalize_ns = main_checked.canonicalize_ns,
@@ -687,6 +722,7 @@ pub fn parseCheckModule(
     source: []const u8,
     inspect_wrap: bool,
     hosted_transform: bool,
+    validation: ModuleValidation,
     explicit_root_names: []const []const u8,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
@@ -715,7 +751,6 @@ pub fn parseCheckModule(
         parse_ast.deinit();
         allocators.deinit();
     }
-    parse_ast.store.emptyScratch();
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
         return error.ParseError;
     }
@@ -756,11 +791,21 @@ pub fn parseCheckModule(
 
     var can_timer = try StageTimer.start();
     try czer.canonicalizeFile();
+    switch (validation) {
+        .roc_check => try czer.validateForChecking(),
+        .checked_artifact => try czer.validateForExplicitRoots(),
+    }
     if (hosted_transform) {
         var modified_defs = try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
         defer modified_defs.deinit(module_env.gpa);
     }
     const can_elapsed = can_timer.read();
+
+    const auto_imported_types = try allocator.create(std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType));
+    errdefer allocator.destroy(auto_imported_types);
+    auto_imported_types.* = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    errdefer auto_imported_types.deinit();
+    try Can.populateModuleEnvs(auto_imported_types, module_env, builtin_module_env, builtin_indices);
 
     const imported_envs_len: usize = if (available_imports.len == 0 and source_kind == .expr) 1 else available_imports.len + 2;
     const imported_envs = try allocator.alloc(*const ModuleEnv, imported_envs_len);
@@ -783,10 +828,11 @@ pub fn parseCheckModule(
         &module_env.types,
         module_env,
         imported_envs,
-        null,
+        auto_imported_types,
         &module_env.store.regions,
         builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
     var check_timer = try StageTimer.start();
     try checker.checkFile();
@@ -798,6 +844,7 @@ pub fn parseCheckModule(
         .can = czer,
         .checker = checker,
         .imported_envs = imported_envs,
+        .auto_imported_types = auto_imported_types,
         .owned_source = owned_source,
         .parse_ns = parse_elapsed,
         .canonicalize_ns = can_elapsed,
@@ -810,33 +857,43 @@ fn lowerParsedProgramToLir(
     resources: *ParsedResources,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
+    return lowerCheckedModuleSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
+}
+
+/// Lower already-published checked modules to a LIR image.
+pub fn lowerCheckedModuleSetToLir(
+    allocator: Allocator,
+    root_module: *check.CheckedArtifact.CheckedModuleArtifact,
+    import_modules: []check.CheckedArtifact.CheckedModuleArtifact,
+    target_usize: base.target.TargetUsize,
+) !LoweredProgram {
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_modules.len);
     defer allocator.free(import_views);
-    for (resources.import_artifacts, 0..) |*artifact, i| {
-        import_views[i] = check.CheckedArtifact.importedView(artifact);
+    for (import_modules, 0..) |*module, i| {
+        import_views[i] = check.CheckedArtifact.importedView(module);
     }
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(EVAL_SHARED_MEMORY_SIZE, page_size);
+    var shm = try SharedMemoryAllocator.createWithMinSize(EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
     errdefer shm.deinit(allocator);
 
     const shm_allocator = shm.allocator();
-    const runtime_header = try shm_allocator.create(RuntimeImage.Header);
+    const image_header = try shm_allocator.create(LirImage.Header);
 
-    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         shm_allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = root_module.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
         },
     );
 
-    try RuntimeImage.fillHeaderInSharedMemory(
-        runtime_header,
+    try LirImage.fillHeaderInSharedMemory(
+        image_header,
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
@@ -845,10 +902,10 @@ fn lowerParsedProgramToLir(
     );
     shm.updateHeader();
 
-    const view = try RuntimeImage.viewMappedImage(runtime_header, shm.base_ptr, shm.getUsedSize());
+    const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize());
     return .{
         .shm = shm,
-        .runtime_header = runtime_header,
+        .image_header = image_header,
         .view = view,
     };
 }
@@ -998,11 +1055,86 @@ fn publishImportKeys(
     return imports;
 }
 
+/// Render diagnostics (tokenize, parse, canonicalize, type-check) for a source as a
+/// terminal-formatted string. Use this on `error.TypeCheckError` to produce the same
+/// nice messages the file-based path prints.
+pub fn renderProblems(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+) ![]u8 {
+    var resources = try parseAndCheckProgramForProblems(allocator, source_kind, source, &.{});
+    defer resources.deinit(allocator);
+
+    return try renderCheckedModuleProblems(allocator, &resources.main, "repl");
+}
+
+fn renderCheckedModuleProblems(
+    allocator: Allocator,
+    main: *const CheckedModule,
+    filename: []const u8,
+) ![]u8 {
+    var reports = std.array_list.Managed(reporting.Report).init(allocator);
+    defer {
+        for (reports.items) |*r| r.deinit();
+        reports.deinit();
+    }
+
+    for (main.parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        const report = try main.parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, filename);
+        try reports.append(report);
+    }
+
+    for (main.parse_ast.parse_diagnostics.items) |diagnostic| {
+        const report = try main.parse_ast.parseDiagnosticToReport(&main.module_env.common, diagnostic, allocator, filename);
+        try reports.append(report);
+    }
+
+    const diagnostics = try main.module_env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        const report = try main.module_env.diagnosticToReport(diagnostic, allocator, filename);
+        try reports.append(report);
+    }
+
+    for (main.checker.problems.problems.items) |problem| {
+        var report_builder = try check.ReportBuilder.init(
+            allocator,
+            main.module_env,
+            main.module_env,
+            &main.checker.snapshots,
+            &main.checker.problems,
+            filename,
+            &.{},
+            &main.checker.import_mapping,
+            &main.checker.regions,
+        );
+        defer report_builder.deinit();
+
+        const report = try report_builder.build(problem);
+        try reports.append(report);
+    }
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    for (reports.items) |report| {
+        try report.render(&out.writer, .color_terminal);
+    }
+    const raw = try out.toOwnedSlice();
+    const trimmed = std.mem.trimRight(u8, raw, "\r\n");
+    if (trimmed.len == raw.len) return raw;
+    const result = try allocator.dupe(u8, trimmed);
+    allocator.free(raw);
+    return result;
+}
+
 fn cleanupCheckedModule(allocator: Allocator, module: CheckedModule) void {
     module.checker.deinit();
     module.can.deinit();
     module.parse_ast.deinit();
     allocator.free(module.imported_envs);
+    module.auto_imported_types.deinit();
+    allocator.destroy(module.auto_imported_types);
     if (!module.published_owns_module_env) {
         module.module_env.deinit();
         if (module.owned_source) |owned_source| allocator.free(owned_source);
@@ -1151,6 +1283,12 @@ pub fn zeroedEntrypointArgBuffer(
 
 /// Public `lirInterpreterInspectedStr` function.
 pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+    const result = try lirInterpreterStrWithStats(allocator, lowered);
+    return result.output;
+}
+
+/// Public `lirInterpreterStrWithStats` function.
+pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -1174,17 +1312,27 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
         else => return err,
     };
     const ret_layout = lowered.view.store.getProcSpec(lowered.mainProc()).ret_layout;
-    return copyReturnedRocStr(
+    const output = try copyReturnedRocStr(
         allocator,
         &lowered.view.layouts,
         ret_layout,
         result.value.ptr,
         null,
     );
+    return .{
+        .output = output,
+        .allocation_count = runtime_env.allocationCallCount(),
+    };
 }
 
 /// Public `devEvaluatorInspectedStr` function.
 pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+    const result = try devEvaluatorStrWithStats(allocator, lowered);
+    return result.output;
+}
+
+/// Public `devEvaluatorStrWithStats` function.
+pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
@@ -1192,7 +1340,7 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
-            null,
+            &.{},
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
@@ -1240,13 +1388,17 @@ pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPro
             .crashed => return error.Crash,
         }
 
-        return copyReturnedRocStr(
+        const output = try copyReturnedRocStr(
             allocator,
             &lowered.view.layouts,
             ret_layout,
             ret_buf.ptr,
             runtime_env.get_ops(),
         );
+        return .{
+            .output = output,
+            .allocation_count = runtime_env.allocationCallCount(),
+        };
     }
 }
 
@@ -1329,6 +1481,12 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
 
 /// Public `wasmEvaluatorInspectedStr` function.
 pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+    const result = try wasmEvaluatorStrWithStats(allocator, lowered);
+    return result.output;
+}
+
+/// Public `wasmEvaluatorStrWithStats` function.
+pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
     var codegen = backend.wasm.WasmCodeGen.init(
         allocator,
@@ -1341,7 +1499,11 @@ pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     const wasm_result = codegen.generateModule(lowered.mainProc(), proc.ret_layout) catch return error.OutOfMemory;
     defer allocator.free(wasm_result.wasm_bytes);
 
-    return @import("wasm_runner.zig").runWasmStr(allocator, wasm_result.wasm_bytes, wasm_result.has_imports);
+    const result = try @import("wasm_runner.zig").runWasmStrWithStats(allocator, wasm_result.wasm_bytes, wasm_result.has_imports);
+    return .{
+        .output = result.output,
+        .allocation_count = result.allocation_count,
+    };
 }
 
 fn copyReturnedRocStr(

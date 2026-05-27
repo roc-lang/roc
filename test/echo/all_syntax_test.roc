@@ -40,12 +40,12 @@ boolean_operators = |a, b| {
 	not_a: !a,
 }
 
-simple_match : [Red, Green, Blue] -> Str
+simple_match : [Red, Green, Blue, BabyBlue] -> Str
 simple_match = |color| {
 	match color {
 		Red => "The color is red."
 		Green => "The color is green."
-		Blue => "The color is blue."
+		Blue | BabyBlue => "The color is blue."
 	}
 }
 

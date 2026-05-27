@@ -2,7 +2,7 @@ platform ""
     requires {
         main! : () => {}
     }
-    exposes [Stdout, Stderr, Stdin, Builder, Host]
+    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element]
     packages {}
     provides { main_for_host!: "main" }
     targets: {
@@ -22,6 +22,9 @@ import Stderr
 import Stdin
 import Builder
 import Host
+import NodeA
+import NodeB
+import Element
 
 main_for_host! : () => {}
 main_for_host! = main!

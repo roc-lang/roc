@@ -66,7 +66,7 @@ src/cli/
 
 ### Phase 2: Extract Compilation Infrastructure
 1. Create `compile_shared_memory.zig` - SharedMemoryHandle, write functions
-2. Keep compilation and runtime execution split at a viewable LIR runtime image
+2. Keep compilation and runtime execution split at a viewable LIR image
 
 ### Phase 3: Extract Platform Resolution
 1. Create `platform_resolution.zig` - extractPlatformSpecFromApp, resolvePlatformPaths

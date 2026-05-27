@@ -2252,10 +2252,11 @@ fn getModulePath(origin_text: []const u8) []const u8 {
 fn convertModuleKind(kind: ModuleEnv.ModuleKind) DocModel.ModuleKind {
     return switch (kind) {
         .app, .default_app => .app,
+        .module => .module,
         .package => .package,
         .platform => .platform,
         .type_module => .type_module,
-        else => .app, // deprecated_module, hosted, malformed → treat as app
+        else => .app, // hosted and malformed modules are not documented as package modules
     };
 }
 

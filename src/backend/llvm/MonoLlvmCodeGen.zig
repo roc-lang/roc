@@ -23,6 +23,7 @@ const LocalId = lir.LocalId;
 const LocalSpan = lir.LocalSpan;
 const LirProcSpec = lir.LirProcSpec;
 const LirProcSpecId = lir.LirProcSpecId;
+const StrLiteral = lir.LIR.StrLiteral;
 
 fn getLlvmTriple() []const u8 {
     const arch = switch (builtin.cpu.arch) {
@@ -134,6 +135,18 @@ pub const MonoLlvmCodeGen = struct {
         block: LlvmBuilder.Function.Block.Index,
         params: LocalSpan,
         body: CFStmtId,
+    };
+
+    const StrFromUtf8LayoutInfo = struct {
+        ok_tag: u16,
+        err_tag: u16,
+        outer_disc_offset: u32,
+        outer_disc_size: u32,
+        err_index_offset: u32,
+        err_problem_offset: u32,
+        inner_disc_offset: u32,
+        inner_disc_size: u32,
+        inner_bad_utf8_tag: u32,
     };
 
     const RcHelperEntry = struct {
@@ -543,7 +556,6 @@ pub const MonoLlvmCodeGen = struct {
                 try self.compileStmt(free_stmt.next);
             },
             .switch_stmt => |sw| try self.emitSwitch(sw),
-            .for_list => |for_stmt| try self.emitForList(for_stmt),
             .loop_continue => try self.emitLoopContinue(),
             .loop_break => try self.emitLoopBreak(),
             .join => |join_stmt| try self.emitJoin(join_stmt),
@@ -719,7 +731,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         if (abi.elem_size == 0) {
-            try self.storeListFields(target_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, elem_locals.len, elem_locals.len);
+            try self.storeListFields(target_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, elem_locals.len, elem_locals.len << 1);
             return;
         }
         try self.callBuiltinVoid(
@@ -822,6 +834,7 @@ pub const MonoLlvmCodeGen = struct {
             .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => try self.emitNumericBinary(target, op, arg_locals),
             .num_negate => try self.emitNumericNegate(target, arg_locals[0]),
             .num_abs => try self.emitNumericAbs(target, arg_locals[0]),
+            .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(arg_locals[0]).ptr, @sizeOf(usize))), self.localLayout(target)),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
@@ -856,6 +869,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_release_excess_capacity", arg_locals[0]),
             .str_to_utf8 => try self.emitStrToUtf8(target, arg_locals[0]),
             .str_from_utf8_lossy => try self.emitStrFromUtf8Lossy(target, arg_locals[0]),
+            .str_from_utf8 => try self.emitStrFromUtf8(target, arg_locals[0]),
             .str_inspect => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_escape_and_quote", arg_locals[0]),
             .u8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, false),
             .i8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, true),
@@ -1099,6 +1113,32 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
+    fn emitNumericAbsDiff(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const lhs_layout = self.localLayout(args[0]);
+        const rhs_layout = self.localLayout(args[1]);
+        const lhs = try self.coerceScalar(try self.loadScalar(self.slot(args[0]).ptr, lhs_layout), .i128, lhs_layout.isSigned());
+        const rhs = try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, rhs_layout), .i128, rhs_layout.isSigned());
+        const zero = builder.intValue(.i128, 0) catch return error.OutOfMemory;
+
+        const result = if (lhs_layout.isSigned() or rhs_layout.isSigned()) blk: {
+            const diff = wip.bin(.sub, lhs, rhs, "") catch return error.CompilationFailed;
+            const is_neg = wip.icmp(.slt, diff, zero, "") catch return error.CompilationFailed;
+            const neg = wip.bin(.sub, zero, diff, "") catch return error.CompilationFailed;
+            break :blk wip.select(.normal, is_neg, neg, diff, "") catch return error.CompilationFailed;
+        } else blk: {
+            const lhs_ge_rhs = wip.icmp(.uge, lhs, rhs, "") catch return error.CompilationFailed;
+            const lhs_minus_rhs = wip.bin(.sub, lhs, rhs, "") catch return error.CompilationFailed;
+            const rhs_minus_lhs = wip.bin(.sub, rhs, lhs, "") catch return error.CompilationFailed;
+            break :blk wip.select(.normal, lhs_ge_rhs, lhs_minus_rhs, rhs_minus_lhs, "") catch return error.CompilationFailed;
+        };
+
+        const target_layout = self.localLayout(target);
+        const coerced = try self.coerceScalar(result, self.scalarType(target_layout), false);
+        try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
+    }
+
     fn emitNumericConversionOrCrash(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
         const name = @tagName(op);
         if (args.len >= 1 and isIntegerLayout(self.localLayout(args[0])) and self.localLayout(target) == .dec and std.mem.endsWith(u8, name, "_to_dec")) {
@@ -1183,63 +1223,6 @@ pub const MonoLlvmCodeGen = struct {
         try self.compileStmt(sw.default_branch);
     }
 
-    fn emitForList(self: *MonoLlvmCodeGen, for_stmt: anytype) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
-        const header = wip.block(0, "for_header") catch return error.OutOfMemory;
-        const body = wip.block(0, "for_body") catch return error.OutOfMemory;
-        const cont = wip.block(0, "for_continue") catch return error.OutOfMemory;
-        const after = wip.block(0, "for_after") catch return error.OutOfMemory;
-        const index_ptr = wip.alloca(.normal, .i64, .@"1", LlvmBuilder.Alignment.fromByteUnits(8), .default, "for_index") catch return error.CompilationFailed;
-        _ = wip.store(.normal, builder.intValue(.i64, 0) catch return error.OutOfMemory, index_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
-        _ = wip.br(header) catch return error.CompilationFailed;
-
-        wip.cursor = .{ .block = header };
-        const index = wip.load(.normal, .i64, index_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.CompilationFailed;
-        const list_ptr = self.slot(for_stmt.iterable).ptr;
-        const len = try self.loadUsize(try self.offsetPtr(list_ptr, @sizeOf(usize)));
-        const index_as_usize = try self.coerceScalar(index, self.ptrSizedIntType(), false);
-        const cond = wip.icmp(.ult, index_as_usize, len, "") catch return error.CompilationFailed;
-        _ = wip.brCond(cond, body, after, .none) catch return error.CompilationFailed;
-
-        wip.cursor = .{ .block = body };
-        try self.bindForListElement(for_stmt.elem, for_stmt.iterable, for_stmt.iterable_elem_layout, index_as_usize);
-        try self.loop_continue_blocks.append(self.allocator, cont);
-        try self.loop_break_blocks.append(self.allocator, after);
-        const saved_continue_len = self.loop_continue_blocks.items.len;
-        const saved_break_len = self.loop_break_blocks.items.len;
-        try self.compileStmt(for_stmt.body);
-        self.loop_continue_blocks.shrinkRetainingCapacity(saved_continue_len - 1);
-        self.loop_break_blocks.shrinkRetainingCapacity(saved_break_len - 1);
-        if (!self.currentBlockHasTerminator()) _ = wip.br(cont) catch return error.CompilationFailed;
-
-        wip.cursor = .{ .block = cont };
-        const next = wip.bin(.add, index, builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
-        _ = wip.store(.normal, next, index_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
-        _ = wip.br(header) catch return error.CompilationFailed;
-
-        wip.cursor = .{ .block = after };
-        try self.compileStmt(for_stmt.next);
-    }
-
-    fn bindForListElement(self: *MonoLlvmCodeGen, elem: LocalId, iterable: LocalId, actual_elem_layout: layout.Idx, index: LlvmBuilder.Value) Error!void {
-        const abi = self.layouts().builtinListAbi(self.localLayout(iterable));
-        const target_slot = self.slot(elem);
-        if (abi.elem_size == 0) {
-            if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
-            return;
-        }
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const bytes = try self.loadPointer(self.slot(iterable).ptr);
-        const scaled = if (abi.elem_size == 1)
-            index
-        else
-            wip.bin(.mul, index, builder.intValue(index.typeOfWip(wip), abi.elem_size) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
-        const src = wip.gep(.inbounds, .i8, bytes, &.{scaled}, "") catch return error.CompilationFailed;
-        try self.copyBytes(target_slot.ptr, src, self.layoutByteSize(actual_elem_layout), self.alignmentForLayout(actual_elem_layout));
-    }
-
     fn emitJoin(self: *MonoLlvmCodeGen, join_stmt: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const key = @intFromEnum(join_stmt.id);
@@ -1263,21 +1246,6 @@ pub const MonoLlvmCodeGen = struct {
     fn emitJump(self: *MonoLlvmCodeGen, jump_stmt: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const info = self.join_points.get(@intFromEnum(jump_stmt.target)) orelse return error.CompilationFailed;
-        const args = self.store.getLocalSpan(jump_stmt.args);
-        const params = self.store.getLocalSpan(info.params);
-        if (args.len != params.len) return error.CompilationFailed;
-        const temps = try self.allocator.alloc(LlvmBuilder.Value, args.len);
-        defer self.allocator.free(temps);
-        for (args, params, temps) |arg, param, *temp| {
-            const param_slot = self.slot(param);
-            const len = (self.builder orelse return error.CompilationFailed).intValue(.i32, @max(param_slot.size, 1)) catch return error.OutOfMemory;
-            temp.* = wip.alloca(.normal, .i8, len, param_slot.alignment, .default, "join_tmp") catch return error.CompilationFailed;
-            if (param_slot.size > 0) try self.copyBytes(temp.*, self.slot(arg).ptr, param_slot.size, param_slot.alignment);
-        }
-        for (temps, params) |temp, param| {
-            const param_slot = self.slot(param);
-            if (param_slot.size > 0) try self.copyBytes(param_slot.ptr, temp, param_slot.size, param_slot.alignment);
-        }
         _ = wip.br(info.block) catch return error.CompilationFailed;
     }
 
@@ -1354,9 +1322,9 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(target_slot.ptr, self.slot(source).ptr, target_slot.size, target_slot.alignment);
     }
 
-    fn emitStrLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, str_idx: anytype) Error!void {
+    fn emitStrLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: StrLiteral) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const bytes = self.store.getString(str_idx);
+        const bytes = self.store.getStringLiteral(literal);
         try self.callBuiltinVoid(
             "roc_builtins_str_from_literal",
             &.{ try self.ptrType(), try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() },
@@ -1465,6 +1433,40 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_str_from_utf8_lossy", call_args.types.items, call_args.values.items);
+    }
+
+    fn emitStrFromUtf8(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_slot = self.slot(target);
+        const info = try self.resolveStrFromUtf8Layout(target_slot.layout_idx);
+        if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
+
+        const layout_ptr = wip.alloca(
+            .normal,
+            .i8,
+            builder.intValue(.i32, @sizeOf(builtins.dev_wrappers.StrFromUtf8Layout)) catch return error.OutOfMemory,
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrFromUtf8Layout)),
+            .default,
+            "str_from_utf8_layout",
+        ) catch return error.CompilationFailed;
+
+        try self.storeRawInt(layout_ptr, 0, .i64, info.ok_tag, 8);
+        try self.storeRawInt(layout_ptr, 8, .i64, info.err_tag, 8);
+        try self.storeRawInt(layout_ptr, 16, .i32, info.outer_disc_offset, 4);
+        try self.storeRawInt(layout_ptr, 20, .i32, info.outer_disc_size, 4);
+        try self.storeRawInt(layout_ptr, 24, .i32, info.err_index_offset, 4);
+        try self.storeRawInt(layout_ptr, 28, .i32, info.err_problem_offset, 4);
+        try self.storeRawInt(layout_ptr, 32, .i32, info.inner_disc_offset, 4);
+        try self.storeRawInt(layout_ptr, 36, .i32, info.inner_disc_size, 4);
+        try self.storeRawInt(layout_ptr, 40, .i32, info.inner_bad_utf8_tag, 4);
+
+        var call_args = try self.rocListArgs1(arg);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
+        try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid("roc_builtins_str_from_utf8_result", call_args.types.items, call_args.values.items);
     }
 
     fn emitIntFromStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, width: u8, signed: bool) Error!void {
@@ -1584,8 +1586,8 @@ pub const MonoLlvmCodeGen = struct {
         var result = CallArgs.init();
         const ptr = self.slot(arg).ptr;
         try result.append(self.allocator, try self.ptrType(), try self.loadPointer(ptr));
-        try result.append(self.allocator, self.ptrSizedIntType(), try self.loadUsize(try self.offsetPtr(ptr, @sizeOf(usize))));
         try result.append(self.allocator, self.ptrSizedIntType(), try self.loadUsize(try self.offsetPtr(ptr, 2 * @sizeOf(usize))));
+        try result.append(self.allocator, self.ptrSizedIntType(), try self.loadUsize(try self.offsetPtr(ptr, @sizeOf(usize))));
         return result;
     }
 
@@ -1602,7 +1604,12 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn rocListArgs1(self: *MonoLlvmCodeGen, arg: LocalId) Error!CallArgs {
-        return self.rocStrArgs1(arg);
+        var result = CallArgs.init();
+        const ptr = self.slot(arg).ptr;
+        try result.append(self.allocator, try self.ptrType(), try self.loadPointer(ptr));
+        try result.append(self.allocator, self.ptrSizedIntType(), try self.loadUsize(try self.offsetPtr(ptr, @sizeOf(usize))));
+        try result.append(self.allocator, self.ptrSizedIntType(), try self.loadUsize(try self.offsetPtr(ptr, 2 * @sizeOf(usize))));
+        return result;
     }
 
     fn appendListElementRcArgs(
@@ -1696,7 +1703,11 @@ pub const MonoLlvmCodeGen = struct {
             const null_ptr = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
             try self.storePointer(self.slot(target).ptr, null_ptr);
             try self.storeScalar(try self.offsetPtr(self.slot(target).ptr, @sizeOf(usize)), .u64, total_len);
-            try self.storeScalar(try self.offsetPtr(self.slot(target).ptr, 2 * @sizeOf(usize)), .u64, total_len);
+            try self.storeScalar(
+                try self.offsetPtr(self.slot(target).ptr, 2 * @sizeOf(usize)),
+                .u64,
+                (self.wip orelse return error.CompilationFailed).bin(.shl, total_len, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed,
+            );
             return;
         }
         var call_args = try self.rocListArgs1(args[0]);
@@ -1917,8 +1928,8 @@ pub const MonoLlvmCodeGen = struct {
         switch (layout_val.tag) {
             .scalar => switch (layout_val.data.scalar.tag) {
                 .str => {
-                    const lhs_fields = try self.rocStrFields(lhs_ptr);
-                    const rhs_fields = try self.rocStrFields(rhs_ptr);
+                    const lhs_fields = try self.rocStrArgFields(lhs_ptr);
+                    const rhs_fields = try self.rocStrArgFields(rhs_ptr);
                     return self.callBuiltin("roc_builtins_str_equal", .i1, &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType() }, &.{ lhs_fields[0], lhs_fields[1], lhs_fields[2], rhs_fields[0], rhs_fields[1], rhs_fields[2] });
                 },
                 else => {
@@ -2214,19 +2225,24 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const bytes = try self.loadPointer(value_ptr);
-        const len = try self.loadUsize(try self.offsetPtr(value_ptr, @sizeOf(usize)));
-        const cap = try self.loadUsize(try self.offsetPtr(value_ptr, 2 * @sizeOf(usize)));
-        const len_is_slice = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
-        const shifted_cap = wip.bin(.shl, cap, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
-        const slice_ptr = wip.cast(.inttoptr, shifted_cap, try self.ptrType(), "") catch return error.CompilationFailed;
-        return wip.select(.normal, len_is_slice, slice_ptr, bytes, "") catch return error.CompilationFailed;
+        const cap_or_alloc = try self.loadUsize(try self.offsetPtr(value_ptr, @sizeOf(usize)));
+        const ptr_int_ty = self.ptrSizedIntType();
+        const bytes_int = wip.cast(.ptrtoint, bytes, ptr_int_ty, "") catch return error.CompilationFailed;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        const slice_mask = wip.bin(.sub, builder.intValue(ptr_int_ty, 0) catch return error.OutOfMemory, slice_tag, "") catch return error.CompilationFailed;
+        const owned_mask = wip.not(slice_mask, "") catch return error.CompilationFailed;
+        const owned_ptr = wip.bin(.@"and", bytes_int, owned_mask, "") catch return error.CompilationFailed;
+        const slice_alloc = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, -2) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        const slice_ptr = wip.bin(.@"and", slice_alloc, slice_mask, "") catch return error.CompilationFailed;
+        const data_ptr = wip.bin(.@"or", owned_ptr, slice_ptr, "") catch return error.CompilationFailed;
+        return wip.cast(.inttoptr, data_ptr, try self.ptrType(), "") catch return error.CompilationFailed;
     }
 
     fn emitRcHelperStrIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        const cap = try self.loadUsize(try self.offsetPtr(value_ptr, 2 * @sizeOf(usize)));
-        const is_small = wip.icmp(.slt, cap, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        const len = try self.loadUsize(try self.offsetPtr(value_ptr, 2 * @sizeOf(usize)));
+        const is_small = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
         const heap_str = wip.block(0, "str_heap") catch return error.OutOfMemory;
         const after = wip.block(0, "str_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, after, heap_str, .else_likely) catch return error.CompilationFailed;
@@ -2242,8 +2258,8 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperStrDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        const cap = try self.loadUsize(try self.offsetPtr(value_ptr, 2 * @sizeOf(usize)));
-        const is_small = wip.icmp(.slt, cap, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        const len = try self.loadUsize(try self.offsetPtr(value_ptr, 2 * @sizeOf(usize)));
+        const is_small = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
         const heap_str = wip.block(0, "str_heap") catch return error.OutOfMemory;
         const after = wip.block(0, "str_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, after, heap_str, .else_likely) catch return error.CompilationFailed;
@@ -2267,7 +2283,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitRcHelperListIncref(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const fields = try self.rocStrFields(value_ptr);
+        const fields = try self.rocListArgFields(value_ptr);
         try self.callBuiltinVoid(
             "roc_builtins_list_incref",
             &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i64, .i1, try self.ptrType() },
@@ -2284,7 +2300,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const fields = try self.rocStrFields(value_ptr);
+        const fields = try self.rocListArgFields(value_ptr);
         const child_fn = if (list_plan.child) |child_key|
             (try self.declareRcHelper(child_key))
         else
@@ -2480,6 +2496,18 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, value, ptr, LlvmBuilder.Alignment.fromByteUnits(@sizeOf(usize))) catch return error.CompilationFailed;
     }
 
+    fn storeRawInt(self: *MonoLlvmCodeGen, base: LlvmBuilder.Value, offset: u32, ty: LlvmBuilder.Type, value: u64, alignment: u32) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr = try self.offsetPtr(base, offset);
+        _ = wip.store(
+            .normal,
+            builder.intValue(ty, @as(i64, @intCast(value))) catch return error.OutOfMemory,
+            ptr,
+            LlvmBuilder.Alignment.fromByteUnits(alignment),
+        ) catch return error.CompilationFailed;
+    }
+
     fn loadPointer(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         return wip.load(.normal, try self.ptrType(), ptr, LlvmBuilder.Alignment.fromByteUnits(@sizeOf(usize)), "") catch return error.CompilationFailed;
@@ -2612,6 +2640,126 @@ pub const MonoLlvmCodeGen = struct {
         return variants.get(discriminant).payload_layout;
     }
 
+    fn resolveStrFromUtf8Layout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrFromUtf8LayoutInfo {
+        const ret_layout_val = self.layoutValue(layout_idx);
+        if (ret_layout_val.tag != .tag_union) return error.CompilationFailed;
+        const tu_data = self.layouts().getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const variants = self.layouts().getTagUnionVariants(tu_data);
+
+        var ok_disc: ?u16 = null;
+        var err_disc: ?u16 = null;
+        var err_record_idx: ?layout.StructIdx = null;
+        var inner_disc_offset: u32 = 0;
+        var inner_disc_size: u32 = 0;
+        var inner_bad_utf8_disc: u32 = 0;
+
+        for (0..variants.len) |i| {
+            const payload = variants.get(@intCast(i)).payload_layout;
+            const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
+            if (candidate == .str) {
+                ok_disc = @intCast(i);
+                continue;
+            }
+
+            err_disc = @intCast(i);
+            const err_layout = self.layoutValue(candidate);
+            switch (err_layout.tag) {
+                .struct_ => err_record_idx = err_layout.data.struct_.idx,
+                .tag_union => {
+                    const inner_tu = self.layouts().getTagUnionData(err_layout.data.tag_union.idx);
+                    if (self.findBadUtf8Variant(inner_tu)) |info| {
+                        err_record_idx = info.struct_idx;
+                        inner_disc_offset = inner_tu.discriminant_offset;
+                        inner_disc_size = inner_tu.discriminant_size;
+                        inner_bad_utf8_disc = info.disc;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        const rec_idx = err_record_idx orelse return error.CompilationFailed;
+        const struct_data = self.layouts().getStructData(rec_idx);
+        const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
+        var index_offset: ?u32 = null;
+        var problem_offset: ?u32 = null;
+        for (0..fields.len) |i| {
+            const field = fields.get(i);
+            const field_layout = self.layoutValue(field.layout);
+            const field_size = self.layoutByteSize(field.layout);
+            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
+            const is_index = switch (field_layout.tag) {
+                .scalar => field_layout.data.scalar.tag == .int and switch (field_layout.data.scalar.data.int) {
+                    .u64, .i64 => true,
+                    else => false,
+                },
+                else => false,
+            };
+            if (is_index and field_size == 8) {
+                index_offset = field_offset;
+            } else if (field_size == 1) {
+                problem_offset = field_offset;
+            }
+        }
+
+        return .{
+            .ok_tag = ok_disc orelse return error.CompilationFailed,
+            .err_tag = err_disc orelse return error.CompilationFailed,
+            .outer_disc_offset = tu_data.discriminant_offset,
+            .outer_disc_size = tu_data.discriminant_size,
+            .err_index_offset = index_offset orelse return error.CompilationFailed,
+            .err_problem_offset = problem_offset orelse return error.CompilationFailed,
+            .inner_disc_offset = inner_disc_offset,
+            .inner_disc_size = inner_disc_size,
+            .inner_bad_utf8_tag = inner_bad_utf8_disc,
+        };
+    }
+
+    fn unwrapSingleFieldPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) ?layout.Idx {
+        const layout_val = self.layoutValue(layout_idx);
+        if (layout_val.tag != .struct_) return null;
+
+        const struct_data = self.layouts().getStructData(layout_val.data.struct_.idx);
+        const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
+        if (fields.len != 1) return null;
+
+        const field = fields.get(0);
+        if (field.index != 0) return null;
+        return field.layout;
+    }
+
+    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u16, struct_idx: layout.StructIdx } {
+        const variants = self.layouts().getTagUnionVariants(inner_tu);
+        for (0..variants.len) |i| {
+            const payload = variants.get(@intCast(i)).payload_layout;
+            const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
+            const payload_layout = self.layoutValue(candidate);
+            if (payload_layout.tag != .struct_) continue;
+
+            const struct_idx = payload_layout.data.struct_.idx;
+            const struct_data = self.layouts().getStructData(struct_idx);
+            const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
+            if (fields.len != 2) continue;
+
+            var has_index_field = false;
+            var has_problem_field = false;
+            for (0..fields.len) |field_i| {
+                const field = fields.get(field_i);
+                const field_size = self.layoutByteSize(field.layout);
+                switch (field.index) {
+                    0 => has_index_field = field_size == 8,
+                    1 => has_problem_field = field_size == 1,
+                    else => {},
+                }
+            }
+            if (has_index_field and has_problem_field) {
+                return .{ .disc = @intCast(i), .struct_idx = struct_idx };
+            }
+        }
+
+        return null;
+    }
+
     fn resolveStructBase(self: *MonoLlvmCodeGen, source: LocalId) Error!ResolvedBase {
         const source_layout = self.localLayout(source);
         const layout_val = self.layoutValue(source_layout);
@@ -2626,7 +2774,15 @@ pub const MonoLlvmCodeGen = struct {
         return self.resolveStructBase(source);
     }
 
-    fn rocStrFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value) Error![3]LlvmBuilder.Value {
+    fn rocStrArgFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value) Error![3]LlvmBuilder.Value {
+        return .{
+            try self.loadPointer(ptr),
+            try self.loadUsize(try self.offsetPtr(ptr, 2 * @sizeOf(usize))),
+            try self.loadUsize(try self.offsetPtr(ptr, @sizeOf(usize))),
+        };
+    }
+
+    fn rocListArgFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value) Error![3]LlvmBuilder.Value {
         return .{
             try self.loadPointer(ptr),
             try self.loadUsize(try self.offsetPtr(ptr, @sizeOf(usize))),

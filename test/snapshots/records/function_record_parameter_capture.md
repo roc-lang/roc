@@ -81,10 +81,12 @@ NO CHANGE
 									(rest-pattern
 										(p-assign (ident "a")))))))))
 			(field (name "is_adult")
-				(e-binop (op "ge")
-					(e-lookup-local
-						(p-assign (ident "age")))
-					(e-num (value "18")))))))
+				(e-dispatch-call (method "is_gte") (constraint-fn-var 73)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "age"))))
+					(args
+						(e-num (value "18"))))))))
 ~~~
 # TYPES
 ~~~clojure

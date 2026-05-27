@@ -44,10 +44,42 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
 }
 
+fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
+    return mustUseLlvm(target) or
+        (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
+}
+
 fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     if (mustUseLlvm(target)) {
         step.use_llvm = true;
     }
+}
+
+const TestHostOptions = struct {
+    uses_stack_handler: bool = false,
+};
+
+fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
+    return std.mem.eql(u8, platform_dir, "fx");
+}
+
+fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
+    if (!options.uses_stack_handler) return false;
+
+    return switch (target.result.os.tag) {
+        .linux,
+        .macos,
+        .ios,
+        .tvos,
+        .watchos,
+        .visionos,
+        .freebsd,
+        .dragonfly,
+        .netbsd,
+        .openbsd,
+        => true,
+        else => false,
+    };
 }
 
 fn isNativeishOrMusl(target: ResolvedTarget) bool {
@@ -726,7 +758,7 @@ const CheckUnusedSuppressionStep = struct {
 /// Build step that checks for deleted post-check architecture APIs being reintroduced.
 ///
 /// This enforces the cor-style lowering contract:
-/// - no publication/canonicalization layer in post-check lowering
+/// - no output/canonicalization layer in post-check lowering
 /// - no workspace/source-var remapping layer in monotype
 /// - no canonical-source specialization lookup in compilation stages
 const CheckPostcheckArchitectureStep = struct {
@@ -1629,6 +1661,9 @@ const MiniCiStep = struct {
         try checkFxPlatformTestCoverage(step);
         try recordTiming(b.allocator, &timings, "fx platform test coverage", &timer);
 
+        try runSubBuild(step, &.{"test-eval"}, "zig build test-eval");
+        try recordTiming(b.allocator, &timings, "zig build test-eval", &timer);
+
         try runSubBuild(step, &.{"test"}, "zig build test");
         try recordTiming(b.allocator, &timings, "zig build test", &timer);
 
@@ -1783,6 +1818,14 @@ const MiniCiStep = struct {
     fn checkSnapshotChanges(step: *Step) !void {
         const b = step.owner;
         std.debug.print("---- minici: checking for snapshot changes ----\n", .{});
+
+        std.fs.cwd().access(".git", .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("Skipping snapshot change check outside a Git worktree.\n", .{});
+                return;
+            },
+            else => return err,
+        };
 
         var child_argv = std.ArrayList([]const u8).empty;
         defer child_argv.deinit(b.allocator);
@@ -1971,6 +2014,58 @@ const TidyStep = struct {
     }
 };
 
+const GitLintsStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *GitLintsStep {
+        const self = b.allocator.create(GitLintsStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "git-lints-inner",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        std.debug.print("---- git-lints: running Git-backed code checks ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, b.graph.zig_exe);
+        try child_argv.append(b.allocator, "run");
+        try child_argv.append(b.allocator, "ci/tidy.zig");
+        try child_argv.append(b.allocator, "--");
+        try child_argv.append(b.allocator, "--git-lints");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Git lints failed. Run 'zig run ci/tidy.zig -- --git-lints' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("zig run ci/tidy.zig -- --git-lints terminated abnormally", .{});
+            },
+        }
+    }
+};
+
 const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
@@ -2035,6 +2130,7 @@ fn createTestPlatformHostLib(
     roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
+    options: TestHostOptions,
 ) *Step.Compile {
     const lib = b.addLibrary(.{
         .name = name,
@@ -2046,15 +2142,20 @@ fn createTestPlatformHostLib(
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
+            // Only linked so host code can set up stack overflow handling.
+            .link_libc = testHostNeedsLibc(options, target),
         }),
     });
     configureBackend(lib, target);
+    if (options.uses_stack_handler) {
+        lib.root_module.addImport("base", roc_modules.base);
+    }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
-    // Bundle compiler-rt when LLVM is used (e.g. x64mac), so that LLVM-generated
-    // symbols like __zig_probe_stack are available at link time. Otherwise skip it
-    // to avoid duplicate symbol errors (e.g. on Windows).
-    lib.bundle_compiler_rt = mustUseLlvm(target);
+    // Bundle compiler_rt when the generated host object may call compiler_rt
+    // routines that are not supplied by the OS libraries. ARM64 Windows Zig code
+    // can emit stack-protector calls to __stack_chk_fail.
+    lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
 
     return lib;
 }
@@ -2071,6 +2172,10 @@ fn buildAndCopyTestPlatformHostLib(
     strip: bool,
     omit_frame_pointer: ?bool,
 ) *Step {
+    const options = TestHostOptions{
+        .uses_stack_handler = testPlatformUsesStackHandler(platform_dir),
+    };
+
     const lib = createTestPlatformHostLib(
         b,
         b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, target_name }),
@@ -2080,6 +2185,7 @@ fn buildAndCopyTestPlatformHostLib(
         roc_modules,
         strip,
         omit_frame_pointer,
+        options,
     );
 
     // Use correct filename for target platform
@@ -2401,24 +2507,27 @@ pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
     const roc_step = b.step("roc", "Build the roc compiler without running it");
-    const test_step = b.step("test", "Run all tests included in src/tests.zig");
+    const test_step = b.step("test", "Run all Zig tests");
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
     const tidy_step = b.step("tidy", "Run code tidiness checks (control chars, line length, etc.)");
+    const git_lints_step = b.step("git-lints", "Run Git-backed code checks");
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
-    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check publication/remapping APIs stay gone");
+    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
     const check_semantic_audit_step = b.step("check-semantic-audit", "Check that semantic reconstruction/fallback paths stay gone");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
-    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + glue)");
+    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
     const test_platforms_step = b.step("test-platforms", "Test platform integration (int/str/fx build and run)");
     const test_subcommands_step = b.step("test-subcommands", "Test roc CLI subcommands (check, build, run, fmt, etc.)");
+    const test_echo_step = b.step("test-echo", "Test the echo platform (headerless app) integration");
     const test_glue_step = b.step("test-glue", "Test the roc glue command");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -2710,7 +2819,14 @@ pub fn build(b: *std.Build) void {
         }
         run_parallel_cli.step.dependOn(&install.step);
         run_parallel_cli.step.dependOn(build_test_hosts_step);
-        test_platforms_step.dependOn(&run_parallel_cli.step);
+        // When -Dplatform=<name> filters to a single platform, only build the
+        // host libraries for that platform — skip the runner, which expects all
+        // platforms to be available.
+        if (platform_filter == null) {
+            test_platforms_step.dependOn(&run_parallel_cli.step);
+        } else {
+            test_platforms_step.dependOn(build_test_hosts_step);
+        }
 
         // test-subcommands: roc CLI subcommand integration tests
         const roc_subcommands_test = b.addTest(.{
@@ -2731,6 +2847,29 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
         test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
 
+        // test-echo: echo platform (headerless app) tests
+        const echo_tests = b.addTest(.{
+            .name = "echo_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/echo_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_echo_tests = b.addRunArtifact(echo_tests);
+        if (run_args.len != 0) {
+            run_echo_tests.addArgs(run_args);
+        }
+        run_echo_tests.step.dependOn(&install.step);
+        run_echo_tests.step.dependOn(build_test_hosts_step);
+
+        // Print "All N tests passed" via the same summary step the rest of the suite uses.
+        const echo_tests_summary = TestsSummaryStep.create(b, test_filters, 0);
+        echo_tests_summary.addRun(&run_echo_tests.step);
+        test_echo_step.dependOn(&echo_tests_summary.step);
+
         // test-glue: glue command integration tests
         const glue_test = b.addTest(.{
             .name = "glue_test",
@@ -2750,9 +2889,10 @@ pub fn build(b: *std.Build) void {
         run_glue_test_step = &run_glue_test.step;
         test_glue_step.dependOn(&run_glue_test.step);
 
-        // test-cli: umbrella depending on all three
+        // test-cli: umbrella depending on all four
         test_cli_step.dependOn(test_platforms_step);
         test_cli_step.dependOn(test_subcommands_step);
+        test_cli_step.dependOn(test_echo_step);
         test_cli_step.dependOn(test_glue_step);
     }
 
@@ -3067,12 +3207,67 @@ pub fn build(b: *std.Build) void {
             .dest_dir = .{ .override = .lib },
         });
         playground_step.dependOn(&echo_wasm_install.step);
+        echo_wasm_step.dependOn(&echo_wasm_install.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
             const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
             playground_step.dependOn(&install_file.step);
+            echo_wasm_step.dependOn(&install_file.step);
         }
+
+        // echo_native: native binary that drives the same runEcho pipeline as
+        // echo.wasm. Use it to debug compile/run failures with real stack
+        // traces. `zig build run-echo -- path/to/app.roc [--with-file Name=path] ...`
+        const echo_native_exe = b.addExecutable(.{
+            .name = "echo_native",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/echo_platform/echo_native.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_native_exe, target);
+        echo_native_exe.root_module.addImport("compile", roc_modules.compile);
+        echo_native_exe.root_module.addImport("check", roc_modules.check);
+        echo_native_exe.root_module.addImport("eval", roc_modules.eval);
+        echo_native_exe.root_module.addImport("lir", roc_modules.lir);
+        echo_native_exe.root_module.addImport("layout", roc_modules.layout);
+        echo_native_exe.root_module.addImport("base", roc_modules.base);
+        echo_native_exe.root_module.addImport("can", roc_modules.can);
+        echo_native_exe.root_module.addImport("echo_platform", roc_modules.echo_platform);
+        echo_native_exe.root_module.addImport("reporting", roc_modules.reporting);
+        echo_native_exe.root_module.addImport("roc_target", roc_modules.roc_target);
+        echo_native_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        echo_native_exe.step.dependOn(&write_compiled_builtins.step);
+
+        const echo_native_install = b.addInstallArtifact(echo_native_exe, .{});
+
+        const run_echo_step = b.step("run-echo", "Run the native echo platform driver (debug helper for echo.wasm)");
+        const run_echo_cmd = b.addRunArtifact(echo_native_exe);
+        if (run_args.len != 0) run_echo_cmd.addArgs(run_args);
+        run_echo_cmd.step.dependOn(&echo_native_install.step);
+        run_echo_step.dependOn(&run_echo_cmd.step);
+
+        // test-echo-wasm: bytebox-driven integration test that loads
+        // zig-out/lib/echo.wasm, supplies in-process js_echo + js_stderr,
+        // and asserts the tutorial example produces the expected output.
+        const echo_wasm_test_exe = b.addExecutable(.{
+            .name = "echo_wasm_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/echo-wasm-test/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(echo_wasm_test_exe, target);
+        echo_wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+
+        const test_echo_wasm_step = b.step("test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
+        const run_echo_wasm_test = b.addRunArtifact(echo_wasm_test_exe);
+        // Ensure the wasm is built before the test runs.
+        run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
+        test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
 
     // Build playground integration tests - now enabled for all optimization modes
@@ -3188,16 +3383,20 @@ pub fn build(b: *std.Build) void {
     const tidy_inner = TidyStep.create(b);
     tidy_step.dependOn(&tidy_inner.step);
 
+    // Git lints step: run checks that require Git metadata
+    const git_lints_inner = GitLintsStep.create(b);
+    git_lints_step.dependOn(&git_lints_inner.step);
+
     const stack_overflow_test_helper_exe = b.addExecutable(.{
         .name = "stack_overflow_test_helper",
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/stack_overflow_test_helper.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
     stack_overflow_test_helper_exe.root_module.addImport("base", roc_modules.base);
-    stack_overflow_test_helper_exe.root_module.addImport("builtins", roc_modules.builtins);
     roc_modules.addModuleDependencies(stack_overflow_test_helper_exe, .base);
     const install_stack_overflow_test_helper = b.addInstallArtifact(stack_overflow_test_helper_exe, .{});
     const stack_overflow_test_helper_path = b.getInstallPath(.bin, stack_overflow_test_helper_exe.out_filename);
@@ -3207,7 +3406,7 @@ pub fn build(b: *std.Build) void {
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
     for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to tests that canonicalize ordinary modules.
-        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "mir")) {
+        if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -3284,6 +3483,59 @@ pub fn build(b: *std.Build) void {
             run_snapshot_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_snapshot_test.step);
+    }
+
+    // Add Builtin.roc doc code-block tests. Verifies every ```roc block in
+    // src/build/roc/Builtin.roc passes the in-memory equivalent of
+    // `roc check`, and either runs as `roc test` (when the block is only
+    // top-level expects) or evaluates.
+    const enable_builtin_doc_tests = b.option(bool, "builtin-doc-tests", "Enable Builtin.roc doc code-block tests") orelse true;
+    if (enable_builtin_doc_tests) {
+        const builtin_doc_test = b.addTest(.{
+            .name = "builtin_doc_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/eval/test/builtin_doc_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+            .filters = test_filters,
+        });
+        roc_modules.addAll(builtin_doc_test);
+        builtin_doc_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        builtin_doc_test.step.dependOn(&write_compiled_builtins.step);
+        try addLlvmSupportToStep(
+            b,
+            builtin_doc_test,
+            target,
+            use_system_llvm,
+            user_llvm_path,
+            roc_modules,
+            llvm_codegen_module,
+            llvm_embedded_module,
+            zstd,
+        );
+        if (builtin_doc_test.root_module.resolved_target.?.result.os.tag != .windows or
+            builtin_doc_test.root_module.resolved_target.?.result.abi != .msvc)
+        {
+            builtin_doc_test.root_module.link_libcpp = true;
+        }
+        add_tracy(b, roc_modules.build_options, builtin_doc_test, target, true, flag_enable_tracy);
+
+        const run_builtin_doc_test = b.addRunArtifact(builtin_doc_test);
+        if (run_args.len != 0) {
+            run_builtin_doc_test.addArgs(run_args);
+        }
+
+        tests_summary.addRun(&run_builtin_doc_test.step);
+
+        // Also expose this as a focused step for debugging a single doc suite
+        // failure without running the entire default `test` aggregate.
+        const builtin_doc_test_step = b.step(
+            "test-builtin-doc",
+            "Run Builtin.roc doc code-block tests",
+        );
+        builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
     }
 
     // Add CLI test
@@ -3371,12 +3623,12 @@ pub fn build(b: *std.Build) void {
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
 
-    // Add check that deleted post-check publication/remapping APIs do not reappear
+    // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     test_step.dependOn(&check_postcheck_architecture.step);
     check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
 
-    // Add check that semantic compiler stages do not recover missing facts.
+    // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = SemanticAuditStep.create(b);
     check_semantic_audit_step.dependOn(&run_semantic_audit.step);
     test_step.dependOn(&run_semantic_audit.step);
@@ -3416,8 +3668,8 @@ pub fn build(b: *std.Build) void {
     const check_fmt = b.addFmt(.{ .paths = &fmt_paths, .check = true });
     check_fmt_step.dependOn(&check_fmt.step);
 
-    // Parser code coverage with kcov
-    // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
+    // Parser code coverage with kcov.
+    // Supported on Linux ARM64 and macOS.
     // Linux x86_64 is NOT supported due to Zig 0.15.2 generating invalid DWARF .debug_line
     // sections that cause kcov to fail (see CoverageSummaryStep comments for details)
     const is_linux_x86_64 = target.result.os.tag == .linux and target.result.cpu.arch == .x86_64;
@@ -3614,7 +3866,7 @@ pub fn build(b: *std.Build) void {
                     std.debug.print("=" ** 60 ++ "\n", .{});
                     std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
                     std.debug.print("=" ** 60 ++ "\n\n", .{});
-                    std.debug.print("kcov is only supported on Linux and macOS.\n", .{});
+                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64 and macOS targets with supported Zig DWARF.\n", .{});
                     std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
                     std.debug.print("=" ** 60 ++ "\n", .{});
                 }
@@ -3656,6 +3908,7 @@ pub fn build(b: *std.Build) void {
             roc_modules,
             strip,
             omit_frame_pointer,
+            .{ .uses_stack_handler = true },
         );
 
         // Copy the fx test platform host library to the source directory
@@ -3779,10 +4032,10 @@ pub fn build(b: *std.Build) void {
                     roc_modules,
                     strip,
                     omit_frame_pointer,
+                    .{ .uses_stack_handler = true },
                 );
 
                 // Add compiler modules to glue platform host for type extraction
-                glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
                 glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
                 glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
                 glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
@@ -4687,7 +4940,7 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = std.fs.cwd().readFileAlloc(
+    const builtin_source = b.build_root.handle.readFileAlloc(
         b.allocator,
         "src/build/roc/Builtin.roc",
         32 * 1024 * 1024,

@@ -348,7 +348,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !Runtime
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
-            null,
+            &.{},
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());

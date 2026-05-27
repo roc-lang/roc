@@ -46,16 +46,24 @@ Parser(input, val) := { run : input -> [Ok(val, input), Err(Str)] }.{
     }
 
     ## Run first parser, keep its result, then run second parser and discard its result.
-    ## TODO: blocked by #9129
-    # skip : Parser(input, a), Parser(input, b) -> Parser(input, a)
-    # skip = |first, second|
-    #     map2(first, second, |a, _b| a)
+    skip : Parser(input, a), Parser(input, b) -> Parser(input, a)
+    skip = |first, second|
+        map2(first, second, |a, _b| a)
 
     ## Run first parser, discard its result, then run second parser and keep its result.
-    ## TODO: blocked by #9129
-    # keep : Parser(input, a), Parser(input, b) -> Parser(input, b)
-    # keep = |first, second|
-    #     map2(first, second, |_a, b| b)
+    keep : Parser(input, a), Parser(input, b) -> Parser(input, b)
+    keep = |first, second|
+        map2(first, second, |_a, b| b)
+
+    ## Try the first parser, then try the second parser if the first fails.
+    alt : Parser(input, a), Parser(input, a) -> Parser(input, a)
+    alt = |first, second| {
+        run: |inp|
+            match parse(first, inp) {
+                Ok(value, rest) => Ok(value, rest)
+                Err(_) => parse(second, inp)
+            }
+    }
 }
 
 ## Tests for the Parser type module
@@ -66,6 +74,23 @@ expect Parser.parse(Parser.succeed("hi"), "hello") == Ok("hi", "hello")
 # Test basic fail
 expect Parser.parse(Parser.fail("oops"), "hello") == Err("oops")
 
-# Test map2 directly - currently has TypeMismatch error, investigating
-# combined = Parser.map2(Parser.succeed("a"), Parser.succeed("b"), |x, y| Str.concat(x, y))
-# expect Parser.parse(combined, "input") == Ok("ab", "input")
+# Test map2 directly
+combined = Parser.map2(Parser.succeed("a"), Parser.succeed("b"), |x, y| Str.concat(x, y))
+expect Parser.parse(combined, "input") == Ok("ab", "input")
+
+# Regression for issue 9132. Mapping creates a closure inside the type module
+# whose Ok branch returns two payloads: the transformed value and remaining input.
+mapped = Parser.map(Parser.succeed("a"), |x| Str.concat(x, "!"))
+expect Parser.parse(mapped, "input") == Ok("a!", "input")
+
+# Test skip and keep
+skip_second = Parser.skip(Parser.succeed("a"), Parser.succeed("b"))
+expect Parser.parse(skip_second, "input") == Ok("a", "input")
+
+keep_second = Parser.keep(Parser.succeed("a"), Parser.succeed("b"))
+expect Parser.parse(keep_second, "input") == Ok("b", "input")
+
+# Regression for issue 9465. The parser value type is unconstrained by both
+# failing branches and is witnessed only by the equality RHS.
+both_fail = Parser.alt(Parser.fail("first"), Parser.fail("second"))
+expect Parser.parse(both_fail, "input") == Err("second")

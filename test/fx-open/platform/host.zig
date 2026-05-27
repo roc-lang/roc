@@ -182,8 +182,10 @@ const RocOps = builtins.host_abi.RocOps;
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+fn hostedStderrLine(ops: *RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
+    defer args.str.decref(ops);
+
     const stderr: std.fs.File = .stderr();
     stderr.writeAll(message) catch {};
     stderr.writeAll("\n") catch {};
@@ -229,8 +231,10 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
+fn hostedStdoutLine(ops: *RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
     const message = args.str.asSlice();
+    defer args.str.decref(ops);
+
     const stdout: std.fs.File = .stdout();
     stdout.writeAll(message) catch {};
     stdout.writeAll("\n") catch {};
@@ -301,10 +305,8 @@ fn platform_main(argc: c_int, argv: [*][*:0]u8) !c_int {
     var exit_code: i32 = 0;
     roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&exit_code)), @as(*anyopaque, @ptrCast(&args)));
 
-    // Note: We don't explicitly free the args list here because:
-    // 1. The process is about to exit anyway
-    // 2. Properly freeing would require a Dec function for RocStr elements
-    // The GPA leak detection is fine with this since OS will reclaim memory
+    // The Roc entrypoint consumes the args list. The hosted effects above still
+    // consume their own owned Str arguments at the host boundary.
 
     return exit_code;
 }

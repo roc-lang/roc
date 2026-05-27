@@ -1875,7 +1875,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 790)
+					(e-call (constraint-fn-var 1339)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1915,10 +1915,12 @@ expect {
 									(e-lookup-local
 										(p-assign (ident "er")))
 									(e-literal (string "")))))
-						(e-binop (op "add")
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-lookup-local
-								(p-assign (ident "n"))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 1539)
+							(receiver
+								(e-runtime-error (tag "ident_not_in_scope")))
+							(args
+								(e-lookup-local
+									(p-assign (ident "n")))))))
 				(s-let
 					(p-assign (ident "rd"))
 					(e-record
@@ -1974,44 +1976,74 @@ expect {
 									(e-num (value "2"))
 									(e-num (value "3")))))))
 				(s-expr
-					(e-binop (op "or")
-						(e-binop (op "gt")
-							(e-match
-								(match
-									(cond
-										(e-runtime-error (tag "ident_not_in_scope")))
-									(branches
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-lookup-local
-													(p-assign (ident "#ok")))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-num (value "12")))))))
-							(e-num (value "5")))
-						(e-binop (op "or")
-							(e-binop (op "and")
-								(e-binop (op "lt")
-									(e-binop (op "add")
-										(e-num (value "13"))
-										(e-num (value "2")))
-									(e-num (value "5")))
-								(e-binop (op "ge")
-									(e-binop (op "sub")
-										(e-num (value "10"))
-										(e-num (value "1")))
-									(e-num (value "16"))))
-							(e-binop (op "le")
-								(e-num (value "12"))
-								(e-num (value "3"))))))
+					(e-if
+						(if-branches
+							(if-branch
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1922)
+									(receiver
+										(e-match
+											(match
+												(cond
+													(e-runtime-error (tag "ident_not_in_scope")))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-lookup-local
+																(p-assign (ident "#ok")))))
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-num (value "12"))))))))
+									(args
+										(e-num (value "5"))))
+								(e-nominal-external
+									(builtin)
+									(e-tag (name "True")))))
+						(if-else
+							(e-if
+								(if-branches
+									(if-branch
+										(e-if
+											(if-branches
+												(if-branch
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2030)
+														(receiver
+															(e-dispatch-call (method "plus") (constraint-fn-var 1995)
+																(receiver
+																	(e-num (value "13")))
+																(args
+																	(e-num (value "2")))))
+														(args
+															(e-num (value "5"))))
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2130)
+														(receiver
+															(e-dispatch-call (method "minus") (constraint-fn-var 2095)
+																(receiver
+																	(e-num (value "10")))
+																(args
+																	(e-num (value "1")))))
+														(args
+															(e-num (value "16"))))))
+											(if-else
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "False")))))
+										(e-nominal-external
+											(builtin)
+											(e-tag (name "True")))))
+								(if-else
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2208)
+										(receiver
+											(e-num (value "12")))
+										(args
+											(e-num (value "3")))))))))
 				(s-expr
 					(e-match
 						(match
@@ -2021,12 +2053,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1192)
+													(e-dispatch-call (method "ned") (constraint-fn-var 2275)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1159)
+																		(e-dispatch-call (method "od") (constraint-fn-var 2242)
 																			(receiver
 																				(e-match
 																					(match
@@ -2207,12 +2239,16 @@ expect {
 	(s-expect
 		(e-block
 			(s-expr
-				(e-binop (op "eq")
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "1"))))
-			(e-binop (op "eq")
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+				(e-method-eq (negated "false")
+					(lhs
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(rhs
+						(e-num (value "1")))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(rhs
+					(e-runtime-error (tag "ident_not_in_scope")))))))
 ~~~
 # TYPES
 ~~~clojure

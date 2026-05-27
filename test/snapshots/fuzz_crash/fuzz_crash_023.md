@@ -2192,220 +2192,216 @@ expect {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-closure
-			(captures
-				(capture (ident "x"))
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-assign (ident "a"))
-					(p-assign (ident "b")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "a"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag))
-									(pattern (degenerate false)
-										(p-applied-tag))
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-block
-										(s-let
-											(p-assign (ident "x"))
-											(e-num (value "12")))
-										(e-lookup-local
-											(p-assign (ident "x"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag))
-									(pattern (degenerate false)
-										(p-applied-tag))
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-block
-										(s-let
-											(p-assign (ident "x"))
-											(e-num (value "12")))
-										(e-lookup-local
-											(p-assign (ident "x"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-assign (ident "lower"))))
-								(value
-									(e-num (value "1"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-str (text "foo"))))
-								(value
-									(e-num (value "100"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-str (text "foo")))
-									(pattern (degenerate false)
-										(p-str (text "bar"))))
-								(value
-									(e-num (value "200"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-list
-											(patterns
-												(p-num (value "1"))
-												(p-num (value "2"))
-												(p-num (value "3")))
-											(rest-at (index 3)
-												(p-assign (ident "rest"))))))
-								(value
-									(e-num (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-list
-											(patterns
-												(p-num (value "1"))
-												(p-runtime-error (tag "not_implemented"))
-												(p-num (value "3")))
-											(rest-at (index 3)
-												(p-assign (ident "rest"))))))
-								(value
-									(e-num (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-list
-											(patterns
-												(p-num (value "1"))
-												(p-runtime-error (tag "not_implemented"))
-												(p-num (value "3")))
-											(rest-at (index 3)
-												(p-assign (ident "rest"))))))
-								(value
-									(e-num (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-small-dec)))
-								(value
-									(e-num (value "314"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-small-dec))
-									(pattern (degenerate false)
-										(p-small-dec)))
-								(value
-									(e-num (value "314"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-tuple
-											(patterns
-												(p-num (value "1"))
-												(p-num (value "2"))
-												(p-num (value "3"))))))
-								(value
-									(e-num (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-tuple
-											(patterns
-												(p-num (value "1"))
-												(p-runtime-error (tag "not_implemented"))
-												(p-num (value "3"))))))
-								(value
-									(e-num (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-record-destructure
-											(destructs
-												(record-destruct (label "foo") (ident "foo")
-													(sub-pattern
-														(p-num (value "1"))))
-												(record-destruct (label "bar") (ident "bar")
-													(sub-pattern
-														(p-num (value "2"))))
-												(record-destruct (label "rest") (ident "rest")
-													(rest-pattern
-														(p-assign (ident "rest"))))))))
-								(value
-									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-num (value "12"))
-										(e-num (value "34")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-record-destructure
-											(destructs
-												(record-destruct (label "foo") (ident "foo")
-													(sub-pattern
-														(p-num (value "1"))))
-												(record-destruct (label "bar") (ident "bar")
-													(sub-pattern
-														(p-num (value "2"))))
-												(record-destruct (label "rest") (ident "rest")
-													(rest-pattern
-														(p-assign (ident "rest"))))))))
-								(value
-									(e-num (value "12"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-record-destructure
-											(destructs
-												(record-destruct (label "foo") (ident "foo")
-													(sub-pattern
-														(p-num (value "1"))))
-												(record-destruct (label "bar") (ident "bar")
-													(sub-pattern
-														(p-runtime-error (tag "not_implemented"))))))))
-								(value
-									(e-num (value "12"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-record-destructure
-											(destructs
-												(record-destruct (label "foo") (ident "foo")
-													(sub-pattern
-														(p-num (value "1"))))
-												(record-destruct (label "bar") (ident "bar")
-													(sub-pattern
-														(p-runtime-error (tag "not_implemented"))))))))
-								(value
-									(e-num (value "12"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-num (value "123"))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "a"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag))
+								(pattern (degenerate false)
+									(p-applied-tag))
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-block
+									(s-let
+										(p-assign (ident "x"))
+										(e-num (value "12")))
 									(e-lookup-local
-										(p-assign (ident "dude")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-num (value "1000"))))))))))
+										(p-assign (ident "x"))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag))
+								(pattern (degenerate false)
+									(p-applied-tag))
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-block
+									(s-let
+										(p-assign (ident "x"))
+										(e-num (value "12")))
+									(e-lookup-local
+										(p-assign (ident "x"))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-assign (ident "lower"))))
+							(value
+								(e-num (value "1"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-str (text "foo"))))
+							(value
+								(e-num (value "100"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-str (text "foo")))
+								(pattern (degenerate false)
+									(p-str (text "bar"))))
+							(value
+								(e-num (value "200"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list
+										(patterns
+											(p-num (value "1"))
+											(p-num (value "2"))
+											(p-num (value "3")))
+										(rest-at (index 3)
+											(p-assign (ident "rest"))))))
+							(value
+								(e-num (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list
+										(patterns
+											(p-num (value "1"))
+											(p-runtime-error (tag "not_implemented"))
+											(p-num (value "3")))
+										(rest-at (index 3)
+											(p-assign (ident "rest"))))))
+							(value
+								(e-num (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list
+										(patterns
+											(p-num (value "1"))
+											(p-runtime-error (tag "not_implemented"))
+											(p-num (value "3")))
+										(rest-at (index 3)
+											(p-assign (ident "rest"))))))
+							(value
+								(e-num (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-small-dec)))
+							(value
+								(e-num (value "314"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-small-dec))
+								(pattern (degenerate false)
+									(p-small-dec)))
+							(value
+								(e-num (value "314"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-tuple
+										(patterns
+											(p-num (value "1"))
+											(p-num (value "2"))
+											(p-num (value "3"))))))
+							(value
+								(e-num (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-tuple
+										(patterns
+											(p-num (value "1"))
+											(p-runtime-error (tag "not_implemented"))
+											(p-num (value "3"))))))
+							(value
+								(e-num (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-record-destructure
+										(destructs
+											(record-destruct (label "foo") (ident "foo")
+												(sub-pattern
+													(p-num (value "1"))))
+											(record-destruct (label "bar") (ident "bar")
+												(sub-pattern
+													(p-num (value "2"))))
+											(record-destruct (label "rest") (ident "rest")
+												(rest-pattern
+													(p-assign (ident "rest"))))))))
+							(value
+								(e-call
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-num (value "12"))
+									(e-num (value "34")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-record-destructure
+										(destructs
+											(record-destruct (label "foo") (ident "foo")
+												(sub-pattern
+													(p-num (value "1"))))
+											(record-destruct (label "bar") (ident "bar")
+												(sub-pattern
+													(p-num (value "2"))))
+											(record-destruct (label "rest") (ident "rest")
+												(rest-pattern
+													(p-assign (ident "rest"))))))))
+							(value
+								(e-num (value "12"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-record-destructure
+										(destructs
+											(record-destruct (label "foo") (ident "foo")
+												(sub-pattern
+													(p-num (value "1"))))
+											(record-destruct (label "bar") (ident "bar")
+												(sub-pattern
+													(p-runtime-error (tag "not_implemented"))))))))
+							(value
+								(e-num (value "12"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-record-destructure
+										(destructs
+											(record-destruct (label "foo") (ident "foo")
+												(sub-pattern
+													(p-num (value "1"))))
+											(record-destruct (label "bar") (ident "bar")
+												(sub-pattern
+													(p-runtime-error (tag "not_implemented"))))))))
+							(value
+								(e-num (value "12"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-num (value "123"))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-lookup-local
+									(p-assign (ident "dude")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-num (value "1000")))))))))
 	(d-let
 		(p-assign (ident "qux"))
 		(e-anno-only)
@@ -2425,9 +2421,11 @@ expect {
 					(p-assign (ident "number"))
 					(e-num (value "123")))
 				(s-expect
-					(e-binop (op "eq")
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-num (value "1"))))
+					(e-method-eq (negated "false")
+						(lhs
+							(e-runtime-error (tag "ident_not_in_scope")))
+						(rhs
+							(e-num (value "1")))))
 				(s-let
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
@@ -2437,7 +2435,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1315)
+					(e-call (constraint-fn-var 2361)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2555,50 +2553,84 @@ expect {
 									(e-num (value "3")))))))
 				(s-let
 					(p-assign (ident "bin_op_result"))
-					(e-binop (op "or")
-						(e-binop (op "gt")
-							(e-match
-								(match
-									(cond
-										(e-tag (name "Err")
+					(e-if
+						(if-branches
+							(if-branch
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3019)
+									(receiver
+										(e-match
+											(match
+												(cond
+													(e-tag (name "Err")
+														(args
+															(e-runtime-error (tag "ident_not_in_scope")))))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-lookup-local
+																(p-assign (ident "#ok")))))
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-num (value "12"))))))))
+									(args
+										(e-dispatch-call (method "times") (constraint-fn-var 3014)
+											(receiver
+												(e-num (value "5")))
 											(args
-												(e-runtime-error (tag "ident_not_in_scope")))))
-									(branches
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-lookup-local
-													(p-assign (ident "#ok")))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-num (value "12")))))))
-							(e-binop (op "mul")
-								(e-num (value "5"))
-								(e-num (value "5"))))
-						(e-binop (op "or")
-							(e-binop (op "and")
-								(e-binop (op "lt")
-									(e-binop (op "add")
-										(e-num (value "13"))
-										(e-num (value "2")))
-									(e-num (value "5")))
-								(e-binop (op "ge")
-									(e-binop (op "sub")
-										(e-num (value "10"))
-										(e-num (value "1")))
-									(e-num (value "16"))))
-							(e-binop (op "le")
-								(e-num (value "12"))
-								(e-binop (op "div")
-									(e-num (value "3"))
-									(e-num (value "5")))))))
+												(e-num (value "5"))))))
+								(e-nominal-external
+									(builtin)
+									(e-tag (name "True")))))
+						(if-else
+							(e-if
+								(if-branches
+									(if-branch
+										(e-if
+											(if-branches
+												(if-branch
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3127)
+														(receiver
+															(e-dispatch-call (method "plus") (constraint-fn-var 3092)
+																(receiver
+																	(e-num (value "13")))
+																(args
+																	(e-num (value "2")))))
+														(args
+															(e-num (value "5"))))
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3227)
+														(receiver
+															(e-dispatch-call (method "minus") (constraint-fn-var 3192)
+																(receiver
+																	(e-num (value "10")))
+																(args
+																	(e-num (value "1")))))
+														(args
+															(e-num (value "16"))))))
+											(if-else
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "False")))))
+										(e-nominal-external
+											(builtin)
+											(e-tag (name "True")))))
+								(if-else
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3337)
+										(receiver
+											(e-num (value "12")))
+										(args
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3332)
+												(receiver
+													(e-num (value "3")))
+												(args
+													(e-num (value "5")))))))))))
 				(s-let
 					(p-assign (ident "static_dispatch_style"))
 					(e-match
@@ -2609,12 +2641,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1729)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3403)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1696)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3370)
 																			(receiver
 																				(e-match
 																					(match
@@ -2877,9 +2909,11 @@ expect {
 	(s-import (module "BadNameMultiline")
 		(exposes))
 	(s-expect
-		(e-binop (op "eq")
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num (value "1"))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(rhs
+				(e-num (value "1")))))
 	(s-expect
 		(e-block
 			(s-let

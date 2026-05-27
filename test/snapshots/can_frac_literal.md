@@ -49,7 +49,7 @@ NO CHANGE
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 	(d-let
 		(p-assign (ident "y"))
-		(e-frac-f64 (value "1.23e45")))
+		(e-num-from-numeral))
 	(d-let
 		(p-assign (ident "z"))
 		(e-dec-small (numerator "5") (denominator-power-of-ten "1") (value "0.5"))))

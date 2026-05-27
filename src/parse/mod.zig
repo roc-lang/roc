@@ -22,6 +22,9 @@ pub const Node = @import("Node.zig");
 /// **AST.NodeStore**
 pub const NodeStore = @import("NodeStore.zig");
 
+/// Parser-owned numeric literal facts.
+pub const NumericLiteral = @import("NumericLiteral.zig");
+
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
 
@@ -124,6 +127,7 @@ test "parser tests" {
     std.testing.refAllDecls(@import("AST.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
+    std.testing.refAllDecls(@import("NumericLiteral.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));

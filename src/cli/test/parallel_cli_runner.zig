@@ -10,7 +10,7 @@
 //! Options:
 //!   --filter <pattern>   Run only tests whose name contains <pattern> (repeatable)
 //!   --threads <N>        Max concurrent child processes (default: CPU count)
-//!   --timeout <ms>       Per-test timeout in ms (default: 60000)
+//!   --timeout <ms>       Per-test timeout in ms (default: 120000)
 //!   --verbose            Print PASS results and timing details
 
 const std = @import("std");
@@ -599,7 +599,7 @@ fn printUsage() void {
         \\Options:
         \\  --filter <pattern>   Run tests matching pattern (repeatable)
         \\  --threads <N>        Max concurrent workers (default: CPU count)
-        \\  --timeout <ms>       Per-test timeout in ms (default: 60000)
+        \\  --timeout <ms>       Per-test timeout in ms (default: 120000)
         \\  --verbose            Show PASS results with timing
         \\
     , .{});

@@ -29,10 +29,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus
-	(e-field-access (field "field")
-		(receiver
-			(e-runtime-error (tag "ident_not_in_scope")))))
+(e-dispatch-call (method "negate") (constraint-fn-var 13)
+	(receiver
+		(e-field-access (field "field")
+			(receiver
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

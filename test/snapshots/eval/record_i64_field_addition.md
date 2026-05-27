@@ -100,12 +100,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-binop (op "add")
-							(e-field-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 125)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -120,7 +122,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 171)
+				(e-call (constraint-fn-var 271)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
