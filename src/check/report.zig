@@ -72,6 +72,9 @@ const ComptimeCrash = problem_mod.ComptimeCrash;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
 
+// Number errors
+const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
+
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
 
@@ -799,6 +802,7 @@ pub const ReportBuilder = struct {
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
+            .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
@@ -3177,6 +3181,42 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_error_name);
+
+        return report;
+    }
+
+    fn buildInvalidNumericLiteralReport(self: *Self, data: InvalidNumericLiteral) !Report {
+        var report = Report.init(self.gpa, "INVALID NUMERIC LITERAL", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This numeric literal cannot be represented as the expected type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("The expected type is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const expected_type_str = try report.addOwnedString(self.getFormattedString(data.expected_type));
+        try report.document.addCodeBlock(expected_type_str);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        if (data.is_fractional) {
+            try D.renderSlice(&.{
+                D.bytes("Fractional numeric literals cannot be used as integer types."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("The value is outside the valid range for that type."),
+            }, self, &report);
+        }
 
         return report;
     }

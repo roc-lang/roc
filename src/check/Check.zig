@@ -1092,19 +1092,19 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
 }
 
 fn builtinNumKindFromTypeName(self: *const Self, type_name: Ident.Idx) ?CIR.NumKind {
-    if (type_name.eql(self.cir.idents.u8)) return .u8;
-    if (type_name.eql(self.cir.idents.i8)) return .i8;
-    if (type_name.eql(self.cir.idents.u16)) return .u16;
-    if (type_name.eql(self.cir.idents.i16)) return .i16;
-    if (type_name.eql(self.cir.idents.u32)) return .u32;
-    if (type_name.eql(self.cir.idents.i32)) return .i32;
-    if (type_name.eql(self.cir.idents.u64)) return .u64;
-    if (type_name.eql(self.cir.idents.i64)) return .i64;
-    if (type_name.eql(self.cir.idents.u128)) return .u128;
-    if (type_name.eql(self.cir.idents.i128)) return .i128;
-    if (type_name.eql(self.cir.idents.f32)) return .f32;
-    if (type_name.eql(self.cir.idents.f64)) return .f64;
-    if (type_name.eql(self.cir.idents.dec)) return .dec;
+    if (type_name.eql(self.cir.idents.u8) or type_name.eql(self.cir.idents.u8_type)) return .u8;
+    if (type_name.eql(self.cir.idents.i8) or type_name.eql(self.cir.idents.i8_type)) return .i8;
+    if (type_name.eql(self.cir.idents.u16) or type_name.eql(self.cir.idents.u16_type)) return .u16;
+    if (type_name.eql(self.cir.idents.i16) or type_name.eql(self.cir.idents.i16_type)) return .i16;
+    if (type_name.eql(self.cir.idents.u32) or type_name.eql(self.cir.idents.u32_type)) return .u32;
+    if (type_name.eql(self.cir.idents.i32) or type_name.eql(self.cir.idents.i32_type)) return .i32;
+    if (type_name.eql(self.cir.idents.u64) or type_name.eql(self.cir.idents.u64_type)) return .u64;
+    if (type_name.eql(self.cir.idents.i64) or type_name.eql(self.cir.idents.i64_type)) return .i64;
+    if (type_name.eql(self.cir.idents.u128) or type_name.eql(self.cir.idents.u128_type)) return .u128;
+    if (type_name.eql(self.cir.idents.i128) or type_name.eql(self.cir.idents.i128_type)) return .i128;
+    if (type_name.eql(self.cir.idents.f32) or type_name.eql(self.cir.idents.f32_type)) return .f32;
+    if (type_name.eql(self.cir.idents.f64) or type_name.eql(self.cir.idents.f64_type)) return .f64;
+    if (type_name.eql(self.cir.idents.dec) or type_name.eql(self.cir.idents.dec_type)) return .dec;
     return null;
 }
 
@@ -7389,6 +7389,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // If this constraint is already an error, the skip this pass
                         continue;
                     }
+                    if (constraint.origin == .from_numeral) {
+                        if (self.builtinNumKindFromNominalType(nominal_type)) |num_kind| {
+                            if (try self.reportInvalidBuiltinFromNumeralLiteral(
+                                deferred_constraint.var_,
+                                constraint,
+                                num_kind,
+                                env,
+                            )) {
+                                continue;
+                            }
+                        }
+                    }
                     const method_ident = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
@@ -7970,9 +7982,99 @@ fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType)
     return self.varSupportsIsEq(self.types.getNominalBackingVar(nominal_type));
 }
 
+fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
+    if (!nominal_type.origin_module.eql(self.cir.idents.builtin_module)) return null;
+    return self.builtinNumKindFromTypeName(nominal_type.ident.ident_idx);
+}
+
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
-    if (!nominal_type.origin_module.eql(self.cir.idents.builtin_module)) return false;
-    return self.builtinNumKindFromTypeName(nominal_type.ident.ident_idx) != null;
+    return self.builtinNumKindFromNominalType(nominal_type) != null;
+}
+
+const BuiltinFromNumeralLiteralProblem = enum {
+    fractional_integer,
+    negative_unsigned,
+    out_of_range,
+};
+
+fn validateBuiltinFromNumeralLiteral(
+    num_kind: CIR.NumKind,
+    num_literal: types_mod.NumeralInfo,
+) ?BuiltinFromNumeralLiteralProblem {
+    return switch (num_kind) {
+        .u8 => validateUnsignedFromNumeralLiteral(u8, num_literal),
+        .u16 => validateUnsignedFromNumeralLiteral(u16, num_literal),
+        .u32 => validateUnsignedFromNumeralLiteral(u32, num_literal),
+        .u64 => validateUnsignedFromNumeralLiteral(u64, num_literal),
+        .u128 => validateUnsignedFromNumeralLiteral(u128, num_literal),
+        .i8 => validateSignedFromNumeralLiteral(i8, num_literal),
+        .i16 => validateSignedFromNumeralLiteral(i16, num_literal),
+        .i32 => validateSignedFromNumeralLiteral(i32, num_literal),
+        .i64 => validateSignedFromNumeralLiteral(i64, num_literal),
+        .i128 => validateSignedFromNumeralLiteral(i128, num_literal),
+        .f32, .f64, .dec => null,
+        .num_unbound, .int_unbound => null,
+    };
+}
+
+fn validateUnsignedFromNumeralLiteral(
+    comptime T: type,
+    num_literal: types_mod.NumeralInfo,
+) ?BuiltinFromNumeralLiteralProblem {
+    if (num_literal.is_fractional) return .fractional_integer;
+    if (num_literal.is_negative) return .negative_unsigned;
+
+    const value = if (num_literal.is_u128) blk: {
+        break :blk num_literal.toU128();
+    } else blk: {
+        const signed_value = num_literal.toI128();
+        if (signed_value < 0) return .negative_unsigned;
+        break :blk @as(u128, @intCast(signed_value));
+    };
+
+    if (value > @as(u128, @intCast(std.math.maxInt(T)))) return .out_of_range;
+    return null;
+}
+
+fn validateSignedFromNumeralLiteral(
+    comptime T: type,
+    num_literal: types_mod.NumeralInfo,
+) ?BuiltinFromNumeralLiteralProblem {
+    if (num_literal.is_fractional) return .fractional_integer;
+
+    if (num_literal.is_u128) {
+        if (num_literal.toU128() > @as(u128, @intCast(std.math.maxInt(T)))) return .out_of_range;
+        return null;
+    }
+
+    const value = num_literal.toI128();
+    if (value < @as(i128, std.math.minInt(T)) or value > @as(i128, std.math.maxInt(T))) {
+        return .out_of_range;
+    }
+    return null;
+}
+
+fn reportInvalidBuiltinFromNumeralLiteral(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    num_kind: CIR.NumKind,
+    env: *Env,
+) Allocator.Error!bool {
+    const num_literal = constraint.num_literal orelse return false;
+    if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
+
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
+        .literal_var = dispatcher_var,
+        .expected_type = expected_snapshot,
+        .is_fractional = num_literal.is_fractional,
+        .region = num_literal.region,
+    } });
+
+    try self.markConstraintFunctionAsError(constraint, env);
+    try self.unifyWith(dispatcher_var, .err, env);
+    return true;
 }
 
 fn satisfyImplicitEqualityConstraint(
