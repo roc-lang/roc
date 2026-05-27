@@ -5041,7 +5041,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // function calling //
         .e_call => |call| {
             switch (call.called_via) {
-                .apply => blk: {
+                .apply, .record_builder => blk: {
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
                     self.checking_call_arg = true;
@@ -5202,6 +5202,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     }
                                 }
 
+                                if (call.called_via == .record_builder) {
+                                    const result = try self.enforceRecordBuilderMap2Return(func, env, expr_idx, func_name);
+                                    if (result.isProblem()) {
+                                        try self.unifyWith(expr_var, .err, env);
+                                        break :blk;
+                                    }
+                                }
+
                                 // Redirect the expr to the function's return type
                                 _ = try self.unify(expr_var, func.ret, env);
                             } else {
@@ -5281,8 +5289,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     }
                 },
                 else => {
-                    // The canonicalizer currently only produces CalledVia.apply for e_call expressions.
-                    // Other call types (binop, unary_op, string_interpolation, record_builder) are
+                    // The canonicalizer currently only produces apply or record_builder for e_call expressions.
+                    // Other call types (binop, unary_op, string_interpolation) are
                     // represented as different expression types. If we hit this, there's a compiler bug.
                     std.debug.assert(false);
                     try self.unifyWith(expr_var, .err, env);
@@ -6148,6 +6156,65 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
         }
     }
     return .{ .does_fx = does_fx, .diverges = diverges };
+}
+
+fn enforceRecordBuilderMap2Return(
+    self: *Self,
+    func: Func,
+    env: *Env,
+    call_expr: CIR.Expr.Idx,
+    func_name: ?Ident.Idx,
+) std.mem.Allocator.Error!unifier.Result {
+    if (func.args.len() != 3) return .ok;
+
+    const return_payload_var = self.singleParameterWrapperPayload(func.ret) orelse return .ok;
+    const mapper_var = self.types.getVarAt(func.args, 2);
+    const mapper_func = self.functionTypeFromVar(mapper_var) orelse return .ok;
+
+    return try self.unifyInContext(return_payload_var, mapper_func.ret, env, .{ .fn_call_arg = .{
+        .fn_name = func_name,
+        .call_expr = call_expr,
+        .arg_index = 2,
+        .num_args = 3,
+        .arg_var = mapper_var,
+    } });
+}
+
+fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
+    const resolved = self.types.resolveVar(wrapper_var);
+    return switch (resolved.desc.content) {
+        .alias => |alias| blk: {
+            const args = self.types.sliceAliasArgs(alias);
+            if (args.len != 1) break :blk null;
+            break :blk args[0];
+        },
+        .structure => |flat| switch (flat) {
+            .nominal_type => |nominal| blk: {
+                const args = self.types.sliceNominalArgs(nominal);
+                if (args.len != 1) break :blk null;
+                break :blk args[0];
+            },
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn functionTypeFromVar(self: *Self, fn_var: Var) ?Func {
+    var current = fn_var;
+    var guard = types_mod.debug.IterationGuard.init("functionTypeFromVar");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| return func,
+                else => return null,
+            },
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            else => return null,
+        }
+    }
 }
 
 // if-else //

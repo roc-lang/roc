@@ -8327,7 +8327,7 @@ fn buildMap2Call(
         .e_call = .{
             .func = func_expr_idx,
             .args = args_span,
-            .called_via = CalledVia.apply,
+            .called_via = CalledVia.record_builder,
         },
     }, region);
 }
