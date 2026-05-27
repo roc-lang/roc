@@ -39,7 +39,6 @@ jobs:
               - 'ci/tidy.zig'
               - 'ci/check_test_wiring.zig'
               - 'ci/custom_valgrind.sh'
-              - 'ci/valgrind_snapshots.sh'
               - 'ci/zig_nix_ci.sh'
               - 'ci/valgrind.supp'
       - uses: dorny/paths-filter@v3
@@ -63,7 +62,6 @@ jobs:
               - '!ci/zig_lints.sh'
               - '!ci/check_test_wiring.zig'
               - '!ci/custom_valgrind.sh'
-              - '!ci/valgrind_snapshots.sh'
               - '!ci/zig_nix_ci.sh'
               - '!ci/valgrind.supp'
               - '!ci/tidy.zig'
