@@ -751,7 +751,7 @@ const tests = [_]CliBugSpec{
             },
         },
         .command = .run_dev,
-        .expect = .{ .success_stdout_exact = "True\n" },
+        .expect = .clean_failure,
     },
     .{
         .id = 84,
@@ -1098,7 +1098,7 @@ const tests = [_]CliBugSpec{
             },
         },
         .command = .run_dev,
-        .expect = .{ .success_stdout_exact = "True\n" },
+        .expect = .clean_failure,
     },
     .{
         .id = 111,
@@ -1422,7 +1422,7 @@ const tests = [_]CliBugSpec{
             },
         },
         .command = .run_dev,
-        .expect = .{ .success_stdout_exact = "True\n" },
+        .expect = .clean_failure,
     },
     .{
         .id = 123,
@@ -2121,21 +2121,34 @@ const tests = [_]CliBugSpec{
         \\
         \\main! = || Stdout.line!(I64.to_str((r.f)(42.I64)))
     , "42\n"),
-    runDevTwoFileCase(164, "B164", "imported polymorphic recursive boxed-tree equality terminates",
-        \\import A
-        \\
-        \\main! = || Stdout.line!(Str.inspect(A.a == A.b))
-    ,
-        \\A :: [].{
-        \\    Tree(a) := [Node(Box(Tree(a)), Box(Tree(a))), Leaf(a)]
-        \\
-        \\    a : Tree(I64)
-        \\    a = Node(Box.box(Leaf(41.I64)), Box.box(Leaf(1)))
-        \\
-        \\    b : Tree(I64)
-        \\    b = Node(Box.box(Leaf(41.I64)), Box.box(Leaf(1)))
-        \\}
-    , "True\n"),
+    .{
+        .id = 164,
+        .bug_id = "B164",
+        .name = "bughunt B164: imported polymorphic recursive boxed-tree equality is rejected cleanly",
+        .files = &.{
+            .{ .path = "main.roc", .contents =
+            \\app [main!] { pf: platform "{FX_PLATFORM}" }
+            \\
+            \\import pf.Stdout
+            \\import A
+            \\
+            \\main! = || Stdout.line!(Str.inspect(A.a == A.b))
+            },
+            .{ .path = "A.roc", .contents =
+            \\A :: [].{
+            \\    Tree(a) := [Node(Box(Tree(a)), Box(Tree(a))), Leaf(a)]
+            \\
+            \\    a : Tree(I64)
+            \\    a = Node(Box.box(Leaf(41.I64)), Box.box(Leaf(1)))
+            \\
+            \\    b : Tree(I64)
+            \\    b = Node(Box.box(Leaf(41.I64)), Box.box(Leaf(1)))
+            \\}
+            },
+        },
+        .command = .run_dev,
+        .expect = .clean_failure,
+    },
     runDevBodyCase(165, "B165", "Str.inspect handles empty-error list payloads",
         \\x : Try(List(I64), [])
         \\x = Ok([42])

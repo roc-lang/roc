@@ -8841,6 +8841,7 @@ fn typeSupportsIsEqInternal(
 
         // Nominal types support is_eq if their backing type supports is_eq
         .nominal_type => |nominal| {
+            if (self.nominalIsBoxType(nominal)) return false;
             const backing_var = self.types.getNominalBackingVar(nominal);
             return try self.varSupportsIsEqInternal(backing_var, visited);
         },
@@ -8940,6 +8941,7 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
 
 fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType) bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
+    if (self.nominalIsBoxType(nominal_type)) return false;
     self.var_set.clearRetainingCapacity();
     return self.varSupportsIsEqInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set) catch false;
 }
