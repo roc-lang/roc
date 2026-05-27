@@ -75,9 +75,9 @@ pub const Paths = struct {
 /// Inputs to `runEcho`. See field doc comments for the contract on each.
 pub const RunOptions = struct {
     /// Single contiguous arena used for the entire pipeline (BuildEnv,
-    /// lowering, runtime image, interpreter). Must own a flat virtual
+    /// lowering, LIR image, interpreter). Must own a flat virtual
     /// region — `std.heap.ArenaAllocator` will not work because the
-    /// runtime-image step computes offsets via `ptr - base_ptr` arithmetic
+    /// LIR image step computes offsets via `ptr - base_ptr` arithmetic
     /// (see `src/compile/README.md` "Runtime arena").
     runtime_fba: *std.heap.FixedBufferAllocator,
     /// Fallback Io that handles everything not served by EchoCtx (i.e. paths
@@ -102,7 +102,7 @@ pub const RunOptions = struct {
 /// Wraps the user `source` in a synthetic `app [main!]` header that imports
 /// the embedded echo platform, then walks the canonical embedding sequence
 /// (see `src/compile/README.md`): BuildEnv discovery → check → LIR lowering
-/// → `RuntimeImage.fillHeaderInBuffer` → `viewMappedImage` →
+/// → `LirImage.fillHeaderInBuffer` → `viewMappedImage` →
 /// `LirInterpreter.runEntrypoint`.
 ///
 /// Returns the Roc program's exit code (or 1 if an inline `expect` failed
@@ -181,21 +181,21 @@ pub fn runEcho(opts: RunOptions) !u8 {
     };
     defer allocator.free(relation_views);
 
-    var lowered = lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
             .imports = import_views,
         },
-        .{ .requests = root_artifact.root_requests.requests },
+        .{ .requests = root_artifact.root_requests.runtime_requests },
         .{ .target_usize = opts.target_usize },
     ) catch |err| {
-        diag.step("lowerArtifactsToLir", err);
+        diag.step("lowerCheckedModulesToLir", err);
         return err;
     };
     defer lowered.deinit();
 
-    // Canonical embedding sequence: build entrypoints + runtime image, then
+    // Canonical embedding sequence: build entrypoints + LIR image, then
     // view it and execute via runEntrypoint. The viewMappedImage step
     // re-constructs the layout Store with the correct target_usize, which
     // matters for cross-compile cases.
@@ -204,28 +204,28 @@ pub fn runEcho(opts: RunOptions) !u8 {
         return err;
     };
 
-    const runtime_header = allocator.create(lir.RuntimeImage.Header) catch |err| {
-        diag.step("create RuntimeImage.Header", err);
+    const image_header = allocator.create(lir.LirImage.Header) catch |err| {
+        diag.step("create LirImage.Header", err);
         return err;
     };
-    lir.RuntimeImage.fillHeaderInBuffer(
-        runtime_header,
+    lir.LirImage.fillHeaderInBuffer(
+        image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
         &lowered.lir_result,
         lowered.target_usize,
         entrypoints,
     ) catch |err| {
-        diag.step("RuntimeImage.fillHeaderInBuffer", err);
+        diag.step("LirImage.fillHeaderInBuffer", err);
         return err;
     };
 
-    const view = lir.RuntimeImage.viewMappedImage(
-        runtime_header,
+    const view = lir.LirImage.viewMappedImage(
+        image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
     ) catch |err| {
-        diag.step("RuntimeImage.viewMappedImage", err);
+        diag.step("LirImage.viewMappedImage", err);
         return err;
     };
 
@@ -237,7 +237,7 @@ pub fn runEcho(opts: RunOptions) !u8 {
 
 fn runEchoView(
     allocator: Allocator,
-    view: *const lir.RuntimeImage.ProgramView,
+    view: *const lir.LirImage.ProgramView,
     diag: Diagnostics,
 ) !u8 {
     // HostedFn array order matters: the interpreter calls

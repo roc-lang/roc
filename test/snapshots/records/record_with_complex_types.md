@@ -198,10 +198,12 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-num (value "1")))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 282)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "x"))))
+					(args
+						(e-num (value "1"))))))
 		(field (name "nested")
 			(e-record
 				(fields

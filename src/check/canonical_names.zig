@@ -1,11 +1,10 @@
 //! Canonical post-check names and procedure identities.
 //!
-//! These ids are artifact-boundary data. They are derived from source spellings
-//! during checking finalization so post-check stages do not consume module-local
-//! `Ident.Idx` values or raw `Symbol` values as semantic identity.
+//! These ids are checked-module boundary data. They are derived from source
+//! spellings during checking finalization so post-check stages do not consume
+//! module-local `Ident.Idx` values or raw `Symbol` values as checked identity.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
@@ -32,23 +31,20 @@ pub const ProcBaseKeyRef = enum(u32) { _ };
 pub const CheckedProcedureTemplateId = enum(u32) { _ };
 /// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };
-/// Public `PromotedCallableWrapperId` declaration.
-pub const PromotedCallableWrapperId = enum(u32) { _ };
 /// Public `HostedWrapperId` declaration.
 pub const HostedWrapperId = enum(u32) { _ };
 /// Public `IntrinsicWrapperId` declaration.
 pub const IntrinsicWrapperId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
-/// Public `PromotedCallableNodeId` declaration.
-pub const PromotedCallableNodeId = enum(u32) { _ };
-/// Public `PromotedCallableBodyPlanId` declaration.
-pub const PromotedCallableBodyPlanId = enum(u32) { _ };
 
 /// Public `ArtifactRef` declaration.
 pub const ArtifactRef = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
+
+/// Digest for checked module identity at post-check boundaries.
+pub const CheckedModuleDigest = ArtifactRef;
 
 /// Public `ProcedureValueRef` declaration.
 pub const ProcedureValueRef = struct {
@@ -63,11 +59,34 @@ pub const ProcedureTemplateRef = struct {
     template: CheckedProcedureTemplateId,
 };
 
+/// Short name for a checked procedure template reference.
+pub const ProcTemplate = ProcedureTemplateRef;
+
+/// Return the checked module digest that owns a procedure template.
+pub fn procTemplateModuleDigest(template: ProcTemplate) CheckedModuleDigest {
+    return template.artifact;
+}
+
 /// Public `MonoSpecializationKey` declaration.
 pub const MonoSpecializationKey = struct {
     template: ProcedureTemplateRef,
     requested_mono_fn_ty: CanonicalTypeKey,
 };
+
+/// Digest for a checked type shape at post-check boundaries.
+pub const TypeDigest = CanonicalTypeKey;
+/// Digest for a checked value type that requests a runtime layout.
+pub const ExecValueDigest = CanonicalExecValueTypeKey;
+/// Short name for the checked boundary name store.
+pub const NameStore = CanonicalNameStore;
+/// Short name used by post-check records for record field labels.
+pub const RecordFieldNameId = RecordFieldLabelId;
+/// Short name used by post-check records for tag labels.
+pub const TagNameId = TagLabelId;
+/// Short name used by post-check records for nested procedure sites.
+pub const ProcSiteId = NestedProcSiteId;
+/// Short name for a procedure template that may come from checked or lifted code.
+pub const CallableProcTemplate = CallableProcedureTemplateRef;
 
 /// Public `MonoSpecializedProcRef` declaration.
 pub const MonoSpecializedProcRef = struct {
@@ -75,8 +94,8 @@ pub const MonoSpecializedProcRef = struct {
     specialization: MonoSpecializationKey,
 };
 
-/// Public `MirProcedureRef` declaration.
-pub const MirProcedureRef = struct {
+/// Public `ProcCallable` declaration.
+pub const ProcCallable = struct {
     proc: ProcedureValueRef,
     callable: ProcedureCallableRef,
 };
@@ -106,8 +125,8 @@ pub fn monoSpecializedProcRefEql(a: MonoSpecializedProcRef, b: MonoSpecializedPr
         monoSpecializationKeyEql(a.specialization, b.specialization);
 }
 
-/// Public `mirProcedureRefFromMono` function.
-pub fn mirProcedureRefFromMono(proc: MonoSpecializedProcRef) MirProcedureRef {
+/// Public `procCallableFromMono` function.
+pub fn procCallableFromMono(proc: MonoSpecializedProcRef) ProcCallable {
     return .{
         .proc = proc.proc,
         .callable = .{
@@ -117,8 +136,8 @@ pub fn mirProcedureRefFromMono(proc: MonoSpecializedProcRef) MirProcedureRef {
     };
 }
 
-/// Public `mirProcedureRefEql` function.
-pub fn mirProcedureRefEql(a: MirProcedureRef, b: MirProcedureRef) bool {
+/// Public `procCallableEql` function.
+pub fn procCallableEql(a: ProcCallable, b: ProcCallable) bool {
     return procedureValueRefEql(a.proc, b.proc) and
         procedureCallableRefEql(a.callable, b.callable);
 }
@@ -147,228 +166,9 @@ pub const ProcedureCallableRef = struct {
     source_fn_ty: CanonicalTypeKey,
 };
 
-/// Public `BoxBoundaryId` declaration.
-pub const BoxBoundaryId = enum(u32) { _ };
-/// Public `CallableSetMemberId` declaration.
-pub const CallableSetMemberId = enum(u32) { _ };
-
-/// The only valid member id for a callable set that has exactly one member.
-/// This is not a placeholder or default; it is the semantic index of the sole
-/// member in a one-member callable-set descriptor.
-pub fn onlyCallableSetMemberId() CallableSetMemberId {
-    const only_member_index: u32 = 0;
-    return @enumFromInt(only_member_index);
-}
-
-/// Public `CanonicalCallableSetKey` declaration.
-pub const CanonicalCallableSetKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-/// Public `CaptureShapeKey` declaration.
-pub const CaptureShapeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
 /// Public `CanonicalExecValueTypeKey` declaration.
 pub const CanonicalExecValueTypeKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-/// Public `ErasedFnAbiKey` declaration.
-pub const ErasedFnAbiKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-/// Public `ErasedFnSigKey` declaration.
-pub const ErasedFnSigKey = struct {
-    source_fn_ty: CanonicalTypeKey,
-    abi: ErasedFnAbiKey,
-    capture_ty: ?CanonicalExecValueTypeKey = null,
-};
-
-/// Public `HostedAbiKey` declaration.
-pub const HostedAbiKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-/// Public `ErasedPackedFunctionArgAbi` declaration.
-pub const ErasedPackedFunctionArgAbi = union(enum) {
-    ordinary_refcounted_value,
-    hosted: HostedAbiKey,
-    intrinsic: IntrinsicWrapperId,
-};
-
-/// Public `ErasedValueAbi` declaration.
-pub const ErasedValueAbi = union(enum) {
-    ordinary_roc_value,
-    opaque_ptr,
-    hosted: HostedAbiKey,
-    intrinsic: IntrinsicWrapperId,
-};
-
-/// Public `ErasedResultAbi` declaration.
-pub const ErasedResultAbi = union(enum) {
-    ordinary_roc_value,
-    opaque_ptr,
-    hosted: HostedAbiKey,
-    intrinsic: IntrinsicWrapperId,
-};
-
-/// Public `ErasedCaptureArgAbi` declaration.
-pub const ErasedCaptureArgAbi = union(enum) {
-    ordinary_roc_value,
-    zero_sized_roc_value,
-    hosted: HostedAbiKey,
-    intrinsic: IntrinsicWrapperId,
-};
-
-/// Public `ErasedFnAbi` declaration.
-pub const ErasedFnAbi = struct {
-    key: ErasedFnAbiKey = .{},
-    fixed_arity: u32,
-    arg_exec_keys: []const CanonicalExecValueTypeKey = &.{},
-    ret_exec_key: CanonicalExecValueTypeKey,
-    packed_function_arg: ErasedPackedFunctionArgAbi = .ordinary_refcounted_value,
-    arg_abis: []const ErasedValueAbi = &.{},
-    result_abi: ErasedResultAbi = .ordinary_roc_value,
-    capture_arg: ?ErasedCaptureArgAbi = null,
-    hosted_owner: ?HostedAbiKey = null,
-};
-
-/// Public `ErasedFnAbiStore` declaration.
-pub const ErasedFnAbiStore = struct {
-    abis: []const ErasedFnAbi = &.{},
-
-    pub fn deinit(self: *ErasedFnAbiStore, allocator: Allocator) void {
-        for (self.abis) |abi| {
-            allocator.free(abi.arg_exec_keys);
-            allocator.free(abi.arg_abis);
-        }
-        allocator.free(self.abis);
-        self.* = .{};
-    }
-
-    pub fn abiFor(self: *const ErasedFnAbiStore, key: ErasedFnAbiKey) ?*const ErasedFnAbi {
-        for (self.abis) |*abi| {
-            if (erasedFnAbiKeyEql(abi.key, key)) return abi;
-        }
-        return null;
-    }
-
-    pub fn append(self: *ErasedFnAbiStore, allocator: Allocator, abi: ErasedFnAbi) Allocator.Error!ErasedFnAbiKey {
-        const key = computeErasedFnAbiKey(abi);
-        if (self.abiFor(key) != null) return key;
-
-        const arg_exec_keys = try allocator.dupe(CanonicalExecValueTypeKey, abi.arg_exec_keys);
-        errdefer allocator.free(arg_exec_keys);
-        const arg_abis = try allocator.dupe(ErasedValueAbi, abi.arg_abis);
-        errdefer allocator.free(arg_abis);
-
-        const old = self.abis;
-        const next = try allocator.alloc(ErasedFnAbi, old.len + 1);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = .{
-            .key = key,
-            .fixed_arity = abi.fixed_arity,
-            .arg_exec_keys = arg_exec_keys,
-            .ret_exec_key = abi.ret_exec_key,
-            .packed_function_arg = abi.packed_function_arg,
-            .arg_abis = arg_abis,
-            .result_abi = abi.result_abi,
-            .capture_arg = abi.capture_arg,
-            .hosted_owner = abi.hosted_owner,
-        };
-        allocator.free(old);
-        self.abis = next;
-        return key;
-    }
-
-    pub fn verifyPublished(self: *const ErasedFnAbiStore) void {
-        if (builtin.mode != .Debug) return;
-        for (self.abis) |abi| {
-            if (abi.arg_exec_keys.len != abi.fixed_arity or abi.arg_abis.len != abi.fixed_arity) {
-                std.debug.panic("erased ABI store invariant violated: ABI arity disagrees with argument payloads", .{});
-            }
-            const recomputed = computeErasedFnAbiKey(abi);
-            if (!erasedFnAbiKeyEql(recomputed, abi.key)) {
-                std.debug.panic("erased ABI store invariant violated: ABI key does not match payload", .{});
-            }
-        }
-    }
-};
-
-/// Public `CallableSetMemberRef` declaration.
-pub const CallableSetMemberRef = struct {
-    callable_set_key: CanonicalCallableSetKey,
-    member_index: CallableSetMemberId,
-};
-
-/// Public `CallableSetCaptureSlot` declaration.
-pub const CallableSetCaptureSlot = struct {
-    slot: u32,
-    source_ty: CanonicalTypeKey,
-    exec_value_ty: CanonicalExecValueTypeKey,
-};
-
-/// Public `CanonicalCallableSetMember` declaration.
-pub const CanonicalCallableSetMember = struct {
-    member: CallableSetMemberId,
-    proc_value: ProcedureCallableRef,
-    source_proc: MirProcedureRef,
-    capture_slots: []const CallableSetCaptureSlot,
-    capture_shape_key: CaptureShapeKey,
-};
-
-/// Public `CanonicalCallableSetDescriptor` declaration.
-pub const CanonicalCallableSetDescriptor = struct {
-    key: CanonicalCallableSetKey,
-    members: []const CanonicalCallableSetMember,
-};
-
-/// Public `CallableRepresentation` declaration.
-pub const CallableRepresentation = union(enum) {
-    finite: CanonicalCallableSetKey,
-    erased: ErasedFnSigKey,
-};
-
-/// Public `CallableReprMode` declaration.
-pub const CallableReprMode = enum {
-    direct,
-    finite_callable_set,
-    erased_callable,
-    erased_adapter,
-    intrinsic_wrapper,
-};
-
-/// Public `ExecutableSpecializationKey` declaration.
-pub const ExecutableSpecializationKey = struct {
-    base: ProcBaseKeyRef,
-    requested_fn_ty: CanonicalTypeKey,
-    exec_arg_tys: []const CanonicalExecValueTypeKey,
-    exec_ret_ty: CanonicalExecValueTypeKey,
-    callable_repr_mode: CallableReprMode,
-    capture_shape_key: CaptureShapeKey,
-};
-
-/// Public `ErasedAdapterKey` declaration.
-pub const ErasedAdapterKey = struct {
-    source_fn_ty: CanonicalTypeKey,
-    callable_set_key: CanonicalCallableSetKey,
-    erased_fn_sig_key: ErasedFnSigKey,
-    capture_shape_key: CaptureShapeKey,
-};
-
-/// Public `ErasedDirectProcCodeRef` declaration.
-pub const ErasedDirectProcCodeRef = struct {
-    proc_value: ProcedureCallableRef,
-    capture_shape_key: CaptureShapeKey,
-};
-
-/// Public `ErasedCallableCodeRef` declaration.
-pub const ErasedCallableCodeRef = union(enum) {
-    direct_proc_value: ErasedDirectProcCodeRef,
-    finite_set_adapter: ErasedAdapterKey,
 };
 
 /// Public `procedureCallableRefEql` function.
@@ -412,7 +212,6 @@ pub const CanonicalTypeSchemeKey = struct {
 pub const ProcBaseKind = enum {
     checked_source,
     hosted_wrapper,
-    promoted_callable_wrapper,
     intrinsic_wrapper,
     entry_wrapper,
 };
@@ -446,104 +245,6 @@ pub const NominalTypeKey = struct {
     module_name: ModuleNameId,
     type_name: TypeNameId,
 };
-
-/// Public `erasedFnAbiKeyEql` function.
-pub fn erasedFnAbiKeyEql(a: ErasedFnAbiKey, b: ErasedFnAbiKey) bool {
-    return std.meta.eql(a.bytes, b.bytes);
-}
-
-/// Public `computeErasedFnAbiKey` function.
-pub fn computeErasedFnAbiKey(abi: ErasedFnAbi) ErasedFnAbiKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeHashTag(&hasher, "erased-fn-abi");
-    writeHashU32(&hasher, abi.fixed_arity);
-    writeHashU32(&hasher, @intCast(abi.arg_exec_keys.len));
-    for (abi.arg_exec_keys) |key| hasher.update(&key.bytes);
-    hasher.update(&abi.ret_exec_key.bytes);
-    hashErasedPackedFunctionArgAbi(&hasher, abi.packed_function_arg);
-    writeHashU32(&hasher, @intCast(abi.arg_abis.len));
-    for (abi.arg_abis) |arg_abi| hashErasedValueAbi(&hasher, arg_abi);
-    hashErasedResultAbi(&hasher, abi.result_abi);
-    if (abi.capture_arg) |capture_arg| {
-        writeHashBool(&hasher, true);
-        hashErasedCaptureArgAbi(&hasher, capture_arg);
-    } else {
-        writeHashBool(&hasher, false);
-    }
-    if (abi.hosted_owner) |hosted_owner| {
-        writeHashBool(&hasher, true);
-        hasher.update(&hosted_owner.bytes);
-    } else {
-        writeHashBool(&hasher, false);
-    }
-    return .{ .bytes = hasher.finalResult() };
-}
-
-fn hashErasedPackedFunctionArgAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedPackedFunctionArgAbi) void {
-    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
-    switch (abi) {
-        .ordinary_refcounted_value => {},
-        .hosted => |key| hasher.update(&key.bytes),
-        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
-    }
-}
-
-fn hashErasedValueAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedValueAbi) void {
-    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
-    switch (abi) {
-        .ordinary_roc_value,
-        .opaque_ptr,
-        => {},
-        .hosted => |key| hasher.update(&key.bytes),
-        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
-    }
-}
-
-fn hashErasedResultAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedResultAbi) void {
-    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
-    switch (abi) {
-        .ordinary_roc_value,
-        .opaque_ptr,
-        => {},
-        .hosted => |key| hasher.update(&key.bytes),
-        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
-    }
-}
-
-fn hashErasedCaptureArgAbi(hasher: *std.crypto.hash.sha2.Sha256, abi: ErasedCaptureArgAbi) void {
-    writeHashTag(hasher, @tagName(std.meta.activeTag(abi)));
-    switch (abi) {
-        .ordinary_roc_value,
-        .zero_sized_roc_value,
-        => {},
-        .hosted => |key| hasher.update(&key.bytes),
-        .intrinsic => |id| writeHashU32(hasher, @intFromEnum(id)),
-    }
-}
-
-fn writeHashTag(hasher: *std.crypto.hash.sha2.Sha256, tag: []const u8) void {
-    writeHashBytes(hasher, tag);
-}
-
-fn writeHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
-    writeHashU32(hasher, @intCast(bytes.len));
-    hasher.update(bytes);
-}
-
-fn writeHashBool(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
-    hasher.update(&[_]u8{if (value) 1 else 0});
-}
-
-fn writeHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-    var bytes: [4]u8 = undefined;
-    bytes = .{
-        @as(u8, @truncate(value)),
-        @as(u8, @truncate(value >> 8)),
-        @as(u8, @truncate(value >> 16)),
-        @as(u8, @truncate(value >> 24)),
-    };
-    hasher.update(&bytes);
-}
 
 /// Public `CanonicalNameStore` declaration.
 pub const CanonicalNameStore = struct {
@@ -700,6 +401,18 @@ pub const CanonicalNameStore = struct {
 
     pub fn lookupExternalSymbolIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExternalSymbolNameId {
         return self.external_symbol_name_by_text.get(idents.getText(ident));
+    }
+
+    pub fn lookupModuleName(self: *const CanonicalNameStore, text: []const u8) ?ModuleNameId {
+        return self.module_name_by_text.get(text);
+    }
+
+    pub fn lookupTypeName(self: *const CanonicalNameStore, text: []const u8) ?TypeNameId {
+        return self.type_name_by_text.get(text);
+    }
+
+    pub fn lookupMethodName(self: *const CanonicalNameStore, text: []const u8) ?MethodNameId {
+        return self.method_name_by_text.get(text);
     }
 
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {

@@ -24,7 +24,7 @@ func : Dec -> Dec
 func = |x| {
 	result = match True {
 		True => {
-			add_x = |y| x + y
+			add_x = |y| x.plus(y)
 			add_x(10)
 		}
 		False => 0
@@ -130,12 +130,14 @@ EndOfFile,
 													(e-lambda
 														(args
 															(p-assign (ident "y")))
-														(e-binop (op "add")
-															(e-lookup-local
-																(p-assign (ident "x")))
-															(e-lookup-local
-																(p-assign (ident "y")))))))
-											(e-call (constraint-fn-var 57)
+														(e-dispatch-call (method "plus") (constraint-fn-var 43)
+															(receiver
+																(e-lookup-local
+																	(p-assign (ident "x"))))
+															(args
+																(e-lookup-local
+																	(p-assign (ident "y"))))))))
+											(e-call (constraint-fn-var 77)
 												(e-lookup-local
 													(p-assign (ident "add_x")))
 												(e-num (value "10"))))))
@@ -149,7 +151,7 @@ EndOfFile,
 					(p-assign (ident "result"))))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 90)
+		(e-call (constraint-fn-var 150)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "42")))))

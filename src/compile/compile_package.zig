@@ -67,6 +67,20 @@ const AtomicUsize = std.atomic.Value(usize);
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
 
+const stage_timers_supported = !threading.is_freestanding;
+const StageTimer = if (stage_timers_supported) std.time.Timer else void;
+
+fn startStageTimer() ?StageTimer {
+    if (comptime !stage_timers_supported) return null;
+    return std.time.Timer.start() catch null;
+}
+
+fn readStageTimer(timer: *?StageTimer) u64 {
+    if (comptime !stage_timers_supported) return 0;
+    if (timer.*) |*active| return active.read();
+    return 0;
+}
+
 // FileProvider was removed in favour of the unified Io abstraction (src/io/Io.zig).
 // Callers that previously used FileProvider now use Io.readFile / Io.fileExists directly.
 
@@ -1120,7 +1134,7 @@ pub const PackageEnv = struct {
         }
 
         // canonicalize using the AST
-        const canon_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var canonicalize_timer = startStageTimer();
 
         var imported_modules = std.ArrayList(CanonicalizeImport).empty;
         defer imported_modules.deinit(self.gpa);
@@ -1157,23 +1171,17 @@ pub const PackageEnv = struct {
             std.fs.path.dirname(st.path) orelse self.root_dir,
         );
 
-        const canon_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_canonicalize_ns += @intCast(canon_end - canon_start);
-        }
+        self.total_canonicalize_ns += readStageTimer(&canonicalize_timer);
 
         // Collect canonicalization diagnostics
-        const canon_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var canonicalize_diagnostics_timer = startStageTimer();
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
-        const canon_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_canonicalize_diagnostics_ns += @intCast(canon_diag_end - canon_diag_start);
-        }
+        self.total_canonicalize_diagnostics_ns += readStageTimer(&canonicalize_diagnostics_timer);
 
         st.phase = .TypeCheck;
         try self.enqueue(module_id);
@@ -1279,6 +1287,7 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -1410,6 +1419,7 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -1595,7 +1605,7 @@ pub const PackageEnv = struct {
         const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
         defer self.gpa.free(available_artifacts);
 
-        const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var check_timer = startStageTimer();
         var typecheck_output = try typeCheckModule(
             self.gpa,
             env,
@@ -1610,13 +1620,10 @@ pub const PackageEnv = struct {
         if (typecheck_output.checked_artifact != null) {
             st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
         }
-        const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_type_checking_ns += @intCast(check_end - check_start);
-        }
+        self.total_type_checking_ns += readStageTimer(&check_timer);
 
         // Build reports from problems
-        const check_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var check_diagnostics_timer = startStageTimer();
         var rb = try ReportBuilder.init(
             self.gpa,
             env,
@@ -1633,10 +1640,7 @@ pub const PackageEnv = struct {
             const rep = rb.build(prob) catch continue;
             try st.reports.append(self.gpa, rep);
         }
-        const check_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
-        }
+        self.total_check_diagnostics_ns += readStageTimer(&check_diagnostics_timer);
 
         // Comptime evaluator is managed inside typeCheckModule, no need to deinit here
 

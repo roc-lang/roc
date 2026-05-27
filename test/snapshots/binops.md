@@ -138,33 +138,51 @@ EndOfFile,
 ~~~clojure
 (e-tuple
 	(elems
-		(e-binop (op "add")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "sub")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "mul")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "div")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "rem")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "lt")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "gt")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "le")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "ge")
-			(e-num (value "4"))
-			(e-num (value "2")))
+		(e-dispatch-call (method "plus") (constraint-fn-var 133)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "minus") (constraint-fn-var 195)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 257)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "div_by") (constraint-fn-var 319)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "rem_by") (constraint-fn-var 381)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "is_lt") (constraint-fn-var 446)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "is_gt") (constraint-fn-var 511)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "is_lte") (constraint-fn-var 576)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-dispatch-call (method "is_gte") (constraint-fn-var 641)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
 		(e-method-eq (negated "false")
 			(lhs
 				(e-num (value "4")))
@@ -175,23 +193,37 @@ EndOfFile,
 				(e-num (value "4")))
 			(rhs
 				(e-num (value "2"))))
-		(e-binop (op "div_trunc")
-			(e-num (value "4"))
-			(e-num (value "2")))
-		(e-binop (op "and")
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "True")))
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "False"))))
-		(e-binop (op "or")
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "False")))
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "True"))))
+		(e-dispatch-call (method "div_trunc_by") (constraint-fn-var 843)
+			(receiver
+				(e-num (value "4")))
+			(args
+				(e-num (value "2"))))
+		(e-if
+			(if-branches
+				(if-branch
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "True")))
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "False")))))
+			(if-else
+				(e-nominal-external
+					(builtin)
+					(e-tag (name "False")))))
+		(e-if
+			(if-branches
+				(if-branch
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "False")))
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "True")))))
+			(if-else
+				(e-nominal-external
+					(builtin)
+					(e-tag (name "True")))))
 		(e-match
 			(match
 				(cond

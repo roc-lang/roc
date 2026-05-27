@@ -100,10 +100,12 @@ foo = |num| {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-binop (op "gt")
-									(e-lookup-local
-										(p-assign (ident "num")))
-									(e-num (value "10")))
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 102)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "num"))))
+									(args
+										(e-num (value "10"))))
 								(e-block
 									(e-return
 										(e-tag (name "Err")

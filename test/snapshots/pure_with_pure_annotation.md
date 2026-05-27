@@ -130,7 +130,7 @@ NO CHANGE
 				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 103)
+		(e-call (constraint-fn-var 143)
 			(e-lookup-local
 				(p-assign (ident "add")))
 			(e-num (value "1"))

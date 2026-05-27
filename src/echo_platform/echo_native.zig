@@ -104,7 +104,7 @@ pub fn main() !void {
     const source = try std.fs.cwd().readFileAlloc(arena, app_path, std.math.maxInt(usize));
 
     // Use a 128 MiB FBA so the pipeline behaves like the wasm case (single
-    // contiguous heap) — this is also what the runtime-image migration in
+    // contiguous heap) — this is also what the LIR image migration in
     // Phase 3 will require.
     const RUNTIME_BUFFER_SIZE: usize = 128 * 1024 * 1024;
     const runtime_buffer = try gpa.alignedAlloc(u8, .@"16", RUNTIME_BUFFER_SIZE);

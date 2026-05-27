@@ -26,6 +26,12 @@ jobs:
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
+      - name: code tidiness
+        run: zig build tidy
+
+      - name: Git lints
+        run: zig build git-lints
+
       - name: check formatting
         run: zig build check-fmt
 
