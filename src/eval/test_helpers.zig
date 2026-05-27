@@ -146,6 +146,16 @@ pub const ProblemResources = struct {
     }
 };
 
+/// Reference to a pre-published Builtin module artifact. When passed into
+/// `parseAndCanonicalize…WithBuiltin` / `compileInspected…WithBuiltin`, the
+/// callee will not re-publish the Builtin and will not deinit `artifact` —
+/// the caller retains ownership.
+pub const PrePublishedBuiltin = struct {
+    env: *const ModuleEnv,
+    indices: CIR.BuiltinIndices,
+    artifact: *check.CheckedArtifact.CheckedModuleArtifact,
+};
+
 /// Public `ParsedResources` declaration.
 pub const ParsedResources = struct {
     module_env: *ModuleEnv,
@@ -154,7 +164,12 @@ pub const ParsedResources = struct {
     checker: *Check,
     checked_artifact: check.CheckedArtifact.CheckedModuleArtifact,
     import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
-    builtin_module: builtin_loading.LoadedModule,
+    /// Locally-loaded Builtin; null when a pre-published Builtin was supplied
+    /// and ownership stays with the caller.
+    builtin_module: ?builtin_loading.LoadedModule,
+    /// Borrowed Builtin artifact when the caller pre-published it. Used during
+    /// lowering to build import views; never deinit'd here.
+    borrowed_builtin_artifact: ?*check.CheckedArtifact.CheckedModuleArtifact = null,
     builtin_indices: CIR.BuiltinIndices,
     imported_envs: []*const ModuleEnv,
     auto_imported_types: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
@@ -280,6 +295,26 @@ pub fn parseAndCanonicalizeProgram(
     imports: []const ModuleSource,
 ) !ParsedResources {
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+}
+
+/// Same as `parseAndCanonicalizeProgramPublishedRoots` but reuses a Builtin
+/// artifact the caller has already published.
+pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) !ParsedResources {
+    return parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .published_roots_only,
+        pre_published_builtin,
+    );
 }
 
 /// Public `parseAndCanonicalizeExpr` function.
@@ -436,7 +471,37 @@ pub fn compileInspectedProgram(
     source: []const u8,
     imports: []const ModuleSource,
 ) !CompiledProgram {
-    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
+    return compileInspectedProgramImpl(allocator, source_kind, source, imports, null);
+}
+
+/// Same as `compileInspectedProgram` but reuses a pre-published Builtin
+/// artifact owned by the caller.
+pub fn compileInspectedProgramWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) !CompiledProgram {
+    return compileInspectedProgramImpl(allocator, source_kind, source, imports, pre_published_builtin);
+}
+
+fn compileInspectedProgramImpl(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) !CompiledProgram {
+    var resources = try parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        true,
+        .{ .eval_root = true },
+        pre_published_builtin,
+    );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
     const lowered = try lowerParsedProgramToLir(allocator, &resources, .native);
@@ -466,7 +531,39 @@ pub fn compileInspectedProgramForTarget(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
 ) !CompiledTargetProgram {
-    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, true);
+    return compileInspectedProgramForTargetImpl(allocator, source_kind, source, imports, target_usize, null);
+}
+
+/// Same as `compileInspectedProgramForTarget` but reuses a pre-published
+/// Builtin artifact owned by the caller.
+pub fn compileInspectedProgramForTargetWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+    pre_published_builtin: PrePublishedBuiltin,
+) !CompiledTargetProgram {
+    return compileInspectedProgramForTargetImpl(allocator, source_kind, source, imports, target_usize, pre_published_builtin);
+}
+
+fn compileInspectedProgramForTargetImpl(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) !CompiledTargetProgram {
+    var resources = try parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        true,
+        .{ .eval_root = true },
+        pre_published_builtin,
+    );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
     const lowered = try lowerParsedProgramToLir(allocator, &resources, target_usize);
@@ -500,7 +597,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
     imports: []const ModuleSource,
     inspect_wrap: bool,
 ) !ParsedResources {
-    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap });
+    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap }, null);
 }
 
 /// Public `parseAndCanonicalizeProgramPublishedRoots` function.
@@ -510,7 +607,7 @@ pub fn parseAndCanonicalizeProgramPublishedRoots(
     source: []const u8,
     imports: []const ModuleSource,
 ) !ParsedResources {
-    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only);
+    return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only, null);
 }
 
 const PublishedRootMode = union(enum) {
@@ -539,16 +636,34 @@ fn parseAndCanonicalizeProgramWithRootMode(
     imports: []const ModuleSource,
     inspect_wrap: bool,
     root_mode: PublishedRootMode,
+    pre_published_builtin: ?PrePublishedBuiltin,
 ) !ParsedResources {
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try builtin_loading.loadCompiledModule(
-        allocator,
-        compiled_builtins.builtin_bin,
-        "Builtin",
-        compiled_builtins.builtin_source,
-    );
+    const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
+        ppb.indices
+    else
+        try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+
+    var loaded_builtin: ?builtin_loading.LoadedModule = if (pre_published_builtin == null)
+        try builtin_loading.loadCompiledModule(
+            allocator,
+            compiled_builtins.builtin_bin,
+            "Builtin",
+            compiled_builtins.builtin_source,
+        )
+    else
+        null;
+    // Tracks whether `loaded_builtin`'s env/buffer ownership has transferred to
+    // an import artifact (`publishImportArtifacts`). Once transferred, the
+    // errdefer must not deinit the LoadedModule.
     var builtin_module_owned_by_artifact = false;
-    errdefer if (!builtin_module_owned_by_artifact) builtin_module.deinit();
+    errdefer if (loaded_builtin) |*lm| {
+        if (!builtin_module_owned_by_artifact) lm.deinit();
+    };
+
+    const builtin_env: *const ModuleEnv = if (pre_published_builtin) |ppb|
+        ppb.env
+    else
+        loaded_builtin.?.env;
 
     var extra_modules = std.ArrayList(CheckedModule).empty;
     errdefer {
@@ -576,7 +691,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
             true,
             .checked_artifact,
             &.{},
-            builtin_module.env,
+            builtin_env,
             builtin_indices,
             available_imports,
         );
@@ -616,7 +731,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         false,
         .checked_artifact,
         explicit_eval_root_names,
-        builtin_module.env,
+        builtin_env,
         builtin_indices,
         main_imports,
     );
@@ -628,7 +743,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     var all_module_envs = try allocator.alloc(*ModuleEnv, extra_modules.items.len + 2);
     defer allocator.free(all_module_envs);
     all_module_envs[0] = main_checked.module_env;
-    all_module_envs[1] = builtin_module.env;
+    all_module_envs[1] = @constCast(builtin_env);
     for (extra_modules.items, 0..) |extra, i| {
         all_module_envs[i + 2] = extra.module_env;
     }
@@ -637,7 +752,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     var source_modules = try allocator.alloc(check.TypedCIR.Modules.SourceModule, extra_modules.items.len + 2);
     defer allocator.free(source_modules);
     source_modules[0] = .{ .precompiled = main_checked.module_env };
-    source_modules[1] = .{ .precompiled = builtin_module.env };
+    source_modules[1] = .{ .precompiled = @constCast(builtin_env) };
     for (extra_modules.items, 0..) |extra, i| {
         source_modules[i + 2] = .{ .precompiled = extra.module_env };
     }
@@ -647,16 +762,17 @@ fn parseAndCanonicalizeProgramWithRootMode(
     const import_artifacts = try publishImportArtifacts(
         allocator,
         &typed_cir_modules,
-        &builtin_module,
+        if (loaded_builtin) |*lm| lm else null,
         extra_modules.items,
         &builtin_module_owned_by_artifact,
+        pre_published_builtin,
     );
     errdefer {
         for (import_artifacts) |*artifact| artifact.deinit(allocator);
         allocator.free(import_artifacts);
     }
 
-    const publish_imports = try publishImportKeys(allocator, import_artifacts);
+    const publish_imports = try publishImportKeysWithBuiltin(allocator, import_artifacts, pre_published_builtin);
     defer allocator.free(publish_imports);
 
     var explicit_root_storage: [1]check.CheckedArtifact.ExplicitRootRequestInput = undefined;
@@ -703,7 +819,8 @@ fn parseAndCanonicalizeProgramWithRootMode(
         .checker = main_checked.checker,
         .checked_artifact = checked_artifact,
         .import_artifacts = import_artifacts,
-        .builtin_module = builtin_module,
+        .builtin_module = loaded_builtin,
+        .borrowed_builtin_artifact = if (pre_published_builtin) |ppb| ppb.artifact else null,
         .builtin_indices = builtin_indices,
         .imported_envs = main_checked.imported_envs,
         .auto_imported_types = main_checked.auto_imported_types,
@@ -857,7 +974,19 @@ fn lowerParsedProgramToLir(
     resources: *ParsedResources,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
-    return lowerCheckedModuleSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
+    if (resources.borrowed_builtin_artifact == null) {
+        return lowerCheckedModuleSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
+    }
+
+    const borrowed = resources.borrowed_builtin_artifact.?;
+    const total = resources.import_artifacts.len + 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, total);
+    defer allocator.free(import_views);
+    import_views[0] = check.CheckedArtifact.importedView(borrowed);
+    for (resources.import_artifacts, 0..) |*module, i| {
+        import_views[i + 1] = check.CheckedArtifact.importedView(module);
+    }
+    return lowerCheckedRootWithViews(allocator, &resources.checked_artifact, import_views, target_usize);
 }
 
 /// Lower already-published checked modules to a LIR image.
@@ -872,7 +1001,15 @@ pub fn lowerCheckedModuleSetToLir(
     for (import_modules, 0..) |*module, i| {
         import_views[i] = check.CheckedArtifact.importedView(module);
     }
+    return lowerCheckedRootWithViews(allocator, root_module, import_views, target_usize);
+}
 
+fn lowerCheckedRootWithViews(
+    allocator: Allocator,
+    root_module: *check.CheckedArtifact.CheckedModuleArtifact,
+    import_views: []const check.CheckedArtifact.ImportedModuleView,
+    target_usize: base.target.TargetUsize,
+) !LoweredProgram {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.createWithMinSize(EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
     errdefer shm.deinit(allocator);
@@ -920,9 +1057,10 @@ fn evalRootName(source_kind: SourceKind, inspect_wrap: bool) []const u8 {
 fn publishImportArtifacts(
     allocator: Allocator,
     typed_cir_modules: *const check.TypedCIR.Modules,
-    builtin_module: *builtin_loading.LoadedModule,
+    builtin_module: ?*builtin_loading.LoadedModule,
     extra_modules: []CheckedModule,
     builtin_module_owned_by_artifact: *bool,
+    pre_published_builtin: ?PrePublishedBuiltin,
 ) ![]check.CheckedArtifact.CheckedModuleArtifact {
     const extra_module_count = extra_modules.len;
     var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
@@ -934,32 +1072,40 @@ fn publishImportArtifacts(
     var published_keys = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
     defer published_keys.deinit(allocator);
 
-    var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
-        allocator,
-        typed_cir_modules,
-        1,
-        .{
-            .module_env_storage = .{ .compiled_buffer = .{
-                .env = builtin_module.env,
-                .buffer = builtin_module.buffer,
-            } },
-            .compile_time_finalizer = CompileTimeFinalization.finalizer(),
-        },
-    );
-    builtin_module_owned_by_artifact.* = true;
-    published_keys.append(allocator, .{
-        .module_idx = 1,
-        .key = builtin_artifact.key,
-        .view = check.CheckedArtifact.importedView(&builtin_artifact),
-    }) catch |err| {
-        builtin_artifact.deinit(allocator);
-        return err;
-    };
-    artifacts.append(allocator, builtin_artifact) catch |err| {
-        _ = published_keys.pop();
-        builtin_artifact.deinit(allocator);
-        return err;
-    };
+    if (pre_published_builtin) |ppb| {
+        try published_keys.append(allocator, .{
+            .module_idx = 1,
+            .key = ppb.artifact.key,
+            .view = check.CheckedArtifact.importedView(ppb.artifact),
+        });
+    } else {
+        var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
+            allocator,
+            typed_cir_modules,
+            1,
+            .{
+                .module_env_storage = .{ .compiled_buffer = .{
+                    .env = builtin_module.?.env,
+                    .buffer = builtin_module.?.buffer,
+                } },
+                .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+            },
+        );
+        builtin_module_owned_by_artifact.* = true;
+        published_keys.append(allocator, .{
+            .module_idx = 1,
+            .key = builtin_artifact.key,
+            .view = check.CheckedArtifact.importedView(&builtin_artifact),
+        }) catch |err| {
+            builtin_artifact.deinit(allocator);
+            return err;
+        };
+        artifacts.append(allocator, builtin_artifact) catch |err| {
+            _ = published_keys.pop();
+            builtin_artifact.deinit(allocator);
+            return err;
+        };
+    }
 
     if (extra_module_count == 0) return try artifacts.toOwnedSlice(allocator);
 
@@ -1040,13 +1186,22 @@ fn directImportsArePublished(
     return true;
 }
 
-fn publishImportKeys(
+fn publishImportKeysWithBuiltin(
     allocator: Allocator,
     artifacts: []const check.CheckedArtifact.CheckedModuleArtifact,
+    pre_published_builtin: ?PrePublishedBuiltin,
 ) ![]check.CheckedArtifact.PublishImportArtifact {
-    const imports = try allocator.alloc(check.CheckedArtifact.PublishImportArtifact, artifacts.len);
+    const borrowed_builtin_count: usize = if (pre_published_builtin == null) 0 else 1;
+    const imports = try allocator.alloc(check.CheckedArtifact.PublishImportArtifact, artifacts.len + borrowed_builtin_count);
+    if (pre_published_builtin) |ppb| {
+        imports[0] = .{
+            .module_idx = 1,
+            .key = ppb.artifact.key,
+            .view = check.CheckedArtifact.importedView(ppb.artifact),
+        };
+    }
     for (artifacts, 0..) |artifact, i| {
-        imports[i] = .{
+        imports[i + borrowed_builtin_count] = .{
             .module_idx = artifact.module_identity.module_idx,
             .key = artifact.key,
             .view = check.CheckedArtifact.importedView(&artifacts[i]),

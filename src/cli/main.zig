@@ -4501,7 +4501,7 @@ fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
     var reader = ReplLine.init(ctx.gpa);
     defer reader.deinit();
 
-    var session = ReplSession.init(ctx.gpa, backend_kind);
+    var session = try ReplSession.init(ctx.gpa, backend_kind);
     defer session.deinit();
 
     var should_exit = false;

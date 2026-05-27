@@ -698,6 +698,7 @@ pub fn main() !void {
         .linecol_mode = linecol_mode,
         .builtin_module = builtin_modules_ptr.builtin_module.env,
         .builtin_indices = builtin_modules_ptr.builtin_indices,
+        .builtin_modules_ref = builtin_modules_ptr,
         .cwd = cwd,
     };
 
@@ -754,6 +755,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .disable_updates = true,
         .builtin_module = builtin_modules_ptr.builtin_module.env,
         .builtin_indices = builtin_modules_ptr.builtin_indices,
+        .builtin_modules_ref = builtin_modules_ptr,
         .cwd = cwd,
     };
     const snapshots_dir = "test/snapshots";
@@ -1318,6 +1320,9 @@ const Config = struct {
     // Compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     builtin_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
+    // Borrowed pre-published Builtin artifact; lets REPL snapshots skip
+    // re-publishing the stdlib on every line.
+    builtin_modules_ref: ?*eval_mod.BuiltinModules = null,
     cwd: []const u8,
 };
 
@@ -4426,7 +4431,24 @@ fn buildSnapshotReplModuleSource(
     return source_writer.toOwnedSlice();
 }
 
-fn compileSnapshotReplInspectedModule(allocator: Allocator, source: []const u8) !eval_mod.test_helpers.CompiledProgram {
+fn compileSnapshotReplInspectedModule(
+    allocator: Allocator,
+    source: []const u8,
+    config: *const Config,
+) !eval_mod.test_helpers.CompiledProgram {
+    if (config.builtin_modules_ref) |bm| {
+        return eval_mod.test_helpers.compileInspectedProgramWithBuiltin(
+            allocator,
+            .module,
+            source,
+            &.{},
+            .{
+                .env = bm.builtin_module.env,
+                .indices = bm.builtin_indices,
+                .artifact = &bm.checked_artifact,
+            },
+        );
+    }
     return eval_mod.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
 }
 
@@ -4617,7 +4639,7 @@ fn snapshotReplDefinitionStep(
     } else validation_base;
     defer if (validation_main_source != null) allocator.free(validation_with_main);
 
-    var compiled = compileSnapshotReplInspectedModule(allocator, validation_with_main) catch |err| {
+    var compiled = compileSnapshotReplInspectedModule(allocator, validation_with_main, config) catch |err| {
         return switch (err) {
             error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .module, validation_with_main, config),
             else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
@@ -4650,7 +4672,7 @@ fn snapshotReplExpressionStep(
     );
     defer allocator.free(source);
 
-    var compiled = compileSnapshotReplInspectedModule(allocator, source) catch |err| {
+    var compiled = compileSnapshotReplInspectedModule(allocator, source, config) catch |err| {
         return switch (err) {
             error.TypeCheckError => if (statement_body or session.definitions.items.len > 0)
                 renderSnapshotReplTypeProblems(allocator, .module, source, config)
