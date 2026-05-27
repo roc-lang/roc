@@ -4,6 +4,7 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
 const comptime_finalization_tests = @import("eval_comptime_finalization_tests.zig");
 const highest_lowest_tests = @import("eval_highest_lowest_tests.zig");
+const issue_89xx_tests = @import("eval_issue_89xx_tests.zig");
 const issue_93xx_tests = @import("eval_issue_93xx_tests.zig");
 const interpreter_style_tests = @import("eval_interpreter_style_tests.zig");
 const low_level_tests = @import("eval_low_level_tests.zig");
@@ -3442,4 +3443,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_93xx_tests.tests ++ interpreter_style_tests.tests;
+pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_89xx_tests.tests ++ issue_93xx_tests.tests ++ interpreter_style_tests.tests;

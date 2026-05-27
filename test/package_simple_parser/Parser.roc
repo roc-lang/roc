@@ -78,6 +78,11 @@ expect Parser.parse(Parser.fail("oops"), "hello") == Err("oops")
 combined = Parser.map2(Parser.succeed("a"), Parser.succeed("b"), |x, y| Str.concat(x, y))
 expect Parser.parse(combined, "input") == Ok("ab", "input")
 
+# Regression for issue 9132. Mapping creates a closure inside the type module
+# whose Ok branch returns two payloads: the transformed value and remaining input.
+mapped = Parser.map(Parser.succeed("a"), |x| Str.concat(x, "!"))
+expect Parser.parse(mapped, "input") == Ok("a!", "input")
+
 # Test skip and keep
 skip_second = Parser.skip(Parser.succeed("a"), Parser.succeed("b"))
 expect Parser.parse(skip_second, "input") == Ok("a", "input")
