@@ -1286,14 +1286,40 @@ pub const MonoLlvmCodeGen = struct {
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         try self.emitStaticRocOpsMessageCall(@offsetOf(builtins.host_abi.RocOps, "roc_crashed"), msg);
-        _ = wip.@"unreachable"() catch return error.CompilationFailed;
+        // Linux AArch64 eval tests handle crashes by returning to the Zig host.
+        // Longjmping through LLVM-generated frames is not reliable on that target.
+        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
+            _ = wip.retVoid() catch return error.CompilationFailed;
+        } else {
+            _ = wip.@"unreachable"() catch return error.CompilationFailed;
+        }
     }
 
     fn emitStaticRocOpsMessageCall(self: *MonoLlvmCodeGen, callback_offset: usize, msg: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
 
+        if (callback_offset == @offsetOf(builtins.host_abi.RocOps, "roc_expect_failed") or
+            callback_offset == @offsetOf(builtins.host_abi.RocOps, "roc_crashed"))
+        {
+            const wrapper_name = if (callback_offset == @offsetOf(builtins.host_abi.RocOps, "roc_crashed"))
+                "roc_builtins_roc_crashed"
+            else
+                "roc_builtins_roc_expect_failed";
+
+            try self.callBuiltinVoid(
+                wrapper_name,
+                &.{ ptr_ty, self.ptrSizedIntType(), ptr_ty },
+                &.{
+                    try self.staticBytes(msg),
+                    builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
+                    self.rocOps(),
+                },
+            );
+            return;
+        }
+
+        const wip = self.wip orelse return error.CompilationFailed;
         const args_ptr = wip.alloca(
             .normal,
             .i8,

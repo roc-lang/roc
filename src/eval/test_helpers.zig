@@ -1445,6 +1445,9 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
+        runtime_env.setLongjmpOnCrash(false);
+    }
 
     const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
