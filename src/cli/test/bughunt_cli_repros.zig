@@ -877,12 +877,14 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\import A
             \\
-            \\main! = || Stdout.line!(I64.to_str(A.run(41)))
+            \\main! = || Stdout.line!(I64.to_str(A.run(41.I64)))
             },
             .{ .path = "A.roc", .contents = 
             \\A :: [].{
+            \\    make : I64 -> Box((I64 -> I64))
             \\    make = |n| Box.box(|x| x + n)
             \\
+            \\    run : I64 -> I64
             \\    run = |x| {
             \\        f = Box.unbox(make(1.I64))
             \\        f(x)
@@ -891,7 +893,7 @@ const tests = [_]CliBugSpec{
             },
         },
         .command = .run_dev,
-        .expect = .{ .warning_stdout_exact = "42\n" },
+        .expect = .{ .success_stdout_exact = "42\n" },
     },
     .{
         .id = 102,
