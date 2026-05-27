@@ -2126,7 +2126,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B164",
         .name = "bughunt B164: imported polymorphic recursive boxed-tree equality is rejected cleanly",
         .files = &.{
-            .{ .path = "main.roc", .contents =
+            .{ .path = "main.roc", .contents = 
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -2134,7 +2134,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(Str.inspect(A.a == A.b))
             },
-            .{ .path = "A.roc", .contents =
+            .{ .path = "A.roc", .contents = 
             \\A :: [].{
             \\    Tree(a) := [Node(Box(Tree(a)), Box(Tree(a))), Leaf(a)]
             \\
@@ -2274,7 +2274,7 @@ const tests = [_]CliBugSpec{
         .id = 182,
         .bug_id = "B182",
         .name = "bughunt B182: recursive nominal definitions are accepted",
-        .files = &.{.{ .path = "main.roc", .contents =
+        .files = &.{.{ .path = "main.roc", .contents = 
         \\app [main!] { pf: platform "{FX_PLATFORM}" }
         \\
         \\import pf.Stdout
@@ -2282,7 +2282,7 @@ const tests = [_]CliBugSpec{
         \\Tree := [Node(Tree)]
         \\
         \\main! = || Stdout.line!("ok")
-        }},
+    }},
         .command = .check,
         .expect = .success,
     },
