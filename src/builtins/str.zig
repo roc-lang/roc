@@ -908,6 +908,10 @@ pub fn repeatC(
 ) callconv(.c) RocStr {
     const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
+    if (count == 0 or bytes_len == 0) {
+        return RocStr.empty();
+    }
+
     const bytes_ptr = string.asU8ptr();
 
     var ret_string = RocStr.allocate(count * bytes_len, roc_ops);
@@ -920,6 +924,16 @@ pub fn repeatC(
     }
 
     return ret_string;
+}
+
+test "repeatC: empty string short-circuits" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const repeated = repeatC(RocStr.empty(), std.math.maxInt(u64), test_env.getOps());
+    defer repeated.decref(test_env.getOps());
+
+    try std.testing.expect(repeated.eql(RocStr.empty()));
 }
 
 /// Str.endsWith
