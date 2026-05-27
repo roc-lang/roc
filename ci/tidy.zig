@@ -100,6 +100,12 @@ fn runTidy(gpa: Allocator) !void {
         }
         file_buffer[bytes_read] = 0;
 
+        // Skip binary files without a recognized extension (e.g. gitignored
+        // compiled executables left in the working tree). A NUL byte in the
+        // first chunk is a strong indicator of binary content.
+        const sniff_len = @min(bytes_read, 1024);
+        if (std.mem.indexOfScalar(u8, file_buffer[0..sniff_len], 0) != null) continue;
+
         const source_file = SourceFile{ .path = file_path, .text = file_buffer[0..bytes_read :0] };
         try tidyFile(gpa, &counter, source_file, &errors);
     }
