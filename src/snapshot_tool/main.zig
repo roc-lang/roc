@@ -85,41 +85,6 @@ fn warn(comptime fmt_str: []const u8, args: anytype) void {
     std.log.warn(fmt_str, args);
 }
 
-fn getCwdAlloc(gpa: Allocator) ![]u8 {
-    // std.process.getCwdAlloc uses undefined buffers before passing them to
-    // getcwd. That is fine normally, but musl/Valgrind can leave the syscall
-    // result marked partially uninitialized. Keep snapshot Valgrind runs strict
-    // by making the buffers initialized before getcwd writes into them.
-    var stack_buf: [std.fs.max_path_bytes]u8 = [_]u8{0} ** std.fs.max_path_bytes;
-    var heap_buf: ?[]u8 = null;
-    defer if (heap_buf) |buf| gpa.free(buf);
-
-    var current_buf: []u8 = &stack_buf;
-    while (true) {
-        if (std.posix.getcwd(current_buf)) |slice| {
-            return gpa.dupe(u8, slice);
-        } else |err| switch (err) {
-            error.NameTooLong => {
-                const new_capacity = current_buf.len * 2;
-                if (heap_buf) |buf| gpa.free(buf);
-                current_buf = try gpa.alloc(u8, new_capacity);
-                @memset(current_buf, 0);
-                heap_buf = current_buf;
-            },
-            else => |e| return e,
-        }
-    }
-}
-
-fn iterateDirValgrindClean(dir: std.fs.Dir) std.fs.Dir.Iterator {
-    var iterator = dir.iterate();
-    // std.fs.Dir.Iterator intentionally leaves this buffer undefined before the
-    // OS fills it. Valgrind does not always model getdents/getdirentries writes
-    // precisely, so initialize it before the first syscall.
-    @memset(&iterator.buf, 0);
-    return iterator;
-}
-
 const UpdateCommand = enum {
     /// Update the section to match the actual output/problems.
     update,
@@ -721,7 +686,7 @@ pub fn main() !void {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try getCwdAlloc(gpa);
+    const cwd = try std.process.getCwdAlloc(gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -1458,7 +1423,7 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
                 .kind = .multi_file_snapshot,
             });
         } else {
-            var dir_iterator = iterateDirValgrindClean(dir);
+            var dir_iterator = dir.iterate();
             while (try dir_iterator.next()) |entry| {
                 // Skip hidden files and special directories
                 if (entry.name[0] == '.') continue;
