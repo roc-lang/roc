@@ -32,6 +32,7 @@ const Command = enum {
 const Expect = union(enum) {
     success,
     success_stdout_exact: []const u8,
+    warning_stdout_exact: []const u8,
     clean_failure,
     success_or_clean_failure,
 };
@@ -467,7 +468,7 @@ const tests = [_]CliBugSpec{
             },
         },
         .command = .run_dev,
-        .expect = .{ .success_stdout_exact = "\"1\"\n" },
+        .expect = .{ .success_stdout_exact = "\"1.0\"\n" },
     },
     .{
         .id = 54,
@@ -592,7 +593,7 @@ const tests = [_]CliBugSpec{
             \\
             \\import pf.Stdout
             \\
-            \\main! = || Stdout.line!(Str.inspect(U8.to(255, 255)))
+            \\main! = || Stdout.line!(Str.inspect(Iter.fold(U8.to(255, 255), [], |acc, item| acc.append(item))))
             },
         },
         .command = .run_dev,
@@ -790,7 +791,7 @@ const tests = [_]CliBugSpec{
             },
         },
         .command = .run_dev,
-        .expect = .{ .success_stdout_exact = "Hello\n" },
+        .expect = .{ .warning_stdout_exact = "Hello\n" },
     },
     .{
         .id = 89,
@@ -2898,6 +2899,30 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
                 mismatchMessage(gpa, "stdout mismatch", expected_stdout, result.stdout)
             else
                 "expected successful command";
+
+            return .{
+                .status = .fail,
+                .duration_ns = duration_ns,
+                .exit_code = exitCode(result.term),
+                .stderr_capture = result.stderr,
+                .stdout_capture = result.stdout,
+                .message = msg,
+            };
+        },
+        .warning_stdout_exact => |expected_stdout| {
+            const ok = switch (result.term) {
+                .Exited => |code| code == 2 and std.mem.eql(u8, result.stdout, expected_stdout),
+                else => false,
+            };
+            if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
+
+            const msg = if (switch (result.term) {
+                .Exited => |code| code == 2,
+                else => false,
+            })
+                mismatchMessage(gpa, "stdout mismatch", expected_stdout, result.stdout)
+            else
+                "expected warning-only command";
 
             return .{
                 .status = .fail,
