@@ -5427,7 +5427,7 @@ fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
                 const args = self.cir.store.sliceExpr(call.args);
                 if (args.len != 1) continue;
                 try self.validateToInspectMethodTypeForArg(
-                    ModuleEnv.varFrom(args[0]),
+                    args[0],
                     env,
                     self.cir.store.getExprRegion(args[0]),
                 );
@@ -5458,12 +5458,14 @@ fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
 
 fn validateToInspectMethodTypeForArg(
     self: *Self,
-    arg_var: Var,
+    arg_expr_idx: CIR.Expr.Idx,
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
+    const arg_var = ModuleEnv.varFrom(arg_expr_idx);
     const resolved = self.types.resolveVar(arg_var);
-    if (resolved.desc.content != .flex and resolved.desc.content != .rigid) {
+
+    if (self.exprIsTopLevelLookup(arg_expr_idx)) {
         self.var_set.clearRetainingCapacity();
         if (try self.varHasUnresolvedContent(arg_var, &self.var_set)) {
             try self.reportPolymorphicValueProblem(arg_var, arg_var, null);
@@ -5481,6 +5483,13 @@ fn validateToInspectMethodTypeForArg(
         .err,
         => {},
     }
+}
+
+fn exprIsTopLevelLookup(self: *Self, expr_idx: CIR.Expr.Idx) bool {
+    return switch (self.cir.store.getExpr(expr_idx)) {
+        .e_lookup_local => |lookup| self.top_level_ptrns.contains(lookup.pattern_idx),
+        else => false,
+    };
 }
 
 fn validateNominalToInspectMethodType(
