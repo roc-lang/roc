@@ -4818,7 +4818,10 @@ fn checkFileWithBuildEnvPreserved(
 
     // Build the file (works for both app and module files)
     build_env.build(filepath) catch |err| {
-        if (err == error.OutOfMemory) return error.OutOfMemory;
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
 
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
 

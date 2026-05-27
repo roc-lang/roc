@@ -1207,38 +1207,6 @@ fn typedLiteralTargetsBuiltin(self: *const Self, expr_idx: CIR.Expr.Idx, num_kin
     };
 }
 
-/// Create a Dec nominal type content using the stored ident index rather than
-/// constructing the qualified name from a string literal.
-fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name;
-
-    const type_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.idents.dec_type,
-    };
-
-    const empty_tag_union_content = Content{ .structure = .empty_tag_union };
-    const ext_var = try self.freshFromContent(empty_tag_union_content, env, Region.zero());
-    const empty_tag_union = types_mod.TagUnion{
-        .tags = types_mod.Tag.SafeMultiList.Range.empty(),
-        .ext = ext_var,
-    };
-    const backing_content = Content{ .structure = .{ .tag_union = empty_tag_union } };
-    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
-
-    const no_type_args: []const Var = &.{};
-
-    return try self.types.mkNominal(
-        type_ident,
-        backing_var,
-        no_type_args,
-        origin_module_id,
-        true,
-    );
-}
-
 /// Create a flex variable with a from_numeral constraint for numeric literals.
 /// This constraint will be checked during deferred constraint checking to validate
 /// that the numeric literal can be converted to the unified type.

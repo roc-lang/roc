@@ -1396,22 +1396,6 @@ const Inserter = struct {
         }
     }
 
-    fn unsetMaskedArgs(
-        self: *Inserter,
-        owned: *OwnedSet,
-        span: LIR.LocalSpan,
-        mask: u64,
-    ) void {
-        if (mask == 0) return;
-        const locals = self.store.getLocalSpan(span);
-        for (locals, 0..) |local, i| {
-            if (i >= 64) break;
-            if ((mask & argMaskBit(i)) != 0) {
-                owned.unset(local);
-            }
-        }
-    }
-
     fn collectJoinBodies(
         self: *Inserter,
         start: LIR.CFStmtId,
