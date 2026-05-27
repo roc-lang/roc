@@ -5376,6 +5376,32 @@ pub fn canonicalizeExpr(
             if (ast_fn == .ident) {
                 const ident_expr = ast_fn.ident;
                 const qualifier_tokens = self.parse_ir.store.tokenSlice(ident_expr.qualifiers);
+                if (qualifier_tokens.len > 1) {
+                    const receiver_token = @as(Token.Idx, @intCast(qualifier_tokens[qualifier_tokens.len - 1]));
+                    const receiver_token_tag = self.parse_ir.tokens.tokens.items(.tag)[@intCast(receiver_token)];
+                    if (receiver_token_tag == .NoSpaceDotLowerIdent or receiver_token_tag == .DotLowerIdent) {
+                        const scratch_top = self.parse_ir.store.scratchTokenTop();
+                        for (qualifier_tokens[0 .. qualifier_tokens.len - 1]) |qualifier_token| {
+                            try self.parse_ir.store.addScratchToken(qualifier_token);
+                        }
+                        const receiver_qualifiers = try self.parse_ir.store.tokenSpanFrom(scratch_top);
+                        const receiver_expr_idx = try self.parse_ir.store.addExpr(.{ .ident = .{
+                            .token = receiver_token,
+                            .qualifiers = receiver_qualifiers,
+                            .region = .{
+                                .start = ident_expr.region.start,
+                                .end = receiver_token + 1,
+                            },
+                        } });
+                        const method_call_idx = try self.parse_ir.store.addExpr(.{ .method_call = .{
+                            .receiver = receiver_expr_idx,
+                            .method_token = ident_expr.token,
+                            .args = e.args,
+                            .region = e.region,
+                        } });
+                        return try self.canonicalizeExpr(method_call_idx);
+                    }
+                }
                 if (qualifier_tokens.len == 1) {
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |alias_name| {
