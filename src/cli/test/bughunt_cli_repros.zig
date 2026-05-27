@@ -2079,7 +2079,7 @@ const tests = [_]CliBugSpec{
         \\    m : Maker
         \\    m = { tag: 0 }
         \\
-        \\    use = |x| x.make()(41)
+        \\    use = |x| x.make()(41.I64)
         \\}
     , "42\n"),
     runDevBodyCase(159, "B159", "top-level boxed polymorphic identity is sealed per concrete use",
