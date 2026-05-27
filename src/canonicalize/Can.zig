@@ -8151,6 +8151,8 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
     // Step 2: Collect field names and canonicalize field values
     var field_names: [64]Ident.Idx = undefined;
     var field_values: [64]Expr.Idx = undefined;
+    const seen_fields_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_fields_top);
     if (field_count > 64) {
         const feature = try self.env.insertString("record builder with more than 64 fields");
         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -8170,6 +8172,23 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
             } });
             return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
         };
+
+        const field_name_region = self.parse_ir.tokens.resolve(field.name);
+        for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
+            if (field_name.eql(seen_field.ident)) {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .duplicate_record_field = .{
+                    .field_name = field_name,
+                    .duplicate_region = field_name_region,
+                    .original_region = seen_field.region,
+                } });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            }
+        }
+        try self.scratch_seen_record_fields.append(SeenRecordField{
+            .ident = field_name,
+            .region = field_name_region,
+        });
+
         field_names[i] = field_name;
 
         // Canonicalize field value

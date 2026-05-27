@@ -1981,6 +1981,33 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .too_many_exports => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const count_text = try std.fmt.allocPrint(allocator, "{d}", .{data.count});
+            defer allocator.free(count_text);
+
+            var report = Report.init(allocator, "TOO MANY EXPORTS", .runtime_error);
+            const owned_count = try report.addOwnedString(count_text);
+
+            try report.document.addReflowingText("This module exposes ");
+            try report.document.addInlineCode(owned_count);
+            try report.document.addReflowingText(" values, which exceeds the compiler limit.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("The export list starts here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
