@@ -962,6 +962,26 @@ Builtin :: [].{
 			Item.join_with(list, joiner)
 		}
 
+		join_list_with : List(List(item)), List(item) -> List(item)
+		join_list_with = |list, joiner| {
+			len = List.len(list)
+
+			if len == 0 {
+				[]
+			} else {
+				var $index = 1
+				var $result = list_get_unsafe(list, 0)
+
+				while $index < len {
+					$result = List.concat($result, joiner)
+					$result = List.concat($result, list_get_unsafe(list, $index))
+					$index = $index + 1
+				}
+
+				$result
+			}
+		}
+
 		## Build a list by repeating the given value `n` times.
 		## ```roc
 		## expect List.repeat(0, 3) == [0, 0, 0]

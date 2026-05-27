@@ -8038,6 +8038,54 @@ fn staticDispatchConstraintAcceptsCandidate(
     return try self.probeUnifyWithoutRecordingProblems(method_var, constraint.fn_var);
 }
 
+fn listJoinWithListItemsMethodIdent(
+    self: *Self,
+    original_env: *const ModuleEnv,
+    is_this_module: bool,
+    nominal_type: types_mod.NominalType,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!?Ident.Idx {
+    if (!std.mem.eql(u8, self.cir.getIdentStoreConst().getText(constraint.fn_name), "join_with")) return null;
+    if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
+
+    const list_ident = original_env.common.findIdent("List") orelse return null;
+    const join_list_with_ident = original_env.common.findIdent("join_list_with") orelse return null;
+    const helper_ident = original_env.lookupMethodIdentConst(list_ident, join_list_with_ident) orelse return null;
+
+    const helper_node_idx = original_env.getExposedNodeIndexById(helper_ident) orelse return null;
+    const helper_def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(helper_node_idx)));
+    const helper_def_var: Var = ModuleEnv.varFrom(helper_def_idx);
+
+    const from_numeral_count = self.types.from_numeral_flex_count;
+    const regions_len = self.regions.items.items.len;
+    var store_snapshot = try self.types.snapshot();
+    defer {
+        self.types.rollbackTo(&store_snapshot);
+        self.types.from_numeral_flex_count = from_numeral_count;
+        self.regions.items.shrinkRetainingCapacity(regions_len);
+        store_snapshot.deinit(self.gpa);
+    }
+
+    var probe_env = try self.env_pool.acquire();
+    defer self.env_pool.release(probe_env);
+    try probe_env.reset(env.rank());
+
+    const helper_var = if (is_this_module) blk: {
+        if (self.types.resolveVar(helper_def_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(helper_def_var, &probe_env, .use_last_var);
+        }
+        break :blk helper_def_var;
+    } else blk: {
+        const copied_var = try self.copyVar(helper_def_var, original_env, region);
+        break :blk try self.instantiateVar(copied_var, &probe_env, .{ .explicit = region });
+    };
+
+    if (!try self.probeUnifyWithoutRecordingProblems(helper_var, constraint.fn_var)) return null;
+    return helper_ident;
+}
+
 fn probeUnifyWithoutRecordingProblems(
     self: *Self,
     expected: Var,
@@ -8356,7 +8404,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         };
-                    } else original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
+                    } else (try self.listJoinWithListItemsMethodIdent(
+                        original_env,
+                        is_this_module,
+                        nominal_type,
+                        constraint,
+                        env,
+                        region,
+                    )) orelse original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,

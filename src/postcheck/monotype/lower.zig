@@ -5880,7 +5880,7 @@ const BodyContext = struct {
         const plan_ret_ty = plan_fn_data.ret;
 
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
-        const lookup = self.dispatchTarget(plan, dispatcher_ty);
+        const lookup = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys);
         if (lookup == null) {
             return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self);
         }
@@ -5944,7 +5944,7 @@ const BodyContext = struct {
         const try_ty = plan_fn_data.ret;
 
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
-        const resolved = self.dispatchTarget(plan, dispatcher_ty) orelse
+        const resolved = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
         const template = resolved.target.template orelse
             Common.invariant("checked from_numeral target was not backed by a procedure template");
@@ -6130,21 +6130,10 @@ const BodyContext = struct {
         const plan_ret_ty = plan_fn_data.ret;
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
 
-        const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
-            if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) {
-                try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
-                return plan_ret_ty;
-            }
-            return null;
+        const resolved = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys) orelse {
+            try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
+            return plan_ret_ty;
         };
-        const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
-            if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) {
-                try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
-                return plan_ret_ty;
-            }
-            Common.invariant("checked method registry is missing resolved dispatch target");
-        };
-        const resolved = lookup;
         const template = resolved.target.template orelse
             Common.invariant("checked dispatch target was not backed by a procedure template");
         var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
@@ -6178,17 +6167,53 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         dispatcher_ty: Type.TypeId,
+        arg_tys: []const Type.TypeId,
     ) ?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
+        if (self.listJoinWithListItemsTarget(owner, plan, dispatcher_ty, arg_tys)) |target| {
+            return target;
+        }
+
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
         return lookup;
+    }
+
+    fn listJoinWithListItemsTarget(
+        self: *BodyContext,
+        owner: static_dispatch.MethodOwner,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        dispatcher_ty: Type.TypeId,
+        arg_tys: []const Type.TypeId,
+    ) ?MethodLookup {
+        switch (owner) {
+            .builtin => |builtin| if (builtin != .list) return null,
+            .nominal => return null,
+        }
+        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "join_with")) return null;
+        if (!self.dispatchArgsAreListJoinWithListItems(dispatcher_ty, arg_tys)) return null;
+
+        return self.builder.lookupMethodTargetByName(owner, "join_list_with") orelse
+            Common.invariant("checked method registry is missing List.join_list_with dispatch target");
+    }
+
+    fn dispatchArgsAreListJoinWithListItems(
+        self: *BodyContext,
+        dispatcher_ty: Type.TypeId,
+        arg_tys: []const Type.TypeId,
+    ) bool {
+        if (arg_tys.len != 2) return false;
+        if (!self.sameType(arg_tys[1], dispatcher_ty)) return false;
+        return switch (self.builder.program.types.get(arg_tys[0])) {
+            .list => |elem| self.sameType(elem, dispatcher_ty),
+            else => false,
+        };
     }
 
     fn lowerResolvedDispatch(
