@@ -2580,7 +2580,10 @@ const BodyContext = struct {
                             if (mono_primitive != primitive) Common.invariant(conflict_message);
                             return;
                         },
-                        else => Common.invariant("builtin primitive nominal was constrained to a non-primitive monotype"),
+                        else => if (try self.monoTypeContainsUninhabited(mono_ty)) {
+                            self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .primitive = primitive };
+                            return;
+                        } else Common.invariant("builtin primitive nominal was constrained to a non-primitive monotype"),
                     }
                 },
                 .bool_tag_union => {
@@ -3850,6 +3853,65 @@ const BodyContext = struct {
         }
     }
 
+    fn inferCurrentTemplateReturnTypeFromArgs(
+        self: *BodyContext,
+        function: checked.CheckedFunctionType,
+    ) Allocator.Error!?Type.TypeId {
+        if (try self.checkedTypeHasConcreteShape(function.ret)) return null;
+
+        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
+        defer self.allocator.free(arg_tys);
+        for (function.args, 0..) |arg_ty, index| {
+            if (!try self.checkedTypeCanLower(arg_ty)) return null;
+            arg_tys[index] = try self.lowerType(arg_ty);
+        }
+
+        const template = self.view.templates.get(self.owner_template.template);
+        return switch (template.body) {
+            .checked_body => |body_id| blk: {
+                const body = self.view.bodies.bodies[@intFromEnum(body_id)];
+                const root = self.view.bodies.exprs[@intFromEnum(body.root_expr)];
+                break :blk switch (root.data) {
+                    .lambda => |lambda| try self.inferLambdaReturnTypeFromArgs(lambda, arg_tys),
+                    .closure => |closure| closure_blk: {
+                        if (closure.captures.len != 0) break :closure_blk null;
+                        const lambda_expr = self.view.bodies.exprs[@intFromEnum(closure.lambda)];
+                        break :closure_blk switch (lambda_expr.data) {
+                            .lambda => |lambda| try self.inferLambdaReturnTypeFromArgs(lambda, arg_tys),
+                            else => null,
+                        };
+                    },
+                    else => try self.lowerExprType(body.root_expr),
+                };
+            },
+            .entry_wrapper,
+            .intrinsic_wrapper,
+            => null,
+        };
+    }
+
+    fn inferLambdaReturnTypeFromArgs(
+        self: *BodyContext,
+        lambda: anytype,
+        arg_tys: []const Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
+        if (arg_tys.len != lambda.args.len) Common.invariant("lambda arity differs from inferred argument types");
+
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        for (lambda.args) |pattern_id| {
+            try self.savePatternBinders(pattern_id, &saved);
+        }
+        defer self.restoreBinders(saved.items);
+
+        for (lambda.args, arg_tys) |pattern_id, arg_ty| {
+            if (self.patternNeedsExplicitBinding(pattern_id)) return null;
+            _ = try self.lowerPatternAtType(pattern_id, arg_ty);
+        }
+
+        return try self.lowerExprType(lambda.body);
+    }
+
     fn lowerStrInspectIntrinsic(self: *BodyContext, fn_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
         const fn_data = self.builder.functionShape(fn_ty, "Str.inspect intrinsic had a non-function type");
         const arg_tys = self.builder.program.types.span(fn_data.args);
@@ -4450,11 +4512,15 @@ const BodyContext = struct {
 
         try self.constrainTargetArgsFromPlanToFixedPoint(function.args, plan_ctx, plan_function.args, "checked dispatch target argument type conflicted with an existing Monotype constraint");
 
+        const inferred_ret_ty = if (expected_ret_ty == null)
+            try self.inferCurrentTemplateReturnTypeFromArgs(function)
+        else
+            null;
         const ret_ty = try self.targetReturnTypeFromPlan(
             function.ret,
             plan_ctx,
             plan_function.ret,
-            expected_ret_ty,
+            expected_ret_ty orelse inferred_ret_ty,
             "checked dispatch target return type conflicted with an existing Monotype constraint",
         );
 
@@ -4635,8 +4701,22 @@ const BodyContext = struct {
             return ret_ty;
         }
 
+        if (try self.checkedTypeHasConcreteShape(function_ret)) {
+            const ret_ty = try self.lowerType(function_ret);
+            try caller.constrainTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
+            return ret_ty;
+        }
+
+        if (try caller.checkedTypeHasConcreteShape(checked_ret_ty)) {
+            const ret_ty = try caller.lowerType(checked_ret_ty);
+            try self.constrainTypeToMono(function_ret, ret_ty, "checked dispatch plan return type conflicted with an existing Monotype constraint");
+            return ret_ty;
+        }
+
         if (try self.checkedTypeCanLower(function_ret)) {
-            return try self.lowerType(function_ret);
+            const ret_ty = try self.lowerType(function_ret);
+            try caller.constrainTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
+            return ret_ty;
         }
 
         Common.invariant("checked dispatch plan return type was not concrete after call-site cell");
@@ -4735,7 +4815,8 @@ const BodyContext = struct {
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         for (formal_tys, operands) |formal_ty, operand| {
-            if ((try caller.dispatchOperandHasNumericDefault(operand)) != numeric_literals) continue;
+            const has_numeric_default = try caller.dispatchOperandHasNumericDefault(operand);
+            if (has_numeric_default != numeric_literals) continue;
             if (numeric_literals and try self.checkedTypeHasFixedShape(formal_ty)) continue;
             switch (operand) {
                 .checked_expr => |checked_arg| {
