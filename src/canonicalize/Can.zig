@@ -6282,10 +6282,13 @@ pub fn canonicalizeExpr(
                 // from outer declarations
                 const saved_defining_patterns_start = self.defining_patterns_start;
                 const saved_defining_pattern = self.defining_pattern;
+                const saved_loop_depth = self.loop_depth;
                 self.defining_patterns_start = null;
                 self.defining_pattern = null;
+                self.loop_depth = 0;
                 defer self.defining_patterns_start = saved_defining_patterns_start;
                 defer self.defining_pattern = saved_defining_pattern;
+                defer self.loop_depth = saved_loop_depth;
 
                 const can_body = try self.canonicalizeExpr(e.body) orelse {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
@@ -12425,13 +12428,12 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     .region = region,
                 } });
                 mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            } else {
+                const stmt_idx = try self.env.addStatement(Statement{
+                    .s_break = .{},
+                }, region);
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
             }
-
-            const stmt_idx = try self.env.addStatement(Statement{
-                .s_break = .{},
-            }, region);
-
-            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
         },
         .file_import => |fi| {
             try self.canonicalizeFileImport(fi);
