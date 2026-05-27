@@ -5710,6 +5710,61 @@ pub fn canonicalizeExpr(
 
                             // If target_node_idx_opt is null, we need to handle the error case
                             if (target_node_idx_opt == null) {
+                                if (qualifier_tokens.len > 1) {
+                                    if (auto_imported_type_info) |info| {
+                                        const module_env = info.requireEnv();
+                                        const first_field_tok = @as(Token.Idx, @intCast(qualifier_tokens[1]));
+                                        if (self.parse_ir.tokens.resolveIdentifier(first_field_tok)) |first_field_ident| {
+                                            const first_field_text = self.env.getIdent(first_field_ident);
+                                            const first_target_node_idx = blk: {
+                                                if (module_env.common.findIdent(first_field_text)) |target_ident| {
+                                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                                        break :blk target_node_idx;
+                                                    }
+                                                }
+
+                                                const qualified_type_text = self.env.getIdent(info.qualified_type_ident);
+                                                const qualified_first_field_idx = try self.env.insertQualifiedIdent(qualified_type_text, first_field_text);
+                                                const qualified_first_field_text = self.env.getIdent(qualified_first_field_idx);
+                                                if (module_env.common.findIdent(qualified_first_field_text)) |target_ident| {
+                                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                                        break :blk target_node_idx;
+                                                    }
+                                                }
+                                                break :blk null;
+                                            };
+
+                                            if (first_target_node_idx) |target_node_idx| {
+                                                var receiver_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                                    .module_idx = import_idx,
+                                                    .target_node_idx = target_node_idx,
+                                                    .ident_idx = first_field_ident,
+                                                    .region = region,
+                                                } }, region);
+
+                                                for (qualifier_tokens[2..]) |nested_tok_raw| {
+                                                    const nested_tok = @as(Token.Idx, @intCast(nested_tok_raw));
+                                                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_tok) orelse continue;
+                                                    receiver_idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                                        .receiver = receiver_idx,
+                                                        .field_name = nested_ident,
+                                                        .field_name_region = region,
+                                                    } }, region);
+                                                }
+
+                                                return CanonicalizedExpr{
+                                                    .idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                                        .receiver = receiver_idx,
+                                                        .field_name = ident,
+                                                        .field_name_region = region,
+                                                    } }, region),
+                                                    .free_vars = DataSpan.empty(),
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
                                 // and we shouldn't report a redundant error here
                                 if (auto_imported_type_info == null) {
@@ -14098,6 +14153,64 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // If we didn't find a valid node index, report an error (don't fall back)
     const target_node_idx = target_node_idx_opt orelse {
+        switch (right_expr) {
+            .ident => |right_ident| {
+                const right_qualifier_tokens = self.parse_ir.store.tokenSlice(right_ident.qualifiers);
+                if (right_qualifier_tokens.len > 0) {
+                    if (self.lookupAvailableModuleEnv(module_name)) |target_info| {
+                        const module_env = target_info.requireEnv();
+                        const first_field_tok = @as(Token.Idx, @intCast(right_qualifier_tokens[0]));
+                        if (self.parse_ir.tokens.resolveIdentifier(first_field_tok)) |first_field_ident| {
+                            const first_field_text = self.env.getIdent(first_field_ident);
+                            const first_target_node_idx = blk: {
+                                if (module_env.common.findIdent(first_field_text)) |target_ident| {
+                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                        break :blk target_node_idx;
+                                    }
+                                }
+
+                                const qualified_type_text = self.env.getIdent(target_info.qualified_type_ident);
+                                const qualified_first_field_idx = try self.env.insertQualifiedIdent(qualified_type_text, first_field_text);
+                                const qualified_first_field_text = self.env.getIdent(qualified_first_field_idx);
+                                if (module_env.common.findIdent(qualified_first_field_text)) |target_ident| {
+                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                        break :blk target_node_idx;
+                                    }
+                                }
+                                break :blk null;
+                            };
+
+                            if (first_target_node_idx) |target_node_idx| {
+                                var receiver_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                    .module_idx = import_idx,
+                                    .target_node_idx = target_node_idx,
+                                    .ident_idx = first_field_ident,
+                                    .region = region,
+                                } }, region);
+
+                                for (right_qualifier_tokens[1..]) |nested_tok_raw| {
+                                    const nested_tok = @as(Token.Idx, @intCast(nested_tok_raw));
+                                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_tok) orelse continue;
+                                    receiver_idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                        .receiver = receiver_idx,
+                                        .field_name = nested_ident,
+                                        .field_name_region = region,
+                                    } }, region);
+                                }
+
+                                return try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                    .receiver = receiver_idx,
+                                    .field_name = field_name,
+                                    .field_name_region = region,
+                                } }, region);
+                            }
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+
         return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = field_name,
             .region = region,
