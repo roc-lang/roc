@@ -764,3 +764,100 @@ fn writerInvariant(comptime message: []const u8) noreturn {
 test "const store writer declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
+
+test "const store writer pointer memoization is scoped to one root" {
+    const testing = std.testing;
+    const can = @import("can");
+
+    var names = check.CanonicalNames.CanonicalNameStore.init(testing.allocator);
+    const module_name = try names.internModuleName("Test");
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+
+    var artifact = checked.CheckedModuleArtifact{
+        .key = .{},
+        .canonical_names = names,
+        .module_identity = .{
+            .module_idx = 0,
+            .module_name = module_name,
+            .display_module_name = module_name,
+            .qualified_module_name = module_name,
+            .kind = .package,
+        },
+        .checking_context_identity = .{},
+        .module_env = .{ .checked_source = &module_env },
+        .exports = .{},
+        .provides_requires = .{},
+        .method_registry = .{},
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .checked_procedure_templates = .{},
+        .intrinsic_wrappers = .{},
+        .top_level_procedure_bindings = .{},
+        .root_requests = .{},
+        .hosted_procs = .{},
+        .platform_required_declarations = .{},
+        .platform_required_bindings = .{},
+        .interface_capabilities = .{},
+        .compile_time_roots = .{},
+        .top_level_values = .{},
+        .const_templates = .{},
+        .const_store = const_store.ConstStore.init(testing.allocator),
+    };
+    defer {
+        artifact.const_templates.deinit(testing.allocator);
+        artifact.const_store.deinit();
+        artifact.canonical_names.deinit();
+    }
+
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+    const str_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(testing.allocator, .str);
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    const root = LirProgram.ConstRootPlan{
+        .root_order = 0,
+        .request = .{
+            .order = 0,
+            .module_idx = 0,
+            .kind = .compile_time_constant,
+            .source = undefined, // storeRoot only reads request.kind for this focused writer test.
+            .checked_type = undefined, // storeRoot only reads request.kind for this focused writer test.
+            .abi = .compile_time,
+            .exposure = .private,
+        },
+        .proc = undefined, // storeRoot does not inspect the root procedure for stored values.
+        .ret_layout = .str,
+        .plan = str_plan,
+    };
+
+    const first_bytes = "alpha root payload 000";
+    const second_bytes = "omega root payload 111";
+    comptime std.debug.assert(first_bytes.len == second_bytes.len);
+
+    const bytes = try testing.allocator.dupe(u8, first_bytes);
+    defer testing.allocator.free(bytes);
+
+    var roc_str = RocStr{
+        .bytes = bytes.ptr,
+        .capacity_or_alloc_ptr = RocStr.encodeCapacity(bytes.len),
+        .length = bytes.len,
+    };
+
+    const first = try writer.storeRoot(root, .{ .ptr = @ptrCast(&roc_str) });
+    @memcpy(bytes, second_bytes);
+    const second = try writer.storeRoot(root, .{ .ptr = @ptrCast(&roc_str) });
+
+    try testing.expect(first.const_node != second.const_node);
+
+    const first_value = artifact.const_store.get(first.const_node);
+    const second_value = artifact.const_store.get(second.const_node);
+    try testing.expectEqual(.str, first_value);
+    try testing.expectEqual(.str, second_value);
+    try testing.expectEqualStrings(first_bytes, artifact.const_store.strBytes(first_value.str));
+    try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str));
+}

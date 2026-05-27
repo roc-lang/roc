@@ -644,6 +644,146 @@ Monotype IR does not need a separate row-finalization stage. Row closure,
 numeric defaulting, nominal backing instantiation, and structural child ordering
 are completed while constructing Monotype types from checked types.
 
+### Monotype Instantiation
+
+Monotype lowering is a specialization-time instantiation of checked type graphs.
+This is the same core model as Cor/LSS: each reachable monomorphic
+specialization starts with the checked function/value type graph, creates a
+fresh stage-local instantiation for that specialization, constrains the root of
+that instantiation to the requested monomorphic type, and lowers the body from
+that constrained graph.
+
+The long-term invariant is:
+
+```text
+one reachable specialization
+  -> one Monotype instantiation context
+  -> one cloned/constrained checked type graph
+  -> one closed Monotype body
+```
+
+This is deliberately different from treating a checked expression id as a
+globally reusable monomorphic expression. A checked expression belongs to the
+checked module; a Monotype expression belongs to one concrete specialization of
+that checked module. The same checked function template may therefore produce
+many Monotype bodies, and the same checked nested lambda site may produce many
+nested Monotype functions, each with a different monomorphic function type.
+
+An instantiation context owns stage-local type cells addressed by
+`(checked module id, checked type id)`. The address is the checked identity of
+the type variable/content in the current specialization. It is not a structural
+digest, source name, runtime layout, object symbol, or generated procedure id.
+Cells begin unresolved. As the specialization is lowered, explicit evidence from
+checked data constrains those cells:
+
+- the requested root function/value type constrains the checked root type;
+- lambda and closure expected function types constrain the nested function
+  specialization they create;
+- call arguments constrain the callee instantiation through the checked formal
+  and actual type relation;
+- call results constrain the callee return type and the caller result type;
+- static-dispatch plans constrain dispatcher, callable, operand, and result
+  types;
+- numeric literals and checked numeric defaults constrain numeric type cells;
+- named type uses constrain their declaration formals to the instantiated named
+  arguments;
+- pattern lowering constrains checked pattern types to the monomorphic value
+  being matched.
+
+Those constraints are not a fallback mechanism and are not best-effort
+inference after checking. They are the Monotype-stage representation of checked
+data that are already present in the checked module. If a required relation is
+missing from checked output, the producer is incomplete and must be fixed.
+
+Nominal instantiation relies on a stronger CheckedModule invariant than
+"the same source name appears twice." A checked nominal declaration owns an
+explicit declaration template:
+
+- `formal_args` are the checked roots for the declaration header parameters;
+- `backing` is the checked root for the declaration backing template;
+- every rigid occurrence in the backing template that refers to a header
+  parameter must point at the same checked root as that header formal.
+
+This root identity is the long-term ideal because it makes nominal
+instantiation dataflow explicit. `Parser(input, value)` does not require
+Monotype, layout lowering, or a backend to rediscover that the `input` in
+`run : input -> ...` is the first nominal parameter by reading source text or
+matching display names. CheckedModule data stores that relation once, as
+checked root identity. Monotype then constrains declaration formal roots to the
+concrete named arguments for the current specialization and lowers the
+declaration backing through those cells. The result is a backing type in which
+every formal occurrence has the same monomorphic meaning as the named type
+argument that instantiated it.
+
+Monotype must use the declaration backing template for ordinary local nominal
+declarations. For local declarations, the `backing` root on a nominal-use
+payload is not the authority for declaration-template instantiation; the
+declaration template is authoritative because it carries the formal roots that
+connect header parameters to backing occurrences. For imported nominal
+declarations, the current CheckedModule must contain the `backing` root that
+`CheckedTypeProjector` writes on the nominal-use payload, so Monotype can
+consume that root directly without reaching into the source module's
+declaration template. Box payload capabilities remain separate explicit
+representation authorities; their backing roots come from the capability entry
+in checked module data instead of from declaration template lookup.
+
+This solves two classes of bugs:
+
+- generic nominal backings cannot accidentally swap, lose, or default one
+  type parameter while the named node itself has the right arguments;
+- post-check stages do not need syntax-name matching, declaration scanning, or
+  layout inspection to recover how a named type's representation is
+  instantiated.
+
+The instantiation context must be the only owner of checked-type-to-Monotype
+state inside a specialization. Later lowering code must ask the context for the
+Monotype type of a checked type, or must add an explicit constraint to the
+context. It must not recover types by scanning source syntax, comparing display
+strings, deriving names, inspecting layouts, or using incidental expression
+shape. It must also not attach a contextual monotype to a checked expression id
+as if that checked expression were a reusable runtime value.
+
+This distinction matters most for lambdas and closures. Expression-position
+functions are checked templates. Lowering a lambda or closure at an expected
+function type creates or reuses a nested Monotype function specialization keyed
+by the checked nested site, the current function digest, the checked source
+function type digest, and the monomorphic function type digest. The expected
+function type is the root constraint for that nested specialization. It is not a
+constraint on the parent expression id. This allows the same checked lambda site
+to be specialized at multiple function types without corrupting the parent body
+or depending on traversal order.
+
+Structural equality follows the same rule. The checker has already established
+that the operands are equality-compatible and has either emitted a dispatch plan
+that permits structural equality or rewritten the expression to an explicit
+structural equality node. Monotype lowering constrains the two checked operand
+types to the same instantiation relation and lowers both operands at that single
+Monotype operand type. It must not independently lower the left and right
+operand types and then attempt to reconcile the results. Independent operand
+lowering is order-sensitive: an unconstrained operand can default to an
+uninhabited type before the other operand provides evidence. A shared
+instantiated operand type preserves the checked equality relation directly.
+
+The reason this is the long-term design rather than a local implementation
+detail is that it makes specialization, dispatch, lambda lowering, and equality
+all obey the same ownership rule:
+
+```text
+checked stage owns meaning and relations
+Monotype instantiation owns monomorphic type cells
+later stages consume closed Monotype types only
+```
+
+That rule removes a class of bugs caused by contextual rebinding. In the old
+failure mode, one traversal path could lower a checked type variable to an
+empty tag union or one concrete function type, and a later traversal path could
+encounter the same checked type under better evidence and try to assign a
+different Monotype type. That is not a valid compiler state; it is evidence that
+the stage was not lowering from one constrained specialization graph. The
+instantiation model makes the intended data flow explicit, so the first
+constraint and every later constraint meet in the same cell before the final
+Monotype body is emitted.
+
 An unconstrained checked type variable that remains open after checking lowers
 to the empty tag union in Monotype. This is not a default choice. It records the
 invariant that no runtime value can be constructed at that type. Values such as `[]`
@@ -810,6 +950,32 @@ Imported modules participate exactly like local modules: their checked modules
 provide procedure templates, method registry entries, checked types,
 and checked bodies. Module boundaries do not erase or hide callable information
 from the final program.
+
+The specialization key is intentionally based on checked callable identity plus
+the requested Monotype function type, not on an incidental lowered body or
+runtime layout. For top-level, imported, hosted, promoted, and platform-required
+procedures, the checked callable identity is the checked procedure template. For
+expression-position functions, the checked callable identity is the nested site
+inside the checked owner template plus the current function digest. The
+Monotype function type is part of the key because one checked callable can be
+instantiated many times.
+
+Creating a specialization performs root instantiation before body lowering:
+
+```text
+create fresh instantiation context
+constrain checked source function type to requested Monotype function type
+lower arguments and body through that context
+emit a closed Monotype definition
+```
+
+Calls do not mutate the callee's checked module. A call creates or reuses a
+callee specialization by constraining a fresh callee instantiation from the
+caller's instantiated argument and result types. The caller and callee contexts
+communicate only through explicit checked type relations and Monotype types.
+This is why generic functions specialize predictably across module boundaries:
+the checked body remains immutable, and every monomorphic specialization records
+its own closed instantiation.
 
 ### Static Dispatch In Monotype
 
