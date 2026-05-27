@@ -1,5 +1,7 @@
 # Loops
 
+Loops let you run the same code multiple times, in...well, in a loop.
+
 ## `for` Loops
 
 A `for` loop iterates over each item in a list:
@@ -75,4 +77,4 @@ for i in [1, 2, 3] {
 }
 ```
 
-Loops typically utilize [variable reassignment](./statements.md#reassignment) or for calling [effectful functions](./functions.md#effectful-functions).
+Loops typically use [variable reassignment](./statements.md#reassignment) or for calling [effectful functions](./functions.md#effectful-functions).

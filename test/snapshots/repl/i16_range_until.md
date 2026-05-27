@@ -1,13 +1,13 @@
 # META
 ~~~ini
-description=I16.until - creates a list of integers from start to end (exclusive)
+description=I16.until - creates an iterator of integers from start to end (exclusive)
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» -2.I16.until(2.I16)
-» 1.I16.until(1.I16)
-» 3.I16.until(1.I16)
+» Iter.fold(-2.I16.until(2.I16), [], |acc, item| acc.append(item))
+» Iter.fold(1.I16.until(1.I16), [], |acc, item| acc.append(item))
+» Iter.fold(3.I16.until(1.I16), [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [-2, -1, 0, 1]

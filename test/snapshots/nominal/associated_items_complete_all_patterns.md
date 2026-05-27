@@ -10754,27 +10754,33 @@ L2 := [DS].{
 		(e-num (value "800")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1443)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
 		(e-num (value "20")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1477)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "5"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1475)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "5")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.l3_private"))
 		(e-num (value "999")))
@@ -10787,26 +10793,34 @@ L2 := [DS].{
 			(p-assign (ident "l3_secret"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))
-			(e-num (value "2"))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "3"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "val1")))
+		(e-dispatch-call (method "times") (constraint-fn-var 1601)
+			(receiver
 				(e-lookup-local
 					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
+			(args
+				(e-num (value "2")))))
+	(d-let
+		(p-assign (ident "Test.L2.val2"))
+		(e-dispatch-call (method "times") (constraint-fn-var 1569)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "3")))))
+	(d-let
+		(p-assign (ident "Test.L2.L3.L4.val4"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1665)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 1633)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "3")))
@@ -10815,84 +10829,110 @@ L2 := [DS].{
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 1703)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 1699)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "val1")))
+					(p-assign (ident "Test.L2.L3.val3"))))))
+	(d-let
+		(p-assign (ident "Test.L2.L3.val3"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1701)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
+	(d-let
+		(p-assign (ident "Test.L2.val2"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1697)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "1")))))
+	(d-let
+		(p-assign (ident "Test.L2.L3.L4.val4"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1799)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.val3"))))
+			(args
+				(e-num (value "1")))))
+	(d-let
+		(p-assign (ident "Test.L2.L3.val3"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1767)
+			(receiver
 				(e-lookup-local
 					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+			(args
+				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "1"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))
-			(e-num (value "1"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))
-			(e-num (value "1"))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "1"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 1735)
+			(receiver
 				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "5"))))
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))
-			(e-num (value "3"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1837)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 1833)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.val3"))))))
+	(d-let
+		(p-assign (ident "Test.L2.L3.val3"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1835)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
+	(d-let
+		(p-assign (ident "Test.L2.val2"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1831)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "5")))))
+	(d-let
+		(p-assign (ident "Test.L2.L3.L4.val4"))
+		(e-dispatch-call (method "times") (constraint-fn-var 1899)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.val3"))))
+			(args
+				(e-num (value "3")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "12")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1961)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "8")))
@@ -10901,22 +10941,28 @@ L2 := [DS].{
 		(e-num (value "4")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "100"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1993)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "100")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "50"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2025)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "50")))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "10"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2057)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.l4_val"))
 		(e-num (value "444")))
@@ -10936,17 +10982,23 @@ L2 := [DS].{
 			(p-assign (ident "l4_private"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2243)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2211)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 2179)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "val1"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "Test.L2.val2"))))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.L3.val3"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
+					(p-assign (ident "Test.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-num (value "4")))
@@ -10958,92 +11010,124 @@ L2 := [DS].{
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2287)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2281)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 2277)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "val1"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "Test.L2.val2"))))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.L3.val3"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
+					(p-assign (ident "Test.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 2285)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2283)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
+					(p-assign (ident "Test.L2.L3.val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2279)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "10"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2275)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2331)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2325)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 2321)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "val1"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "Test.L2.val2"))))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.L3.val3"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
+					(p-assign (ident "Test.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 2329)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2327)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
+					(p-assign (ident "Test.L2.L3.val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2323)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "1"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2319)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))
-			(e-num (value "5"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 2393)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.L4.val4"))))
+			(args
+				(e-num (value "5")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-num (value "6")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2455)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.val3"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-num (value "7")))
@@ -11052,40 +11136,54 @@ L2 := [DS].{
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2499)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2493)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 2489)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "val1"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "Test.L2.val2"))))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.L3.val3"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
+					(p-assign (ident "Test.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 2497)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2495)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
+					(p-assign (ident "Test.L2.L3.val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2491)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "10"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2487)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.deep_secret"))
 		(e-num (value "12345")))

@@ -91,12 +91,15 @@ pub const Expr = union(enum) {
     /// ```roc
     /// 3.14    # Stored as numerator=314, denominator_power_of_ten=2 (314/100)
     /// 0.5     # Stored as numerator=5, denominator_power_of_ten=1 (5/10)
-    /// 42.0    # Stored as numerator=420, denominator_power_of_ten=1 (420/10)
+    /// 42.0    # Stored as numerator=42, denominator_power_of_ten=0
     /// ```
     e_dec_small: struct {
         value: CIR.SmallDecValue,
         has_suffix: bool, // If the value had a `dec` suffix
     },
+    /// A numeric literal whose exact value is stored in ModuleEnv's numeral
+    /// table because it does not fit the compact builtin literal payloads.
+    e_num_from_numeral: struct {},
     /// An integer literal with explicit type annotation: `123.U64`
     /// The type_name stores the type identifier (e.g., "U64", "I32")
     /// Type checking constrains it through `from_numeral`; lowering uses the solved expr type.
@@ -110,6 +113,11 @@ pub const Expr = union(enum) {
     /// The value is stored as scaled i128 (like Dec, scaled by 10^18).
     e_typed_frac: struct {
         value: CIR.IntValue,
+        type_name: Ident.Idx,
+    },
+    /// A typed numeric literal whose exact value is stored in ModuleEnv's numeral
+    /// table because it does not fit the compact builtin literal payloads.
+    e_typed_num_from_numeral: struct {
         type_name: Ident.Idx,
     },
     // A single segment of a string literal
@@ -719,6 +727,15 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
+            .e_num_from_numeral => {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-num-from-numeral");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .e_typed_int => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-typed-int");
@@ -728,6 +745,18 @@ pub const Expr = union(enum) {
                 var value_buf: [40]u8 = undefined;
                 const value_str = e.value.bufPrint(&value_buf) catch unreachable;
                 try tree.pushStringPair("value", value_str);
+
+                const type_name = ir.getIdent(e.type_name);
+                try tree.pushStringPair("type", type_name);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_typed_num_from_numeral => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-num-from-numeral");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const type_name = ir.getIdent(e.type_name);
                 try tree.pushStringPair("type", type_name);

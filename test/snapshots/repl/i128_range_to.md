@@ -1,13 +1,13 @@
 # META
 ~~~ini
-description=I128.to - creates a list of integers from start to end (inclusive)
+description=I128.to - creates an iterator of integers from start to end (inclusive)
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» -2.I128.to(2.I128)
-» 0.I128.to(0.I128)
-» 3.I128.to(1.I128)
+» Iter.fold(-2.I128.to(2.I128), [], |acc, item| acc.append(item))
+» Iter.fold(0.I128.to(0.I128), [], |acc, item| acc.append(item))
+» Iter.fold(3.I128.to(1.I128), [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [-2, -1, 0, 1, 2]

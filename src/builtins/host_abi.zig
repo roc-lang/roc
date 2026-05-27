@@ -71,7 +71,13 @@ pub fn hostedFn(func: anytype) HostedFn {
 }
 
 /// Array of hosted function pointers provided by the platform.
-/// These are sorted alphabetically by function name during canonicalization.
+///
+/// Dispatch is positional: the interpreter calls `fns[i]`. For a
+/// typical platform — hosted functions in a single module — `i` is the
+/// function's alphabetical index by `Module.fn_name` (trailing `!`
+/// stripped). When hosted functions span multiple modules the ordering
+/// rule is more involved; see `src/compile/README.md` ("Host functions").
+/// Wrong order is silent: the wrong function gets called.
 pub const HostedFunctions = extern struct {
     count: u32,
     fns: [*]HostedFn,

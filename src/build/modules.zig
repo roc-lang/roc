@@ -33,6 +33,8 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .check => &.{"check tests"},
         .parse => &.{"parser tests"},
         .layout => &.{"layout tests"},
+        .lir_core => &.{"lir core declarations are referenced"},
+        .postcheck => &.{"postcheck declarations are referenced"},
         .values => &.{"values tests"},
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
@@ -269,7 +271,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [28]ModuleTest,
+    tests: []const ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -302,10 +304,10 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
+    lir_core,
+    postcheck,
     lir,
     symbol,
-    mir,
-    ir,
     roc_target,
     sljmp,
     echo_platform,
@@ -320,7 +322,7 @@ pub const ModuleType = enum {
             .io => &.{},
             .tracy => &.{.build_options},
             .collections => &.{},
-            .base => &.{ .collections, .builtins },
+            .base => &.{.collections},
             .roc_src => &.{},
             .types => &.{ .tracy, .base, .collections },
             .reporting => &.{ .collections, .base },
@@ -330,8 +332,8 @@ pub const ModuleType = enum {
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .interpreter_layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .mir, .ir, .roc_target, .sljmp, .ipc },
-            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .mir, .ir, .sljmp },
+            .eval => &.{ .tracy, .io, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .interpreter_layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+            .compile => &.{ .tracy, .build_options, .io, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
             .ipc => &.{},
             .fmt => &.{ .base, .parse, .collections, .can, .io, .tracy },
             .watch => &.{.build_options},
@@ -340,10 +342,10 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .io, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target },
-            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .mir, .ir },
+            .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
+            .postcheck => &.{ .base, .builtins, .can, .check, .layout, .lir_core },
+            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .lir_core, .postcheck },
             .symbol => &.{.base},
-            .mir => &.{ .base, .types, .can, .check, .symbol, .layout },
-            .ir => &.{ .base, .types, .symbol, .mir, .layout },
             .roc_target => &.{.base},
             .sljmp => &.{},
             .echo_platform => &.{.builtins},
@@ -380,10 +382,10 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
+    lir_core: *Module,
+    postcheck: *Module,
     lir: *Module,
     symbol: *Module,
-    mir: *Module,
-    ir: *Module,
     roc_target: *Module,
     sljmp: *Module,
     echo_platform: *Module,
@@ -423,10 +425,10 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
+            .lir_core = b.addModule("lir_core", .{ .root_source_file = b.path("src/lir/core.zig") }),
+            .postcheck = b.addModule("postcheck", .{ .root_source_file = b.path("src/postcheck/mod.zig") }),
             .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
             .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
-            .mir = b.addModule("mir", .{ .root_source_file = b.path("src/mir/mod.zig") }),
-            .ir = b.addModule("ir", .{ .root_source_file = b.path("src/ir/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
             .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
@@ -472,10 +474,10 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .lir_core,
+            .postcheck,
             .lir,
             .symbol,
-            .mir,
-            .ir,
             .roc_target,
             .sljmp,
             .echo_platform,
@@ -517,10 +519,10 @@ pub const RocModules = struct {
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
+        step.root_module.addImport("lir_core", self.lir_core);
+        step.root_module.addImport("postcheck", self.postcheck);
         step.root_module.addImport("lir", self.lir);
         step.root_module.addImport("symbol", self.symbol);
-        step.root_module.addImport("mir", self.mir);
-        step.root_module.addImport("ir", self.ir);
         step.root_module.addImport("sljmp", self.sljmp);
         step.root_module.addImport("echo_platform", self.echo_platform);
         step.root_module.addImport("docs", self.docs);
@@ -569,10 +571,10 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
+            .lir_core => self.lir_core,
+            .postcheck => self.postcheck,
             .lir => self.lir,
             .symbol => self.symbol,
-            .mir => self.mir,
-            .ir => self.ir,
             .roc_target => self.roc_target,
             .sljmp => self.sljmp,
             .echo_platform => self.echo_platform,
@@ -620,16 +622,17 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .lir_core,
+            .postcheck,
             .lir,
             .symbol,
-            .mir,
-            .ir,
             .sljmp,
             .echo_platform,
             .docs,
         };
 
-        var tests: [test_configs.len]ModuleTest = undefined;
+        const tests = b.allocator.alloc(ModuleTest, test_configs.len) catch
+            @panic("OOM while creating module tests");
         var forced_passes: usize = 0;
 
         inline for (test_configs, 0..) |module_type, i| {
@@ -646,12 +649,13 @@ pub const RocModules = struct {
                     .root_source_file = module.root_source_file.?,
                     .target = target,
                     .optimize = optimize,
+                    // Base module needs libc for compiler crash handler tests.
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for C zstd (unbundle uses stdlib zstd)
                     // Eval module needs libc for setjmp/longjmp crash protection
                     // sljmp module needs libc for setjmp/longjmp functions
                     // compile/lsp modules transitively depend on eval->sljmp, so also need libc
-                    .link_libc = (module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
+                    .link_libc = (module_type == .base or module_type == .ipc or module_type == .bundle or module_type == .eval or module_type == .sljmp or module_type == .compile or module_type == .lsp),
                 }),
                 .filters = filter_injection.filters,
             });

@@ -274,6 +274,16 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     frac_patt,
+    /// Integer pattern with explicit type annotation.
+    /// * main_token - Token index of the integer literal
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
+    typed_int_patt,
+    /// Fractional pattern with explicit type annotation.
+    /// * main_token - Token index of the fractional literal
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
+    typed_frac_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -340,13 +350,13 @@ pub const Tag = enum {
     frac,
     /// An integer with explicit type annotation: 123.U64
     /// * main_token - Token index of the integer literal
-    /// * lhs - Token index of the type (e.g., .U64)
-    /// * rhs - Unused
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
     typed_int,
     /// A fractional with explicit type annotation: 3.14.Dec
     /// * main_token - Token index of the fractional literal
-    /// * lhs - Token index of the type (e.g., .Dec)
-    /// * rhs - Unused
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
     typed_frac,
     /// A character literal enclosed in single quotes
     /// Example: 'a'

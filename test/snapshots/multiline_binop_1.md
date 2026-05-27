@@ -41,11 +41,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "add")
-	(e-num (value "1"))
-	(e-binop (op "mul")
-		(e-num (value "2"))
-		(e-num (value "3"))))
+(e-dispatch-call (method "plus") (constraint-fn-var 103)
+	(receiver
+		(e-num (value "1")))
+	(args
+		(e-dispatch-call (method "times") (constraint-fn-var 101)
+			(receiver
+				(e-num (value "2")))
+			(args
+				(e-num (value "3"))))))
 ~~~
 # TYPES
 ~~~clojure

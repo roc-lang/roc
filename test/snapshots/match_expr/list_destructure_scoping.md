@@ -70,11 +70,13 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "first")))
-						(e-lookup-local
-							(p-assign (ident "second")))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 26)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "second"))))))))))
 ~~~
 # TYPES
 ~~~clojure

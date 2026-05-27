@@ -123,19 +123,23 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-assign (ident "sum_"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "sum_")))
-							(e-lookup-local
-								(p-assign (ident "n")))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 423)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "sum_"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "n"))))))
 					(e-if
 						(if-branches
 							(if-branch
-								(e-binop (op "gt")
-									(e-lookup-local
-										(p-assign (ident "n")))
-									(e-lookup-local
-										(p-assign (ident "max_"))))
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 428)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "n"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "max_")))))
 								(e-block
 									(s-reassign
 										(p-assign (ident "max_"))
@@ -145,11 +149,13 @@ NO CHANGE
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "sum_")))
-				(e-lookup-local
-					(p-assign (ident "max_")))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 441)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "sum_"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "max_"))))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

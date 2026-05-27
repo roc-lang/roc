@@ -136,7 +136,7 @@ pub const Modules = struct {
             }
             module_result.value_ptr.* = @intCast(i);
 
-            for (module_.allDefs()) |def_idx| {
+            for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().global_value_defs)) |def_idx| {
                 const def = module_.def(def_idx);
                 if (def.data.kind != .let) continue;
                 switch (def.pattern.data) {

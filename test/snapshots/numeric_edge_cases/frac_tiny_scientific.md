@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-f64 (value "1e-100"))
+(e-dec-small (numerator "1") (denominator-power-of-ten "100") (value "9.999999999999998e-101"))
 ~~~
 # TYPES
 ~~~clojure

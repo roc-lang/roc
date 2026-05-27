@@ -122,6 +122,7 @@ pub const PlatformDocs = struct {
 /// The kind of module.
 pub const ModuleKind = enum {
     app,
+    module,
     package,
     platform,
     type_module,
@@ -129,6 +130,7 @@ pub const ModuleKind = enum {
     pub fn toStr(self: ModuleKind) []const u8 {
         return switch (self) {
             .app => "app",
+            .module => "module",
             .package => "package",
             .platform => "platform",
             .type_module => "type_module",

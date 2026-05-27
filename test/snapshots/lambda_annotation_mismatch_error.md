@@ -91,10 +91,12 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+			(e-dispatch-call (method "times") (constraint-fn-var 125)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

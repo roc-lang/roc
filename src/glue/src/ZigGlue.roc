@@ -215,9 +215,27 @@ generate_roc_list_generic =
 	\\            return self.length == 0;
 	\\        }
 	\\
+	\\        /// Return true if this list is a seamless slice into another allocation.
+	\\        /// Slices share the rc slot with their backing allocation; the alloc ptr is
+	\\        /// encoded in `capacity_or_alloc_ptr` with the low bit set.
+	\\        pub fn isSeamlessSlice(self: Self) bool {
+	\\            return (self.capacity_or_alloc_ptr & 1) != 0;
+	\\        }
+	\\
 	\\        /// Return an empty RocList.
 	\\        pub fn empty() Self {
 	\\            return .{ .elements_ptr = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+	\\        }
+	\\
+	\\        /// Resolve `self` to the start of its backing allocation (the element block
+	\\        /// just after the rc slot). Returns `null` for empty lists. Handles both
+	\\        /// whole-backing and seamless-slice forms.
+	\\        fn getAllocationPtr(self: Self) ?[*]u8 {
+	\\            if (self.isSeamlessSlice()) {
+	\\                return @as(?[*]u8, @ptrFromInt(self.capacity_or_alloc_ptr & ~@as(usize, 1)));
+	\\            }
+	\\            const ptr = self.elements_ptr orelse return null;
+	\\            return @ptrCast(ptr);
 	\\        }
 	\\
 	\\        /// Allocate a new list with space for `length` elements.
@@ -238,7 +256,7 @@ generate_roc_list_generic =
 	\\            return .{
 	\\                .elements_ptr = @ptrCast(@alignCast(data_ptr)),
 	\\                .length = length,
-	\\                .capacity_or_alloc_ptr = length,
+	\\                .capacity_or_alloc_ptr = length << 1,
 	\\            };
 	\\        }
 	\\
@@ -254,9 +272,10 @@ generate_roc_list_generic =
 	\\
 	\\        /// Decrement the reference count; frees the allocation when it reaches zero.
 	\\        pub fn decref(self: Self, roc_ops: *RocOps) void {
-	\\            const ptr = self.elements_ptr orelse return;
-	\\            const data_addr = @intFromPtr(ptr);
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
+	\\            const data_addr = @intFromPtr(alloc_ptr);
 	\\            const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
+	\\            if (rc.* == 0) return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
 	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\            if (prev == 1) {
 	\\                const base: *anyopaque = @ptrFromInt(data_addr - header_bytes);
@@ -270,16 +289,17 @@ generate_roc_list_generic =
 	\\
 	\\        /// Increment the reference count by `amount`.
 	\\        pub fn incref(self: Self, amount: isize) void {
-	\\            const ptr = self.elements_ptr orelse return;
-	\\            const rc: *isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
+	\\            const rc: *isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\            if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
 	\\            _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\        }
 	\\
 	\\        /// Return true if this list has a reference count of exactly one.
 	\\        pub fn isUnique(self: Self) bool {
-	\\            const ptr = self.elements_ptr orelse return true;
-	\\            if (self.capacity_or_alloc_ptr == 0) return true;
-	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(isize));
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return true;
+	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\            if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
 	\\            return rc.* == 1;
 	\\        }
 	\\    };
@@ -962,15 +982,23 @@ generate_roc_str : Str
 generate_roc_str =
 	\\/// A Roc string value. Small strings (up to 23 bytes) are stored inline;
 	\\/// larger strings are heap-allocated with a reference count.
+	\\///
+	\\/// `bytes` is never tagged. Operations, host code, glue code, and object-file
+	\\/// relocations can use it directly as the UTF-8 byte pointer for non-small
+	\\/// strings. Seamless-slice tagging lives in `capacity_or_alloc_ptr` instead.
+	\\/// Big-string capacity is stored shifted left by one bit, so max capacity is
+	\\/// essentially `std.math.maxInt(isize)` bytes: about 2 GiB on 32-bit targets
+	\\/// and 8 EiB on 64-bit targets.
 	\\pub const RocStr = extern struct {
 	\\    bytes: ?[*]u8,
-	\\    length: usize,
 	\\    capacity_or_alloc_ptr: usize,
+	\\    length: usize,
 	\\
 	\\    const Self = @This();
 	\\    const small_string_size = @sizeOf(RocStr);
 	\\    const small_str_max_length = small_string_size - 1;
-	\\    const seamless_slice_bit: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
+	\\    const small_str_bit: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
+	\\    const seamless_slice_tag: usize = 1;
 	\\
 	\\    /// Return the string contents as a `[]const u8` slice.
 	\\    pub fn asSlice(self: *const Self) []const u8 {
@@ -982,7 +1010,7 @@ generate_roc_str =
 	\\        if (self.isSmallStr()) {
 	\\            return @as([*]const u8, @ptrCast(&self))[@sizeOf(Self) - 1] ^ 0b1000_0000;
 	\\        } else {
-	\\            return self.length & ~seamless_slice_bit;
+	\\            return self.length;
 	\\        }
 	\\    }
 	\\
@@ -993,12 +1021,12 @@ generate_roc_str =
 	\\
 	\\    /// Return true if this string is stored inline (small string optimization).
 	\\    pub fn isSmallStr(self: Self) bool {
-	\\        return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
+	\\        return @as(isize, @bitCast(self.length)) < 0;
 	\\    }
 	\\
 	\\    /// Return true if this string is a seamless slice into another allocation.
 	\\    pub fn isSeamlessSlice(self: Self) bool {
-	\\        return !self.isSmallStr() and @as(isize, @bitCast(self.length)) < 0;
+	\\        return !self.isSmallStr() and (self.capacity_or_alloc_ptr & seamless_slice_tag) != 0;
 	\\    }
 	\\
 	\\    /// Return a pointer to the raw UTF-8 bytes.
@@ -1012,7 +1040,7 @@ generate_roc_str =
 	\\
 	\\    /// Return an empty RocStr.
 	\\    pub fn empty() Self {
-	\\        return .{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = seamless_slice_bit };
+	\\        return .{ .bytes = null, .capacity_or_alloc_ptr = 0, .length = small_str_bit };
 	\\    }
 	\\
 	\\    /// Create a RocStr from a byte slice, using `roc_ops` for heap allocation if needed.
@@ -1040,8 +1068,8 @@ generate_roc_str =
 	\\            @memcpy(data_ptr[0..slice.len], slice.ptr[0..slice.len]);
 	\\            return .{
 	\\                .bytes = data_ptr,
+	\\                .capacity_or_alloc_ptr = slice.len << 1,
 	\\                .length = slice.len,
-	\\                .capacity_or_alloc_ptr = slice.len,
 	\\            };
 	\\        }
 	\\    }
@@ -1052,6 +1080,7 @@ generate_roc_str =
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const data_addr = @intFromPtr(alloc_ptr);
 	\\        const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
+	\\        if (rc.* == 0) return; // REFCOUNT_STATIC_DATA — bytes are in read-only memory
 	\\        const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
 	\\        if (prev == 1) {
 	\\            const ptr_width = @sizeOf(usize);
@@ -1066,21 +1095,22 @@ generate_roc_str =
 	\\        if (self.isSmallStr()) return;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\        const rc: *isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\        if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
 	\\        _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\    }
 	\\
 	\\    /// Return true if this string has a reference count of exactly one.
 	\\    pub fn isUnique(self: Self) bool {
 	\\        if (self.isSmallStr()) return true;
-	\\        if (self.capacity_or_alloc_ptr == 0) return true;
 	\\        const alloc_ptr = self.getAllocationPtr() orelse return true;
 	\\        const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
+	\\        if (rc.* == 0) return true; // REFCOUNT_STATIC_DATA — treated as unique
 	\\        return rc.* == 1;
 	\\    }
 	\\
 	\\    fn getAllocationPtr(self: Self) ?[*]u8 {
 	\\        if (self.isSeamlessSlice()) {
-	\\            return @as(?[*]u8, @ptrFromInt(self.capacity_or_alloc_ptr << 1));
+	\\            return @as(?[*]u8, @ptrFromInt(self.capacity_or_alloc_ptr & ~seamless_slice_tag));
 	\\        } else {
 	\\            return self.bytes;
 	\\        }

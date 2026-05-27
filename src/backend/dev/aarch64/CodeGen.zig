@@ -744,6 +744,27 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.movRegImm64(dst, @bitCast(value));
         }
 
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) !void {
+            const page_offset = self.currentOffset();
+            try self.emit.adrp(dst);
+            const offset12 = self.currentOffset();
+            try self.emit.addRegRegImm12(.w64, dst, dst, 0);
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(page_offset),
+                    .name = symbol_name,
+                    .kind = .page21,
+                },
+            });
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(offset12),
+                    .name = symbol_name,
+                    .kind = .pageoff12,
+                },
+            });
+        }
+
         // Control flow
 
         /// Emit unconditional jump (returns patch location for fixup)

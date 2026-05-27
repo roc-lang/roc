@@ -1,13 +1,13 @@
 # META
 ~~~ini
-description=I32.to - creates a list of integers from start to end (inclusive)
+description=I32.to - creates an iterator of integers from start to end (inclusive)
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» -2.I32.to(2.I32)
-» 0.I32.to(0.I32)
-» 3.I32.to(1.I32)
+» Iter.fold(-2.I32.to(2.I32), [], |acc, item| acc.append(item))
+» Iter.fold(0.I32.to(0.I32), [], |acc, item| acc.append(item))
+» Iter.fold(3.I32.to(1.I32), [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [-2, -1, 0, 1, 2]

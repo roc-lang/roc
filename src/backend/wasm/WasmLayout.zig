@@ -29,7 +29,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
         .f64 => .{ .primitive = .f64 },
         .i128, .u128 => .{ .stack_memory = 16 },
         .dec => .{ .stack_memory = 16 },
-        .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + len(4) + cap(4)
+        .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + encoded cap(4) + len(4)
         else => .{ .stack_memory = 0 }, // composite — use wasmReprWithStore for size
     };
 }

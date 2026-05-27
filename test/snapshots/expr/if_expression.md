@@ -36,9 +36,11 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-binop (op "gt")
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-num (value "5")))
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 49)
+				(receiver
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(args
+					(e-num (value "5"))))
 			(e-string
 				(e-literal (string "big")))))
 	(if-else

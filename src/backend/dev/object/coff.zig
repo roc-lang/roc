@@ -7,7 +7,9 @@
 //! Reference: https://docs.microsoft.com/en-us/windows/win32/debug/pe-format
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 
 /// COFF file format constants
 const COFF = struct {
@@ -40,7 +42,10 @@ const COFF = struct {
     const IMAGE_REL_AMD64_ADDR32NB = 0x0003; // 32-bit address w/o base (RVA)
 
     // ARM64 relocation types
+    const IMAGE_REL_ARM64_ADDR32NB = 0x0002; // 32-bit address w/o base (RVA)
     const IMAGE_REL_ARM64_BRANCH26 = 0x0003;
+    const IMAGE_REL_ARM64_PAGEBASE_REL21 = 0x0004;
+    const IMAGE_REL_ARM64_PAGEOFFSET_12A = 0x0006;
     const IMAGE_REL_ARM64_ADDR64 = 0x000E;
 
     // x64 Unwind operation codes
@@ -155,15 +160,18 @@ pub const Symbol = struct {
     is_function: bool,
 };
 
-/// Function info for generating unwind data (.pdata/.xdata on Windows x64)
+/// Function info for generating Windows unwind data.
 /// This is required for proper exception handling and debugger stack walking.
 pub const FunctionInfo = struct {
     start_offset: u32, // Offset of function start in .text
     end_offset: u32, // Offset of function end in .text (one past last byte)
-    prologue_size: u8, // Size of function prologue in bytes
+    prologue_size: u32, // Size of function prologue in bytes
     frame_reg_offset: u8, // Offset of frame register from RSP (scaled by 16)
     uses_frame_pointer: bool, // Whether function uses RBP as frame pointer
     stack_alloc: u32, // Stack allocation size (for UWOP_ALLOC_*)
+    frame_size: u32 = 0, // Full AArch64 frame size
+    callee_saved_mask: u32 = 0, // AArch64 callee-saved register mask
+    epilogue_offset: u32 = 0, // AArch64 epilogue offset from function start
 };
 
 /// Section types
@@ -197,7 +205,7 @@ pub const CoffWriter = struct {
     // String table (for long symbol names)
     strtab: std.ArrayList(u8),
 
-    // Function info for unwind data (Windows x64 only)
+    // Function info for unwind data.
     functions: std.ArrayList(FunctionInfo),
 
     const TextReloc = struct {
@@ -277,6 +285,30 @@ pub const CoffWriter = struct {
         });
     }
 
+    /// Add a data-symbol relocation to the text section.
+    pub fn addTextDataRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: DataRelocationKind) !void {
+        const reloc_type: u16 = switch (kind) {
+            .abs64 => self.arch.absolutePointerRelocType(),
+            .rel32 => switch (self.arch) {
+                .x86_64 => COFF.IMAGE_REL_AMD64_REL32,
+                .aarch64 => unreachable,
+            },
+            .page21 => switch (self.arch) {
+                .x86_64 => unreachable,
+                .aarch64 => COFF.IMAGE_REL_ARM64_PAGEBASE_REL21,
+            },
+            .pageoff12 => switch (self.arch) {
+                .x86_64 => unreachable,
+                .aarch64 => COFF.IMAGE_REL_ARM64_PAGEOFFSET_12A,
+            },
+        };
+        try self.text_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .reloc_type = reloc_type,
+        });
+    }
+
     /// Add an absolute pointer relocation to the read-only data section.
     pub fn addRdataRelocation(self: *Self, offset: u32, symbol_idx: u32, addend: i64) !void {
         if (offset + 8 > self.rdata.items.len) unreachable;
@@ -312,6 +344,225 @@ pub const CoffWriter = struct {
         try output.appendSlice(self.allocator, &buf);
     }
 
+    fn pdataEntrySize(self: *const Self) u32 {
+        return switch (self.arch) {
+            .x86_64 => 12,
+            .aarch64 => 8,
+        };
+    }
+
+    fn pdataRelocCountPerFunction(self: *const Self) u32 {
+        return switch (self.arch) {
+            .x86_64 => 3,
+            .aarch64 => 2,
+        };
+    }
+
+    fn addr32NbRelocType(self: *const Self) u16 {
+        return switch (self.arch) {
+            .x86_64 => COFF.IMAGE_REL_AMD64_ADDR32NB,
+            .aarch64 => COFF.IMAGE_REL_ARM64_ADDR32NB,
+        };
+    }
+
+    fn x64UnwindSize(func: FunctionInfo) u32 {
+        var code_count: u32 = 0;
+        if (func.uses_frame_pointer) {
+            code_count += 1; // UWOP_SET_FPREG
+            code_count += 1; // UWOP_PUSH_NONVOL for RBP
+        }
+        if (func.stack_alloc > 0) {
+            if (func.stack_alloc <= 128) {
+                code_count += 1; // UWOP_ALLOC_SMALL
+            } else if (func.stack_alloc <= 512 * 1024 - 8) {
+                code_count += 2; // UWOP_ALLOC_LARGE with 1 extra slot
+            } else {
+                code_count += 3; // UWOP_ALLOC_LARGE with 2 extra slots
+            }
+        }
+        const codes_size = (code_count * 2 + 3) & ~@as(u32, 3);
+        return 4 + codes_size;
+    }
+
+    fn appendArm64AllocCode(self: *Self, codes: *std.ArrayList(u8), size: u32) !void {
+        if (builtin.mode == .Debug and (size == 0 or size % 16 != 0)) {
+            std.debug.panic("COFF invariant violated: ARM64 stack allocation must be non-zero and 16-byte aligned, got {d}", .{size});
+        }
+        if (size == 0 or size % 16 != 0) unreachable;
+
+        const scaled = size / 16;
+        if (scaled < 32) {
+            try codes.append(self.allocator, @intCast(scaled));
+        } else if (scaled < 2048) {
+            try codes.append(self.allocator, @as(u8, 0xC0) | @as(u8, @intCast(scaled >> 8)));
+            try codes.append(self.allocator, @truncate(scaled));
+        } else {
+            if (builtin.mode == .Debug and scaled >= (1 << 24)) {
+                std.debug.panic("COFF invariant violated: ARM64 stack allocation too large for one unwind code, got {d}", .{size});
+            }
+            if (scaled >= (1 << 24)) unreachable;
+            try codes.append(self.allocator, 0xE0);
+            try codes.append(self.allocator, @truncate(scaled >> 16));
+            try codes.append(self.allocator, @truncate(scaled >> 8));
+            try codes.append(self.allocator, @truncate(scaled));
+        }
+    }
+
+    fn appendArm64SaveFplr(self: *Self, codes: *std.ArrayList(u8), frame_size: u32) !void {
+        if (frame_size <= 504) {
+            if (builtin.mode == .Debug and (frame_size == 0 or frame_size % 8 != 0)) {
+                std.debug.panic("COFF invariant violated: ARM64 small frame must be a non-zero multiple of 8, got {d}", .{frame_size});
+            }
+            if (frame_size == 0 or frame_size % 8 != 0) unreachable;
+            try codes.append(self.allocator, @as(u8, 0x80) | @as(u8, @intCast(frame_size / 8 - 1)));
+        } else {
+            try codes.append(self.allocator, 0x40);
+        }
+    }
+
+    fn appendArm64AllocChunks(self: *Self, codes: *std.ArrayList(u8), frame_size: u32, with_probe_nops: bool) !void {
+        if (frame_size <= 504) return;
+
+        if (frame_size < 4096 or !with_probe_nops) {
+            try self.appendArm64AllocCode(codes, frame_size);
+            return;
+        }
+
+        var chunks: std.ArrayList(u32) = .{};
+        defer chunks.deinit(self.allocator);
+
+        var remaining = frame_size;
+        while (remaining > 0) {
+            const chunk = @min(remaining, 4096);
+            try chunks.append(self.allocator, chunk);
+            remaining -= chunk;
+        }
+
+        var index = chunks.items.len;
+        while (index > 0) {
+            index -= 1;
+            try codes.append(self.allocator, 0xE3);
+            try self.appendArm64AllocCode(codes, chunks.items[index]);
+        }
+    }
+
+    fn appendArm64RegPair(self: *Self, codes: *std.ArrayList(u8), reg: u8, offset: u32) !void {
+        if (builtin.mode == .Debug and (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63)) {
+            std.debug.panic("COFF invariant violated: ARM64 saved register pair x{d} at offset {d} is not encodable", .{ reg, offset });
+        }
+        if (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63) unreachable;
+
+        const reg_delta = reg - 19;
+        try codes.append(self.allocator, @as(u8, 0xC8) | @as(u8, @intCast(reg_delta >> 2)));
+        try codes.append(self.allocator, (@as(u8, @intCast(reg_delta & 0x3)) << 6) | @as(u8, @intCast(offset / 8)));
+    }
+
+    fn arm64PairUsed(mask: u32, reg: u8) bool {
+        return (mask & ((@as(u32, 1) << @intCast(reg)) | (@as(u32, 1) << @intCast(reg + 1)))) != 0;
+    }
+
+    const Arm64Pair = struct {
+        reg: u8,
+        offset: u32,
+    };
+
+    const arm64_pairs = [_]Arm64Pair{
+        .{ .reg = 19, .offset = 16 },
+        .{ .reg = 21, .offset = 32 },
+        .{ .reg = 23, .offset = 48 },
+        .{ .reg = 25, .offset = 64 },
+        .{ .reg = 27, .offset = 80 },
+    };
+
+    fn appendArm64PairsReverse(self: *Self, codes: *std.ArrayList(u8), mask: u32) !void {
+        var index = arm64_pairs.len;
+        while (index > 0) {
+            index -= 1;
+            const pair = arm64_pairs[index];
+            if (arm64PairUsed(mask, pair.reg)) {
+                try self.appendArm64RegPair(codes, pair.reg, pair.offset);
+            }
+        }
+    }
+
+    fn appendArm64PairsForward(self: *Self, codes: *std.ArrayList(u8), mask: u32) !void {
+        for (arm64_pairs) |pair| {
+            if (arm64PairUsed(mask, pair.reg)) {
+                try self.appendArm64RegPair(codes, pair.reg, pair.offset);
+            }
+        }
+    }
+
+    fn appendArm64BodySequence(self: *Self, codes: *std.ArrayList(u8), func: FunctionInfo) !void {
+        try self.appendArm64PairsReverse(codes, func.callee_saved_mask);
+        if (func.uses_frame_pointer) {
+            try codes.append(self.allocator, 0xE1);
+        }
+        try self.appendArm64SaveFplr(codes, func.frame_size);
+        try self.appendArm64AllocChunks(codes, func.frame_size, true);
+        try codes.append(self.allocator, 0xE4);
+    }
+
+    fn appendArm64EpilogueSequence(self: *Self, codes: *std.ArrayList(u8), func: FunctionInfo) !void {
+        try self.appendArm64PairsForward(codes, func.callee_saved_mask);
+        try self.appendArm64SaveFplr(codes, func.frame_size);
+        try self.appendArm64AllocChunks(codes, func.frame_size, false);
+        try codes.append(self.allocator, 0xE4);
+    }
+
+    const Arm64UnwindData = struct {
+        codes: std.ArrayList(u8),
+        epilogue_index: u32,
+
+        fn codeWords(self: *const Arm64UnwindData) u32 {
+            return @intCast((self.codes.items.len + 3) / 4);
+        }
+
+        fn recordSize(self: *const Arm64UnwindData) u32 {
+            const words = self.codeWords();
+            const extended: u32 = if (words > 31) 4 else 0;
+            return 4 + extended + 4 + words * 4;
+        }
+    };
+
+    fn buildArm64UnwindData(self: *Self, func: FunctionInfo) !Arm64UnwindData {
+        if (builtin.mode == .Debug and func.frame_size == 0) {
+            std.debug.panic("COFF invariant violated: ARM64 function {d}-{d} has no frame size", .{ func.start_offset, func.end_offset });
+        }
+        if (func.frame_size == 0) unreachable;
+
+        var codes: std.ArrayList(u8) = .{};
+        errdefer codes.deinit(self.allocator);
+
+        try self.appendArm64BodySequence(&codes, func);
+        const epilogue_index: u32 = @intCast(codes.items.len);
+        try self.appendArm64EpilogueSequence(&codes, func);
+
+        const code_words = @as(u32, @intCast((codes.items.len + 3) / 4));
+        if (builtin.mode == .Debug and code_words > 255) {
+            std.debug.panic("COFF invariant violated: ARM64 unwind code words exceed xdata limit: {d}", .{code_words});
+        }
+        if (code_words > 255) unreachable;
+
+        return .{
+            .codes = codes,
+            .epilogue_index = epilogue_index,
+        };
+    }
+
+    fn arm64XdataSize(self: *Self, func: FunctionInfo) !u32 {
+        var data = try self.buildArm64UnwindData(func);
+        defer data.codes.deinit(self.allocator);
+        return data.recordSize();
+    }
+
+    fn functionXdataSize(self: *Self, func: FunctionInfo) !u32 {
+        return switch (self.arch) {
+            .x86_64 => x64UnwindSize(func),
+            .aarch64 => try self.arm64XdataSize(func),
+        };
+    }
+
     /// Write the COFF object file to a buffer
     pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
         // Section indices (1-based in COFF)
@@ -319,8 +570,7 @@ pub const CoffWriter = struct {
         const has_rdata = self.rdata.items.len > 0;
         const SECT_RDATA: i16 = if (has_rdata) 2 else 0;
 
-        // Check if we need unwind sections (Windows x64 only with functions defined)
-        const need_unwind = self.arch == .x86_64 and self.functions.items.len > 0;
+        const need_unwind = self.functions.items.len > 0;
         const SECT_PDATA: i16 = if (need_unwind) (if (has_rdata) 3 else 2) else 0;
         const SECT_XDATA: i16 = if (need_unwind) SECT_PDATA + 1 else 0;
 
@@ -329,33 +579,13 @@ pub const CoffWriter = struct {
         const section_header_size: u32 = @sizeOf(SectionHeader);
         const num_sections: u16 = 1 + @as(u16, if (has_rdata) 1 else 0) + @as(u16, if (need_unwind) 2 else 0);
 
-        // Calculate .pdata and .xdata sizes
-        // .pdata: 12 bytes per RUNTIME_FUNCTION (BeginAddress, EndAddress, UnwindData)
-        const pdata_size: u32 = if (need_unwind) @intCast(self.functions.items.len * 12) else 0;
+        const function_count: u32 = @intCast(self.functions.items.len);
+        const pdata_size: u32 = if (need_unwind) function_count * self.pdataEntrySize() else 0;
 
-        // .xdata: UNWIND_INFO for each function
-        // Minimal UNWIND_INFO: 4 bytes header + 2 bytes per unwind code (padded to 4-byte alignment)
         var xdata_size: u32 = 0;
         if (need_unwind) {
             for (self.functions.items) |func| {
-                // Calculate unwind code count for this function
-                var code_count: u32 = 0;
-                if (func.uses_frame_pointer) {
-                    code_count += 1; // UWOP_SET_FPREG
-                    code_count += 1; // UWOP_PUSH_NONVOL for RBP
-                }
-                if (func.stack_alloc > 0) {
-                    if (func.stack_alloc <= 128) {
-                        code_count += 1; // UWOP_ALLOC_SMALL
-                    } else if (func.stack_alloc <= 512 * 1024 - 8) {
-                        code_count += 2; // UWOP_ALLOC_LARGE with 1 extra slot
-                    } else {
-                        code_count += 3; // UWOP_ALLOC_LARGE with 2 extra slots
-                    }
-                }
-                // UNWIND_INFO header (4 bytes) + unwind codes (2 bytes each, padded to 4 bytes)
-                const codes_size = (code_count * 2 + 3) & ~@as(u32, 3); // Round up to 4 bytes
-                xdata_size += 4 + codes_size;
+                xdata_size += try self.functionXdataSize(func);
             }
         }
 
@@ -381,9 +611,9 @@ pub const CoffWriter = struct {
         const rdata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
         const rdata_reloc_size: u32 = @as(u32, @intCast(self.rdata_relocs.items.len)) * reloc_entry_size;
 
-        // .pdata relocations (3 per RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData)
+        // .pdata relocations.
         const pdata_reloc_offset: u32 = rdata_reloc_offset + rdata_reloc_size;
-        const pdata_reloc_count: u32 = if (need_unwind) @intCast(self.functions.items.len * 3) else 0;
+        const pdata_reloc_count: u32 = if (need_unwind) function_count * self.pdataRelocCountPerFunction() else 0;
         const pdata_reloc_size: u32 = pdata_reloc_count * reloc_entry_size;
 
         // Symbol table comes after all relocations
@@ -569,14 +799,21 @@ pub const CoffWriter = struct {
         // Write .pdata section content (RUNTIME_FUNCTION entries)
         if (need_unwind) {
             for (self.functions.items) |func| {
-                // RUNTIME_FUNCTION: BeginAddress, EndAddress, UnwindData
-                // These will be fixed up by relocations at link time
-                // For now, write the offsets within their respective sections
-                var runtime_func: [12]u8 = undefined;
-                std.mem.writeInt(u32, runtime_func[0..4], func.start_offset, .little); // BeginAddress
-                std.mem.writeInt(u32, runtime_func[4..8], func.end_offset, .little); // EndAddress
-                std.mem.writeInt(u32, runtime_func[8..12], 0, .little); // UnwindData (offset in .xdata, set below)
-                try output.appendSlice(self.allocator, &runtime_func);
+                switch (self.arch) {
+                    .x86_64 => {
+                        var runtime_func: [12]u8 = undefined;
+                        std.mem.writeInt(u32, runtime_func[0..4], func.start_offset, .little);
+                        std.mem.writeInt(u32, runtime_func[4..8], func.end_offset, .little);
+                        std.mem.writeInt(u32, runtime_func[8..12], 0, .little);
+                        try output.appendSlice(self.allocator, &runtime_func);
+                    },
+                    .aarch64 => {
+                        var runtime_func: [8]u8 = undefined;
+                        std.mem.writeInt(u32, runtime_func[0..4], func.start_offset, .little);
+                        std.mem.writeInt(u32, runtime_func[4..8], 0, .little);
+                        try output.appendSlice(self.allocator, &runtime_func);
+                    },
+                }
             }
         }
 
@@ -589,82 +826,108 @@ pub const CoffWriter = struct {
             for (self.functions.items) |func| {
                 try xdata_offsets.append(self.allocator, current_xdata_offset);
 
-                // Calculate unwind codes for this function
-                var unwind_codes: std.ArrayList(u8) = .{};
-                defer unwind_codes.deinit(self.allocator);
+                switch (self.arch) {
+                    .x86_64 => {
+                        var unwind_codes: std.ArrayList(u8) = .{};
+                        defer unwind_codes.deinit(self.allocator);
 
-                // Track prologue offset for each code
-                const prolog_offset: u8 = func.prologue_size;
+                        if (builtin.mode == .Debug and func.prologue_size > std.math.maxInt(u8)) {
+                            std.debug.panic("COFF invariant violated: x64 prologue too large for UNWIND_INFO: {d}", .{func.prologue_size});
+                        }
+                        if (func.prologue_size > std.math.maxInt(u8)) unreachable;
+                        const prolog_offset: u8 = @intCast(func.prologue_size);
 
-                // Build unwind codes in reverse order of execution
-                // (first in array = last prologue instruction)
+                        if (func.stack_alloc > 0) {
+                            if (func.stack_alloc <= 128) {
+                                const op_info: u8 = @intCast((func.stack_alloc - 8) / 8);
+                                try unwind_codes.append(self.allocator, prolog_offset);
+                                try unwind_codes.append(self.allocator, (op_info << 4) | COFF.UWOP_ALLOC_SMALL);
+                            } else if (func.stack_alloc <= 512 * 1024 - 8) {
+                                try unwind_codes.append(self.allocator, prolog_offset);
+                                try unwind_codes.append(self.allocator, COFF.UWOP_ALLOC_LARGE);
+                                const size_scaled: u16 = @intCast(func.stack_alloc / 8);
+                                try unwind_codes.append(self.allocator, @truncate(size_scaled));
+                                try unwind_codes.append(self.allocator, @truncate(size_scaled >> 8));
+                            } else {
+                                try unwind_codes.append(self.allocator, prolog_offset);
+                                try unwind_codes.append(self.allocator, (1 << 4) | COFF.UWOP_ALLOC_LARGE);
+                                try unwind_codes.append(self.allocator, @truncate(func.stack_alloc));
+                                try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 8));
+                                try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 16));
+                                try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 24));
+                            }
+                        }
 
-                // Stack allocation (if any) - happens last in prologue
-                if (func.stack_alloc > 0) {
-                    if (func.stack_alloc <= 128) {
-                        // UWOP_ALLOC_SMALL: OpInfo = (size - 8) / 8
-                        const op_info: u8 = @intCast((func.stack_alloc - 8) / 8);
-                        try unwind_codes.append(self.allocator, prolog_offset); // Offset in prolog
-                        try unwind_codes.append(self.allocator, (op_info << 4) | COFF.UWOP_ALLOC_SMALL);
-                    } else if (func.stack_alloc <= 512 * 1024 - 8) {
-                        // UWOP_ALLOC_LARGE with OpInfo=0: size/8 in next slot
-                        try unwind_codes.append(self.allocator, prolog_offset);
-                        try unwind_codes.append(self.allocator, COFF.UWOP_ALLOC_LARGE); // OpInfo=0
-                        // Next slot contains size/8 as 16-bit value
-                        const size_scaled: u16 = @intCast(func.stack_alloc / 8);
-                        try unwind_codes.append(self.allocator, @truncate(size_scaled));
-                        try unwind_codes.append(self.allocator, @truncate(size_scaled >> 8));
-                    } else {
-                        // UWOP_ALLOC_LARGE with OpInfo=1: full 32-bit size in next 2 slots
-                        try unwind_codes.append(self.allocator, prolog_offset);
-                        try unwind_codes.append(self.allocator, (1 << 4) | COFF.UWOP_ALLOC_LARGE);
-                        // Next 2 slots contain full 32-bit size
-                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc));
-                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 8));
-                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 16));
-                        try unwind_codes.append(self.allocator, @truncate(func.stack_alloc >> 24));
-                    }
+                        if (func.uses_frame_pointer) {
+                            const set_fpreg_offset: u8 = if (prolog_offset > 4) 4 else prolog_offset;
+                            try unwind_codes.append(self.allocator, set_fpreg_offset);
+                            try unwind_codes.append(self.allocator, COFF.UWOP_SET_FPREG);
+                            try unwind_codes.append(self.allocator, 1);
+                            try unwind_codes.append(self.allocator, (COFF.UNWIND_REG_RBP << 4) | COFF.UWOP_PUSH_NONVOL);
+                        }
+
+                        const code_count: u8 = @intCast(unwind_codes.items.len / 2);
+                        const version_flags: u8 = 1;
+                        const frame_reg: u8 = if (func.uses_frame_pointer) COFF.UNWIND_REG_RBP else 0;
+                        const frame_offset: u8 = func.frame_reg_offset;
+
+                        try output.append(self.allocator, version_flags);
+                        try output.append(self.allocator, prolog_offset);
+                        try output.append(self.allocator, code_count);
+                        try output.append(self.allocator, (frame_offset << 4) | frame_reg);
+                        try output.appendSlice(self.allocator, unwind_codes.items);
+
+                        const total_size = 4 + unwind_codes.items.len;
+                        const padded_size = (total_size + 3) & ~@as(usize, 3);
+                        try output.appendNTimes(self.allocator, 0, padded_size - total_size);
+                        current_xdata_offset += @intCast(padded_size);
+                    },
+                    .aarch64 => {
+                        var data = try self.buildArm64UnwindData(func);
+                        defer data.codes.deinit(self.allocator);
+
+                        const function_bytes = func.end_offset - func.start_offset;
+                        if (builtin.mode == .Debug and (function_bytes % 4 != 0 or function_bytes / 4 > 0x3ffff)) {
+                            std.debug.panic("COFF invariant violated: ARM64 function length is not encodable: {d}", .{function_bytes});
+                        }
+                        if (function_bytes % 4 != 0 or function_bytes / 4 > 0x3ffff) unreachable;
+
+                        const code_words = data.codeWords();
+                        const extended = code_words > 31;
+                        const header_code_words: u32 = if (extended) 0 else code_words;
+                        const header_epilog_count: u32 = if (extended) 0 else 1;
+                        const arm64_header =
+                            (header_code_words << 27) |
+                            (header_epilog_count << 22) |
+                            (0 << 21) |
+                            (0 << 20) |
+                            (function_bytes / 4);
+                        var header_bytes: [4]u8 = undefined;
+                        std.mem.writeInt(u32, &header_bytes, arm64_header, .little);
+                        try output.appendSlice(self.allocator, &header_bytes);
+
+                        if (extended) {
+                            const extension = (code_words << 16) | 1;
+                            var extension_bytes: [4]u8 = undefined;
+                            std.mem.writeInt(u32, &extension_bytes, extension, .little);
+                            try output.appendSlice(self.allocator, &extension_bytes);
+                        }
+
+                        if (builtin.mode == .Debug and (func.epilogue_offset % 4 != 0 or func.epilogue_offset / 4 > 0x3ffff or data.epilogue_index > 1023)) {
+                            std.debug.panic("COFF invariant violated: ARM64 epilogue scope is not encodable: offset={d} index={d}", .{ func.epilogue_offset, data.epilogue_index });
+                        }
+                        if (func.epilogue_offset % 4 != 0 or func.epilogue_offset / 4 > 0x3ffff or data.epilogue_index > 1023) unreachable;
+
+                        const epilog_scope = (data.epilogue_index << 22) | (func.epilogue_offset / 4);
+                        var epilog_bytes: [4]u8 = undefined;
+                        std.mem.writeInt(u32, &epilog_bytes, epilog_scope, .little);
+                        try output.appendSlice(self.allocator, &epilog_bytes);
+
+                        try output.appendSlice(self.allocator, data.codes.items);
+                        try output.appendNTimes(self.allocator, 0, code_words * 4 - data.codes.items.len);
+                        current_xdata_offset += data.recordSize();
+                    },
                 }
-
-                // Set frame pointer (if used) - happens in middle of prologue
-                if (func.uses_frame_pointer) {
-                    // UWOP_SET_FPREG: no OpInfo, frame reg and offset are in header
-                    // Prolog offset should be where MOV RBP,RSP happens (after PUSH RBP)
-                    const set_fpreg_offset: u8 = if (prolog_offset > 4) 4 else prolog_offset;
-                    try unwind_codes.append(self.allocator, set_fpreg_offset);
-                    try unwind_codes.append(self.allocator, COFF.UWOP_SET_FPREG);
-                }
-
-                // Push RBP (if frame pointer used) - happens first in prologue
-                if (func.uses_frame_pointer) {
-                    // UWOP_PUSH_NONVOL: OpInfo = register number (RBP = 5)
-                    try unwind_codes.append(self.allocator, 1); // Offset 1 (after PUSH RBP)
-                    try unwind_codes.append(self.allocator, (COFF.UNWIND_REG_RBP << 4) | COFF.UWOP_PUSH_NONVOL);
-                }
-
-                // Write UNWIND_INFO header
-                const code_count: u8 = @intCast(unwind_codes.items.len / 2);
-                const version_flags: u8 = 1; // Version 1, no flags
-                const frame_reg: u8 = if (func.uses_frame_pointer) COFF.UNWIND_REG_RBP else 0;
-                const frame_offset: u8 = func.frame_reg_offset; // Scaled offset
-
-                try output.append(self.allocator, version_flags);
-                try output.append(self.allocator, func.prologue_size);
-                try output.append(self.allocator, code_count);
-                try output.append(self.allocator, (frame_offset << 4) | frame_reg);
-
-                // Write unwind codes
-                try output.appendSlice(self.allocator, unwind_codes.items);
-
-                // Pad to 4-byte alignment
-                const total_size = 4 + unwind_codes.items.len;
-                const padded_size = (total_size + 3) & ~@as(usize, 3);
-                const padding = padded_size - total_size;
-                for (0..padding) |_| {
-                    try output.append(self.allocator, 0);
-                }
-
-                current_xdata_offset += @intCast(padded_size);
             }
         }
 
@@ -677,27 +940,31 @@ pub const CoffWriter = struct {
             try self.writeRelocation(output, rel.offset, rel.symbol_idx, rel.reloc_type);
         }
 
-        // Write .pdata relocations (3 per RUNTIME_FUNCTION)
+        // Write .pdata relocations.
         if (need_unwind) {
             for (self.functions.items, 0..) |_, func_idx| {
-                const pdata_entry_offset: u32 = @intCast(func_idx * 12);
+                const pdata_entry_offset: u32 = @as(u32, @intCast(func_idx)) * self.pdataEntrySize();
                 const xdata_offset_for_func = xdata_offsets.items[func_idx];
+                const addr32nb = self.addr32NbRelocType();
 
-                // Relocation for BeginAddress (offset 0 in entry) -> .text section
-                try self.writeRelocation(output, pdata_entry_offset + 0, text_section_sym_idx, COFF.IMAGE_REL_AMD64_ADDR32NB);
-
-                // Relocation for EndAddress (offset 4 in entry) -> .text section
-                try self.writeRelocation(output, pdata_entry_offset + 4, text_section_sym_idx, COFF.IMAGE_REL_AMD64_ADDR32NB);
-
-                // Relocation for UnwindData (offset 8 in entry) -> .xdata section
-                try self.writeRelocation(output, pdata_entry_offset + 8, xdata_section_sym_idx, COFF.IMAGE_REL_AMD64_ADDR32NB);
-
-                // Update the UnwindData field in .pdata with the correct offset
-                // We need to patch the .pdata content we wrote earlier
-                // Calculate where in output buffer this entry is
                 const pdata_content_start = pdata_offset;
-                const unwind_data_field_offset = pdata_content_start + pdata_entry_offset + 8;
-                std.mem.writeInt(u32, output.items[unwind_data_field_offset..][0..4], xdata_offset_for_func, .little);
+                switch (self.arch) {
+                    .x86_64 => {
+                        try self.writeRelocation(output, pdata_entry_offset + 0, text_section_sym_idx, addr32nb);
+                        try self.writeRelocation(output, pdata_entry_offset + 4, text_section_sym_idx, addr32nb);
+                        try self.writeRelocation(output, pdata_entry_offset + 8, xdata_section_sym_idx, addr32nb);
+
+                        const unwind_data_field_offset = pdata_content_start + pdata_entry_offset + 8;
+                        std.mem.writeInt(u32, output.items[unwind_data_field_offset..][0..4], xdata_offset_for_func, .little);
+                    },
+                    .aarch64 => {
+                        try self.writeRelocation(output, pdata_entry_offset + 0, text_section_sym_idx, addr32nb);
+                        try self.writeRelocation(output, pdata_entry_offset + 4, xdata_section_sym_idx, addr32nb);
+
+                        const unwind_data_field_offset = pdata_content_start + pdata_entry_offset + 4;
+                        std.mem.writeInt(u32, output.items[unwind_data_field_offset..][0..4], xdata_offset_for_func, .little);
+                    },
+                }
             }
         }
 
@@ -812,4 +1079,64 @@ test "coff aarch64" {
     // Check machine type (ARM64 = 0xAA64)
     const machine = std.mem.readInt(u16, output.items[0..2], .little);
     try std.testing.expectEqual(COFF.IMAGE_FILE_MACHINE_ARM64, machine);
+}
+
+test "coff aarch64 unwind sections" {
+    var writer = try CoffWriter.init(std.testing.allocator, .aarch64);
+    defer writer.deinit();
+
+    try writer.setCode(&[_]u8{
+        0xFD, 0x7B, 0xBA, 0xA9,
+        0xFD, 0x03, 0x00, 0x91,
+        0xF3, 0x53, 0x01, 0xA9,
+        0xF3, 0x53, 0x41, 0xA9,
+        0xFD, 0x7B, 0xC6, 0xA8,
+        0xC0, 0x03, 0x5F, 0xD6,
+    });
+
+    _ = try writer.addSymbol(.{
+        .name = "test_func",
+        .section = .text,
+        .offset = 0,
+        .is_global = true,
+        .is_function = true,
+    });
+
+    try writer.addFunctionInfo(.{
+        .start_offset = 0,
+        .end_offset = 24,
+        .prologue_size = 12,
+        .frame_reg_offset = 0,
+        .uses_frame_pointer = true,
+        .stack_alloc = 0,
+        .frame_size = 96,
+        .callee_saved_mask = (@as(u32, 1) << 19) | (@as(u32, 1) << 20),
+        .epilogue_offset = 12,
+    });
+
+    var output: std.ArrayList(u8) = .{};
+    defer output.deinit(std.testing.allocator);
+
+    try writer.write(&output);
+
+    const machine = std.mem.readInt(u16, output.items[0..2], .little);
+    try std.testing.expectEqual(COFF.IMAGE_FILE_MACHINE_ARM64, machine);
+
+    const num_sections = std.mem.readInt(u16, output.items[2..4], .little);
+    try std.testing.expectEqual(@as(u16, 3), num_sections);
+
+    const section_headers_offset: usize = @sizeOf(CoffHeader);
+    const pdata_header_offset = section_headers_offset + @sizeOf(SectionHeader);
+    const xdata_header_offset = pdata_header_offset + @sizeOf(SectionHeader);
+
+    try std.testing.expectEqualSlices(u8, ".pdata", output.items[pdata_header_offset..][0..6]);
+    try std.testing.expectEqualSlices(u8, ".xdata", output.items[xdata_header_offset..][0..6]);
+
+    const pdata_size = std.mem.readInt(u32, output.items[pdata_header_offset + 16 ..][0..4], .little);
+    const pdata_relocs = std.mem.readInt(u16, output.items[pdata_header_offset + 32 ..][0..2], .little);
+    const xdata_size = std.mem.readInt(u32, output.items[xdata_header_offset + 16 ..][0..4], .little);
+
+    try std.testing.expectEqual(@as(u32, 8), pdata_size);
+    try std.testing.expectEqual(@as(u16, 2), pdata_relocs);
+    try std.testing.expect(xdata_size > 0);
 }

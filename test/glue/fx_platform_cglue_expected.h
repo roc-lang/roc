@@ -36,12 +36,15 @@ extern "C" {
  *
  * A 24-byte structure representing a string. Small strings (up to 23 bytes
  * on 64-bit systems) are stored inline. Larger strings store a pointer to
- * heap-allocated data.
+ * heap-allocated data. The bytes field is always an untagged pointer
+ * for non-small strings. Big-string capacity is stored shifted left by
+ * one bit, so max capacity is essentially the max signed pointer-sized
+ * integer.
  */
 typedef struct {
     uint8_t* bytes;
-    size_t len;
-    size_t capacity;
+    size_t capacity_or_alloc_ptr;
+    size_t length;
 } RocStr;
 
 _Static_assert(sizeof(RocStr) == 24, "RocStr must be 24 bytes");

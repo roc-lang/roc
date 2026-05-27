@@ -504,13 +504,16 @@ pub const LowLevel = enum {
             .str_trim_end,
             .str_with_ascii_lowercased,
             .str_with_ascii_uppercased,
-            .str_drop_prefix,
-            .str_drop_suffix,
             .str_reserve,
             .str_release_excess_capacity,
-            .str_to_utf8,
-            .str_from_utf8,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            .str_drop_prefix,
+            .str_drop_suffix,
+            .str_from_utf8,
+            => RcEffect.retainsOrReleases(),
+
+            .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleases(),
 
             .list_drop_at,
             .list_sublist,

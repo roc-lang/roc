@@ -186,7 +186,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 329)
+		(e-dispatch-call (method "plus") (constraint-fn-var 569)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "c"))))

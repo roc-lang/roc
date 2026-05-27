@@ -33,9 +33,6 @@ pub const ExecutableMemory = if (builtin.os.tag == .freestanding)
 else
     @import("ExecutableMemory.zig").ExecutableMemory;
 
-// Static data interner for string literals and other static data
-pub const StaticDataInterner = @import("StaticDataInterner.zig");
-
 // LirCodeGen - LIR-based code generator parameterized by RocTarget
 pub const LirCodeGenMod = @import("LirCodeGen.zig");
 
@@ -52,6 +49,7 @@ pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @i
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
+pub const StaticStringData = @import("StaticStringData.zig");
 pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;
 pub const CompilationResult = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").CompilationResult;
 pub const writeFileWindowsAvSafe = @import("ObjectFileCompiler.zig").writeFileWindowsAvSafe;
