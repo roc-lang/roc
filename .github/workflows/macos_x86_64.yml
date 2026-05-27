@@ -16,7 +16,7 @@ jobs:
     env:
       RUSTC_WRAPPER: /Users/username1/.cargo/bin/sccache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: set LLVM_SYS_180_PREFIX
         run: echo "LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV

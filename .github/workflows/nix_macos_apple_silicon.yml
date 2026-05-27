@@ -14,7 +14,7 @@ jobs:
     name: nix-apple-silicon
     runs-on: [self-hosted, macOS, ARM64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       # These started to accumulate quickly since #5990, not sure why
       - name: Clean up old nix shells
