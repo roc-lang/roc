@@ -135,8 +135,13 @@ const Inserter = struct {
     rewritten_joins: ?*RewrittenJoinMap = null,
 
     const CallArgOwnership = struct {
-        retain_mask: u64 = 0,
-        transfer_mask: u64 = 0,
+        retain_args: std.ArrayList(LIR.LocalId) = .empty,
+        transfer_args: std.ArrayList(LIR.LocalId) = .empty,
+
+        fn deinit(self: *CallArgOwnership, allocator: std.mem.Allocator) void {
+            self.retain_args.deinit(allocator);
+            self.transfer_args.deinit(allocator);
+        }
     };
 
     const RewriteTask = union(enum) {
@@ -319,25 +324,27 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call => |assign| {
-                    const arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    defer arg_ownership.deinit(self.store.allocator);
                     if (!self.spanUsesLocal(assign.args, assign.target)) {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     }
-                    self.unsetMaskedArgs(&path.owned, assign.args, arg_ownership.transfer_mask);
+                    self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
-                    current_start = try self.retainMaskedArgs(assign.args, arg_ownership.retain_mask, current_start);
+                    current_start = try self.retainArgs(arg_ownership.retain_args.items, current_start);
                     try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    const arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    defer arg_ownership.deinit(self.store.allocator);
                     if (!self.spanUsesLocal(assign.args, assign.target) and assign.closure != assign.target) {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     }
-                    self.unsetMaskedArgs(&path.owned, assign.args, arg_ownership.transfer_mask);
+                    self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     current_start = try self.retainLocalIfRc(assign.closure, current_start);
-                    current_start = try self.retainMaskedArgs(assign.args, arg_ownership.retain_mask, current_start);
+                    current_start = try self.retainArgs(arg_ownership.retain_args.items, current_start);
                     try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
                     path.cursor = assign.next;
                 },
@@ -1025,14 +1032,16 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call => |assign| {
-                    const arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.loop_keep);
-                    self.unsetMaskedArgs(&path.owned, assign.args, arg_ownership.transfer_mask);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.loop_keep);
+                    defer arg_ownership.deinit(self.store.allocator);
+                    self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    const arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.loop_keep);
-                    self.unsetMaskedArgs(&path.owned, assign.args, arg_ownership.transfer_mask);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.loop_keep);
+                    defer arg_ownership.deinit(self.store.allocator);
+                    self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     path.cursor = assign.next;
                 },
@@ -1282,9 +1291,20 @@ const Inserter = struct {
         var i = locals.len;
         while (i > 0) {
             i -= 1;
+            if (i >= 64) continue;
             if ((mask & argMaskBit(i)) != 0) {
                 current = try self.retainLocalIfRc(locals[i], current);
             }
+        }
+        return current;
+    }
+
+    fn retainArgs(self: *Inserter, args: []const LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        var current = next;
+        var i = args.len;
+        while (i > 0) {
+            i -= 1;
+            current = try self.retainLocalIfRc(args[i], current);
         }
         return current;
     }
@@ -1301,6 +1321,7 @@ const Inserter = struct {
         var preserve: u64 = 0;
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
+            if (i >= 64) break;
             const bit = argMaskBit(i);
             if ((mask & bit) == 0) continue;
             if (local == target) continue;
@@ -1320,22 +1341,22 @@ const Inserter = struct {
         loop_keep: ?*const OwnedSet,
     ) ResourceError!CallArgOwnership {
         var result = CallArgOwnership{};
+        errdefer result.deinit(self.store.allocator);
         var transferred = try OwnedSet.init(self.store.allocator, owned.len());
         defer transferred.deinit();
 
         const locals = self.store.getLocalSpan(span);
-        for (locals, 0..) |local, i| {
+        for (locals) |local| {
             if (!self.localContainsRefcounted(local)) continue;
 
-            const bit = argMaskBit(i);
             const used_after_call = local != target and try self.localValueUsedInPath(next, local, loop_keep);
             const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
 
             if (can_transfer) {
-                result.transfer_mask |= bit;
+                try result.transfer_args.append(self.store.allocator, local);
                 transferred.set(local);
             } else {
-                result.retain_mask |= bit;
+                try result.retain_args.append(self.store.allocator, local);
             }
         }
 
@@ -1346,9 +1367,16 @@ const Inserter = struct {
         if (mask == 0) return false;
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
+            if (i >= 64) break;
             if ((mask & argMaskBit(i)) != 0 and local == needle) return true;
         }
         return false;
+    }
+
+    fn unsetArgs(_: *Inserter, owned: *OwnedSet, args: []const LIR.LocalId) void {
+        for (args) |local| {
+            owned.unset(local);
+        }
     }
 
     fn unsetMaskedArgsExcept(
@@ -1361,6 +1389,7 @@ const Inserter = struct {
         if (mask == 0) return;
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
+            if (i >= 64) break;
             if ((mask & argMaskBit(i)) != 0 and local != except) {
                 owned.unset(local);
             }
@@ -1376,6 +1405,7 @@ const Inserter = struct {
         if (mask == 0) return;
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
+            if (i >= 64) break;
             if ((mask & argMaskBit(i)) != 0) {
                 owned.unset(local);
             }
