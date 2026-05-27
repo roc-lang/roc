@@ -10873,6 +10873,9 @@ fn canonicalizeTypeAnnoRecord(
     const scratch_record_fields_top = self.scratch_record_fields.top();
     defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
 
+    const seen_fields_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_fields_top);
+
     for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
         const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
             error.MalformedNode => {
@@ -10906,6 +10909,28 @@ fn canonicalizeTypeAnnoRecord(
 
             continue;
         };
+
+        const field_region = self.parse_ir.tokens.resolve(ast_field.name);
+        var found_duplicate = false;
+        for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
+            if (field_name.eql(seen_field.ident)) {
+                try self.env.pushDiagnostic(Diagnostic{
+                    .duplicate_record_field = .{
+                        .field_name = field_name,
+                        .duplicate_region = field_region,
+                        .original_region = seen_field.region,
+                    },
+                });
+                found_duplicate = true;
+                break;
+            }
+        }
+        if (found_duplicate) continue;
+
+        try self.scratch_seen_record_fields.append(SeenRecordField{
+            .ident = field_name,
+            .region = field_region,
+        });
 
         // Canonicalize field type
         const canonicalized_ty = try self.canonicalizeTypeAnnoHelp(ast_field.ty, type_anno_ctx);
@@ -11004,7 +11029,47 @@ fn canonicalizeTypeAnnoTagUnion(
     const scratch_annos_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_annos_top);
 
+    const seen_tags_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_tags_top);
+
     for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+        const seen_tag: ?SeenRecordField = blk: {
+            const ast_tag = self.parse_ir.store.getTypeAnno(tag_idx);
+            const tag_ty = switch (ast_tag) {
+                .ty => |ty| ty,
+                .apply => |apply| tag_ty: {
+                    const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
+                    if (args_slice.len == 0) break :blk null;
+                    break :tag_ty switch (self.parse_ir.store.getTypeAnno(args_slice[0])) {
+                        .ty => |ty| ty,
+                        else => break :blk null,
+                    };
+                },
+                else => break :blk null,
+            };
+
+            const ident = self.parse_ir.tokens.resolveIdentifier(tag_ty.token) orelse
+                try self.env.insertIdent(base.Ident.for_text(self.parse_ir.resolve(tag_ty.token)));
+            break :blk .{
+                .ident = ident,
+                .region = self.parse_ir.tokenizedRegionToRegion(tag_ty.region),
+            };
+        };
+        if (seen_tag) |tag| {
+            var found_duplicate = false;
+            for (self.scratch_seen_record_fields.sliceFromStart(seen_tags_top)) |seen| {
+                if (tag.ident.eql(seen.ident)) {
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .malformed_type_annotation = .{ .region = tag.region },
+                    });
+                    found_duplicate = true;
+                    break;
+                }
+            }
+            if (found_duplicate) continue;
+            try self.scratch_seen_record_fields.append(tag);
+        }
+
         // Canonicalized the tag variant
         // This will always return a `ty` or an `apply`
         const canonicalized_tag_idx = try self.canonicalizeTypeAnnoTag(tag_idx, type_anno_ctx);
