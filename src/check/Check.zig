@@ -2366,6 +2366,11 @@ fn generateAliasDecl(
         .num_args = @intCast(header_args.len),
     } });
 
+    if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
+        try self.unifyWith(decl_var, .err, env);
+        return;
+    }
+
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where List is defined.
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
@@ -2848,6 +2853,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     // Resolve the referenced type
                     const decl_var = ModuleEnv.varFrom(local.decl_idx);
                     const decl_resolved = self.types.resolveVar(decl_var).desc.content;
+                    const decl_is_alias = decl_resolved == .alias;
 
                     // Get the arguments & name the referenced type
                     const decl_arg_vars, const decl_name = blk: {
@@ -2901,12 +2907,17 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         env,
                         .{ .explicit = anno_region },
                     );
+                    if (decl_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
+                        try self.unifyWith(anno_var, .err, env);
+                        return;
+                    }
                     _ = try self.unify(anno_var, instantiated_var, env);
                 },
                 .external => |ext| {
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
                         // Resolve the referenced type
                         const ext_resolved = self.types.resolveVar(ext_ref.local_var).desc.content;
+                        const ext_is_alias = ext_resolved == .alias;
 
                         // Get the arguments & name the referenced type
                         const ext_arg_vars, const ext_name = blk: {
@@ -2973,6 +2984,10 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             env,
                             .{ .explicit = anno_region },
                         );
+                        if (ext_is_alias and !try self.validateAliasRows(instantiated_var, env, anno_region)) {
+                            try self.unifyWith(anno_var, .err, env);
+                            return;
+                        }
                         _ = try self.unify(anno_var, instantiated_var, env);
                     } else {
                         // If this external type is unresolved, can should've reported
@@ -3126,6 +3141,258 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             try self.unifyWith(anno_var, .err, env);
         },
     }
+}
+
+fn validateAliasRows(self: *Self, var_: Var, env: *Env, region: Region) Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return self.validateAliasRowsHelp(var_, env, region, &self.var_set);
+}
+
+fn validateAliasRowsHelp(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return true;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .alias => |alias| blk: {
+            if (!try self.validateAliasRowsHelp(self.types.getAliasBackingVar(alias), env, region, visited)) break :blk false;
+            for (self.types.sliceAliasArgs(alias)) |arg_var| {
+                if (!try self.validateAliasRowsHelp(arg_var, env, region, visited)) break :blk false;
+            }
+            break :blk true;
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .tuple => |tuple| try self.validateAliasRowVars(self.types.sliceVars(tuple.elems), env, region, visited),
+            .nominal_type => |nominal| try self.validateAliasRowVars(self.types.sliceNominalArgs(nominal), env, region, visited),
+            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                if (!try self.validateAliasRowVars(self.types.sliceVars(func.args), env, region, visited)) break :blk false;
+                break :blk try self.validateAliasRowsHelp(func.ret, env, region, visited);
+            },
+            .record => |record| try self.validateRecordRow(record.fields, record.ext, env, region, visited),
+            .record_unbound => |fields| try self.validateRecordFields(fields, env, region, visited),
+            .tag_union => |tag_union| try self.validateTagUnionRow(tag_union.tags, tag_union.ext, env, region, visited),
+            .empty_record, .empty_tag_union => true,
+        },
+        .flex, .rigid, .err => true,
+    };
+}
+
+fn validateAliasRowVars(
+    self: *Self,
+    vars: []const Var,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    for (vars) |var_| {
+        if (!try self.validateAliasRowsHelp(var_, env, region, visited)) return false;
+    }
+    return true;
+}
+
+fn validateRecordFields(
+    self: *Self,
+    fields: types_mod.RecordField.SafeMultiList.Range,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const field_slice = self.types.getRecordFieldsSlice(fields);
+    for (field_slice.items(.var_)) |field_var| {
+        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+    }
+    return true;
+}
+
+fn validateRecordRow(
+    self: *Self,
+    fields: types_mod.RecordField.SafeMultiList.Range,
+    ext_var: Var,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    var names = std.AutoHashMap(Ident.Idx, void).init(self.gpa);
+    defer names.deinit();
+
+    const field_slice = self.types.getRecordFieldsSlice(fields);
+    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
+        const entry = try names.getOrPut(name);
+        if (entry.found_existing) {
+            try self.reportInvalidAliasRow(.record, field_var, env, region);
+            return false;
+        }
+        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+    }
+
+    return try self.validateRecordExt(ext_var, &names, env, region, visited);
+}
+
+fn validateRecordExt(
+    self: *Self,
+    ext_var: Var,
+    names: *std.AutoHashMap(Ident.Idx, void),
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    var current = ext_var;
+    var guard = types_mod.debug.IterationGuard.init("validateRecordExt");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .record => |record| {
+                    if (!try self.validateRecordExtFields(record.fields, current, names, env, region, visited)) return false;
+                    current = record.ext;
+                },
+                .record_unbound => |fields| {
+                    return try self.validateRecordExtFields(fields, current, names, env, region, visited);
+                },
+                .empty_record => return true,
+                else => {
+                    try self.reportInvalidAliasRow(.record, current, env, region);
+                    return false;
+                },
+            },
+            .flex, .rigid, .err => return true,
+        }
+    }
+}
+
+fn validateRecordExtFields(
+    self: *Self,
+    fields: types_mod.RecordField.SafeMultiList.Range,
+    ext_source_var: Var,
+    names: *std.AutoHashMap(Ident.Idx, void),
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const field_slice = self.types.getRecordFieldsSlice(fields);
+    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
+        const entry = try names.getOrPut(name);
+        if (entry.found_existing) {
+            try self.reportInvalidAliasRow(.record, ext_source_var, env, region);
+            return false;
+        }
+        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
+    }
+    return true;
+}
+
+fn validateTagUnionRow(
+    self: *Self,
+    tags: types_mod.Tag.SafeMultiList.Range,
+    ext_var: Var,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    var names = std.AutoHashMap(Ident.Idx, void).init(self.gpa);
+    defer names.deinit();
+
+    const tag_slice = self.types.getTagsSlice(tags);
+    for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+        const entry = try names.getOrPut(name);
+        if (entry.found_existing) {
+            try self.reportInvalidAliasRow(.tag_union, ext_var, env, region);
+            return false;
+        }
+        if (!try self.validateAliasRowVars(self.types.sliceVars(args), env, region, visited)) return false;
+    }
+
+    return try self.validateTagUnionExt(ext_var, &names, env, region, visited);
+}
+
+fn validateTagUnionExt(
+    self: *Self,
+    ext_var: Var,
+    names: *std.AutoHashMap(Ident.Idx, void),
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    var current = ext_var;
+    var guard = types_mod.debug.IterationGuard.init("validateTagUnionExt");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tag_union => |tag_union| {
+                    if (!try self.validateTagUnionExtTags(tag_union.tags, current, names, env, region, visited)) return false;
+                    current = tag_union.ext;
+                },
+                .empty_tag_union => return true,
+                else => {
+                    try self.reportInvalidAliasRow(.tag_union, current, env, region);
+                    return false;
+                },
+            },
+            .flex, .rigid, .err => return true,
+        }
+    }
+}
+
+fn validateTagUnionExtTags(
+    self: *Self,
+    tags: types_mod.Tag.SafeMultiList.Range,
+    ext_source_var: Var,
+    names: *std.AutoHashMap(Ident.Idx, void),
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const tag_slice = self.types.getTagsSlice(tags);
+    for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+        const entry = try names.getOrPut(name);
+        if (entry.found_existing) {
+            try self.reportInvalidAliasRow(.tag_union, ext_source_var, env, region);
+            return false;
+        }
+        if (!try self.validateAliasRowVars(self.types.sliceVars(args), env, region, visited)) return false;
+    }
+    return true;
+}
+
+fn reportInvalidAliasRow(
+    self: *Self,
+    comptime row_kind: enum { record, tag_union },
+    actual_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const expected_content: Content = switch (row_kind) {
+        .record => .{ .structure = .empty_record },
+        .tag_union => .{ .structure = .empty_tag_union },
+    };
+    const expected_var = try self.freshFromContent(expected_content, env, region);
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = expected_var,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = actual_var,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = .type_annotation,
+    } });
 }
 
 /// Set the content of anno_var to the builtin type.
