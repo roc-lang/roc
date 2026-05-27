@@ -2288,7 +2288,11 @@ const Unifier = struct {
         );
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
+            var merged_constraint = two_constraints.b;
+            if (two_constraints.a.origin == .from_numeral and two_constraints.b.origin == .from_numeral) {
+                merged_constraint.num_literal = mergeNumeralInfo(two_constraints.a.num_literal, two_constraints.b.num_literal);
+            }
+            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(merged_constraint);
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
@@ -2298,6 +2302,20 @@ const Unifier = struct {
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
+    }
+
+    fn mergeNumeralInfo(a: ?types_mod.NumeralInfo, b: ?types_mod.NumeralInfo) ?types_mod.NumeralInfo {
+        const a_info = a orelse return b;
+        var merged = b orelse return a;
+        merged.is_negative = merged.is_negative or a_info.is_negative;
+        merged.is_fractional = merged.is_fractional or a_info.is_fractional;
+        merged.fits_dec = if (a_info.fits_dec == false or merged.fits_dec == false)
+            false
+        else if (a_info.fits_dec == true or merged.fits_dec == true)
+            true
+        else
+            null;
+        return merged;
     }
 
     /// Unify two static dispatch constraints

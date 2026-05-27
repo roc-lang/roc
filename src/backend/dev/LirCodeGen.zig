@@ -187,6 +187,7 @@ pub const BuiltinFn = enum {
 
     // Numeric operations
     dec_to_str,
+    dec_mul,
     dec_mul_saturated,
     dec_div,
     dec_div_trunc,
@@ -281,6 +282,7 @@ pub const BuiltinFn = enum {
 
             // Numeric operations
             .dec_to_str => "roc_builtins_dec_to_str",
+            .dec_mul => "roc_builtins_dec_mul",
             .dec_mul_saturated => "roc_builtins_dec_mul_saturated",
             .dec_div => "roc_builtins_dec_div",
             .dec_div_trunc => "roc_builtins_dec_div_trunc",
@@ -5870,9 +5872,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Call Dec multiplication builtin via decomposed wrapper.
-        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) -> void
+        /// Wrapper signature: (out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) -> void
         fn callDecMul(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Allocator.Error!void {
-            const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul_saturated);
+            const fn_addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const result_slot = self.codegen.allocStackSlot(16);
             const base_reg = frame_ptr;
 
@@ -5883,7 +5886,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(lhs_parts.high);
             try builder.addRegArg(rhs_parts.low);
             try builder.addRegArg(rhs_parts.high);
-            try self.callBuiltin(&builder, fn_addr, .dec_mul_saturated);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, .dec_mul);
 
             // Load results from stack slot
             try self.codegen.emitLoadStack(.w64, result_low, result_slot);

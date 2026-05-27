@@ -4892,7 +4892,7 @@ pub const Interpreter = struct {
                 64 => val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float width {d}", .{bits}),
             },
-            .dec => val.write(i128, self.decBinOp(a.read(i128), b.read(i128), op)),
+            .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op)),
         }
         return val;
     }
@@ -6167,7 +6167,7 @@ pub const Interpreter = struct {
     }
 
     /// Dec (fixed-point i128 with 10^18 scale) binary operation.
-    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp) i128 {
+    fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp) Error!i128 {
         return switch (op) {
             .add => av +% bv,
             .sub => av -% bv,
@@ -6176,6 +6176,7 @@ pub const Interpreter = struct {
             .abs_diff => if (av > bv) av -% bv else bv -% av,
             .mul => blk: {
                 const result = RocDec.mulWithOverflow(RocDec{ .num = av }, RocDec{ .num = bv });
+                if (result.has_overflowed) return self.triggerCrash("Decimal multiplication overflowed!");
                 break :blk result.value.num;
             },
             .div => blk: {

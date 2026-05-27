@@ -5,6 +5,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const builtins = @import("builtins");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
@@ -1191,6 +1192,14 @@ fn unifyTypedLiteralWithExplicitType(
     }
 }
 
+fn typedLiteralTargetsBuiltin(self: *const Self, expr_idx: CIR.Expr.Idx, num_kind: CIR.NumKind) bool {
+    const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return false;
+    return switch (suffix_type.target()) {
+        .builtin => |target_kind| target_kind == num_kind,
+        else => false,
+    };
+}
+
 /// Create a Dec nominal type content using the stored ident index rather than
 /// constructing the qualified name from a string literal.
 fn mkDecContent(self: *Self, env: *Env) Allocator.Error!Content {
@@ -1306,14 +1315,101 @@ fn mkFlexWithFromNumeralConstraint(
     return flex_var;
 }
 
-fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) types_mod.NumeralInfo {
+fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
     const literal = self.cir.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("missing recorded exact numeral for expression {}", .{@intFromEnum(expr_idx)});
         }
         unreachable;
     };
-    return types_mod.NumeralInfo.fromExact(literal.isNegative(), literal.isFractional(), region);
+    const text = try numeralLiteralDecimalText(self.gpa, self.cir, literal);
+    defer self.gpa.free(text);
+    const fits_dec = builtins.dec.RocDec.fromNonemptySlice(text) != null;
+    return types_mod.NumeralInfo.fromExact(literal.isNegative(), literal.isFractional(), fits_dec, region);
+}
+
+fn numeralLiteralDecimalText(
+    allocator: Allocator,
+    module_env: *const ModuleEnv,
+    literal: ModuleEnv.NumeralLiteral,
+) Allocator.Error![]const u8 {
+    const before = try base256DecimalText(allocator, module_env.numeralDigitsBefore(literal), 1);
+    defer allocator.free(before);
+
+    const after_min_digits: usize = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
+        @panic("recorded numeral literal decimal digit count exceeded host usize");
+    };
+    const after = if (after_min_digits == 0)
+        try allocator.alloc(u8, 0)
+    else
+        try base256DecimalText(allocator, module_env.numeralDigitsAfter(literal), after_min_digits);
+    defer allocator.free(after);
+
+    const sign_len: usize = @intFromBool(literal.isNegative());
+    const dot_len: usize = @intFromBool(after_min_digits > 0);
+    const total_len = sign_len + before.len + dot_len + after.len;
+    const text = try allocator.alloc(u8, total_len);
+    var offset: usize = 0;
+    if (literal.isNegative()) {
+        text[offset] = '-';
+        offset += 1;
+    }
+    @memcpy(text[offset..][0..before.len], before);
+    offset += before.len;
+    if (after_min_digits > 0) {
+        text[offset] = '.';
+        offset += 1;
+        @memcpy(text[offset..][0..after.len], after);
+    }
+    return text;
+}
+
+fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: usize) Allocator.Error![]const u8 {
+    var first_nonzero: usize = 0;
+    while (first_nonzero < bytes_be.len and bytes_be[first_nonzero] == 0) : (first_nonzero += 1) {}
+
+    if (first_nonzero == bytes_be.len) {
+        const len = @max(min_digits, 1);
+        const out = try allocator.alloc(u8, len);
+        @memset(out, '0');
+        return out;
+    }
+
+    var current_buf = try allocator.dupe(u8, bytes_be[first_nonzero..]);
+    defer allocator.free(current_buf);
+    var current_len = current_buf.len;
+    var digits_rev = std.ArrayList(u8).empty;
+    defer digits_rev.deinit(allocator);
+
+    while (current_len > 0) {
+        const current = current_buf[0..current_len];
+        var quotient = try allocator.alloc(u8, current.len);
+        var quotient_len: usize = 0;
+        var remainder: u16 = 0;
+        for (current) |byte| {
+            const value = remainder * 256 + byte;
+            const digit: u8 = @intCast(value / 10);
+            remainder = value % 10;
+            if (digit != 0 or quotient_len != 0) {
+                quotient[quotient_len] = digit;
+                quotient_len += 1;
+            }
+        }
+        try digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder)));
+        allocator.free(current_buf);
+        current_buf = quotient;
+        current_len = quotient_len;
+    }
+
+    const digit_count = digits_rev.items.len;
+    const total_len = @max(digit_count, min_digits);
+    const out = try allocator.alloc(u8, total_len);
+    const pad = total_len - digit_count;
+    @memset(out[0..pad], '0');
+    for (digits_rev.items, 0..) |digit, i| {
+        out[pad + digit_count - 1 - i] = digit;
+    }
+    return out;
 }
 
 /// Create a nominal Box type with the given element type
@@ -3639,7 +3735,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_num_from_numeral => {
-            const num_literal_info = self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
             _ = try self.unify(expr_var, flex_var, env);
         },
@@ -3675,6 +3771,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_dec => |frac| {
             if (frac.has_suffix) {
+                const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unsuffixed Dec literal - create constrained flex var
@@ -3690,6 +3788,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_dec_small => |frac| {
             if (frac.has_suffix) {
+                const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unsuffixed small Dec literal - create constrained flex var
@@ -3707,7 +3807,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_typed_int => |typed_num| {
             // Typed integer literal like 123.U64
             // Create from_numeral constraint and unify with the explicit type
-            const num_literal_info = switch (typed_num.value.kind) {
+            const num_literal_info = if (self.typedLiteralTargetsBuiltin(expr_idx, .dec))
+                try self.exactNumeralInfoForExpr(expr_idx, expr_region)
+            else switch (typed_num.value.kind) {
                 .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
                 .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
             };
@@ -3721,19 +3823,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 expr_region,
                 env,
             );
+            if (self.typedLiteralTargetsBuiltin(expr_idx, .dec)) {
+                _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+            }
 
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
             _ = try self.unify(expr_var, flex_var, env);
         },
-        .e_typed_frac => |typed_num| {
+        .e_typed_frac => |_| {
             // Typed fractional literal like 3.14.Dec
-            // The value is stored as scaled i128 (like Dec)
-            const num_literal_info = types_mod.NumeralInfo.fromI128(
-                typed_num.value.toI128(),
-                typed_num.value.toI128() < 0,
-                true, // is_fractional
-                expr_region,
-            );
+            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
 
             // Create flex var with from_numeral constraint
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
@@ -3744,12 +3843,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 expr_region,
                 env,
             );
+            if (self.typedLiteralTargetsBuiltin(expr_idx, .dec)) {
+                _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+            }
 
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
             _ = try self.unify(expr_var, flex_var, env);
         },
         .e_typed_num_from_numeral => {
-            const num_literal_info = self.exactNumeralInfoForExpr(expr_idx, expr_region);
+            const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
             const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
 
             try self.unifyTypedLiteralWithExplicitType(
@@ -3758,6 +3860,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 expr_region,
                 env,
             );
+            if (self.typedLiteralTargetsBuiltin(expr_idx, .dec)) {
+                _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+            }
 
             _ = try self.unify(expr_var, flex_var, env);
         },
@@ -7098,8 +7203,15 @@ fn builtinNumericCandidateSatisfiesStaticDispatchConstraints(
 
     if (!try self.probeUnifyWithoutRecordingProblems(dispatcher_var, candidate_var)) return false;
 
+    const candidate_nominal = self.types.resolveVar(candidate_var).desc.content.unwrapNominalType() orelse return false;
+    const candidate_num_kind = self.builtinNumKindFromNominalType(candidate_nominal) orelse return false;
+
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral) continue;
+        if (constraint.origin == .from_numeral) {
+            const num_literal = constraint.num_literal orelse continue;
+            if (validateBuiltinFromNumeralLiteral(candidate_num_kind, num_literal) != null) return false;
+            continue;
+        }
         if (!try self.staticDispatchConstraintAcceptsCandidate(constraint, candidate_var, &probe_env)) {
             return false;
         }
@@ -7191,9 +7303,20 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
         }
         if (!has_from_numeral) continue;
 
-        const dec_var = try self.freshFromContent(try self.mkDecContent(env), env, Region.zero());
-        _ = try self.unify(resolved.var_, dec_var, env);
+        const default_kind = defaultNumericKindForConstraints(constraints);
+        const default_var = try self.freshFromContent(try self.mkBuiltinNumberTypeContentFromKind(default_kind, env), env, Region.zero());
+        _ = try self.unify(resolved.var_, default_var, env);
     }
+}
+
+fn defaultNumericKindForConstraints(constraints: []const StaticDispatchConstraint) CIR.NumKind {
+    for (constraints) |constraint| {
+        if (constraint.origin != .from_numeral) continue;
+        const num_literal = constraint.num_literal orelse continue;
+        if (!num_literal.is_fractional) continue;
+        if (num_literal.fits_dec == false) return .f64;
+    }
+    return .dec;
 }
 
 fn varHasFromNumeralConstraint(self: *Self, var_: Var) bool {
@@ -7332,6 +7455,22 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                 // Iterate over the constraints
                 for (deferred_constraints) |constraint| {
+                    if (constraint.origin == .from_numeral) {
+                        if (self.builtinNumKindFromTypeName(rigid.name)) |num_kind| {
+                            if (skipDefaultedDecIntegerLiteralValidation(is_numeric_default_pass, num_kind, constraint)) {
+                                continue;
+                            }
+                            if (try self.reportInvalidBuiltinFromNumeralLiteral(
+                                deferred_constraint.var_,
+                                constraint,
+                                num_kind,
+                                env,
+                            )) {
+                                continue;
+                            }
+                        }
+                    }
+
                     // Extract the function and return type from the constraint
                     const resolved_constraint = self.types.resolveVar(constraint.fn_var);
                     const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
@@ -7391,6 +7530,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     }
                     if (constraint.origin == .from_numeral) {
                         if (self.builtinNumKindFromNominalType(nominal_type)) |num_kind| {
+                            if (skipDefaultedDecIntegerLiteralValidation(is_numeric_default_pass, num_kind, constraint)) {
+                                continue;
+                            }
                             if (try self.reportInvalidBuiltinFromNumeralLiteral(
                                 deferred_constraint.var_,
                                 constraint,
@@ -8012,9 +8154,20 @@ fn validateBuiltinFromNumeralLiteral(
         .i32 => validateSignedFromNumeralLiteral(i32, num_literal),
         .i64 => validateSignedFromNumeralLiteral(i64, num_literal),
         .i128 => validateSignedFromNumeralLiteral(i128, num_literal),
-        .f32, .f64, .dec => null,
+        .dec => validateDecFromNumeralLiteral(num_literal, false),
+        .f32, .f64 => null,
         .num_unbound, .int_unbound => null,
     };
+}
+
+fn skipDefaultedDecIntegerLiteralValidation(
+    is_numeric_default_pass: bool,
+    num_kind: CIR.NumKind,
+    constraint: StaticDispatchConstraint,
+) bool {
+    if (!is_numeric_default_pass or num_kind != .dec) return false;
+    const num_literal = constraint.num_literal orelse return false;
+    return !num_literal.is_fractional;
 }
 
 fn validateUnsignedFromNumeralLiteral(
@@ -8054,6 +8207,29 @@ fn validateSignedFromNumeralLiteral(
     return null;
 }
 
+fn validateDecFromNumeralLiteral(
+    num_literal: types_mod.NumeralInfo,
+    strict_exact_integer: bool,
+) ?BuiltinFromNumeralLiteralProblem {
+    if (num_literal.fits_dec) |fits| {
+        if (!fits and !strict_exact_integer and !num_literal.is_fractional) return null;
+        return if (fits) null else .out_of_range;
+    }
+
+    if (num_literal.is_fractional) return null;
+
+    const max_whole_dec: u128 = 170141183460469231731;
+    if (num_literal.is_u128) {
+        if (num_literal.toU128() > max_whole_dec) return .out_of_range;
+        return null;
+    }
+
+    const value = num_literal.toI128();
+    const max_signed: i128 = @intCast(max_whole_dec);
+    if (value < -max_signed or value > max_signed) return .out_of_range;
+    return null;
+}
+
 fn reportInvalidBuiltinFromNumeralLiteral(
     self: *Self,
     dispatcher_var: Var,
@@ -8062,7 +8238,24 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     env: *Env,
 ) Allocator.Error!bool {
     const num_literal = constraint.num_literal orelse return false;
-    if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
+    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, num_literal, env)) return false;
+
+    try self.markConstraintFunctionAsError(constraint, env);
+    return true;
+}
+
+fn reportInvalidBuiltinFromNumeralInfo(
+    self: *Self,
+    dispatcher_var: Var,
+    num_kind: CIR.NumKind,
+    num_literal: types_mod.NumeralInfo,
+    env: *Env,
+) Allocator.Error!bool {
+    const literal_problem = if (num_kind == .dec)
+        validateDecFromNumeralLiteral(num_literal, true)
+    else
+        validateBuiltinFromNumeralLiteral(num_kind, num_literal);
+    if (literal_problem == null) return false;
 
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
@@ -8072,7 +8265,6 @@ fn reportInvalidBuiltinFromNumeralLiteral(
         .region = num_literal.region,
     } });
 
-    try self.markConstraintFunctionAsError(constraint, env);
     try self.unifyWith(dispatcher_var, .err, env);
     return true;
 }

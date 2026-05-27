@@ -5629,10 +5629,10 @@ const CheckedBodyPayloadCopier = struct {
             .e_frac_f64 => |frac| self.copyFracLiteral(expr_idx, .{ .f64 = frac.value }, frac.has_suffix),
             .e_dec => |dec| self.copyFracLiteral(expr_idx, .{ .dec = dec.value }, dec.has_suffix),
             .e_dec_small => |dec| self.copyFracLiteral(expr_idx, .{ .small = dec.value }, dec.has_suffix),
-            .e_num_from_numeral => .{ .num_from_numeral = null },
+            .e_num_from_numeral => try self.copyNumFromNumeralLiteral(expr_idx, false),
             .e_typed_int => |typed| try self.copyTypedIntLiteral(expr_idx, typed.value, typed.type_name),
             .e_typed_frac => |typed| try self.copyTypedFracLiteral(expr_idx, typed.value, typed.type_name),
-            .e_typed_num_from_numeral => .{ .typed_num_from_numeral = null },
+            .e_typed_num_from_numeral => try self.copyTypedNumFromNumeralLiteral(expr_idx),
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
@@ -5757,6 +5757,81 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    fn copyNumFromNumeralLiteral(
+        self: *@This(),
+        expr_idx: CIR.Expr.Idx,
+        has_suffix: bool,
+    ) Allocator.Error!CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .num_from_numeral = null };
+        const text = try self.exactNumeralDecimalText(expr_idx);
+        defer self.allocator.free(text);
+        return exactNumeralForBuiltin(text, builtin_nominal, has_suffix) orelse .{ .num_from_numeral = null };
+    }
+
+    fn copyTypedNumFromNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_num_from_numeral = null };
+        const text = try self.exactNumeralDecimalText(expr_idx);
+        defer self.allocator.free(text);
+        return exactNumeralForBuiltin(text, builtin_nominal, true) orelse .{ .typed_num_from_numeral = null };
+    }
+
+    fn exactNumeralDecimalText(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const u8 {
+        const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+            checkedArtifactInvariant("checked exact numeral literal had no parser-owned numeral facts", .{});
+        };
+        return numeralLiteralDecimalText(self.allocator, self.module.moduleEnvConst(), literal);
+    }
+
+    fn exactNumeralForBuiltin(
+        text: []const u8,
+        builtin_nominal: CheckedBuiltinNominal,
+        has_suffix: bool,
+    ) ?CheckedExprData {
+        return switch (builtin_nominal) {
+            .u8 => exactUnsignedIntLiteral(u8, text, .u8),
+            .u16 => exactUnsignedIntLiteral(u16, text, .u16),
+            .u32 => exactUnsignedIntLiteral(u32, text, .u32),
+            .u64 => exactUnsignedIntLiteral(u64, text, .u64),
+            .u128 => exactUnsignedIntLiteral(u128, text, .u128),
+            .i8 => exactSignedIntLiteral(i8, text, .i8),
+            .i16 => exactSignedIntLiteral(i16, text, .i16),
+            .i32 => exactSignedIntLiteral(i32, text, .i32),
+            .i64 => exactSignedIntLiteral(i64, text, .i64),
+            .i128 => exactSignedIntLiteral(i128, text, .i128),
+            .f32 => if (std.fmt.parseFloat(f32, text)) |value|
+                .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
+            else |_| null,
+            .f64 => if (std.fmt.parseFloat(f64, text)) |value|
+                .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
+            else |_| null,
+            .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |value|
+                .{ .dec = .{ .value = value, .has_suffix = has_suffix } }
+            else if (!has_suffix)
+                .{ .dec = .{ .value = if (text.len > 0 and text[0] == '-') builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
+            else
+                null,
+            else => null,
+        };
+    }
+
+    fn exactUnsignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
+        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+        const value = CIR.IntValue{
+            .bytes = @bitCast(@as(u128, @intCast(parsed))),
+            .kind = .u128,
+        };
+        return .{ .num = .{ .value = value, .kind = kind } };
+    }
+
+    fn exactSignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
+        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+        const value = CIR.IntValue{
+            .bytes = @bitCast(@as(i128, @intCast(parsed))),
+            .kind = .i128,
+        };
+        return .{ .num = .{ .value = value, .kind = kind } };
     }
 
     fn copyTypedIntLiteral(

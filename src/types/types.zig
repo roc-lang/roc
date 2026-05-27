@@ -678,6 +678,11 @@ pub const NumeralInfo = struct {
     /// Whether the literal had a decimal point
     is_fractional: bool,
 
+    /// Whether exact source digits can be represented by Dec.
+    /// Null means the literal was stored in a compact representation, or the
+    /// checker did not need exact Dec range facts for it.
+    fits_dec: ?bool,
+
     /// Source region for error reporting
     region: base.Region,
 
@@ -698,6 +703,7 @@ pub const NumeralInfo = struct {
             .is_u128 = false,
             .is_negative = is_negative,
             .is_fractional = is_fractional,
+            .fits_dec = null,
             .region = region,
         };
     }
@@ -709,6 +715,7 @@ pub const NumeralInfo = struct {
             .is_u128 = true,
             .is_negative = false, // u128 values are never negative
             .is_fractional = is_fractional,
+            .fits_dec = null,
             .region = region,
         };
     }
@@ -716,12 +723,13 @@ pub const NumeralInfo = struct {
     /// Create metadata for a literal whose exact digits are stored outside the
     /// type store. Type checking only needs sign, fractional-ness, and region;
     /// lowering consumes the recorded digit bytes.
-    pub fn fromExact(is_negative: bool, is_fractional: bool, region: base.Region) NumeralInfo {
+    pub fn fromExact(is_negative: bool, is_fractional: bool, fits_dec: ?bool, region: base.Region) NumeralInfo {
         return .{
             .bytes = [_]u8{0} ** 16,
             .is_u128 = false,
             .is_negative = is_negative,
             .is_fractional = is_fractional,
+            .fits_dec = fits_dec,
             .region = region,
         };
     }
