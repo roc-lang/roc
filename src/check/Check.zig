@@ -2260,6 +2260,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Infer types for the body, checking against the instantiated annotation
     _ = try self.checkExpr(def.expr, env, expectation);
+    if (def.annotation == null and self.exprAlwaysCrashes(def.expr)) {
+        try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
+    }
     if (def.annotation == null and self.erroneous_value_exprs.contains(def.expr)) {
         try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
     }
@@ -5925,6 +5928,14 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
         .e_lambda => true,
         .e_anno_only => true,
         .e_hosted_lambda => true,
+        else => false,
+    };
+}
+
+fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
+    return switch (self.cir.store.getExpr(expr_idx)) {
+        .e_crash => true,
+        .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         else => false,
     };
 }

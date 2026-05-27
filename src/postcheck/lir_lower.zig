@@ -1068,7 +1068,7 @@ const Lowerer = struct {
         const rest = try self.lowerExprInto(target, let_.rest, next);
         const value_expr = self.expr(let_.value);
         const value_local = try self.addTemp(value_expr.ty);
-        const bind = try self.bindPattern(let_.bind, value_local, rest);
+        const bind = try self.bindPatternOrCrash(let_.bind, value_local, rest);
         return try self.lowerExprInto(value_local, let_.value, bind);
     }
 
@@ -1270,7 +1270,7 @@ const Lowerer = struct {
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| blk: {
                 const value = try self.addTemp(self.expr(let_.value).ty);
-                const bind = try self.bindPattern(let_.pat, value, next);
+                const bind = try self.bindPatternOrCrash(let_.pat, value, next);
                 break :blk try self.lowerExprInto(value, let_.value, bind);
             },
             .expr => |expr_id| blk: {
@@ -1648,6 +1648,20 @@ const Lowerer = struct {
             .nominal => |inner| try self.bindPattern(inner, source, next),
             .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => next,
         };
+    }
+
+    fn bindPatternOrCrash(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        if (!self.patternCanMiss(pat_id)) return try self.bindPattern(pat_id, source, next);
+
+        const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+        const crash = try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        const matched = try self.lowerPatternThen(pat_id, source, next, miss, next);
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = miss.join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = crash,
+            .remainder = matched,
+        } });
     }
 
     fn bindRecordPattern(self: *Lowerer, ty: Type.TypeId, span: LambdaMono.Span(LambdaMono.RecordDestruct), source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {

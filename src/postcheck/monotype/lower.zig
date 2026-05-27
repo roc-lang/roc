@@ -1563,6 +1563,11 @@ const Builder = struct {
                 str.offset,
                 str.len,
             ) },
+            .crash => |str| .{ .crash = try self.program.addStringView(
+                store_view.const_store.strData(str.data),
+                str.offset,
+                str.len,
+            ) },
             .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items) },
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtType(store_view, type_view, payload, self.constBoxPayloadType(ty));
@@ -5358,6 +5363,11 @@ const BodyContext = struct {
             .zst => .unit,
             .scalar => |scalar| restoreScalar(scalar),
             .str => |str| .{ .str_lit = try self.builder.program.addStringView(
+                store_view.const_store.strData(str.data),
+                str.offset,
+                str.len,
+            ) },
+            .crash => |str| .{ .crash = try self.builder.program.addStringView(
                 store_view.const_store.strData(str.data),
                 str.offset,
                 str.len,

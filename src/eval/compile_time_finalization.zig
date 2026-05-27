@@ -314,11 +314,17 @@ fn lowerEvalAndFinishRoots(
     defer writer.deinit();
 
     for (lowered.lir_result.const_roots.items) |root| {
-        const payload = blk: {
-            const eval_result = try interpreter.eval(.{
+        const payload: checked.CompileTimeRootPayload = blk: {
+            const eval_result = interpreter.eval(.{
                 .proc_id = root.proc,
                 .ret_layout = root.ret_layout,
-            });
+            }) catch |err| switch (err) {
+                error.Crash, error.RuntimeError => {
+                    if (root.request.kind != .compile_time_constant) return err;
+                    break :blk .{ .const_node = try appendCrashConst(module, host.crash_message orelse "compile-time evaluation failed") };
+                },
+                else => return err,
+            };
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
@@ -328,6 +334,18 @@ fn lowerEvalAndFinishRoots(
         finishConstRoot(module, module.compile_time_roots.root(root_id), payload);
         state.markDone(root_id);
     }
+}
+
+fn appendCrashConst(
+    module: *checked.CheckedModuleArtifact,
+    message: []const u8,
+) Allocator.Error!checked.ConstNodeId {
+    const data = try module.const_store.addStrData(message);
+    return try module.const_store.append(.{ .crash = .{
+        .data = data,
+        .offset = 0,
+        .len = @intCast(message.len),
+    } });
 }
 
 fn finalizationImports(
