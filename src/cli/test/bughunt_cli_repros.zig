@@ -1118,8 +1118,12 @@ const tests = [_]CliBugSpec{
             \\}
             \\
             \\main! = || {
+            \\    a : Tree
             \\    a = Node(Box.box(Leaf(1)), Box.box(Leaf(2)))
+            \\
+            \\    b : Tree
             \\    b = Node(Box.box(Leaf(1)), Box.box(Leaf(2)))
+            \\
             \\    Stdout.line!(Str.inspect(a == b))
             \\}
             },

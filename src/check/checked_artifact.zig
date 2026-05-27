@@ -1329,14 +1329,14 @@ fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?Intr
         .e_anno_only => |anno| anno.ident,
         else => return null,
     };
-    const common = module.commonIdents();
-    if (expr_ident.eql(common.builtin_str_inspect)) return .str_inspect;
-    if (Ident.textEndsWith(module.getIdent(expr_ident), ".is_eq")) return .structural_eq;
-
-    if (def.patternName()) |pattern_ident| {
-        if (pattern_ident.eql(common.builtin_str_inspect)) return .str_inspect;
-        if (Ident.textEndsWith(module.getIdent(pattern_ident), ".is_eq")) return .structural_eq;
+    const env = module.moduleEnvConst();
+    if (!can.BuiltinLowLevel.isBuiltinModule(env) or
+        !can.BuiltinLowLevel.isIntrinsicAnnotation(env, expr_ident))
+    {
+        return null;
     }
+    if (expr_ident.eql(module.commonIdents().builtin_str_inspect)) return .str_inspect;
+    if (Ident.textEndsWith(module.getIdent(expr_ident), ".is_eq")) return .structural_eq;
 
     return null;
 }

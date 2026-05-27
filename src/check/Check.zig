@@ -7520,6 +7520,7 @@ fn rewriteImplicitEqMethodCallAsStructuralEq(
             self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.binop_negated);
         },
         .e_dispatch_call => |method_call| {
+            if (method_call.constraint_fn_var != constraint.fn_var) return;
             const args = self.cir.store.sliceExpr(method_call.args);
             if (args.len != 1) {
                 std.debug.panic(
@@ -7531,6 +7532,7 @@ fn rewriteImplicitEqMethodCallAsStructuralEq(
             self.cir.store.replaceExprWithStructuralEq(expr_idx, method_call.receiver, args[0], constraint.binop_negated);
         },
         .e_method_eq => |eq| {
+            if (eq.constraint_fn_var != constraint.fn_var) return;
             self.cir.store.replaceExprWithStructuralEq(expr_idx, eq.lhs, eq.rhs, constraint.binop_negated);
         },
         .e_binop => |binop| {
@@ -8328,15 +8330,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             }
                         }
                     }
-                    const method_ident = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                        self.nominalSupportsImplicitIsEq(nominal_type))
-                    blk: {
+                    const method_ident = if (constraint.fn_name.eql(self.cir.idents.is_eq)) blk: {
                         const exact_method_ident = original_env.lookupMethodIdentFromEnvConst(
                             self.cir,
                             nominal_type.ident.ident_idx,
                             constraint.fn_name,
                         );
-                        if (exact_method_ident == null) {
+                        if (exact_method_ident == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
                             try self.satisfyImplicitEqualityConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -8346,7 +8346,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         }
-                        break :blk exact_method_ident.?;
+                        break :blk exact_method_ident orelse {
+                            try self.reportConstraintError(
+                                deferred_constraint.var_,
+                                constraint,
+                                .{ .missing_method = .nominal },
+                                env,
+                                is_numeric_default_pass,
+                            );
+                            continue;
+                        };
                     } else original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
@@ -8784,6 +8793,15 @@ fn reportEffectfulDispatchInExpect(
 /// - All of its components (record fields, tuple elements, tag payloads) also support is_eq
 /// - For nominal types, check if their backing type supports is_eq
 fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
+    self.var_set.clearRetainingCapacity();
+    return self.typeSupportsIsEqInternal(flat_type, &self.var_set) catch false;
+}
+
+fn typeSupportsIsEqInternal(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
         // Function types do not support is_eq
         .fn_pure, .fn_effectful, .fn_unbound => false,
@@ -8795,7 +8813,7 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
         .record => |record| {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (!self.varSupportsIsEq(field_var)) return false;
+                if (!try self.varSupportsIsEqInternal(field_var, visited)) return false;
             }
             return true;
         },
@@ -8804,7 +8822,7 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem_var| {
-                if (!self.varSupportsIsEq(elem_var)) return false;
+                if (!try self.varSupportsIsEqInternal(elem_var, visited)) return false;
             }
             return true;
         },
@@ -8815,7 +8833,7 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
             for (tags_slice.items(.args)) |tag_args| {
                 const args = self.types.sliceVars(tag_args);
                 for (args) |arg_var| {
-                    if (!self.varSupportsIsEq(arg_var)) return false;
+                    if (!try self.varSupportsIsEqInternal(arg_var, visited)) return false;
                 }
             }
             return true;
@@ -8824,7 +8842,7 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
         // Nominal types support is_eq if their backing type supports is_eq
         .nominal_type => |nominal| {
             const backing_var = self.types.getNominalBackingVar(nominal);
-            return self.varSupportsIsEq(backing_var);
+            return try self.varSupportsIsEqInternal(backing_var, visited);
         },
 
         // Unbound records: resolve and check the resolved type
@@ -8832,7 +8850,7 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
             // Check each field in the unbound record
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (!self.varSupportsIsEq(field_var)) return false;
+                if (!try self.varSupportsIsEqInternal(field_var, visited)) return false;
             }
             return true;
         },
@@ -8922,7 +8940,8 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
 
 fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType) bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
-    return self.varSupportsIsEq(self.types.getNominalBackingVar(nominal_type));
+    self.var_set.clearRetainingCapacity();
+    return self.varSupportsIsEqInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set) catch false;
 }
 
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
@@ -9100,15 +9119,27 @@ fn satisfyImplicitEqualityConstraint(
 
 /// Check if a type variable supports is_eq by resolving it and checking its content
 fn varSupportsIsEq(self: *Self, var_: Var) bool {
+    self.var_set.clearRetainingCapacity();
+    return self.varSupportsIsEqInternal(var_, &self.var_set) catch false;
+}
+
+fn varSupportsIsEqInternal(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return true;
+    try visited.put(resolved.var_, {});
+
     return switch (resolved.desc.content) {
-        .structure => |s| self.typeSupportsIsEq(s),
+        .structure => |s| try self.typeSupportsIsEqInternal(s, visited),
         // Flex/rigid vars: we optimistically assume they support is_eq.
         // This is sound because if the variable is later unified with a type
         // that doesn't support is_eq (like a function), unification will fail.
         .flex, .rigid => true,
         // Aliases: check the underlying type
-        .alias => |alias| self.varSupportsIsEq(self.types.getAliasBackingVar(alias)),
+        .alias => |alias| try self.varSupportsIsEqInternal(self.types.getAliasBackingVar(alias), visited),
         // Error types: allow them to proceed
         .err => true,
     };
