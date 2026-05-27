@@ -5494,7 +5494,13 @@ const BodyContext = struct {
                 str.len,
             ) },
             .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items) },
-            .box => |payload| .{ .nominal = try self.restoreConstNodeAtType(store_view, type_view, payload, self.constBoxPayloadType(ty)) },
+            .box => |payload| blk: {
+                const child = try self.restoreConstNodeAtType(store_view, type_view, payload, self.constBoxPayloadType(ty));
+                break :blk .{ .low_level = .{
+                    .op = .box_box,
+                    .args = try self.builder.program.addExprSpan(&.{child}),
+                } };
+            },
             .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items) },
             .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, ty, items) },
             .tag => |tag| .{ .tag = .{

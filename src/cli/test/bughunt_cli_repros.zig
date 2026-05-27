@@ -2349,11 +2349,11 @@ const tests = [_]CliBugSpec{
         \\
         \\main! = || {
         \\    f = Box.unbox(A.r.boxed)
-        \\    Stdout.line!(I64.to_str(f(41)))
+        \\    Stdout.line!(I64.to_str(f(41.I64)))
         \\}
     ,
         \\A :: [].{
-        \\    r = { boxed: Box.box(|x| x + 1) }
+        \\    r = { boxed: Box.box(|x| x + 1.I64) }
         \\}
     , "42\n"),
     runDevBodyCase(191, "B191", "nominal minus operators use attached methods",
