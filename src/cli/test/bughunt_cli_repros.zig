@@ -78,6 +78,22 @@ fn runDevBodyCase(
     };
 }
 
+fn runDevCleanFailureBodyCase(
+    comptime id: usize,
+    comptime bug_id: []const u8,
+    comptime title: []const u8,
+    comptime body: []const u8,
+) CliBugSpec {
+    return .{
+        .id = id,
+        .bug_id = bug_id,
+        .name = "bughunt " ++ bug_id ++ ": " ++ title,
+        .files = &.{.{ .path = "main.roc", .contents = fx_app_prefix ++ body }},
+        .command = .run_dev,
+        .expect = .clean_failure,
+    };
+}
+
 fn runDevTwoFileCase(
     comptime id: usize,
     comptime bug_id: []const u8,
@@ -1867,7 +1883,7 @@ const tests = [_]CliBugSpec{
         \\    Stdout.line!(I64.to_str(f(41)))
         \\}
     , "42\n"),
-    runDevBodyCase(147, "B147", "break in record-stored closures inside loops is handled coherently",
+    runDevCleanFailureBodyCase(147, "B147", "break in record-stored closures inside loops is rejected cleanly",
         \\main! = || {
         \\    var $n = 0.I64
         \\    while $n < 1 {
@@ -1877,8 +1893,8 @@ const tests = [_]CliBugSpec{
         \\    }
         \\    Stdout.line!(I64.to_str($n))
         \\}
-    , "0\n"),
-    runDevBodyCase(148, "B148", "break in higher-order closures inside loops is handled coherently",
+    ),
+    runDevCleanFailureBodyCase(148, "B148", "break in higher-order closures inside loops is rejected cleanly",
         \\call = |f| f()
         \\
         \\main! = || {
@@ -1889,7 +1905,7 @@ const tests = [_]CliBugSpec{
         \\    }
         \\    Stdout.line!(I64.to_str($n))
         \\}
-    , "0\n"),
+    ),
     runDevBodyCase(149, "B149", "record destructuring preserves callable fields",
         \\main! = || {
         \\    { f } = { f: |x| x + 1 }
