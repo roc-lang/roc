@@ -38,10 +38,15 @@ runs:
           }
           heartbeat &
           heartbeat_pid=$!
-          eval "${{ inputs.command }}" 2>&1 | tee "$output_file"
-          exit_code=${PIPESTATUS[0]}
+          # Avoid piping through tee here. Some Zig build children can inherit
+          # the pipe and keep it open after Zig has already exited successfully.
+          eval "${{ inputs.command }}" > "$output_file" 2>&1 &
+          command_pid=$!
+          wait "$command_pid"
+          exit_code=$?
           kill "$heartbeat_pid" 2>/dev/null || true
           wait "$heartbeat_pid" 2>/dev/null || true
+          cat "$output_file"
           set -e
 
 
