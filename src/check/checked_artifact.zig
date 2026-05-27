@@ -17,6 +17,7 @@ const static_dispatch = @import("static_dispatch_registry.zig");
 const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
 const const_store = @import("const_store.zig");
+const problem = @import("problem.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -341,6 +342,7 @@ pub const PublishInputs = struct {
     platform_app_relation: ?PlatformAppRelation = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
+    problem_store: ?*problem.Store = null,
 };
 
 /// Public `CompileTimeFinalizer` declaration.
@@ -353,6 +355,7 @@ pub const CompileTimeFinalizer = struct {
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
+        problem_store: ?*problem.Store,
     ) anyerror!void,
 
     pub fn run(
@@ -362,8 +365,9 @@ pub const CompileTimeFinalizer = struct {
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
         relation_artifacts: []const ImportedModuleView,
+        problem_store: ?*problem.Store,
     ) anyerror!void {
-        try self.finalize(self.context, allocator, artifact, imports, available_artifacts, relation_artifacts);
+        try self.finalize(self.context, allocator, artifact, imports, available_artifacts, relation_artifacts, problem_store);
     }
 };
 
@@ -5788,6 +5792,15 @@ const CheckedBodyPayloadCopier = struct {
             .f64 => return .{ .frac_f64 = .{ .value = try self.floatLiteralForExpr(f64, expr_idx), .has_suffix = true } },
             else => {},
         }
+        if (integerBuiltinNumKind(builtin_nominal) != null) {
+            if (integralFracLitToIntValue(.{ .scaled_dec = value })) |int_value| {
+                return .{ .typed_int = .{
+                    .value = int_value,
+                    .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
+                } };
+            }
+            return .{ .typed_num_from_numeral = null };
+        }
         return fracLiteralForBuiltin(.{ .scaled_dec = value }, builtin_nominal, true) orelse .{ .typed_frac = .{
             .value = value,
             .type_name = try self.names.internTypeIdent(self.module.identStoreConst(), type_name),
@@ -5813,6 +5826,12 @@ const CheckedBodyPayloadCopier = struct {
     ) CheckedExprData {
         if (self.checkedBuiltinForExpr(expr_idx) == null) return .{ .num_from_numeral = null };
         const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return originalFracLiteral(literal, has_suffix);
+        if (integerBuiltinNumKind(builtin_nominal) != null) {
+            if (integralFracLitToIntValue(literal)) |int_value| {
+                return .{ .num = .{ .value = int_value, .kind = .num_unbound } };
+            }
+            return .{ .num_from_numeral = null };
+        }
         return fracLiteralForBuiltin(literal, builtin_nominal, has_suffix) orelse originalFracLiteral(literal, has_suffix);
     }
 
@@ -6359,6 +6378,47 @@ fn originalFracLiteral(literal: FracLit, has_suffix: bool) CheckedExprData {
         .small => |value| .{ .dec_small = .{ .value = value, .has_suffix = has_suffix } },
         .scaled_dec => |value| .{ .dec = .{ .value = scaledDecToDec(value), .has_suffix = has_suffix } },
     };
+}
+
+fn integerBuiltinNumKind(builtin_nominal: CheckedBuiltinNominal) ?CIR.NumKind {
+    return switch (builtin_nominal) {
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        else => null,
+    };
+}
+
+fn integralFracLitToIntValue(literal: FracLit) ?CIR.IntValue {
+    const int_value: i128 = switch (literal) {
+        .small => |value| blk: {
+            if (value.denominator_power_of_ten != 0) return null;
+            break :blk value.numerator;
+        },
+        .dec => |value| scaledDecBitsToInt(value.num) orelse return null,
+        .scaled_dec => |value| scaledDecBitsToInt(value.toI128()) orelse return null,
+        .f32,
+        .f64,
+        => return null,
+    };
+
+    return .{
+        .bytes = @bitCast(int_value),
+        .kind = .i128,
+    };
+}
+
+fn scaledDecBitsToInt(bits: i128) ?i128 {
+    const scale = builtins.dec.RocDec.one_point_zero_i128;
+    if (@rem(bits, scale) != 0) return null;
+    return @divTrunc(bits, scale);
 }
 
 fn checkedBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeId) ?CheckedBuiltinNominal {
@@ -16134,6 +16194,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         inputs.relation_artifacts,
+        inputs.problem_store,
     );
     artifact.verifyComplete();
     return artifact;

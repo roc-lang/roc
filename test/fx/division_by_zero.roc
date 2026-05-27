@@ -5,10 +5,10 @@ import pf.Stdout
 # Use a mutable variable to prevent compile-time evaluation
 main! = || {
     # The var keyword creates a runtime variable that can't be constant-folded
-    var $divisor = 0
+    var $divisor = 0.I64
 
     # This will trigger a division by zero error at runtime
-    result = 42 / $divisor
+    result = 42.I64 / $divisor
 
-    Stdout.line!("Result: ${U64.to_str(result)}")
+    Stdout.line!("Result: ${I64.to_str(result)}")
 }
