@@ -11215,6 +11215,9 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     const scratch_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
 
+    const seen_params_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_params_top);
+
     for (self.parse_ir.store.typeAnnoSlice(ast_header.args)) |arg_idx| {
         const ast_arg = self.parse_ir.store.getTypeAnno(arg_idx);
         // Type parameters should be treated as declarations, not lookups
@@ -11228,6 +11231,25 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                     try self.env.store.addScratchTypeAnno(malformed);
                     continue;
                 };
+
+                var found_duplicate = false;
+                for (self.scratch_seen_record_fields.sliceFromStart(seen_params_top)) |seen_param| {
+                    if (param_ident.eql(seen_param.ident)) {
+                        try self.env.pushDiagnostic(Diagnostic{ .type_parameter_conflict = .{
+                            .name = name_ident,
+                            .parameter_name = param_ident,
+                            .region = param_region,
+                            .original_region = seen_param.region,
+                        } });
+                        found_duplicate = true;
+                        break;
+                    }
+                }
+                if (found_duplicate) continue;
+                try self.scratch_seen_record_fields.append(.{
+                    .ident = param_ident,
+                    .region = param_region,
+                });
 
                 // Create type variable annotation for this parameter
                 // Check for underscore in type parameter
@@ -11255,6 +11277,25 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                     try self.env.store.addScratchTypeAnno(malformed);
                     continue;
                 };
+
+                var found_duplicate = false;
+                for (self.scratch_seen_record_fields.sliceFromStart(seen_params_top)) |seen_param| {
+                    if (param_ident.eql(seen_param.ident)) {
+                        try self.env.pushDiagnostic(Diagnostic{ .type_parameter_conflict = .{
+                            .name = name_ident,
+                            .parameter_name = param_ident,
+                            .region = param_region,
+                            .original_region = seen_param.region,
+                        } });
+                        found_duplicate = true;
+                        break;
+                    }
+                }
+                if (found_duplicate) continue;
+                try self.scratch_seen_record_fields.append(.{
+                    .ident = param_ident,
+                    .region = param_region,
+                });
 
                 // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
                 if (type_kind == .alias) {
