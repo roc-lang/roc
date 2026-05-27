@@ -67,6 +67,7 @@ const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
+const EffectfulExpect = problem_mod.EffectfulExpect;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -793,6 +794,9 @@ pub const ReportBuilder = struct {
             },
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
+            },
+            .effectful_expect => |data| {
+                return self.buildEffectfulExpectReport(data);
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
@@ -3119,6 +3123,24 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Move the effect into a function body so it runs when the function is called."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulExpectReport(self: *Self, data: EffectfulExpect) !Report {
+        var report = Report.init(self.gpa, "EFFECTFUL EXPECT", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This expect performs an effect while evaluating its condition."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Keep expect conditions pure, and test effectful behavior from a function body instead."),
         }, self, &report);
         return report;
     }

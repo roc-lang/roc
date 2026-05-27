@@ -114,6 +114,10 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Checker-local source-site mapping for method/equality rewrites.
 constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
+/// Static dispatch constraints created while checking an expect body.
+expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
+/// Region of the expect body currently being checked, if any.
+current_expect_region: ?Region,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The name of the enclosing function, if known.
@@ -363,6 +367,8 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
+        .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
+        .current_expect_region = null,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
@@ -456,6 +462,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
+    self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
@@ -1728,7 +1735,12 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         switch (stmt) {
             .s_expect => |expr_stmt| {
                 // Check the body expression
-                _ = try self.checkExpr(expr_stmt.body, &env, Expected.none());
+                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
+                if (expect_does_fx) {
+                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+                        .region = stmt_region,
+                    } });
+                }
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 // Unify with Bool (expects must be bool expressions)
@@ -1843,6 +1855,20 @@ fn reportPolymorphicValueProblem(
     } });
 }
 
+fn checkExpectBody(
+    self: *Self,
+    body: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+    expect_region: Region,
+) std.mem.Allocator.Error!bool {
+    const saved_expect_region = self.current_expect_region;
+    self.current_expect_region = expect_region;
+    defer self.current_expect_region = saved_expect_region;
+
+    return try self.checkExpr(body, env, expected);
+}
+
 fn varIsFunctionType(self: *Self, var_: Var) bool {
     var current = var_;
     while (true) {
@@ -1854,6 +1880,25 @@ fn varIsFunctionType(self: *Self, var_: Var) bool {
             },
             .structure => |flat| return switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => true,
+                else => false,
+            },
+            .err, .flex, .rigid => return false,
+        }
+    }
+}
+
+fn varIsEffectfulFunction(self: *Self, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_effectful => true,
+                .fn_pure, .fn_unbound => false,
                 else => false,
             },
             .err, .flex, .rigid => return false,
@@ -5493,7 +5538,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_expect => |expect| {
-            does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
+            const expect_does_fx = try self.checkExpectBody(expect.body, env, expected, expr_region);
+            if (expect_does_fx) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+                    .region = expr_region,
+                } });
+            }
+            does_fx = expect_does_fx or does_fx;
             const body_var = ModuleEnv.varFrom(expect.body);
 
             const bool_var = try self.freshBool(env, expr_region);
@@ -6104,7 +6155,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
             .s_expect => |expr_stmt| {
-                does_fx = try self.checkExpr(expr_stmt.body, env, Expected.none()) or does_fx;
+                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, Expected.none(), stmt_region);
+                if (expect_does_fx) {
+                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+                        .region = stmt_region,
+                    } });
+                }
+                does_fx = expect_does_fx or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 const bool_var = try self.freshBool(env, stmt_region);
@@ -7392,6 +7449,9 @@ fn mkReceiverDispatchConstraint(
     if (method_expr_idx) |expr_idx| {
         try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
     }
+    if (self.current_expect_region) |expect_region| {
+        try self.expect_region_by_constraint_fn_var.put(constraint_fn_var, expect_region);
+    }
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -7427,6 +7487,9 @@ fn mkTypeMethodCallConstraint(
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     try self.constraint_expr_by_fn_var.put(constraint_fn_var, method_expr_idx);
+    if (self.current_expect_region) |expect_region| {
+        try self.expect_region_by_constraint_fn_var.put(constraint_fn_var, expect_region);
+    }
 
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
@@ -8208,6 +8271,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (result.isProblem()) {
                             try self.unifyWith(deferred_constraint.var_, .err, env);
                             try self.unifyWith(resolved_func.ret, .err, env);
+                        } else {
+                            try self.reportEffectfulDispatchInExpect(constraint);
                         }
                     } else {
                         try self.reportConstraintError(
@@ -8428,6 +8493,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         try self.unifyWith(constraint_fn.ret, .err, env);
+                    } else {
+                        try self.reportEffectfulDispatchInExpect(constraint);
                     }
                 }
                 break :dispatch_resolution;
@@ -8599,6 +8666,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         try self.unifyWith(constraint_fn.ret, .err, env);
+                    } else {
+                        try self.reportEffectfulDispatchInExpect(constraint);
                     }
                 }
                 break :dispatch_resolution;
@@ -8695,6 +8764,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         self.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
+}
+
+fn reportEffectfulDispatchInExpect(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+) std.mem.Allocator.Error!void {
+    if (!self.varIsEffectfulFunction(constraint.fn_var)) return;
+    if (self.expect_region_by_constraint_fn_var.fetchRemove(constraint.fn_var)) |entry| {
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+            .region = entry.value,
+        } });
+    }
 }
 
 /// Check if a structural type supports is_eq.

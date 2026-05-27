@@ -41,6 +41,7 @@ pub const Problem = union(enum) {
     anonymous_recursion: VarWithSnapshot,
     polymorphic_value: VarWithSnapshot,
     effectful_top_level: EffectfulTopLevel,
+    effectful_expect: EffectfulExpect,
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
     platform_def_not_found: PlatformDefNotFound,
@@ -83,6 +84,11 @@ pub const AnnotationOnlyValue = struct {
 
 /// A top-level value definition performs effects while initializing.
 pub const EffectfulTopLevel = struct {
+    region: base.Region,
+};
+
+/// An expect expression performs effects while evaluating its condition.
+pub const EffectfulExpect = struct {
     region: base.Region,
 };
 

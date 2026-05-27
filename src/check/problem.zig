@@ -58,6 +58,7 @@ pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
+pub const EffectfulExpect = types.EffectfulExpect;
 
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;
