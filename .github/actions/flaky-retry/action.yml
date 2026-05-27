@@ -30,8 +30,18 @@ runs:
           trap 'rm -f "$output_file"' EXIT
 
           set +e
+          heartbeat() {
+            while true; do
+              sleep 300
+              echo "[flaky-retry] command still running after ${SECONDS}s..."
+            done
+          }
+          heartbeat &
+          heartbeat_pid=$!
           eval "${{ inputs.command }}" 2>&1 | tee "$output_file"
           exit_code=${PIPESTATUS[0]}
+          kill "$heartbeat_pid" 2>/dev/null || true
+          wait "$heartbeat_pid" 2>/dev/null || true
           set -e
 
 
