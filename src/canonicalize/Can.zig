@@ -1756,6 +1756,9 @@ fn processAssociatedItemsSecondPass(
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     const stmt_idxs = self.parse_ir.store.statementSlice(statements);
+    var seen_value_methods = std.AutoHashMapUnmanaged(Ident.Idx, void){};
+    defer seen_value_methods.deinit(self.env.gpa);
+
     var i: usize = 0;
     while (i < stmt_idxs.len) : (i += 1) {
         const stmt_idx = stmt_idxs[i];
@@ -1808,6 +1811,7 @@ fn processAssociatedItemsSecondPass(
                         const decl = next_stmt.decl;
                         // Check if the declaration pattern matches the annotation name
                         const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                        const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                         if (pattern == .ident) {
                             const pattern_ident_tok = pattern.ident.ident_tok;
                             if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
@@ -1823,6 +1827,15 @@ fn processAssociatedItemsSecondPass(
 
                                         break :blk2 try self.env.insertQualifiedIdent(parent_text, decl_text);
                                     };
+                                    const seen_method = try seen_value_methods.getOrPut(self.env.gpa, decl_ident);
+                                    if (seen_method.found_existing) {
+                                        try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                                            .ident = decl_ident,
+                                            .region = pattern_region,
+                                        } });
+                                        break :blk true;
+                                    }
+                                    seen_method.value_ptr.* = {};
 
                                     // Canonicalize with the qualified name and type annotation
                                     const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
@@ -1892,6 +1905,15 @@ fn processAssociatedItemsSecondPass(
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
+                    const seen_method = try seen_value_methods.getOrPut(self.env.gpa, name_ident);
+                    if (seen_method.found_existing) {
+                        try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                            .ident = name_ident,
+                            .region = region,
+                        } });
+                        continue;
+                    }
+                    seen_method.value_ptr.* = {};
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
                     try self.recordGlobalValueDef(def_idx);
@@ -1919,6 +1941,15 @@ fn processAssociatedItemsSecondPass(
                         const parent_text = self.env.getIdent(parent_name);
                         const decl_text = self.env.getIdent(decl_ident);
                         const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+                        const seen_method = try seen_value_methods.getOrPut(self.env.gpa, decl_ident);
+                        if (seen_method.found_existing) {
+                            try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                                .ident = decl_ident,
+                                .region = pattern_region,
+                            } });
+                            continue;
+                        }
+                        seen_method.value_ptr.* = {};
 
                         // Canonicalize with the qualified name
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
@@ -2480,6 +2511,10 @@ pub fn canonicalizeFile(
                                     .ident = decl_ident,
                                     .region = pattern_region,
                                     .original_region = original_region,
+                                } });
+                                try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                                    .ident = decl_ident,
+                                    .region = pattern_region,
                                 } });
                             },
                             // is_var=false, so var-related errors can't occur
@@ -3533,20 +3568,29 @@ fn createAnnoOnlyDef(
 fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?TypeAnnoIdent) std.mem.Allocator.Error!void {
     // Check if this declaration matches the last type annotation
     var mb_validated_anno: ?Annotation.Idx = null;
+    const ast_pattern = self.parse_ir.store.getPattern(decl.pattern);
+
+    if (ast_pattern != .ident) {
+        const string_idx = try self.env.insertString("destructuring declaration");
+        const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
+        try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+            .stmt = string_idx,
+            .region = region,
+        } });
+        return;
+    }
+
     if (mb_last_anno) |anno_info| {
-        const ast_pattern = self.parse_ir.store.getPattern(decl.pattern);
-        if (ast_pattern == .ident) {
-            const pattern_ident = ast_pattern.ident;
-            if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                if (anno_info.name.eql(decl_ident)) {
-                    // This declaration matches the type annotation
-                    const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
-                }
+        const pattern_ident = ast_pattern.ident;
+        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
+            if (anno_info.name.eql(decl_ident)) {
+                // This declaration matches the type annotation
+                const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
+                mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
             }
-            // Note: If resolveIdentifier returns null, the identifier token is malformed.
-            // The parser already handles this; we just don't match it with the annotation.
         }
+        // Note: If resolveIdentifier returns null, the identifier token is malformed.
+        // The parser already handles this; we just don't match it with the annotation.
     }
 
     // Canonicalize the decl (with the validated anno)
@@ -3717,6 +3761,12 @@ fn handleScopeIntroduceResult(
                 .region = region,
                 .original_region = original_region,
             } });
+            if (self.scopes.items.len == 1) {
+                try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                    .ident = ident,
+                    .region = region,
+                } });
+            }
         },
         .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {
             if (builtin.mode == .Debug) {

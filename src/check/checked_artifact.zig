@@ -5794,10 +5794,12 @@ const CheckedBodyPayloadCopier = struct {
             .i128 => exactSignedIntLiteral(i128, text, .i128),
             .f32 => if (std.fmt.parseFloat(f32, text)) |value|
                 .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_| null,
+            else |_|
+                null,
             .f64 => if (std.fmt.parseFloat(f64, text)) |value|
                 .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
-            else |_| null,
+            else |_|
+                null,
             .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |value|
                 .{ .dec = .{ .value = value, .has_suffix = has_suffix } }
             else if (!has_suffix)
@@ -9121,15 +9123,22 @@ pub const PlatformRequirementTypeMismatch = struct {
     actual: CheckedTypeId,
 };
 
+/// Public `PlatformRequirementMissingValue` declaration.
+pub const PlatformRequirementMissingValue = struct {
+    declaration: PlatformRequiredDeclaration,
+};
+
 /// Public `PlatformAppRelationBuildResult` declaration.
 pub const PlatformAppRelationBuildResult = union(enum) {
     relation: PlatformAppRelation,
     type_mismatch: PlatformRequirementTypeMismatch,
+    missing_value: PlatformRequirementMissingValue,
 
     pub fn deinit(self: *PlatformAppRelationBuildResult, allocator: Allocator) void {
         switch (self.*) {
             .relation => |*relation| relation.deinit(allocator),
             .type_mismatch => {},
+            .missing_value => {},
         }
         self.* = undefined;
     }
@@ -9708,13 +9717,13 @@ pub fn buildPlatformAppRelation(
     for (declarations, 0..) |declaration, i| {
         const required_name = platform_declaration_artifact.canonical_names.exportNameText(declaration.platform_name);
         const app_value = appTopLevelValueByName(app_artifact, required_name) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "checked artifact invariant violated: app artifact does not publish a top-level value for platform requirement {s}",
-                    .{required_name},
-                );
-            }
-            unreachable;
+            allocator.free(relations);
+            for (bindings[0..initialized_bindings]) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
+            allocator.free(bindings);
+            initialized_bindings = 0;
+            return .{ .missing_value = .{
+                .declaration = declaration,
+            } };
         };
 
         const requested_source_ty = try canonical_type_keys.fromVar(
@@ -11127,15 +11136,10 @@ fn topLevelDefSourceName(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     def: TypedCIR.Def,
-) Allocator.Error!canonical.ExportNameId {
+) Allocator.Error!?canonical.ExportNameId {
     switch (def.pattern.data) {
         .assign => |assign| return try names.internExportIdent(module.identStoreConst(), assign.ident),
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: top-level value has non-assign pattern", .{});
-            }
-            unreachable;
-        },
+        else => return null,
     }
 }
 
@@ -11879,10 +11883,16 @@ pub const TopLevelValueTable = struct {
         errdefer allocator.free(by_def);
         @memset(by_def, null);
 
+        var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
+        defer seen_source_names.deinit(allocator);
+
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
-            const source_name = try topLevelDefSourceName(module, names, def);
+            const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
+            const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
+            if (seen_source_name.found_existing) continue;
+            seen_source_name.value_ptr.* = {};
             const source_ty = module.defType(def_idx);
             const source_scheme = try canonical_type_keys.schemeFromVar(
                 allocator,
