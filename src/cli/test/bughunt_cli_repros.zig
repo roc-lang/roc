@@ -2251,11 +2251,22 @@ const tests = [_]CliBugSpec{
         \\
         \\main! = || {}
     ),
-    checkBodyCase(182, "B182", "unboxed recursive nominal definitions are rejected",
+    .{
+        .id = 182,
+        .bug_id = "B182",
+        .name = "bughunt B182: recursive nominal definitions are accepted",
+        .files = &.{.{ .path = "main.roc", .contents =
+        \\app [main!] { pf: platform "{FX_PLATFORM}" }
+        \\
+        \\import pf.Stdout
+        \\
         \\Tree := [Node(Tree)]
         \\
-        \\main! = || {}
-    ),
+        \\main! = || Stdout.line!("ok")
+        }},
+        .command = .check,
+        .expect = .success,
+    },
     checkBodyCase(183, "B183", "or-pattern alternatives must bind the same names",
         \\main! = || {
         \\    _ = match Ok(1) {
