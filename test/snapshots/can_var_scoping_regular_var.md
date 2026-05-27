@@ -141,44 +141,47 @@ NO CHANGE
 					(e-num (value "0")))
 				(s-reassign
 					(p-assign (ident "count_"))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "count_")))
-						(e-num (value "1"))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 136)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "count_"))))
+						(args
+							(e-num (value "1")))))
 				(s-reassign
 					(p-assign (ident "total_"))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "total_")))
-						(e-num (value "10"))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 168)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "total_"))))
+						(args
+							(e-num (value "10")))))
 				(s-let
 					(p-assign (ident "nestedFunc"))
-					(e-closure
-						(captures
-							(capture (ident "count_")))
-						(e-lambda
-							(args
-								(p-underscore))
-							(e-block
-								(s-reassign
-									(p-assign (ident "count_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(s-reassign
-									(p-assign (ident "total_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(e-lookup-local
-									(p-assign (ident "count_")))))))
+					(e-lambda
+						(args
+							(p-underscore))
+						(e-block
+							(s-reassign
+								(p-assign (ident "count_"))
+								(e-runtime-error (tag "var_across_function_boundary")))
+							(s-reassign
+								(p-assign (ident "total_"))
+								(e-runtime-error (tag "var_across_function_boundary")))
+							(e-lookup-local
+								(p-assign (ident "count_"))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 94)
+					(e-call (constraint-fn-var 172)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "total_")))
-					(e-lookup-local
-						(p-assign (ident "result"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 173)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "total_"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "result")))))))))
 ~~~
 # TYPES
 ~~~clojure

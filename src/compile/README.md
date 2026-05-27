@@ -18,7 +18,7 @@ The compile module serves as the orchestrator that coordinates between the diffe
 
 ## Embedding
 
-Roc can be embedded in another Zig program to compile and run `.roc` files in-process. The driver is [`Coordinator`](coordinator.zig); the in-process execution path uses [`lir.RuntimeImage`](../lir/runtime_image.zig) and [`eval.LirInterpreter`](../eval/interpreter.zig).
+Roc can be embedded in another Zig program to compile and run `.roc` files in-process. The driver is [`Coordinator`](coordinator.zig); the in-process execution path uses [`lir.LirImage`](../lir/lir_image.zig) and [`eval.LirInterpreter`](../eval/interpreter.zig).
 
 The embedding API is stable in shape; implementation details may change between releases.
 
@@ -68,31 +68,31 @@ const root = coord.executableRootCheckedArtifact();
 const imports = try coord.collectImportedArtifactViews(arena, root);
 const relations = try coord.collectRelationArtifactViews(arena, root);
 
-const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
     runtime_alloc,
     .{
         .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
         .imports = imports,
     },
-    .{ .requests = root.root_requests.requests },
+    .{ .requests = root.root_requests.runtime_requests },
     .{ .target_usize = base.target.TargetUsize.native },
 );
 
-// 6. Build the runtime image in the same contiguous buffer.
+// 6. Build the LIR image in the same contiguous buffer.
 const entrypoints = try lowered.platformEntrypoints(runtime_alloc);
 const entrypoint_names = try lowered.platformEntrypointNames(arena, root);
 
-const runtime_header = try runtime_alloc.create(lir.RuntimeImage.Header);
-try lir.RuntimeImage.fillHeaderInBuffer(
-    runtime_header,
+const image_header = try runtime_alloc.create(lir.LirImage.Header);
+try lir.LirImage.fillHeaderInBuffer(
+    image_header,
     runtime_buffer.ptr,    // start of the contiguous backing buffer
     runtime_fba.end_index, // bytes used so far
     &lowered.lir_result,
     lowered.target_usize,
     entrypoints,
 );
-const view = try lir.RuntimeImage.viewMappedImage(
-    runtime_header,
+const view = try lir.LirImage.viewMappedImage(
+    image_header,
     runtime_buffer.ptr,
     runtime_fba.end_index,
 );
@@ -123,7 +123,7 @@ Skip `finalizeExecutableArtifacts`, LIR lowering, and execution entirely.
 
 ### Runtime arena
 
-`fillHeaderInBuffer` and `viewMappedImage` compute offsets via `ptr - base_ptr` arithmetic, so **the runtime allocator must own a single contiguous virtual region**. `std.heap.ArenaAllocator` grows by allocating new pages and **will not work** — the offsets it computes will be wrong, either silently producing a broken image or tripping `error.InvalidRuntimeImage`.
+`fillHeaderInBuffer` and `viewMappedImage` compute offsets via `ptr - base_ptr` arithmetic, so **the image allocator must own a single contiguous virtual region**. `std.heap.ArenaAllocator` grows by allocating new pages and **will not work** — the offsets it computes will be wrong, either silently producing a broken image or tripping `error.InvalidLirImage`.
 
 Use a `std.heap.FixedBufferAllocator` over a heap-allocated contiguous buffer:
 
@@ -183,4 +183,4 @@ Wrong order is silent (wrong function called), not loud — be deliberate, espec
 2. Resolve URLs to local paths using your own caching policy.
 3. Register packages with `coord.ensurePackage` / `coord.registerInlinePackage` instead of `discoverAppFromPath`.
 
-The Roc CLI follows exactly this pattern — see `buildLirRuntimeImageWithCoordinator` in `src/cli/main.zig` for a worked example.
+The Roc CLI follows exactly this pattern — see `buildLirImageWithCoordinator` in `src/cli/main.zig` for a worked example.

@@ -349,13 +349,13 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call (constraint-fn-var 182)
+		(e-call (constraint-fn-var 322)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call (constraint-fn-var 193)
+		(e-call (constraint-fn-var 333)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string
@@ -387,14 +387,18 @@ main = |_| {
 							(builtin))
 						(e-lookup-local
 							(p-assign (ident "all_float_list")))))
-				(e-binop (op "add")
-					(e-binop (op "add")
+				(e-dispatch-call (method "plus") (constraint-fn-var 368)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 366)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "len1"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "len2"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "len1")))
-						(e-lookup-local
-							(p-assign (ident "len2"))))
-					(e-lookup-local
-						(p-assign (ident "len3"))))))))
+							(p-assign (ident "len3")))))))))
 ~~~
 # TYPES
 ~~~clojure

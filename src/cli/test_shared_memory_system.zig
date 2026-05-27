@@ -136,7 +136,7 @@ test "platform resolution - insecure HTTP URL rejected" {
     try testing.expectError(error.CliError, result);
 }
 
-fn compileRuntimeImageForSharedTest(
+fn compileLirImageForSharedTest(
     allocator: std.mem.Allocator,
     source: []const u8,
     imports: []const test_helpers.ModuleSource,
@@ -144,31 +144,31 @@ fn compileRuntimeImageForSharedTest(
     return test_helpers.compileProgramForTarget(allocator, .module, source, imports, .native);
 }
 
-fn expectRuntimeImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) !void {
+fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) !void {
     const used = compiled.lowered.shm.getUsedSize();
-    try testing.expect(used > @sizeOf(lir.RuntimeImage.Header));
+    try testing.expect(used > @sizeOf(lir.LirImage.Header));
     try testing.expect(compiled.lowered.view.root_procs.len > 0);
     try testing.expect(compiled.lowered.view.store.proc_specs.items.len > 0);
     try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
 
-    const header = compiled.lowered.runtime_header;
-    const child_view = try lir.RuntimeImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used);
-    try testing.expectEqual(lir.RuntimeImage.MAGIC, header.magic);
-    try testing.expectEqual(lir.RuntimeImage.FORMAT_VERSION, header.format_version);
+    const header = compiled.lowered.image_header;
+    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used);
+    try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
+    try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
     try testing.expectEqual(compiled.lowered.view.store.proc_specs.items.len, child_view.store.proc_specs.items.len);
     try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
 }
 
 test "integration - shared memory setup and parsing" {
-    var compiled = try compileRuntimeImageForSharedTest(
+    var compiled = try compileLirImageForSharedTest(
         testing.allocator,
         "main = || 40 + 2",
         &.{},
     );
     defer compiled.deinit(testing.allocator);
 
-    try expectRuntimeImageCanBeViewedFromMappedHeader(&compiled);
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
 }
 
 test "integration - compilation pipeline for different platforms" {
@@ -190,8 +190,8 @@ test "integration - compilation pipeline for different platforms" {
     );
     defer wasm32.deinit(testing.allocator);
 
-    try expectRuntimeImageCanBeViewedFromMappedHeader(&native);
-    try expectRuntimeImageCanBeViewedFromMappedHeader(&wasm32);
+    try expectLirImageCanBeViewedFromMappedHeader(&native);
+    try expectLirImageCanBeViewedFromMappedHeader(&wasm32);
     try testing.expectEqual(base.target.TargetUsize.native, native.lowered.view.target_usize);
     try testing.expectEqual(base.target.TargetUsize.u32, wasm32.lowered.view.target_usize);
 }
@@ -216,14 +216,14 @@ test "integration - automatic module dependency ordering" {
         .{ .name = "Leaf", .source = "module [value]\nvalue = 40\n" },
         .{ .name = "Branch", .source = "module [value]\nimport Leaf\nvalue = Leaf.value + 2\n" },
     };
-    var compiled = try compileRuntimeImageForSharedTest(
+    var compiled = try compileLirImageForSharedTest(
         testing.allocator,
         "import Branch\nmain = || Branch.value",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
 
-    try expectRuntimeImageCanBeViewedFromMappedHeader(&compiled);
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
     try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
 }
 
@@ -232,14 +232,14 @@ test "integration - transitive module imports (module A imports module B)" {
         .{ .name = "B", .source = "module [value]\nvalue = 40\n" },
         .{ .name = "A", .source = "module [value]\nimport B\nvalue = B.value + 2\n" },
     };
-    var compiled = try compileRuntimeImageForSharedTest(
+    var compiled = try compileLirImageForSharedTest(
         testing.allocator,
         "import A\nmain = || A.value",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
 
-    try expectRuntimeImageCanBeViewedFromMappedHeader(&compiled);
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
     try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
 }
 
@@ -250,14 +250,14 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
         .{ .name = "C", .source = "module [value]\nimport D\nvalue : {} -> I64\nvalue = |_| D.value({}) + 12\n" },
         .{ .name = "A", .source = "module [value]\nimport B\nimport C\nvalue : {} -> I64\nvalue = |_| B.value({}) + C.value({})\n" },
     };
-    var compiled = try compileRuntimeImageForSharedTest(
+    var compiled = try compileLirImageForSharedTest(
         testing.allocator,
         "import A\nmain = || A.value({})",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
 
-    try expectRuntimeImageCanBeViewedFromMappedHeader(&compiled);
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
     try testing.expectEqual(@as(usize, 5), compiled.resources.import_artifacts.len);
 }
 
@@ -266,13 +266,13 @@ test "integration - direct Core and Utils calls from app" {
         .{ .name = "Core", .source = "module [inc]\ninc = |x| x + 1\n" },
         .{ .name = "Utils", .source = "module [double]\ndouble = |x| x * 2\n" },
     };
-    var compiled = try compileRuntimeImageForSharedTest(
+    var compiled = try compileLirImageForSharedTest(
         testing.allocator,
         "import Core\nimport Utils\nmain = || Utils.double(Core.inc(20))",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
 
-    try expectRuntimeImageCanBeViewedFromMappedHeader(&compiled);
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
     try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
 }

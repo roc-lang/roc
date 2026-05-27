@@ -30,11 +30,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "add")
-	(e-field-access (field "age")
-		(receiver
-			(e-runtime-error (tag "ident_not_in_scope"))))
-	(e-num (value "5")))
+(e-dispatch-call (method "plus") (constraint-fn-var 44)
+	(receiver
+		(e-field-access (field "age")
+			(receiver
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(args
+		(e-num (value "5"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -83,8 +83,10 @@ pub const Tag = enum {
     expr_frac_f64,
     expr_dec,
     expr_dec_small,
+    expr_num_from_numeral,
     expr_typed_int,
     expr_typed_frac,
+    expr_typed_num_from_numeral,
     expr_tag,
     expr_nominal,
     expr_nominal_external,
@@ -298,6 +300,7 @@ pub const Payload = extern union {
     expr_num: ExprNum,
     expr_dec: ExprDec,
     expr_dec_small: ExprDecSmall,
+    expr_num_from_numeral: ExprNumFromNumeral,
     expr_string: ExprString,
     expr_field_access: ExprFieldAccess,
     expr_method_call: ExprMethodCall,
@@ -314,6 +317,7 @@ pub const Payload = extern union {
     expr_expect: ExprExpect,
     expr_typed_int: ExprTypedInt,
     expr_typed_frac: ExprTypedFrac,
+    expr_typed_num_from_numeral: ExprTypedNumFromNumeral,
     expr_string_segment: ExprStringSegment,
     expr_nominal: ExprNominal,
     expr_nominal_external: ExprNominalExternal,
@@ -598,6 +602,10 @@ pub const Payload = extern union {
         _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
     };
 
+    pub const ExprNumFromNumeral = extern struct {
+        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
     pub const ExprString = extern struct {
         segments_start: u32,
         segments_len: u32,
@@ -696,6 +704,11 @@ pub const Payload = extern union {
         type_name: u32,
         val_kind: u32,
         int128_idx: u32,
+    };
+
+    pub const ExprTypedNumFromNumeral = extern struct {
+        type_name: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_string_segment: string segment reference

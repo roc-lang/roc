@@ -23,13 +23,6 @@ pub const CacheManager = struct {
 
     const Self = @This();
 
-    fn verboseLog(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        if (!self.config.verbose) return;
-        var buf: [1024]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-        self.io.writeStderr(msg) catch {};
-    }
-
     pub fn init(allocator: Allocator, config: CacheConfig, io: Io) Self {
         return .{
             .config = config,
@@ -73,8 +66,7 @@ pub const CacheManager = struct {
     pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8) void {
         if (!self.config.enabled) return;
 
-        self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
-            self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
+        self.ensureCacheSubdirIn(cache_key, entries_dir) catch {
             self.stats.recordStoreFailure();
             return;
         };
@@ -91,14 +83,12 @@ pub const CacheManager = struct {
         };
         defer self.allocator.free(temp_path);
 
-        self.io.writeFile(temp_path, data) catch |err| {
-            self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
+        self.io.writeFile(temp_path, data) catch {
             self.stats.recordStoreFailure();
             return;
         };
 
-        self.io.rename(temp_path, cache_path) catch |err| {
-            self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
+        self.io.rename(temp_path, cache_path) catch {
             self.stats.recordStoreFailure();
             return;
         };
@@ -120,8 +110,7 @@ pub const CacheManager = struct {
             return null;
         }
 
-        const data = self.io.readFile(cache_path, self.allocator) catch |err| {
-            self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
+        const data = self.io.readFile(cache_path, self.allocator) catch {
             self.stats.recordMiss();
             return null;
         };

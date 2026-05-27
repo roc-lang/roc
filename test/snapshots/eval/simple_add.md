@@ -70,11 +70,13 @@ NO CHANGE
 			(args
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "a")))
-				(e-lookup-local
-					(p-assign (ident "b")))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 56)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "a"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "b"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U8") (builtin))
@@ -83,7 +85,7 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 86)
+				(e-call (constraint-fn-var 126)
 					(e-lookup-local
 						(p-assign (ident "addU8")))
 					(e-num (value "1"))
@@ -93,7 +95,7 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 229)
+				(e-call (constraint-fn-var 449)
 					(e-lookup-local
 						(p-assign (ident "addU8")))
 					(e-num (value "0"))

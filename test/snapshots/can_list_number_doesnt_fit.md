@@ -19,8 +19,8 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (e-list
-	(e-typed-int (raw "1") (type ".U8"))
-	(e-typed-int (raw "2") (type ".U8"))
+	(e-typed-int (raw "1") (type "U8"))
+	(e-typed-int (raw "2") (type "U8"))
 	(e-int (raw "300")))
 ~~~
 # FORMATTED

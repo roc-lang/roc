@@ -277,12 +277,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-binop (op "add")
-							(e-field-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 228)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -298,12 +300,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-binop (op "sub")
-							(e-field-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "minus") (constraint-fn-var 385)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -319,12 +323,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-binop (op "add")
-							(e-field-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 542)
+							(receiver
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -340,12 +346,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-binop (op "sub")
-							(e-field-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "minus") (constraint-fn-var 699)
+							(receiver
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -360,7 +368,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 565)
+				(e-call (constraint-fn-var 845)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -378,7 +386,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 742)
+				(e-call (constraint-fn-var 1262)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -396,7 +404,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 919)
+				(e-call (constraint-fn-var 1679)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -414,7 +422,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1096)
+				(e-call (constraint-fn-var 2096)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -430,23 +438,25 @@ NO CHANGE
 						(field (name "y")
 							(e-num (value "0"))))))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call (constraint-fn-var 1274)
-				(e-runtime-error (tag "erroneous_value_use"))
-				(e-call (constraint-fn-var 1273)
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 2514)
 					(e-runtime-error (tag "erroneous_value_use"))
-					(e-record
-						(fields
-							(field (name "x")
-								(e-num (value "5")))
-							(field (name "y")
-								(e-num (value "5")))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "5")))
-					(field (name "y")
-						(e-num (value "5"))))))))
+					(e-call (constraint-fn-var 2513)
+						(e-runtime-error (tag "erroneous_value_use"))
+						(e-record
+							(fields
+								(field (name "x")
+									(e-num (value "5")))
+								(field (name "y")
+									(e-num (value "5"))))))))
+			(rhs
+				(e-record
+					(fields
+						(field (name "x")
+							(e-num (value "5")))
+						(field (name "y")
+							(e-num (value "5")))))))))
 ~~~
 # TYPES
 ~~~clojure

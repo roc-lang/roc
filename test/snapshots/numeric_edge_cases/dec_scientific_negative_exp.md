@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec (value "1.23456789e-10"))
+(e-num-from-numeral)
 ~~~
 # TYPES
 ~~~clojure

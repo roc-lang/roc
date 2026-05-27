@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-f64 (value "1e100"))
+(e-num-from-numeral)
 ~~~
 # TYPES
 ~~~clojure

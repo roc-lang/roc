@@ -72,6 +72,37 @@ test "Custom number type with from_numeral: typed decimal suffix unifies" {
     try test_env.assertNoErrors();
 }
 
+test "Custom number type with from_numeral: exact huge fractional suffix unifies" {
+    const source =
+        \\  Big := [
+        \\      Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
+        \\  ].{
+        \\      from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
+        \\      from_numeral = |numeral| match numeral {
+        \\          Literal(parts) => Ok(Value({
+        \\              is_negative: parts.is_negative,
+        \\              before: parts.digits_before_pt,
+        \\              after: parts.digits_after_pt,
+        \\              count: parts.digits_after_pt_count,
+        \\          }))
+        \\      }
+        \\  }
+        \\
+        \\  main = {
+        \\      value = 340282366920938463463374607431768211456.00000000000000000001.Big
+        \\
+        \\      match value {
+        \\          Value(parts) => (parts.is_negative, parts.before, parts.after, parts.count)
+        \\      }
+        \\  }
+    ;
+
+    var test_env = try TestEnv.init("Big", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "Custom number type without from_numeral: integer literal does not unify" {
     const source =
         \\  MyType := [].{

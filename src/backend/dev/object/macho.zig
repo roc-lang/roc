@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 
 /// Mach-O constants
 const MachO = struct {
@@ -47,11 +48,14 @@ const MachO = struct {
 
     // Relocation types (x86_64)
     const X86_64_RELOC_UNSIGNED = 0;
+    const X86_64_RELOC_SIGNED = 1;
     const X86_64_RELOC_BRANCH = 2;
 
     // Relocation types (arm64)
     const ARM64_RELOC_UNSIGNED = 0;
     const ARM64_RELOC_BRANCH26 = 2;
+    const ARM64_RELOC_PAGE21 = 3;
+    const ARM64_RELOC_PAGEOFF12 = 4;
 };
 
 /// Mach-O 64-bit header (32 bytes)
@@ -228,6 +232,15 @@ pub const MachOWriter = struct {
         offset: u32,
         symbol_idx: u32,
         is_extern: bool,
+        pcrel: bool,
+        length: u2,
+        reloc_type: u4,
+    };
+
+    const TextDataReloc = struct {
+        pcrel: bool,
+        length: u2,
+        reloc_type: u4,
     };
 
     const DataReloc = struct {
@@ -316,6 +329,55 @@ pub const MachOWriter = struct {
             .offset = offset,
             .symbol_idx = symbol_idx,
             .is_extern = is_extern,
+            .pcrel = true,
+            .length = 2,
+            .reloc_type = self.arch.branchRelocType(),
+        });
+    }
+
+    /// Add a data-symbol relocation in the text section.
+    pub fn addTextDataRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: DataRelocationKind) !void {
+        const reloc: TextDataReloc = switch (kind) {
+            .abs64 => .{
+                .pcrel = false,
+                .length = @as(u2, 3),
+                .reloc_type = switch (self.arch) {
+                    .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
+                    .aarch64 => MachO.ARM64_RELOC_UNSIGNED,
+                },
+            },
+            .rel32 => .{
+                .pcrel = true,
+                .length = @as(u2, 2),
+                .reloc_type = switch (self.arch) {
+                    .x86_64 => MachO.X86_64_RELOC_SIGNED,
+                    .aarch64 => unreachable,
+                },
+            },
+            .page21 => .{
+                .pcrel = true,
+                .length = @as(u2, 2),
+                .reloc_type = switch (self.arch) {
+                    .x86_64 => unreachable,
+                    .aarch64 => MachO.ARM64_RELOC_PAGE21,
+                },
+            },
+            .pageoff12 => .{
+                .pcrel = false,
+                .length = @as(u2, 2),
+                .reloc_type = switch (self.arch) {
+                    .x86_64 => unreachable,
+                    .aarch64 => MachO.ARM64_RELOC_PAGEOFF12,
+                },
+            },
+        };
+        try self.text_relocs.append(self.allocator, .{
+            .offset = offset,
+            .symbol_idx = symbol_idx,
+            .is_extern = true,
+            .pcrel = reloc.pcrel,
+            .length = reloc.length,
+            .reloc_type = reloc.reloc_type,
         });
     }
 
@@ -524,10 +586,10 @@ pub const MachOWriter = struct {
             const reloc = RelocationInfo.init(
                 rel.offset,
                 @intCast(rel.symbol_idx),
-                true, // PC-relative
-                2, // 32-bit (2^2 = 4 bytes)
+                rel.pcrel,
+                rel.length,
                 rel.is_extern,
-                self.arch.branchRelocType(),
+                rel.reloc_type,
             );
             try output.appendSlice(self.allocator, std.mem.asBytes(&reloc));
         }

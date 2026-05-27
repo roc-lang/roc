@@ -351,24 +351,6 @@ Builtin :: [].{
 		## ```
 		join_with : List(Str), Str -> Str
 
-		## Split a string into two parts at the last occurrence of a specified delimiter substring, returning the part before the delimiter and the part after it. If the delimiter is not found, return `Err(NotFound)`.
-		## ```roc
-		## expect "a.b.c".split_last(".") == Ok({ before: "a.b", after: "c" })
-		## expect "abc".split_last(",") == Err(NotFound)
-		## ```
-		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
-		split_last = |str, delim| {
-			parts = str.split_on(delim)
-			if parts.len() <= 1 {
-				Err(NotFound)
-			} else {
-				match parts.last() {
-					Ok(after) => Ok({ before: parts.drop_last(1).join_with(delim), after })
-					Err(_) => Err(NotFound)
-				}
-			}
-		}
-
 		## Returns `True` if the two strings are exactly the same.
 		is_eq : Str, Str -> Bool
 
@@ -391,6 +373,90 @@ Builtin :: [].{
 		}
 	}
 
+	Iter(item) :: {
+		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
+		len_if_known : [Known(U64), Unknown],
+		step : () -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done],
+	}.{
+		custom : source, [Known(U64), Unknown], (source -> Try((item, Iter(item)), [NoMore])) -> Iter(item)
+		custom = |source, len_if_known, advance| {
+			len_if_known,
+			step: ||
+				match advance(source) {
+					Ok((item, rest_iter)) => One({ item, rest: rest_iter })
+					Err(NoMore) => Done
+				},
+		}
+
+		iter : Iter(item) -> Iter(item)
+		iter = |self| self
+
+		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done]
+		next = |iterator| (iterator.step)()
+
+		map : Iter(a), (a -> b) -> Iter(b)
+		map = |iterator, transform|
+			match iterator {
+				{ len_if_known, step } => {
+					len_if_known,
+					step: ||
+						match step() {
+							Done => Done
+							Skip({ count, rest }) => Skip({ count, rest: Iter.map(rest, transform) })
+							One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
+						},
+				}
+			}
+
+		keep_if : Iter(a), (a -> Bool) -> Iter(a)
+		keep_if = |iterator, predicate|
+			match iterator {
+				{ step, .. } => {
+					len_if_known: Unknown,
+					step: || {
+						match step() {
+							Done => Done
+							Skip({ count, rest }) => Skip({ count, rest: Iter.keep_if(rest, predicate) })
+							One({ item, rest }) =>
+								if predicate(item) {
+									One({ item, rest: Iter.keep_if(rest, predicate) })
+								} else {
+									Skip({ count: 1, rest: Iter.keep_if(rest, predicate) })
+								}
+							}
+					},
+				}
+			}
+
+		drop_if : Iter(a), (a -> Bool) -> Iter(a)
+		drop_if = |iterator, predicate|
+			match iterator {
+				{ step, .. } => {
+					len_if_known: Unknown,
+					step: || {
+						match step() {
+							Done => Done
+							Skip({ count, rest }) => Skip({ count, rest: Iter.drop_if(rest, predicate) })
+							One({ item, rest }) =>
+								if predicate(item) {
+									Skip({ count: 1, rest: Iter.drop_if(rest, predicate) })
+								} else {
+									One({ item, rest: Iter.drop_if(rest, predicate) })
+								}
+							}
+					},
+				}
+			}
+
+		fold : Iter(a), acc, (acc, a -> acc) -> acc
+		fold = |iterator, acc, step|
+			match Iter.next(iterator) {
+				Done => acc
+				Skip({ rest, .. }) => Iter.fold(rest, acc, step)
+				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
+			}
+	}
+
 	List(_item) :: [ProvidedByCompiler].{
 
 		## Returns the length of the list, which is equal to the number of elements it contains.
@@ -407,6 +473,26 @@ Builtin :: [].{
 		## ```
 		is_empty : List(_item) -> Bool
 		is_empty = |list| List.len(list) == 0
+
+		## Iterate over the list from first to last.
+		iter : List(item) -> Iter(item)
+		iter = |list| {
+			make = |index| {
+				len = List.len(list)
+
+				{
+					len_if_known: Known(len - index),
+					step: ||
+						if index == len {
+							Done
+						} else {
+							One({ item: list_get_unsafe(list, index), rest: make(index + 1) })
+						},
+				}
+			}
+
+			make(0)
+		}
 
 		## Put two lists together.
 		## ```roc
@@ -1741,17 +1827,17 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
-		Numeral :: [
-			Self(
-				{ # TODO get rid of the "Self" wrapper once we have nominal records"
+		Numeral := [
+			Literal(
+				{ # TODO get rid of this wrapper once we have nominal records"
 					# True iff there was a minus sign in front of the literal
 					is_negative : Bool,
 					# Base-256 digits before and after the decimal point, with any underscores
-					# and leading/trailing zeros removed from the source code.
+					# removed from the source code.
 					#
 					# Example: If I write "0356.5170" in the source file, that will be:
 					# - [1, 100] before the pt, because in base-256, 356 = (1 * 256^1) + (100 * 256^0)
-					# - [2, 5] after the pt, because in base-256, 517 = (2 * 256^1) + (5 * 256^0)
+					# - [20, 50] after the pt, because in base-256, 5170 = (20 * 256^1) + (50 * 256^0)
 					#
 					# This design compactly represents the digits without wasting any memory
 					# (because base-256 stores each digit using every single bit of the U8), and also
@@ -1759,13 +1845,14 @@ Builtin :: [].{
 					# arbitrarily long number literals as long as the number types can support them.
 					digits_before_pt : List(U8),
 					digits_after_pt : List(U8),
+					digits_after_pt_count : U64,
 				},
 			),
 		].{
 			is_negative : Numeral -> Bool
 			is_negative = |self| match self {
 				# TODO make this a nominal record once we have those
-				Self({ is_negative: neg, digits_before_pt: _, digits_after_pt: _ }) => neg
+				Literal({ is_negative: neg, digits_before_pt: _, digits_after_pt: _, digits_after_pt_count: _ }) => neg
 			}
 		}
 
@@ -1877,6 +1964,9 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
+			add_checked : U8, U8 -> Try(U8, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U8.highest, a, b)
+
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U8.plus_saturated(U8.highest, 1) == U8.highest
@@ -1896,11 +1986,17 @@ Builtin :: [].{
 			## ```
 			minus : U8, U8 -> U8
 
+			sub_checked : U8, U8 -> Try(U8, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U8] values.
 			## ```roc
 			## expect U8.times(4, 3) == 12
 			## ```
 			times : U8, U8 -> U8
+
+			mul_checked : U8, U8 -> Try(U8, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U8.highest, 0, a, b)
 
 			## Divide the first [U8] by the second, discarding any remainder. Crashes if the second [U8] is zero.
 			## ```roc
@@ -1909,6 +2005,9 @@ Builtin :: [].{
 			## expect U8.div_by(11, 2) == 5
 			## ```
 			div_by : U8, U8 -> U8
+
+			div_checked : U8, U8 -> Try(U8, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U8] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U8.div_by].
@@ -1980,7 +2079,8 @@ Builtin :: [].{
 			## ```roc
 			## expect U8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
+			from_int_digits = |digits| u8_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
 
@@ -1994,31 +2094,71 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(U8, [BadNumStr, ..])
 
-			## List of integers beginning with this `U8` and ending with the other `U8`.
+			## Iterator of integers beginning with this `U8` and ending with the other `U8`.
 			## (Use [U8.until] instead to end with the other `U8` minus one.)
-			## Returns an empty list if this `U8` is greater than the other.
+			## Returns an empty iterator if this `U8` is greater than the other.
 			## ```roc
-			## expect U8.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U8.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U8.to(3, 3) == [3]
+			## expect Iter.fold(U8.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U8.to(5, 2) == []
+			## expect Iter.fold(U8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U8, U8 -> List(U8)
-			to = |start, end| range_to(start, end)
+			to : U8, U8 -> Iter(U8)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U8.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U8.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `U8` and ending with the other `U8` minus one.
+			## Iterator of integers beginning with this `U8` and ending with the other `U8` minus one.
 			## (Use [U8.to] instead to end with the other `U8` exactly, instead of minus one.)
-			## Returns an empty list if this `U8` is greater than or equal to the other.
+			## Returns an empty iterator if this `U8` is greater than or equal to the other.
 			## ```roc
-			## expect U8.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U8.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U8.until(3, 3) == []
+			## expect Iter.fold(U8.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U8.until(5, 2) == []
+			## expect Iter.fold(U8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U8, U8 -> List(U8)
-			until = |start, end| range_until(start, end)
+			until : U8, U8 -> Iter(U8)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U8.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U8.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 
@@ -2221,6 +2361,9 @@ Builtin :: [].{
 			## ```
 			plus : I8, I8 -> I8
 
+			add_checked : I8, I8 -> Try(I8, [Overflow])
+			add_checked = |a, b| signed_add_checked(I8.lowest, I8.highest, 0, a, b)
+
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I8.plus_saturated(I8.highest, 1) == I8.highest
@@ -2244,11 +2387,17 @@ Builtin :: [].{
 			## ```
 			minus : I8, I8 -> I8
 
+			sub_checked : I8, I8 -> Try(I8, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I8.lowest, I8.highest, 0, a, b)
+
 			## Multiply two [I8] values.
 			## ```roc
 			## expect I8.times(4, 3) == 12
 			## ```
 			times : I8, I8 -> I8
+
+			mul_checked : I8, I8 -> Try(I8, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I8.lowest, I8.highest, 0, -1, a, b)
 
 			## Divide the first [I8] by the second, discarding any remainder. Crashes if the second [I8] is zero.
 			## ```roc
@@ -2257,6 +2406,9 @@ Builtin :: [].{
 			## expect I8.div_by(11, 2) == 5
 			## ```
 			div_by : I8, I8 -> I8
+
+			div_checked : I8, I8 -> Try(I8, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I8.lowest, 0, -1, a, b)
 
 			## Divide the first [I8] by the second, truncating toward zero.
 			## ```roc
@@ -2328,31 +2480,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I8, U8 -> I8
 
-			## List of integers beginning with this `I8` and ending with the other `I8`.
+			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
 			## (Use [I8.until] instead to end with the other `I8` minus one.)
-			## Returns an empty list if this `I8` is greater than the other.
+			## Returns an empty iterator if this `I8` is greater than the other.
 			## ```roc
-			## expect I8.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I8.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I8.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I8.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I8.to(5, 2) == []
+			## expect Iter.fold(I8.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I8, I8 -> List(I8)
-			to = |start, end| range_to(start, end)
+			to : I8, I8 -> Iter(I8)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I8.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I8.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `I8` and ending with the other `I8` minus one.
+			## Iterator of integers beginning with this `I8` and ending with the other `I8` minus one.
 			## (Use [I8.to] instead to end with the other `I8` exactly, instead of minus one.)
-			## Returns an empty list if this `I8` is greater than or equal to the other.
+			## Returns an empty iterator if this `I8` is greater than or equal to the other.
 			## ```roc
-			## expect I8.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I8.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I8.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I8.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I8.until(5, 2) == []
+			## expect Iter.fold(I8.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I8, I8 -> List(I8)
-			until = |start, end| range_until(start, end)
+			until : I8, I8 -> Iter(I8)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I8.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I8.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -2363,7 +2555,8 @@ Builtin :: [].{
 			## ```roc
 			## expect I8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
+			from_int_digits = |digits| i8_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
 
@@ -2617,6 +2810,9 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
+			add_checked : U16, U16 -> Try(U16, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U16.highest, a, b)
+
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U16.plus_saturated(U16.highest, 1) == U16.highest
@@ -2636,11 +2832,17 @@ Builtin :: [].{
 			## ```
 			minus : U16, U16 -> U16
 
+			sub_checked : U16, U16 -> Try(U16, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U16] values.
 			## ```roc
 			## expect U16.times(4, 3) == 12
 			## ```
 			times : U16, U16 -> U16
+
+			mul_checked : U16, U16 -> Try(U16, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U16.highest, 0, a, b)
 
 			## Divide the first [U16] by the second, discarding any remainder. Crashes if the second [U16] is zero.
 			## ```roc
@@ -2649,6 +2851,9 @@ Builtin :: [].{
 			## expect U16.div_by(11, 2) == 5
 			## ```
 			div_by : U16, U16 -> U16
+
+			div_checked : U16, U16 -> Try(U16, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U16] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U16.div_by].
@@ -2713,31 +2918,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U16, U8 -> U16
 
-			## List of integers beginning with this `U16` and ending with the other `U16`.
+			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
-			## Returns an empty list if this `U16` is greater than the other.
+			## Returns an empty iterator if this `U16` is greater than the other.
 			## ```roc
-			## expect U16.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U16.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U16.to(3, 3) == [3]
+			## expect Iter.fold(U16.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U16.to(5, 2) == []
+			## expect Iter.fold(U16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U16, U16 -> List(U16)
-			to = |start, end| range_to(start, end)
+			to : U16, U16 -> Iter(U16)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U16.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U16.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `U16` and ending with the other `U16` minus one.
+			## Iterator of integers beginning with this `U16` and ending with the other `U16` minus one.
 			## (Use [U16.to] instead to end with the other `U16` exactly, instead of minus one.)
-			## Returns an empty list if this `U16` is greater than or equal to the other.
+			## Returns an empty iterator if this `U16` is greater than or equal to the other.
 			## ```roc
-			## expect U16.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U16.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U16.until(3, 3) == []
+			## expect Iter.fold(U16.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U16.until(5, 2) == []
+			## expect Iter.fold(U16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U16, U16 -> List(U16)
-			until = |start, end| range_until(start, end)
+			until : U16, U16 -> Iter(U16)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U16.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U16.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -2746,7 +2991,8 @@ Builtin :: [].{
 			## ```roc
 			## expect U16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
+			from_int_digits = |digits| u16_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
 
@@ -2999,6 +3245,9 @@ Builtin :: [].{
 			## ```
 			plus : I16, I16 -> I16
 
+			add_checked : I16, I16 -> Try(I16, [Overflow])
+			add_checked = |a, b| signed_add_checked(I16.lowest, I16.highest, 0, a, b)
+
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I16.plus_saturated(I16.highest, 1) == I16.highest
@@ -3022,11 +3271,17 @@ Builtin :: [].{
 			## ```
 			minus : I16, I16 -> I16
 
+			sub_checked : I16, I16 -> Try(I16, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I16.lowest, I16.highest, 0, a, b)
+
 			## Multiply two [I16] values.
 			## ```roc
 			## expect I16.times(4, 3) == 12
 			## ```
 			times : I16, I16 -> I16
+
+			mul_checked : I16, I16 -> Try(I16, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I16.lowest, I16.highest, 0, -1, a, b)
 
 			## Divide the first [I16] by the second, discarding any remainder. Crashes if the second [I16] is zero.
 			## ```roc
@@ -3035,6 +3290,9 @@ Builtin :: [].{
 			## expect I16.div_by(11, 2) == 5
 			## ```
 			div_by : I16, I16 -> I16
+
+			div_checked : I16, I16 -> Try(I16, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I16.lowest, 0, -1, a, b)
 
 			## Divide the first [I16] by the second, truncating toward zero.
 			## ```roc
@@ -3106,31 +3364,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I16, U8 -> I16
 
-			## List of integers beginning with this `I16` and ending with the other `I16`.
+			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
-			## Returns an empty list if this `I16` is greater than the other.
+			## Returns an empty iterator if this `I16` is greater than the other.
 			## ```roc
-			## expect I16.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I16.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I16.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I16.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I16.to(5, 2) == []
+			## expect Iter.fold(I16.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I16, I16 -> List(I16)
-			to = |start, end| range_to(start, end)
+			to : I16, I16 -> Iter(I16)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I16.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I16.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `I16` and ending with the other `I16` minus one.
+			## Iterator of integers beginning with this `I16` and ending with the other `I16` minus one.
 			## (Use [I16.to] instead to end with the other `I16` exactly, instead of minus one.)
-			## Returns an empty list if this `I16` is greater than or equal to the other.
+			## Returns an empty iterator if this `I16` is greater than or equal to the other.
 			## ```roc
-			## expect I16.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I16.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I16.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I16.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I16.until(5, 2) == []
+			## expect Iter.fold(I16.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I16, I16 -> List(I16)
-			until = |start, end| range_until(start, end)
+			until : I16, I16 -> Iter(I16)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I16.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I16.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3141,7 +3439,8 @@ Builtin :: [].{
 			## ```roc
 			## expect I16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
+			from_int_digits = |digits| i16_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
 
@@ -3412,6 +3711,9 @@ Builtin :: [].{
 			## ```
 			plus : U32, U32 -> U32
 
+			add_checked : U32, U32 -> Try(U32, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U32.highest, a, b)
+
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U32.plus_saturated(U32.highest, 1) == U32.highest
@@ -3431,11 +3733,17 @@ Builtin :: [].{
 			## ```
 			minus : U32, U32 -> U32
 
+			sub_checked : U32, U32 -> Try(U32, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U32] values.
 			## ```roc
 			## expect U32.times(4, 3) == 12
 			## ```
 			times : U32, U32 -> U32
+
+			mul_checked : U32, U32 -> Try(U32, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U32.highest, 0, a, b)
 
 			## Divide the first [U32] by the second, discarding any remainder. Crashes if the second [U32] is zero.
 			## ```roc
@@ -3444,6 +3752,9 @@ Builtin :: [].{
 			## expect U32.div_by(11, 2) == 5
 			## ```
 			div_by : U32, U32 -> U32
+
+			div_checked : U32, U32 -> Try(U32, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U32] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U32.div_by].
@@ -3508,31 +3819,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U32, U8 -> U32
 
-			## List of integers beginning with this `U32` and ending with the other `U32`.
+			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
-			## Returns an empty list if this `U32` is greater than the other.
+			## Returns an empty iterator if this `U32` is greater than the other.
 			## ```roc
-			## expect U32.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U32.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U32.to(3, 3) == [3]
+			## expect Iter.fold(U32.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U32.to(5, 2) == []
+			## expect Iter.fold(U32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U32, U32 -> List(U32)
-			to = |start, end| range_to(start, end)
+			to : U32, U32 -> Iter(U32)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U32.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U32.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `U32` and ending with the other `U32` minus one.
+			## Iterator of integers beginning with this `U32` and ending with the other `U32` minus one.
 			## (Use [U32.to] instead to end with the other `U32` exactly, instead of minus one.)
-			## Returns an empty list if this `U32` is greater than or equal to the other.
+			## Returns an empty iterator if this `U32` is greater than or equal to the other.
 			## ```roc
-			## expect U32.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U32.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U32.until(3, 3) == []
+			## expect Iter.fold(U32.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U32.until(5, 2) == []
+			## expect Iter.fold(U32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U32, U32 -> List(U32)
-			until = |start, end| range_until(start, end)
+			until : U32, U32 -> Iter(U32)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U32.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U32.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3541,7 +3892,8 @@ Builtin :: [].{
 			## ```roc
 			## expect U32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
+			from_int_digits = |digits| u32_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
 
@@ -3832,6 +4184,9 @@ Builtin :: [].{
 			## ```
 			plus : I32, I32 -> I32
 
+			add_checked : I32, I32 -> Try(I32, [Overflow])
+			add_checked = |a, b| signed_add_checked(I32.lowest, I32.highest, 0, a, b)
+
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I32.plus_saturated(I32.highest, 1) == I32.highest
@@ -3855,11 +4210,17 @@ Builtin :: [].{
 			## ```
 			minus : I32, I32 -> I32
 
+			sub_checked : I32, I32 -> Try(I32, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I32.lowest, I32.highest, 0, a, b)
+
 			## Multiply two [I32] values.
 			## ```roc
 			## expect I32.times(4, 3) == 12
 			## ```
 			times : I32, I32 -> I32
+
+			mul_checked : I32, I32 -> Try(I32, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I32.lowest, I32.highest, 0, -1, a, b)
 
 			## Divide the first [I32] by the second, discarding any remainder. Crashes if the second [I32] is zero.
 			## ```roc
@@ -3868,6 +4229,9 @@ Builtin :: [].{
 			## expect I32.div_by(11, 2) == 5
 			## ```
 			div_by : I32, I32 -> I32
+
+			div_checked : I32, I32 -> Try(I32, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I32.lowest, 0, -1, a, b)
 
 			## Divide the first [I32] by the second, truncating toward zero.
 			## ```roc
@@ -3939,31 +4303,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I32, U8 -> I32
 
-			## List of integers beginning with this `I32` and ending with the other `I32`.
+			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
-			## Returns an empty list if this `I32` is greater than the other.
+			## Returns an empty iterator if this `I32` is greater than the other.
 			## ```roc
-			## expect I32.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I32.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I32.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I32.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I32.to(5, 2) == []
+			## expect Iter.fold(I32.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I32, I32 -> List(I32)
-			to = |start, end| range_to(start, end)
+			to : I32, I32 -> Iter(I32)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I32.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I32.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `I32` and ending with the other `I32` minus one.
+			## Iterator of integers beginning with this `I32` and ending with the other `I32` minus one.
 			## (Use [I32.to] instead to end with the other `I32` exactly, instead of minus one.)
-			## Returns an empty list if this `I32` is greater than or equal to the other.
+			## Returns an empty iterator if this `I32` is greater than or equal to the other.
 			## ```roc
-			## expect I32.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I32.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I32.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I32.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I32.until(5, 2) == []
+			## expect Iter.fold(I32.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I32, I32 -> List(I32)
-			until = |start, end| range_until(start, end)
+			until : I32, I32 -> Iter(I32)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I32.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I32.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3974,7 +4378,8 @@ Builtin :: [].{
 			## ```roc
 			## expect I32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
+			from_int_digits = |digits| i32_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
 
@@ -4265,6 +4670,9 @@ Builtin :: [].{
 			## ```
 			plus : U64, U64 -> U64
 
+			add_checked : U64, U64 -> Try(U64, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U64.highest, a, b)
+
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U64.plus_saturated(U64.highest, 1) == U64.highest
@@ -4284,11 +4692,17 @@ Builtin :: [].{
 			## ```
 			minus : U64, U64 -> U64
 
+			sub_checked : U64, U64 -> Try(U64, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U64] values.
 			## ```roc
 			## expect U64.times(4, 3) == 12
 			## ```
 			times : U64, U64 -> U64
+
+			mul_checked : U64, U64 -> Try(U64, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U64.highest, 0, a, b)
 
 			## Divide the first [U64] by the second, discarding any remainder. Crashes if the second [U64] is zero.
 			## ```roc
@@ -4297,6 +4711,9 @@ Builtin :: [].{
 			## expect U64.div_by(11, 2) == 5
 			## ```
 			div_by : U64, U64 -> U64
+
+			div_checked : U64, U64 -> Try(U64, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U64] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U64.div_by].
@@ -4361,31 +4778,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U64, U8 -> U64
 
-			## List of integers beginning with this `U64` and ending with the other `U64`.
+			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
-			## Returns an empty list if this `U64` is greater than the other.
+			## Returns an empty iterator if this `U64` is greater than the other.
 			## ```roc
-			## expect U64.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U64.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U64.to(3, 3) == [3]
+			## expect Iter.fold(U64.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U64.to(5, 2) == []
+			## expect Iter.fold(U64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U64, U64 -> List(U64)
-			to = |start, end| range_to(start, end)
+			to : U64, U64 -> Iter(U64)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U64.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U64.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `U64` and ending with the other `U64` minus one.
+			## Iterator of integers beginning with this `U64` and ending with the other `U64` minus one.
 			## (Use [U64.to] instead to end with the other `U64` exactly, instead of minus one.)
-			## Returns an empty list if this `U64` is greater than or equal to the other.
+			## Returns an empty iterator if this `U64` is greater than or equal to the other.
 			## ```roc
-			## expect U64.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U64.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U64.until(3, 3) == []
+			## expect Iter.fold(U64.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U64.until(5, 2) == []
+			## expect Iter.fold(U64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U64, U64 -> List(U64)
-			until = |start, end| range_until(start, end)
+			until : U64, U64 -> Iter(U64)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U64.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U64.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4394,7 +4851,8 @@ Builtin :: [].{
 			## ```roc
 			## expect U64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
+			from_int_digits = |digits| u64_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
 
@@ -4727,6 +5185,9 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
+			add_checked : I64, I64 -> Try(I64, [Overflow])
+			add_checked = |a, b| signed_add_checked(I64.lowest, I64.highest, 0, a, b)
+
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I64.plus_saturated(I64.highest, 1) == I64.highest
@@ -4750,11 +5211,17 @@ Builtin :: [].{
 			## ```
 			minus : I64, I64 -> I64
 
+			sub_checked : I64, I64 -> Try(I64, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I64.lowest, I64.highest, 0, a, b)
+
 			## Multiply two [I64] values.
 			## ```roc
 			## expect I64.times(4, 3) == 12
 			## ```
 			times : I64, I64 -> I64
+
+			mul_checked : I64, I64 -> Try(I64, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I64.lowest, I64.highest, 0, -1, a, b)
 
 			## Divide the first [I64] by the second, discarding any remainder. Crashes if the second [I64] is zero.
 			## ```roc
@@ -4763,6 +5230,9 @@ Builtin :: [].{
 			## expect I64.div_by(11, 2) == 5
 			## ```
 			div_by : I64, I64 -> I64
+
+			div_checked : I64, I64 -> Try(I64, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I64.lowest, 0, -1, a, b)
 
 			## Divide the first [I64] by the second, truncating toward zero.
 			## ```roc
@@ -4834,31 +5304,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I64, U8 -> I64
 
-			## List of integers beginning with this `I64` and ending with the other `I64`.
+			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
-			## Returns an empty list if this `I64` is greater than the other.
+			## Returns an empty iterator if this `I64` is greater than the other.
 			## ```roc
-			## expect I64.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I64.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I64.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I64.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I64.to(5, 2) == []
+			## expect Iter.fold(I64.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I64, I64 -> List(I64)
-			to = |start, end| range_to(start, end)
+			to : I64, I64 -> Iter(I64)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I64.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I64.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `I64` and ending with the other `I64` minus one.
+			## Iterator of integers beginning with this `I64` and ending with the other `I64` minus one.
 			## (Use [I64.to] instead to end with the other `I64` exactly, instead of minus one.)
-			## Returns an empty list if this `I64` is greater than or equal to the other.
+			## Returns an empty iterator if this `I64` is greater than or equal to the other.
 			## ```roc
-			## expect I64.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I64.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I64.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I64.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I64.until(5, 2) == []
+			## expect Iter.fold(I64.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I64, I64 -> List(I64)
-			until = |start, end| range_until(start, end)
+			until : I64, I64 -> Iter(I64)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I64.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I64.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4869,7 +5379,8 @@ Builtin :: [].{
 			## ```roc
 			## expect I64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
+			from_int_digits = |digits| i64_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
 
@@ -5176,6 +5687,9 @@ Builtin :: [].{
 			## ```
 			plus : U128, U128 -> U128
 
+			add_checked : U128, U128 -> Try(U128, [Overflow])
+			add_checked = |a, b| unsigned_add_checked(U128.highest, a, b)
+
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U128.plus_saturated(U128.highest, 1) == U128.highest
@@ -5195,11 +5709,17 @@ Builtin :: [].{
 			## ```
 			minus : U128, U128 -> U128
 
+			sub_checked : U128, U128 -> Try(U128, [Overflow])
+			sub_checked = |a, b| unsigned_sub_checked(a, b)
+
 			## Multiply two [U128] values.
 			## ```roc
 			## expect U128.times(4, 3) == 12
 			## ```
 			times : U128, U128 -> U128
+
+			mul_checked : U128, U128 -> Try(U128, [Overflow])
+			mul_checked = |a, b| unsigned_mul_checked(U128.highest, 0, a, b)
 
 			## Divide the first [U128] by the second, discarding any remainder. Crashes if the second [U128] is zero.
 			## ```roc
@@ -5208,6 +5728,9 @@ Builtin :: [].{
 			## expect U128.div_by(11, 2) == 5
 			## ```
 			div_by : U128, U128 -> U128
+
+			div_checked : U128, U128 -> Try(U128, [DivByZero])
+			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
 			## Divide the first [U128] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U128.div_by].
@@ -5272,31 +5795,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U128, U8 -> U128
 
-			## List of integers beginning with this `U128` and ending with the other `U128`.
+			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
-			## Returns an empty list if this `U128` is greater than the other.
+			## Returns an empty iterator if this `U128` is greater than the other.
 			## ```roc
-			## expect U128.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(U128.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect U128.to(3, 3) == [3]
+			## expect Iter.fold(U128.to(3, 3), [], |acc, item| acc.append(item)) == [3]
 			##
-			## expect U128.to(5, 2) == []
+			## expect Iter.fold(U128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : U128, U128 -> List(U128)
-			to = |start, end| range_to(start, end)
+			to : U128, U128 -> Iter(U128)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match U128.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										U128.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `U128` and ending with the other `U128` minus one.
+			## Iterator of integers beginning with this `U128` and ending with the other `U128` minus one.
 			## (Use [U128.to] instead to end with the other `U128` exactly, instead of minus one.)
-			## Returns an empty list if this `U128` is greater than or equal to the other.
+			## Returns an empty iterator if this `U128` is greater than or equal to the other.
 			## ```roc
-			## expect U128.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(U128.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect U128.until(3, 3) == []
+			## expect Iter.fold(U128.until(3, 3), [], |acc, item| acc.append(item)) == []
 			##
-			## expect U128.until(5, 2) == []
+			## expect Iter.fold(U128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : U128, U128 -> List(U128)
-			until = |start, end| range_until(start, end)
+			until : U128, U128 -> Iter(U128)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match U128.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										U128.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5306,7 +5869,8 @@ Builtin :: [].{
 			## ```roc
 			## expect U128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
+			from_int_digits = |digits| u128_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
 
@@ -5507,7 +6071,8 @@ Builtin :: [].{
 			to_f64 : U128 -> F64
 
 			# Conversion to Dec (can overflow)
-			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..])
+			to_dec_try : U128 -> Try(Dec, [OutOfRange])
+			to_dec_try = |num| out_of_range_try(u128_to_dec_try_unsafe(num))
 
 			# Encode a U128 using a format that provides encode_u128
 			encode : U128, fmt -> Try(encoded, err)
@@ -5676,6 +6241,9 @@ Builtin :: [].{
 			## ```
 			plus : I128, I128 -> I128
 
+			add_checked : I128, I128 -> Try(I128, [Overflow])
+			add_checked = |a, b| signed_add_checked(I128.lowest, I128.highest, 0, a, b)
+
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I128.plus_saturated(I128.highest, 1) == I128.highest
@@ -5699,11 +6267,17 @@ Builtin :: [].{
 			## ```
 			minus : I128, I128 -> I128
 
+			sub_checked : I128, I128 -> Try(I128, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(I128.lowest, I128.highest, 0, a, b)
+
 			## Multiply two [I128] values.
 			## ```roc
 			## expect I128.times(4, 3) == 12
 			## ```
 			times : I128, I128 -> I128
+
+			mul_checked : I128, I128 -> Try(I128, [Overflow])
+			mul_checked = |a, b| signed_mul_checked(I128.lowest, I128.highest, 0, -1, a, b)
 
 			## Divide the first [I128] by the second, discarding any remainder. Crashes if the second [I128] is zero.
 			## ```roc
@@ -5712,6 +6286,9 @@ Builtin :: [].{
 			## expect I128.div_by(11, 2) == 5
 			## ```
 			div_by : I128, I128 -> I128
+
+			div_checked : I128, I128 -> Try(I128, [DivByZero, Overflow])
+			div_checked = |a, b| signed_div_checked(I128.lowest, 0, -1, a, b)
 
 			## Divide the first [I128] by the second, truncating toward zero.
 			## ```roc
@@ -5784,31 +6361,71 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I128, U8 -> I128
 
-			## List of integers beginning with this `I128` and ending with the other `I128`.
+			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
-			## Returns an empty list if this `I128` is greater than the other.
+			## Returns an empty iterator if this `I128` is greater than the other.
 			## ```roc
-			## expect I128.to(1, 4) == [1, 2, 3, 4]
+			## expect Iter.fold(I128.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
 			##
-			## expect I128.to(-2, 1) == [-2, -1, 0, 1]
+			## expect Iter.fold(I128.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
 			##
-			## expect I128.to(5, 2) == []
+			## expect Iter.fold(I128.to(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : I128, I128 -> List(I128)
-			to = |start, end| range_to(start, end)
+			to : I128, I128 -> Iter(I128)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match I128.add_checked(start, 1) {
+									Ok(next) => if next <= end {
+										I128.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of integers beginning with this `I128` and ending with the other `I128` minus one.
+			## Iterator of integers beginning with this `I128` and ending with the other `I128` minus one.
 			## (Use [I128.to] instead to end with the other `I128` exactly, instead of minus one.)
-			## Returns an empty list if this `I128` is greater than or equal to the other.
+			## Returns an empty iterator if this `I128` is greater than or equal to the other.
 			## ```roc
-			## expect I128.until(1, 4) == [1, 2, 3]
+			## expect Iter.fold(I128.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
 			##
-			## expect I128.until(-2, 1) == [-2, -1, 0]
+			## expect Iter.fold(I128.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
 			##
-			## expect I128.until(5, 2) == []
+			## expect Iter.fold(I128.until(5, 2), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : I128, I128 -> List(I128)
-			until = |start, end| range_until(start, end)
+			until : I128, I128 -> Iter(I128)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match I128.add_checked(start, 1) {
+									Ok(next) => if next < end {
+										I128.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5820,7 +6437,8 @@ Builtin :: [].{
 			## ```roc
 			## expect I128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
+			from_int_digits = |digits| i128_from_int_digits(digits)
 
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
 
@@ -6024,7 +6642,8 @@ Builtin :: [].{
 
 			## Convert an [I128] to a [Dec], returning `Err(OutOfRange)` if the
 			## value does not fit in a [Dec].
-			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..])
+			to_dec_try : I128 -> Try(Dec, [OutOfRange])
+			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
 			## Encode an I128 using a format that provides encode_i128
 			encode : I128, fmt -> Try(encoded, err)
@@ -6192,6 +6811,9 @@ Builtin :: [].{
 			## ```
 			plus : Dec, Dec -> Dec
 
+			add_checked : Dec, Dec -> Try(Dec, [Overflow])
+			add_checked = |a, b| signed_add_checked(Dec.lowest, Dec.highest, 0.0, a, b)
+
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect Dec.plus_saturated(Dec.highest, 1.0) == Dec.highest
@@ -6214,6 +6836,9 @@ Builtin :: [].{
 			## expect Dec.minus(5.0, 3.5) == 1.5
 			## ```
 			minus : Dec, Dec -> Dec
+
+			sub_checked : Dec, Dec -> Try(Dec, [Overflow])
+			sub_checked = |a, b| signed_sub_checked(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Multiply two [Dec] values.
 			## ```roc
@@ -6262,7 +6887,8 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.from_int_digits([1, 2, 3]) == Ok(123.0)
 			## ```
-			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
+			from_int_digits = |digits| dec_from_int_digits(digits)
 
 			## Build a [Dec] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
@@ -6274,7 +6900,8 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.from_dec_digits(([1, 2], [5])) == Ok(12.5)
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
+			from_dec_digits = |digits| dec_from_dec_digits(digits)
 
 			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
 
@@ -6313,7 +6940,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
+			to_i8_try : Dec -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range_try(dec_to_i8_try_unsafe(num))
 
 			## Convert a [Dec] to an [I16]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -6336,7 +6964,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
+			to_i16_try : Dec -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range_try(dec_to_i16_try_unsafe(num))
 
 			## Convert a [Dec] to an [I32]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -6359,7 +6988,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i32_try(3000000000.0) == Err(OutOfRange)
 			## ```
-			to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
+			to_i32_try : Dec -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range_try(dec_to_i32_try_unsafe(num))
 
 			## Convert a [Dec] to an [I64]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -6377,7 +7007,8 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
+			to_i64_try : Dec -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range_try(dec_to_i64_try_unsafe(num))
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
@@ -6393,7 +7024,8 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
+			to_i128_try : Dec -> Try(I128, [OutOfRange])
+			to_i128_try = |num| out_of_range_try(dec_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
 
@@ -6418,7 +7050,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
+			to_u8_try : Dec -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range_try(dec_to_u8_try_unsafe(num))
 
 			## Convert a [Dec] to a [U16]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -6441,7 +7074,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u16_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
+			to_u16_try : Dec -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range_try(dec_to_u16_try_unsafe(num))
 
 			## Convert a [Dec] to a [U32]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -6464,7 +7098,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u32_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
+			to_u32_try : Dec -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range_try(dec_to_u32_try_unsafe(num))
 
 			## Convert a [Dec] to a [U64]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -6486,7 +7121,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u64_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
+			to_u64_try : Dec -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range_try(dec_to_u64_try_unsafe(num))
 
 			## Convert a [Dec] to a [U128]. The fractional part is truncated
 			## toward zero. Non-negative integer parts are preserved; negative
@@ -6504,7 +7140,8 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u128_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
+			to_u128_try : Dec -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range_try(dec_to_u128_try_unsafe(num))
 
 			# Conversions to floating point (lossy - Dec has more precision)
 
@@ -6518,40 +7155,81 @@ Builtin :: [].{
 			## value does not fit in the finite [F32] range. This conversion is
 			## lossy because [Dec] has more precision than [F32] in its
 			## fractional range.
-			to_f32_try : Dec -> Try(F32, [OutOfRange, ..])
+			to_f32_try : Dec -> Try(F32, [OutOfRange])
+			to_f32_try = |num| out_of_range_try(dec_to_f32_try_unsafe(num))
 
 			## Convert a [Dec] to an [F64]. This conversion is lossy because
 			## [Dec] has more precision than [F64] in its fractional range.
 			to_f64 : Dec -> F64
 
-			## List of decimals beginning with this `Dec` and ending with the
+			## Iterator of decimals beginning with this `Dec` and ending with the
 			## other `Dec`, stepping by `1.0`. (Use [Dec.until] instead to end with
-			## the other `Dec` minus one.) Returns an empty list if this `Dec`
+			## the other `Dec` minus one.) Returns an empty iterator if this `Dec`
 			## is greater than the other.
 			## ```roc
-			## expect Dec.to(1.0, 4.0) == [1.0, 2.0, 3.0, 4.0]
+			## expect Iter.fold(Dec.to(1.0, 4.0), [], |acc, item| acc.append(item)) == [1.0, 2.0, 3.0, 4.0]
 			##
-			## expect Dec.to(-2.0, 1.0) == [-2.0, -1.0, 0.0, 1.0]
+			## expect Iter.fold(Dec.to(-2.0, 1.0), [], |acc, item| acc.append(item)) == [-2.0, -1.0, 0.0, 1.0]
 			##
-			## expect Dec.to(5.0, 2.0) == []
+			## expect Iter.fold(Dec.to(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
-			to : Dec, Dec -> List(Dec)
-			to = |start, end| range_to(start, end)
+			to : Dec, Dec -> Iter(Dec)
+			to = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start <= end {
+						One(
+							{
+								item: start,
+								rest: match Dec.add_checked(start, 1.0) {
+									Ok(next) => if next <= end {
+										Dec.to(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
-			## List of decimals beginning with this `Dec` and ending with the
+			## Iterator of decimals beginning with this `Dec` and ending with the
 			## other `Dec` minus one, stepping by `1.0`. (Use [Dec.to] instead to
 			## end with the other `Dec` exactly, instead of minus one.) Returns
-			## an empty list if this `Dec` is greater than or equal to the
+			## an empty iterator if this `Dec` is greater than or equal to the
 			## other.
 			## ```roc
-			## expect Dec.until(1.0, 4.0) == [1.0, 2.0, 3.0]
+			## expect Iter.fold(Dec.until(1.0, 4.0), [], |acc, item| acc.append(item)) == [1.0, 2.0, 3.0]
 			##
-			## expect Dec.until(-2.0, 1.0) == [-2.0, -1.0, 0.0]
+			## expect Iter.fold(Dec.until(-2.0, 1.0), [], |acc, item| acc.append(item)) == [-2.0, -1.0, 0.0]
 			##
-			## expect Dec.until(5.0, 2.0) == []
+			## expect Iter.fold(Dec.until(5.0, 2.0), [], |acc, item| acc.append(item)) == []
 			## ```
-			until : Dec, Dec -> List(Dec)
-			until = |start, end| range_until(start, end)
+			until : Dec, Dec -> Iter(Dec)
+			until = |start, end| {
+				len_if_known: Unknown,
+				step: ||
+					if start < end {
+						One(
+							{
+								item: start,
+								rest: match Dec.add_checked(start, 1.0) {
+									Ok(next) => if next < end {
+										Dec.until(next, end)
+									} else {
+										range_done()
+									}
+									Err(Overflow) => range_done()
+								},
+							},
+						)
+					} else {
+						Done
+					},
+			}
 
 			## Encode a Dec using a format that provides encode_dec
 			encode : Dec, fmt -> Try(encoded, err)
@@ -6725,28 +7403,6 @@ Builtin :: [].{
 			## ```
 			plus : F32, F32 -> F32
 
-			## Add two [F32] values, clamping the result to the finite range
-			## `[F32.lowest, F32.highest]`. An overflow to `inf` or `-inf` is
-			## clamped to [F32.highest] or [F32.lowest] respectively. `NaN` operands
-			## or results pass through unchanged.
-			## ```roc
-			## expect F32.plus_saturated(F32.highest, F32.highest) == F32.highest
-			##
-			## expect F32.plus_saturated(F32.lowest, F32.lowest) == F32.lowest
-			##
-			## expect F32.plus_saturated(1.5, 2.5) == 4.0
-			## ```
-			plus_saturated : F32, F32 -> F32
-			plus_saturated = |a, b| {
-				sum = a + b
-				if sum > highest
-					highest
-				else if sum < lowest
-					lowest
-				else
-					sum
-			}
-
 			## Subtract the second [F32] from the first. Subtraction is subject to
 			## IEEE 754 rounding; the result may be `inf`, `-inf`, or `NaN`.
 			## ```roc
@@ -6807,7 +7463,8 @@ Builtin :: [].{
 			##     Err(_) => False
 			## }
 			## ```
-			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
+			from_int_digits = |digits| f32_from_int_digits(digits)
 
 			## Build an [F32] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
@@ -6822,7 +7479,8 @@ Builtin :: [].{
 			##     Err(_) => False
 			## }
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
+			from_dec_digits = |digits| f32_from_dec_digits(digits)
 
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
 
@@ -6867,7 +7525,8 @@ Builtin :: [].{
 			##
 			## expect F32.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : F32 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range_try(f32_to_i8_try_unsafe(num))
 
 			## Convert an [F32] to an [I16]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -6890,7 +7549,8 @@ Builtin :: [].{
 			##
 			## expect F32.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : F32 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range_try(f32_to_i16_try_unsafe(num))
 
 			## Convert an [F32] to an [I32]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -6906,7 +7566,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i32_try(42.5) == Ok(42)
 			## ```
-			to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
+			to_i32_try : F32 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range_try(f32_to_i32_try_unsafe(num))
 
 			## Convert an [F32] to an [I64]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -6922,7 +7583,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
+			to_i64_try : F32 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range_try(f32_to_i64_try_unsafe(num))
 
 			## Convert an [F32] to an [I128]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -6938,7 +7600,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
+			to_i128_try : F32 -> Try(I128, [OutOfRange])
+			to_i128_try = |num| out_of_range_try(f32_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 
@@ -6960,7 +7623,8 @@ Builtin :: [].{
 			##
 			## expect F32.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : F32 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range_try(f32_to_u8_try_unsafe(num))
 
 			## Convert an [F32] to a [U16]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -6978,7 +7642,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u16_try(42.5) == Ok(42)
 			## ```
-			to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : F32 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range_try(f32_to_u16_try_unsafe(num))
 
 			## Convert an [F32] to a [U32]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -6996,7 +7661,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u32_try(42.5) == Ok(42)
 			## ```
-			to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : F32 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range_try(f32_to_u32_try_unsafe(num))
 
 			## Convert an [F32] to a [U64]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7014,7 +7680,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u64_try(42.5) == Ok(42)
 			## ```
-			to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : F32 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range_try(f32_to_u64_try_unsafe(num))
 
 			## Convert an [F32] to a [U128]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7032,7 +7699,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u128_try(42.5) == Ok(42)
 			## ```
-			to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
+			to_u128_try : F32 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range_try(f32_to_u128_try_unsafe(num))
 
 			## Convert an [F32] to an [F64]. This is a safe widening conversion:
 			## every [F32] value is exactly representable as an [F64], including
@@ -7214,28 +7882,6 @@ Builtin :: [].{
 			## ```
 			plus : F64, F64 -> F64
 
-			## Add two [F64] values, clamping the result to the finite range
-			## `[F64.lowest, F64.highest]`. An overflow to `inf` or `-inf` is
-			## clamped to [F64.highest] or [F64.lowest] respectively. `NaN` operands
-			## or results pass through unchanged.
-			## ```roc
-			## expect F64.plus_saturated(F64.highest, F64.highest) == F64.highest
-			##
-			## expect F64.plus_saturated(F64.lowest, F64.lowest) == F64.lowest
-			##
-			## expect F64.plus_saturated(1.5, 2.5) == 4.0
-			## ```
-			plus_saturated : F64, F64 -> F64
-			plus_saturated = |a, b| {
-				sum = a + b
-				if sum > highest
-					highest
-				else if sum < lowest
-					lowest
-				else
-					sum
-			}
-
 			## Subtract the second [F64] from the first. Subtraction is subject to
 			## IEEE 754 rounding; the result may be `inf`, `-inf`, or `NaN`.
 			## ```roc
@@ -7296,7 +7942,8 @@ Builtin :: [].{
 			##     Err(_) => False
 			## }
 			## ```
-			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
+			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
+			from_int_digits = |digits| f64_from_int_digits(digits)
 
 			## Build an [F64] from a tuple of (integer digits, fractional digits),
 			## each as a list of base-10 digits most significant first. Each
@@ -7311,7 +7958,8 @@ Builtin :: [].{
 			##     Err(_) => False
 			## }
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
+			from_dec_digits = |digits| f64_from_dec_digits(digits)
 
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
 
@@ -7356,7 +8004,8 @@ Builtin :: [].{
 			##
 			## expect F64.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
+			to_i8_try : F64 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range_try(f64_to_i8_try_unsafe(num))
 
 			## Convert an [F64] to an [I16]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. Integer-part
@@ -7379,7 +8028,8 @@ Builtin :: [].{
 			##
 			## expect F64.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
+			to_i16_try : F64 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range_try(f64_to_i16_try_unsafe(num))
 
 			## Convert an [F64] to an [I32]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7395,7 +8045,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i32_try(42.5) == Ok(42)
 			## ```
-			to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
+			to_i32_try : F64 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range_try(f64_to_i32_try_unsafe(num))
 
 			## Convert an [F64] to an [I64]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7411,7 +8062,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
+			to_i64_try : F64 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range_try(f64_to_i64_try_unsafe(num))
 
 			## Convert an [F64] to an [I128]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7427,7 +8079,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
+			to_i128_try : F64 -> Try(I128, [OutOfRange])
+			to_i128_try = |num| out_of_range_try(f64_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 
@@ -7449,7 +8102,8 @@ Builtin :: [].{
 			##
 			## expect F64.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
+			to_u8_try : F64 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range_try(f64_to_u8_try_unsafe(num))
 
 			## Convert an [F64] to a [U16]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7467,7 +8121,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u16_try(42.5) == Ok(42)
 			## ```
-			to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
+			to_u16_try : F64 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range_try(f64_to_u16_try_unsafe(num))
 
 			## Convert an [F64] to a [U32]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7485,7 +8140,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u32_try(42.5) == Ok(42)
 			## ```
-			to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
+			to_u32_try : F64 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range_try(f64_to_u32_try_unsafe(num))
 
 			## Convert an [F64] to a [U64]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7503,7 +8159,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u64_try(42.5) == Ok(42)
 			## ```
-			to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
+			to_u64_try : F64 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range_try(f64_to_u64_try_unsafe(num))
 
 			## Convert an [F64] to a [U128]. The fractional part is truncated
 			## toward zero; the integer part wraps on overflow. The result for
@@ -7521,7 +8178,8 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u128_try(42.5) == Ok(42)
 			## ```
-			to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
+			to_u128_try : F64 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range_try(f64_to_u128_try_unsafe(num))
 
 			## Convert an [F64] to an [F32], narrowing the value. [F64] has more
 			## precision and a wider range than [F32], so this conversion may
@@ -7543,15 +8201,8 @@ Builtin :: [].{
 			##     Err(_) => False
 			## }
 			## ```
-			to_f32_try : F64 -> Try(F32, [OutOfRange, ..])
-			to_f32_try = |num| {
-				answer = f64_to_f32_try_unsafe(num)
-				if answer.success != 0 {
-					Ok(answer.val_or_memory_garbage)
-				} else {
-					Err(OutOfRange)
-				}
-			}
+			to_f32_try : F64 -> Try(F32, [OutOfRange])
+			to_f32_try = |num| out_of_range_try(f64_to_f32_try_unsafe(num))
 
 			## Encode an F64 using a format that provides encode_f64
 			encode : F64, fmt -> Try(encoded, err)
@@ -7570,28 +8221,289 @@ Builtin :: [].{
 		}
 	}
 
+	u8_from_str : Str -> Try(U8, [BadNumStr])
+	i8_from_str : Str -> Try(I8, [BadNumStr])
+	u16_from_str : Str -> Try(U16, [BadNumStr])
+	i16_from_str : Str -> Try(I16, [BadNumStr])
+	u32_from_str : Str -> Try(U32, [BadNumStr])
+	i32_from_str : Str -> Try(I32, [BadNumStr])
+	u64_from_str : Str -> Try(U64, [BadNumStr])
+	i64_from_str : Str -> Try(I64, [BadNumStr])
+	u128_from_str : Str -> Try(U128, [BadNumStr])
+	i128_from_str : Str -> Try(I128, [BadNumStr])
+	dec_from_str : Str -> Try(Dec, [BadNumStr])
+	f32_from_str : Str -> Try(F32, [BadNumStr])
+	f64_from_str : Str -> Try(F64, [BadNumStr])
+
 }
 
-range_to = |var $current, end| {
-	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
+u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange])
+u8_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u8_from_str(str))
 
-	while $current <= end {
-		$answer = $answer.append($current)
-		$current = $current + 1
+i8_from_int_digits : List(U8) -> Try(I8, [OutOfRange])
+i8_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i8_from_str(str))
+
+u16_from_int_digits : List(U8) -> Try(U16, [OutOfRange])
+u16_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u16_from_str(str))
+
+i16_from_int_digits : List(U8) -> Try(I16, [OutOfRange])
+i16_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i16_from_str(str))
+
+u32_from_int_digits : List(U8) -> Try(U32, [OutOfRange])
+u32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u32_from_str(str))
+
+i32_from_int_digits : List(U8) -> Try(I32, [OutOfRange])
+i32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i32_from_str(str))
+
+u64_from_int_digits : List(U8) -> Try(U64, [OutOfRange])
+u64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u64_from_str(str))
+
+i64_from_int_digits : List(U8) -> Try(I64, [OutOfRange])
+i64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i64_from_str(str))
+
+u128_from_int_digits : List(U8) -> Try(U128, [OutOfRange])
+u128_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.u128_from_str(str))
+
+i128_from_int_digits : List(U8) -> Try(I128, [OutOfRange])
+i128_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.i128_from_str(str))
+
+dec_from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
+dec_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.dec_from_str(str))
+
+dec_from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
+dec_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.dec_from_str(str))
+
+f32_from_int_digits : List(U8) -> Try(F32, [OutOfRange])
+f32_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.f32_from_str(str))
+
+f32_from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
+f32_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.f32_from_str(str))
+
+f64_from_int_digits : List(U8) -> Try(F64, [OutOfRange])
+f64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.f64_from_str(str))
+
+f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
+f64_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.f64_from_str(str))
+
+out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange])
+out_of_range_try = |answer|
+	if answer.success != 0 {
+		Ok(answer.val_or_memory_garbage)
+	} else {
+		Err(OutOfRange)
 	}
 
-	$answer
+digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange])
+digits_to_bytes = |digits|
+	List.fold(
+		digits,
+		Ok([]),
+		|state, digit|
+			match state {
+				Err(OutOfRange) => Err(OutOfRange)
+				Ok(bytes) =>
+					if digit > 9 {
+						Err(OutOfRange)
+					} else {
+						Ok(List.append(bytes, digit + 48))
+					}
+				},
+	)
+
+int_from_digits : List(U8), (Str -> Try(item, err)) -> Try(item, [OutOfRange])
+int_from_digits = |digits, parse|
+	match digits_to_str(digits) {
+		Ok(str) =>
+			match parse(str) {
+				Ok(num) => Ok(num)
+				Err(_) => Err(OutOfRange)
+			}
+		Err(OutOfRange) => Err(OutOfRange)
+	}
+
+dec_from_digits : (List(U8), List(U8)), (Str -> Try(item, err)) -> Try(item, [OutOfRange])
+dec_from_digits = |digits, parse| {
+	(int_digits, frac_digits) = digits
+
+	match digits_to_bytes(int_digits) {
+		Err(OutOfRange) => Err(OutOfRange)
+		Ok(int_bytes) =>
+			match digits_to_bytes(frac_digits) {
+				Err(OutOfRange) => Err(OutOfRange)
+				Ok(frac_bytes) => {
+					bytes = List.concat(List.concat(int_bytes, [46]), frac_bytes)
+					match bytes_to_str(bytes) {
+						Ok(str) =>
+							match parse(str) {
+								Ok(num) => Ok(num)
+								Err(_) => Err(OutOfRange)
+							}
+						Err(OutOfRange) => Err(OutOfRange)
+					}
+				}
+			}
+		}
 }
 
-range_until = |var $current, end| {
-	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
-
-	while $current < end {
-		$answer = $answer.append($current)
-		$current = $current + 1
+digits_to_str : List(U8) -> Try(Str, [OutOfRange])
+digits_to_str = |digits|
+	match digits_to_bytes(digits) {
+		Err(OutOfRange) => Err(OutOfRange)
+		Ok(bytes) => bytes_to_str(bytes)
 	}
 
-	$answer
+bytes_to_str : List(U8) -> Try(Str, [OutOfRange])
+bytes_to_str = |bytes|
+	match Str.from_utf8(bytes) {
+		Ok(str) => Ok(str)
+		Err(_) => Err(OutOfRange)
+	}
+
+unsigned_add_checked : item, item, item -> Try(item, [Overflow])
+	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
+unsigned_add_checked = |highest, a, b|
+	if a > highest - b {
+		Err(Overflow)
+	} else {
+		Ok(a + b)
+	}
+
+unsigned_sub_checked : item, item -> Try(item, [Overflow])
+	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+unsigned_sub_checked = |a, b|
+	if a < b {
+		Err(Overflow)
+	} else {
+		Ok(a - b)
+	}
+
+unsigned_mul_checked : item, item, item, item -> Try(item, [Overflow])
+	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
+unsigned_mul_checked = |highest, zero, a, b|
+	if b == zero {
+		Ok(zero)
+	} else if a > highest / b {
+		Err(Overflow)
+	} else {
+		Ok(a * b)
+	}
+
+unsigned_div_checked : item, item, item -> Try(item, [DivByZero])
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+unsigned_div_checked = |zero, a, b|
+	if b == zero {
+		Err(DivByZero)
+	} else {
+		Ok(a / b)
+	}
+
+signed_add_checked : item, item, item, item, item -> Try(item, [Overflow])
+	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+signed_add_checked = |lowest, highest, zero, a, b|
+	if b > zero {
+		if a > highest - b {
+			Err(Overflow)
+		} else {
+			Ok(a + b)
+		}
+	} else if b < zero {
+		if a < lowest - b {
+			Err(Overflow)
+		} else {
+			Ok(a + b)
+		}
+	} else {
+		Ok(a)
+	}
+
+signed_sub_checked : item, item, item, item, item -> Try(item, [Overflow])
+	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+signed_sub_checked = |lowest, highest, zero, a, b|
+	if b > zero {
+		if a < lowest + b {
+			Err(Overflow)
+		} else {
+			Ok(a - b)
+		}
+	} else if b < zero {
+		if a > highest + b {
+			Err(Overflow)
+		} else {
+			Ok(a - b)
+		}
+	} else {
+		Ok(a)
+	}
+
+signed_mul_checked : item, item, item, item, item, item -> Try(item, [Overflow])
+	where [
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.is_eq : item, item -> Bool,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+		item.div_trunc_by : item, item -> item,
+	]
+signed_mul_checked = |lowest, highest, zero, neg_one, a, b|
+	if a == zero {
+		Ok(zero)
+	} else if b == zero {
+		Ok(zero)
+	} else if a == neg_one {
+		if b == lowest {
+			Err(Overflow)
+		} else {
+			Ok(zero - b)
+		}
+	} else if b == neg_one {
+		if a == lowest {
+			Err(Overflow)
+		} else {
+			Ok(zero - a)
+		}
+	} else if a > zero {
+		if b > zero {
+			if a > highest.div_trunc_by(b) {
+				Err(Overflow)
+			} else {
+				Ok(a * b)
+			}
+		} else if b < lowest.div_trunc_by(a) {
+			Err(Overflow)
+		} else {
+			Ok(a * b)
+		}
+	} else if b > zero {
+		if a < lowest.div_trunc_by(b) {
+			Err(Overflow)
+		} else {
+			Ok(a * b)
+		}
+	} else if a < highest.div_trunc_by(b) {
+		Err(Overflow)
+	} else {
+		Ok(a * b)
+	}
+
+signed_div_checked : item, item, item, item, item -> Try(item, [DivByZero, Overflow])
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+signed_div_checked = |lowest, zero, neg_one, a, b|
+	if b == zero {
+		Err(DivByZero)
+	} else if a == lowest {
+		if b == neg_one {
+			Err(Overflow)
+		} else {
+			Ok(a / b)
+		}
+	} else {
+		Ok(a / b)
+	}
+
+range_done : () -> Iter(item)
+range_done = || {
+	len_if_known: Known(0),
+	step: || Done,
 }
 
 # Implemented by the compiler, does not perform bounds checks
@@ -7609,4 +8521,70 @@ list_release_excess_capacity : List(item) -> List(item)
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler
 # Note: success is U8 (0 = false, 1 = true) since Bool is not available at top level
+u128_to_dec_try_unsafe : U128 -> { success : U8, val_or_memory_garbage : Dec }
+
+i128_to_dec_try_unsafe : I128 -> { success : U8, val_or_memory_garbage : Dec }
+
+dec_to_i8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I8 }
+
+dec_to_i16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I16 }
+
+dec_to_i32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I32 }
+
+dec_to_i64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I64 }
+
+dec_to_i128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I128 }
+
+dec_to_u8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U8 }
+
+dec_to_u16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U16 }
+
+dec_to_u32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U32 }
+
+dec_to_u64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U64 }
+
+dec_to_u128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U128 }
+
+dec_to_f32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : F32 }
+
+f32_to_i8_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I8 }
+
+f32_to_i16_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I16 }
+
+f32_to_i32_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I32 }
+
+f32_to_i64_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I64 }
+
+f32_to_i128_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : I128 }
+
+f32_to_u8_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U8 }
+
+f32_to_u16_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U16 }
+
+f32_to_u32_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U32 }
+
+f32_to_u64_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U64 }
+
+f32_to_u128_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U128 }
+
+f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
+
+f64_to_i16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I16 }
+
+f64_to_i32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I32 }
+
+f64_to_i64_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I64 }
+
+f64_to_i128_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I128 }
+
+f64_to_u8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U8 }
+
+f64_to_u16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U16 }
+
+f64_to_u32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U32 }
+
+f64_to_u64_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U64 }
+
+f64_to_u128_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U128 }
+
 f64_to_f32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : F32 }

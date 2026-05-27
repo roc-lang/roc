@@ -11,7 +11,7 @@ pub const is_windows = builtin.target.os.tag == .windows;
 pub const Handle = if (is_windows) *anyopaque else std.posix.fd_t;
 
 /// Base address for shared memory mapping. Set to null to let the OS choose
-/// the best address. The payload is an offset-addressed LIR runtime image, so
+/// the best address. The payload is an offset-addressed LIR image, so
 /// the interpreter shim does not depend on matching parent-process pointers.
 pub const SHARED_MEMORY_BASE_ADDR: ?*anyopaque = null;
 

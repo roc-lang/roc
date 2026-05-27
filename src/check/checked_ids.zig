@@ -12,3 +12,5 @@ pub const CheckedStatementId = enum(u32) { _ };
 pub const CheckedTypeId = enum(u32) { _ };
 /// Public `CheckedTypeSchemeId` declaration.
 pub const CheckedTypeSchemeId = enum(u32) { _ };
+/// Public `PatternBinderId` declaration.
+pub const PatternBinderId = enum(u32) { _ };
