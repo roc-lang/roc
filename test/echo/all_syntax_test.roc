@@ -119,8 +119,11 @@ question_with_err_lambda = |strings| {
 	Ok(first_str)
 }
 
-# three dots for things you want to fill in later, will crash if implement_me_later(arg) is called
-implement_me_later = |_str| ...
+# Use crash for placeholders you want to fill in later.
+implement_me_later : Str -> Str
+implement_me_later = |_str| {
+	crash "not implemented"
+}
 
 # for loops can be easier to think about than List.fold (previously `List.walk`)
 for_loop = |num_list| {
@@ -164,7 +167,8 @@ print! = |something| {
 }
 
 dbg_keyword = || {
-	foo = 42
+	foo : Dec
+	foo = 42.0
 
 	dbg foo
 
@@ -210,10 +214,12 @@ type_var : List(a) -> List(a)
 type_var = |lst| lst
 
 destructuring = || {
-	tup = ("Roc", 1)
+	tup : (Str, Dec)
+	tup = ("Roc", 1.0)
 	(str, num) = tup
 
-	rec = { x: 1, y: tup.1 } # tuple access with `.index`
+	rec : { x: Dec, y: Dec }
+	rec = { x: 1.0, y: tup.1 } # tuple access with `.index`
 	{ x, y } = rec
 
 	(str, num, x, y)
