@@ -1759,6 +1759,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     }
 
     try self.validateToInspectMethodTypes(&env);
+    try self.checkAllFromNumeralFlexConstraintCompatibility(&env, true);
 
     // After solving all deferred constraints, check for infinite types
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -1771,11 +1772,208 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.poisonErroneousValueExprs();
     }
 
-    // Note that we can't use SCCs to determine the order to resolve defs
-    // because anonymous static dispatch makes function order not knowable
-    // before type inference
+    try self.reportPolymorphicTopLevelValues();
+}
 
-    // TODO: Check for any exposed types that are generalized that are NOT functions
+fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        const def = self.cir.store.getDef(def_idx);
+        const def_var = ModuleEnv.varFrom(def_idx);
+
+        if (self.erroneous_value_patterns.contains(def.pattern)) continue;
+        if (self.zeroArgFunctionReturnVar(def_var)) |ret_var| {
+            self.var_set.clearRetainingCapacity();
+            if (try self.varHasUnresolvedStaticDispatchConstraints(ret_var, &self.var_set)) {
+                try self.reportPolymorphicValueProblem(ret_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
+            }
+            continue;
+        }
+        if (self.varIsFunctionType(def_var)) continue;
+
+        self.var_set.clearRetainingCapacity();
+        if (!try self.varHasUnresolvedStaticDispatchConstraints(def_var, &self.var_set)) continue;
+
+        try self.reportPolymorphicValueProblem(def_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
+    }
+}
+
+fn zeroArgFunctionReturnVar(self: *Self, var_: Var) ?Var {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    if (func.args.len() == 0) return func.ret;
+                    return null;
+                },
+                else => return null,
+            },
+            .err, .flex, .rigid => return null,
+        }
+    }
+}
+
+fn reportPolymorphicConstrainedExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    if (self.varIsFunctionType(expr_var)) return;
+
+    self.var_set.clearRetainingCapacity();
+    if (!try self.varHasUnresolvedStaticDispatchConstraints(expr_var, &self.var_set)) return;
+
+    try self.reportPolymorphicValueProblem(expr_var, expr_var, null);
+}
+
+fn reportPolymorphicValueProblem(
+    self: *Self,
+    snapshot_var: Var,
+    region_var: Var,
+    def_name: ?Ident.Idx,
+) std.mem.Allocator.Error!void {
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, snapshot_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_value = .{
+        .var_ = region_var,
+        .snapshot = snapshot,
+        .def_name = def_name,
+    } });
+}
+
+fn varIsFunctionType(self: *Self, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => true,
+                else => false,
+            },
+            .err, .flex, .rigid => return false,
+        }
+    }
+}
+
+fn varHasUnresolvedContent(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .flex, .rigid => true,
+        .err => false,
+        .alias => |alias| try self.varHasUnresolvedContent(self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat_type| try self.flatTypeHasUnresolvedContent(flat_type, visited),
+    };
+}
+
+fn flatTypeHasUnresolvedContent(
+    self: *Self,
+    flat_type: FlatType,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    return switch (flat_type) {
+        .tuple => |tuple| try self.varsHaveUnresolvedContent(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| try self.varsHaveUnresolvedContent(self.types.sliceNominalArgs(nominal), visited),
+        .fn_pure, .fn_effectful, .fn_unbound => false,
+        .record => |record| blk: {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (try self.varsHaveUnresolvedContent(fields.items(.var_), visited)) break :blk true;
+            break :blk try self.varHasUnresolvedContent(record.ext, visited);
+        },
+        .record_unbound => |fields_range| blk: {
+            const fields = self.types.getRecordFieldsSlice(fields_range);
+            break :blk try self.varsHaveUnresolvedContent(fields.items(.var_), visited);
+        },
+        .tag_union => |tag_union| blk: {
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            for (tags.items(.args)) |args| {
+                if (try self.varsHaveUnresolvedContent(self.types.sliceVars(args), visited)) break :blk true;
+            }
+            break :blk try self.varHasUnresolvedContent(tag_union.ext, visited);
+        },
+        .empty_record, .empty_tag_union => false,
+    };
+}
+
+fn varsHaveUnresolvedContent(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.varHasUnresolvedContent(var_, visited)) return true;
+    }
+    return false;
+}
+
+fn varHasUnresolvedStaticDispatchConstraints(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .flex => |flex| flex.constraints.len() > 0,
+        .rigid => |rigid| rigid.constraints.len() > 0,
+        .err => false,
+        .alias => |alias| try self.varHasUnresolvedStaticDispatchConstraints(self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat_type| try self.flatTypeHasUnresolvedStaticDispatchConstraints(flat_type, visited),
+    };
+}
+
+fn flatTypeHasUnresolvedStaticDispatchConstraints(
+    self: *Self,
+    flat_type: FlatType,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    return switch (flat_type) {
+        .tuple => |tuple| try self.varsHaveUnresolvedStaticDispatchConstraints(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| try self.varsHaveUnresolvedStaticDispatchConstraints(self.types.sliceNominalArgs(nominal), visited),
+        .fn_pure, .fn_effectful, .fn_unbound => false,
+        .record => |record| blk: {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (try self.varsHaveUnresolvedStaticDispatchConstraints(fields.items(.var_), visited)) break :blk true;
+            break :blk try self.varHasUnresolvedStaticDispatchConstraints(record.ext, visited);
+        },
+        .record_unbound => |fields_range| blk: {
+            const fields = self.types.getRecordFieldsSlice(fields_range);
+            break :blk try self.varsHaveUnresolvedStaticDispatchConstraints(fields.items(.var_), visited);
+        },
+        .tag_union => |tag_union| blk: {
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            for (tags.items(.args)) |args| {
+                if (try self.varsHaveUnresolvedStaticDispatchConstraints(self.types.sliceVars(args), visited)) break :blk true;
+            }
+            break :blk try self.varHasUnresolvedStaticDispatchConstraints(tag_union.ext, visited);
+        },
+        .empty_record, .empty_tag_union => false,
+    };
+}
+
+fn varsHaveUnresolvedStaticDispatchConstraints(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.varHasUnresolvedStaticDispatchConstraints(var_, visited)) return true;
+    }
+    return false;
 }
 
 /// Process the requires_types annotations for platform modules, like:
@@ -1920,6 +2118,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
     try self.checkFlexVarConstraintCompatibility(expr_var, &env, true);
+    try self.reportPolymorphicConstrainedExpr(expr_idx);
 
     // Check for infinite types
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
@@ -1997,6 +2196,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
+    try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
 }
 
@@ -3446,6 +3646,42 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+fn reportMatchAltBinderProblem(
+    self: *Self,
+    expected_pattern_idx: CIR.Pattern.Idx,
+    actual_pattern_idx: CIR.Pattern.Idx,
+    binder_ident: Ident.Idx,
+    branch_index: u32,
+    first_pattern_index: u32,
+    pattern_index: u32,
+    num_branches: u32,
+    num_patterns: u32,
+    match_expr: CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    const expected_var = ModuleEnv.varFrom(expected_pattern_idx);
+    const actual_var = ModuleEnv.varFrom(actual_pattern_idx);
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = expected_var,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = actual_var,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = .{ .match_alt_binder = .{
+            .branch_index = branch_index,
+            .first_pattern_index = first_pattern_index,
+            .pattern_index = pattern_index,
+            .num_branches = num_branches,
+            .num_patterns = num_patterns,
+            .binder_ident = binder_ident,
+            .match_expr = match_expr,
+        } },
+    } });
+}
+
 fn collectPatternBindings(
     self: *const Self,
     pattern_idx: CIR.Pattern.Idx,
@@ -3539,9 +3775,28 @@ fn unifyMatchAltPatternBindings(
         const branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.collectPatternBindings(branch_pattern.pattern, &bindings);
 
+        var current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(self.gpa);
+        defer current.deinit();
+
         for (bindings.items) |binding| {
             const key: u32 = @bitCast(binding.ident);
-            const first = baseline.get(key) orelse continue;
+            try current.put(key, binding.pattern_idx);
+            const first = baseline.get(key) orelse {
+                const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
+                try self.reportMatchAltBinderProblem(
+                    first_branch_pattern.pattern,
+                    binding.pattern_idx,
+                    binding.ident,
+                    branch_index,
+                    0,
+                    @intCast(pattern_index),
+                    num_branches,
+                    @intCast(branch_ptrn_idxs.len),
+                    match_expr,
+                );
+                had_type_error = true;
+                continue;
+            };
             const result = try self.unifyInContext(
                 ModuleEnv.varFrom(first.pattern_idx),
                 ModuleEnv.varFrom(binding.pattern_idx),
@@ -3557,6 +3812,25 @@ fn unifyMatchAltPatternBindings(
                 } },
             );
             if (!result.isOk()) had_type_error = true;
+        }
+
+        var baseline_iter = baseline.iterator();
+        while (baseline_iter.next()) |entry| {
+            if (current.contains(entry.key_ptr.*)) continue;
+
+            const ident: Ident.Idx = @bitCast(entry.key_ptr.*);
+            try self.reportMatchAltBinderProblem(
+                entry.value_ptr.pattern_idx,
+                branch_pattern.pattern,
+                ident,
+                branch_index,
+                entry.value_ptr.pattern_index,
+                @intCast(pattern_index),
+                num_branches,
+                @intCast(branch_ptrn_idxs.len),
+                match_expr,
+            );
+            had_type_error = true;
         }
     }
 
@@ -3954,7 +4228,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             const elem_var = elems[elem_index];
                             _ = try self.unify(expr_var, elem_var, env);
                         } else {
-                            // Index out of bounds
+                            const min_elems = elem_index + 1;
+                            const scratch_vars_top = self.scratch_vars.top();
+                            defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+                            for (0..min_elems) |_| {
+                                const fresh_var = try self.fresh(env, expr_region);
+                                try self.scratch_vars.append(fresh_var);
+                            }
+                            const expected_elems = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
+                            const expected_tuple_var = try self.freshFromContent(.{ .structure = .{
+                                .tuple = .{ .elems = expected_elems },
+                            } }, env, expr_region);
+
+                            _ = try self.unify(expected_tuple_var, tuple_var, env);
                             try self.unifyWith(expr_var, .err, env);
                         }
                     },
@@ -5176,6 +5463,13 @@ fn validateToInspectMethodTypeForArg(
     region: Region,
 ) Allocator.Error!void {
     const resolved = self.types.resolveVar(arg_var);
+    if (resolved.desc.content != .flex and resolved.desc.content != .rigid) {
+        self.var_set.clearRetainingCapacity();
+        if (try self.varHasUnresolvedContent(arg_var, &self.var_set)) {
+            try self.reportPolymorphicValueProblem(arg_var, arg_var, null);
+            return;
+        }
+    }
     switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.validateNominalToInspectMethodType(arg_var, nominal, env, region),
@@ -6149,6 +6443,13 @@ fn checkBinopExpr(
             const lhs_is_from_numeral = self.varHasFromNumeralConstraint(lhs_var);
             const rhs_is_from_numeral = self.varHasFromNumeralConstraint(rhs_var);
 
+            if (lhs_is_from_numeral and try self.reportDefinitelyInvalidNumericBinopOperand(rhs_var, expr_var, expr_idx, binop.op, .rhs, env, expr_region)) {
+                return does_fx;
+            }
+            if (rhs_is_from_numeral and try self.reportDefinitelyInvalidNumericBinopOperand(lhs_var, expr_var, expr_idx, binop.op, .lhs, env, expr_region)) {
+                return does_fx;
+            }
+
             if (lhs_is_numeric or rhs_is_numeric) {
                 const target = if (lhs_is_numeric) lhs_var else rhs_var;
                 const other = if (lhs_is_numeric) rhs_var else lhs_var;
@@ -6332,6 +6633,66 @@ fn checkBinopExpr(
     }
 
     return does_fx;
+}
+
+fn reportDefinitelyInvalidNumericBinopOperand(
+    self: *Self,
+    operand_var: Var,
+    expr_var: Var,
+    expr_idx: CIR.Expr.Idx,
+    op: CIR.Expr.Binop.Op,
+    side: enum { lhs, rhs },
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    if (!self.varIsDefinitelyNonNumericOperand(operand_var)) return false;
+
+    const expected_num = try self.freshFromContent(try self.mkBuiltinNumberTypeContentFromKind(.dec, env), env, region);
+    const binop_ctx: problem.Context.BinopContext.Binop = switch (op) {
+        .add => .plus,
+        .sub => .minus,
+        .mul => .times,
+        .div => .div,
+        .rem => .div,
+        .div_trunc => .div,
+        else => return false,
+    };
+
+    const ctx: problem.Context = switch (side) {
+        .lhs => .{ .binop_lhs = .{ .operator = binop_ctx, .binop_expr = expr_idx } },
+        .rhs => .{ .binop_rhs = .{ .operator = binop_ctx, .binop_expr = expr_idx } },
+    };
+
+    _ = try self.unifyInContext(expected_num, operand_var, env, ctx);
+    try self.unifyWith(expr_var, .err, env);
+    return true;
+}
+
+fn varIsDefinitelyNonNumericOperand(self: *Self, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        return switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = self.types.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| switch (flat) {
+                .record,
+                .record_unbound,
+                .tuple,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => true,
+                .nominal_type => false,
+            },
+            .err, .flex, .rigid => false,
+        };
+    }
 }
 
 fn reportMissingNominalMethodForBinop(
@@ -8358,6 +8719,21 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
                 );
             }
         }
+    }
+}
+
+fn checkAllFromNumeralFlexConstraintCompatibility(
+    self: *Self,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: Var = @enumFromInt(i);
+        try self.checkFlexVarConstraintCompatibility(var_, env, is_numeric_default_pass);
     }
 }
 

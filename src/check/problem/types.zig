@@ -39,6 +39,7 @@ pub const Problem = union(enum) {
     unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    polymorphic_value: VarWithSnapshot,
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
     platform_def_not_found: PlatformDefNotFound,

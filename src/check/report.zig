@@ -787,6 +787,9 @@ pub const ReportBuilder = struct {
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
             },
+            .polymorphic_value => |data| {
+                return self.buildPolymorphicValueReport(data);
+            },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
             },
@@ -2959,6 +2962,36 @@ pub const ReportBuilder = struct {
             D.bytes(":=").withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
+
+        return report;
+    }
+
+    fn buildPolymorphicValueReport(self: *Self, data: VarWithSnapshot) !Report {
+        var report = Report.init(self.gpa, "POLYMORPHIC VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addReflowingText("This top-level value still has an unresolved polymorphic type:");
+        try report.document.addLineBreak();
+
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        const type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Its type is:");
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(type_str, .code_block);
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Add an annotation or use this value in a way that fixes its concrete type.");
 
         return report;
     }
