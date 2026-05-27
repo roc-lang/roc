@@ -57,6 +57,7 @@ pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
+pub const EffectfulTopLevel = types.EffectfulTopLevel;
 
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;

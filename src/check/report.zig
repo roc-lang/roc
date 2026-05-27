@@ -66,6 +66,7 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -789,6 +790,9 @@ pub const ReportBuilder = struct {
             },
             .polymorphic_value => |data| {
                 return self.buildPolymorphicValueReport(data);
+            },
+            .effectful_top_level => |data| {
+                return self.buildEffectfulTopLevelReport(data);
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
@@ -3097,6 +3101,24 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) !Report {
+        var report = Report.init(self.gpa, "EFFECTFUL TOP-LEVEL VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This top-level definition performs an effect while initializing."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Move the effect into a function body so it runs when the function is called."),
         }, self, &report);
         return report;
     }

@@ -2259,7 +2259,13 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     };
 
     // Infer types for the body, checking against the instantiated annotation
-    _ = try self.checkExpr(def.expr, env, expectation);
+    const def_does_fx = try self.checkExpr(def.expr, env, expectation);
+    if (def_does_fx) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
+            .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
+        } });
+        try self.unifyWith(expr_var, .err, env);
+    }
     if (def.annotation == null and self.exprAlwaysCrashes(def.expr)) {
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
     }
@@ -4981,12 +4987,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check the the body of the expr
             // If we have an expected function, use that as the expr's expected type
-            if (mb_anno_func) |expected_func| {
-                does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret)) or does_fx;
+            const body_does_fx = if (mb_anno_func) |expected_func| blk: {
+                const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
-            } else {
-                does_fx = try self.checkExpr(lambda.body, env, Expected.none()) or does_fx;
-            }
+                break :blk lambda_body_does_fx;
+            } else try self.checkExpr(lambda.body, env, Expected.none());
 
             // Process any pending return constraints (from early returns / ? operator) before
             // creating the function type. This must happen after the body is fully checked
@@ -4998,7 +5003,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.processReturnConstraints(env);
 
             // Create the function type
-            if (does_fx) {
+            if (body_does_fx) {
                 try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
             } else {
                 try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);

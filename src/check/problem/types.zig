@@ -40,6 +40,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     polymorphic_value: VarWithSnapshot,
+    effectful_top_level: EffectfulTopLevel,
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
     platform_def_not_found: PlatformDefNotFound,
@@ -77,6 +78,11 @@ pub const HostedUnboxedFunction = struct {
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A top-level value definition performs effects while initializing.
+pub const EffectfulTopLevel = struct {
     region: base.Region,
 };
 
