@@ -9707,6 +9707,56 @@ pub fn canonicalizePattern(
                 const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
                 const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
+                if (self.scopeLookupTypeBinding(type_tok_ident)) |binding_location| {
+                    switch (binding_location.binding.*) {
+                        .external_nominal => |external| {
+                            if (external.target_node_idx) |target_node_idx| {
+                                const import_idx = external.import_idx orelse {
+                                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .module_not_imported = .{
+                                        .module_name = external.module_ident,
+                                        .region = region,
+                                    } });
+                                };
+
+                                return try self.env.addPattern(CIR.Pattern{
+                                    .nominal_external = .{
+                                        .module_idx = import_idx,
+                                        .target_node_idx = target_node_idx,
+                                        .backing_pattern = tag_pattern_idx,
+                                        .backing_type = .tag,
+                                    },
+                                }, region);
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
+                if (self.lookupAvailableModuleEnv(type_tok_ident)) |auto_imported_type| {
+                    if (auto_imported_type.statement_idx) |stmt_idx| {
+                        const module_name_text = auto_imported_type.requireEnv().module_name;
+                        const import_idx = try self.getOrCreateAutoImport(module_name_text);
+
+                        const target_node_idx = auto_imported_type.requireEnv().getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                            const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .nested_type_not_found = .{
+                                .parent_name = module_ident,
+                                .nested_name = type_tok_ident,
+                                .region = region,
+                            } });
+                        };
+
+                        return try self.env.addPattern(CIR.Pattern{
+                            .nominal_external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                                .backing_pattern = tag_pattern_idx,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                }
+
                 // Lookup the type ident in scope
                 const nominal_type_decl_stmt_idx = self.scopeLookupTypeDecl(type_tok_ident) orelse
                     return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
