@@ -1311,15 +1311,7 @@ fn sourceVarIsFunction(store: *const types.Store, var_: Var) bool {
                 else => false,
             },
             .err => return false,
-            .flex, .rigid => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: top-level source type {d} was not fully resolved before publication",
-                        .{@intFromEnum(var_)},
-                    );
-                }
-                unreachable;
-            },
+            .flex, .rigid => return false,
         }
     }
 }

@@ -3658,15 +3658,15 @@ fn checkPatternHelp(
                 // Create a nominal List type with the inferred element type
                 const list_content = try self.mkListContent(elem_var, env);
                 try self.unifyWith(pattern_var, list_content, env);
+            }
 
-                // Then, check the "rest" pattern is bound to a variable
-                // This is if the pattern is like `.. as x`
-                if (list.rest_info) |rest_info| {
-                    if (rest_info.pattern) |rest_pattern_idx| {
-                        const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, ctx, env, out_var);
+            // Then, check the "rest" pattern is bound to the list value.
+            // This is if the pattern is like `.. as x`.
+            if (list.rest_info) |rest_info| {
+                if (rest_info.pattern) |rest_pattern_idx| {
+                    const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, ctx, env, out_var);
 
-                        _ = try self.unify(pattern_var, rest_pattern_var, env);
-                    }
+                    _ = try self.unify(pattern_var, rest_pattern_var, env);
                 }
             }
         },

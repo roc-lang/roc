@@ -1156,7 +1156,7 @@ fn makeModuleSource(
         else
             std.fmt.allocPrint(allocator, "main = || ({s})", .{source}),
         .module => if (inspect_wrap)
-            std.fmt.allocPrint(allocator, "{s}\n\ncodex_test_inspect_main = || Str.inspect(main)\n", .{source})
+            std.fmt.allocPrint(allocator, "{s}\n\ncodex_test_inspect_main = || Str.inspect(({{ roc_eval_main: main }}).roc_eval_main)\n", .{source})
         else
             allocator.dupe(u8, source),
     };
