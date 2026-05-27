@@ -891,7 +891,7 @@ const tests = [_]CliBugSpec{
             },
         },
         .command = .run_dev,
-        .expect = .{ .success_stdout_exact = "42\n" },
+        .expect = .{ .warning_stdout_exact = "42\n" },
     },
     .{
         .id = 102,
@@ -954,9 +954,9 @@ const tests = [_]CliBugSpec{
             \\Value := [F((I64 -> I64)), N(I64)]
             \\
             \\main! = || {
-            \\    v = F(|x| x + 1)
+            \\    v = F(|x| x + 1.I64)
             \\    out = match v {
-            \\        F(f) => f(41)
+            \\        F(f) => f(41.I64)
             \\        N(n) => n
             \\    }
             \\    Stdout.line!(I64.to_str(out))
@@ -984,11 +984,11 @@ const tests = [_]CliBugSpec{
             \\    Value := [F((I64 -> I64)), N(I64)]
             \\
             \\    make : Value
-            \\    make = F(|x| x + 1)
+            \\    make = F(|x| x + 1.I64)
             \\
             \\    run : Value -> I64
             \\    run = |v| match v {
-            \\        F(f) => f(41)
+            \\        F(f) => f(41.I64)
             \\        N(n) => n
             \\    }
             \\}
@@ -1007,9 +1007,9 @@ const tests = [_]CliBugSpec{
             \\
             \\import pf.Stdout
             \\
-            \\r = { f: |x| x + 1 }
+            \\r = { f: |x| x + 1.I64 }
             \\
-            \\main! = || Stdout.line!(I64.to_str((r.f)(41)))
+            \\main! = || Stdout.line!(I64.to_str((r.f)(41.I64)))
             },
         },
         .command = .run_dev,
@@ -1028,11 +1028,11 @@ const tests = [_]CliBugSpec{
             \\Value := [F((I64 -> I64)), N(I64)]
             \\
             \\v : Value
-            \\v = F(|x| x + 1)
+            \\v = F(|x| x + 1.I64)
             \\
             \\main! = || {
             \\    out = match v {
-            \\        F(f) => f(41)
+            \\        F(f) => f(41.I64)
             \\        N(n) => n
             \\    }
             \\    Stdout.line!(I64.to_str(out))
@@ -1141,11 +1141,11 @@ const tests = [_]CliBugSpec{
             \\
             \\import pf.Stdout
             \\
-            \\boxed = Box.box(|x| x + 1)
+            \\boxed = Box.box(|x| x + 1.I64)
             \\
             \\main! = || {
             \\    f = Box.unbox(boxed)
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
         },
@@ -1165,13 +1165,13 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || {
             \\    f = Box.unbox(A.boxed)
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
             .{ .path = "A.roc", .contents = 
             \\A :: [].{
             \\    boxed : Box((I64 -> I64))
-            \\    boxed = Box.box(|x| x + 1)
+            \\    boxed = Box.box(|x| x + 1.I64)
             \\}
             },
         },
@@ -1189,9 +1189,9 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\import pf.Host
             \\
-            \\boxed = Box.box(|x| x + 1)
+            \\boxed = Box.box(|x| x + 1.I64)
             \\
-            \\main! = || Stdout.line!(I64.to_str(Host.call_boxed!(boxed, 41)))
+            \\main! = || Stdout.line!(I64.to_str(Host.call_boxed!(boxed, 41.I64)))
             },
         },
         .command = .run_dev,
@@ -1208,11 +1208,11 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\import pf.Host
             \\
-            \\boxed = Box.box(|x| x + 1)
+            \\boxed = Box.box(|x| x + 1.I64)
             \\
             \\main! = || {
             \\    f = Box.unbox(Host.roundtrip_boxed!(boxed))
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
         },
@@ -1230,11 +1230,11 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\import pf.Host
             \\
-            \\boxed = Box.box(|x| x + 1)
+            \\boxed = Box.box(|x| x + 1.I64)
             \\
             \\main! = || {
             \\    Host.store_boxed!(boxed)
-            \\    Stdout.line!(I64.to_str(Host.stored_boxed_call!(41)))
+            \\    Stdout.line!(I64.to_str(Host.stored_boxed_call!(41.I64)))
             \\    Host.release_stored_boxed!()
             \\}
             },
@@ -1255,7 +1255,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || {
             \\    f = A.h.make()
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
             .{ .path = "A.roc", .contents = 
@@ -1285,10 +1285,10 @@ const tests = [_]CliBugSpec{
             \\
             \\Maker := { tag : I64 }.{
             \\    make : Maker -> (I64 -> I64)
-            \\    make = |_| |x| x + 1
+            \\    make = |_| |x| x + 1.I64
             \\}
             \\
-            \\use = |m| m.make()(41)
+            \\use = |m| m.make()(41.I64)
             \\
             \\main! = || {
             \\    m : Maker
@@ -1317,13 +1317,13 @@ const tests = [_]CliBugSpec{
             \\A :: [].{
             \\    Maker := { tag : I64 }.{
             \\        make : Maker -> (I64 -> I64)
-            \\        make = |_| |x| x + 1
+            \\        make = |_| |x| x + 1.I64
             \\    }
             \\
             \\    m : Maker
             \\    m = { tag: 0 }
             \\
-            \\    use = |x| x.make()(41)
+            \\    use = |x| x.make()(41.I64)
             \\}
             },
         },
@@ -1435,9 +1435,9 @@ const tests = [_]CliBugSpec{
             \\Tree := [Leaf((I64 -> I64)), Node(Box(Tree), Box(Tree))]
             \\
             \\main! = || {
-            \\    tree = Leaf(|x| x + 1)
+            \\    tree = Leaf(|x| x + 1.I64)
             \\    out = match tree {
-            \\        Leaf(f) => f(41)
+            \\        Leaf(f) => f(41.I64)
             \\        Node(_, _) => 0
             \\    }
             \\    Stdout.line!(I64.to_str(out))
@@ -1465,11 +1465,11 @@ const tests = [_]CliBugSpec{
             \\    Tree := [Leaf((I64 -> I64)), Node(Box(Tree), Box(Tree))]
             \\
             \\    tree : Tree
-            \\    tree = Leaf(|x| x + 1)
+            \\    tree = Leaf(|x| x + 1.I64)
             \\
             \\    run : Tree -> I64
             \\    run = |value| match value {
-            \\        Leaf(f) => f(41)
+            \\        Leaf(f) => f(41.I64)
             \\        Node(_, _) => 0
             \\    }
             \\}
@@ -1489,8 +1489,8 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\
             \\main! = || {
-            \\    r = { f: |x| x + 1 }
-            \\    Stdout.line!(I64.to_str((r.f)(41)))
+            \\    r = { f: |x| x + 1.I64 }
+            \\    Stdout.line!(I64.to_str((r.f)(41.I64)))
             \\}
             },
         },
@@ -1510,9 +1510,9 @@ const tests = [_]CliBugSpec{
             \\get = |r| r.f
             \\
             \\main! = || {
-            \\    r = { f: |x| x + 1 }
+            \\    r = { f: |x| x + 1.I64 }
             \\    f = get(r)
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
         },
@@ -1530,12 +1530,12 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\
             \\main! = || {
-            \\    fs = [|x| x + 1, |x| x + 10]
+            \\    fs = [|x| x + 1.I64, |x| x + 10.I64]
             \\    f = match List.get(fs, 0) {
             \\        Ok(g) => g
             \\        Err(_) => |x| x
             \\    }
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
         },
@@ -1552,14 +1552,14 @@ const tests = [_]CliBugSpec{
             \\
             \\import pf.Stdout
             \\
-            \\fs = [|x| x + 1, |x| x + 10]
+            \\fs = [|x| x + 1.I64, |x| x + 10.I64]
             \\
             \\main! = || {
             \\    f = match List.get(fs, 0) {
             \\        Ok(g) => g
             \\        Err(_) => |x| x
             \\    }
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
         },
@@ -1582,12 +1582,12 @@ const tests = [_]CliBugSpec{
             \\        Ok(g) => g
             \\        Err(_) => |x| x
             \\    }
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
             .{ .path = "A.roc", .contents = 
             \\A :: [].{
-            \\    fs = [|x| x + 1, |x| x + 10]
+            \\    fs = [|x| x + 1.I64, |x| x + 10.I64]
             \\}
             },
         },
@@ -1605,7 +1605,7 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\
             \\main! = || {
-            \\    t = (|x| x + 1, 41.I64)
+            \\    t = (|x| x + 1.I64, 41.I64)
             \\    Stdout.line!(I64.to_str((t.0)(t.1)))
             \\}
             },
@@ -1623,7 +1623,7 @@ const tests = [_]CliBugSpec{
             \\
             \\import pf.Stdout
             \\
-            \\t = (|x| x + 1, 41.I64)
+            \\t = (|x| x + 1.I64, 41.I64)
             \\
             \\main! = || Stdout.line!(I64.to_str((t.0)(t.1)))
             },
@@ -1646,7 +1646,7 @@ const tests = [_]CliBugSpec{
             },
             .{ .path = "A.roc", .contents = 
             \\A :: [].{
-            \\    t = (|x| x + 1, 41.I64)
+            \\    t = (|x| x + 1.I64, 41.I64)
             \\}
             },
         },
@@ -1664,12 +1664,12 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\
             \\main! = || {
-            \\    v = Ok(|x| x + 1)
+            \\    v = Ok(|x| x + 1.I64)
             \\    f = match v {
             \\        Ok(g) => g
             \\        Err(_) => |x| x
             \\    }
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
         },
@@ -1692,12 +1692,12 @@ const tests = [_]CliBugSpec{
             \\        Ok(g) => g
             \\        Err(_) => |x| x
             \\    }
-            \\    Stdout.line!(I64.to_str(f(41)))
+            \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
             .{ .path = "A.roc", .contents = 
             \\A :: [].{
-            \\    v = Ok(|x| x + 1)
+            \\    v = Ok(|x| x + 1.I64)
             \\}
             },
         },
@@ -1715,7 +1715,7 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\
             \\main! = || {
-            \\    r = { f: |x| x + 1, n: 0.I64 }
+            \\    r = { f: |x| x + 1.I64, n: 0.I64 }
             \\    updated = { ..r, n: 41.I64 }
             \\    Stdout.line!(I64.to_str((updated.f)(updated.n)))
             \\}
@@ -1738,10 +1738,10 @@ const tests = [_]CliBugSpec{
             \\    var $n = 0.I64
             \\    var $f = |x| x
             \\    while $n < 1 {
-            \\        $f = |x| x + 1
+            \\        $f = |x| x + 1.I64
             \\        $n = $n + 1
             \\    }
-            \\    Stdout.line!(I64.to_str($f(41)))
+            \\    Stdout.line!(I64.to_str($f(41.I64)))
             \\}
             },
         },
@@ -1760,7 +1760,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || {
             \\    var $out = 0.I64
-            \\    for { f, n } in [{ f: |x| x + 1, n: 41.I64 }] {
+            \\    for { f, n } in [{ f: |x| x + 1.I64, n: 41.I64 }] {
             \\        $out = f(n)
             \\    }
             \\    Stdout.line!(I64.to_str($out))
@@ -1784,7 +1784,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || {
             \\    out = match A.v {
-            \\        A.Value.F(f) => Host.call_boxed!(f, 41)
+            \\        A.Value.F(f) => Host.call_boxed!(f, 41.I64)
             \\    }
             \\    Stdout.line!(I64.to_str(out))
             \\}
@@ -1794,7 +1794,7 @@ const tests = [_]CliBugSpec{
             \\    Value := [F(Box((I64 -> I64)))]
             \\
             \\    v : Value
-            \\    v = F(Box.box(|x| x + 1))
+            \\    v = F(Box.box(|x| x + 1.I64))
             \\}
             },
         },
@@ -1812,37 +1812,37 @@ const tests = [_]CliBugSpec{
             \\import pf.Stdout
             \\
             \\main! = || {
-            \\    var $f = |x| x + 1
-            \\    $f = |x| x + 2
-            \\    Stdout.line!(I64.to_str($f(40)))
+            \\    var $f = |x| x + 1.I64
+            \\    $f = |x| x + 2.I64
+            \\    Stdout.line!(I64.to_str($f(40.I64)))
             \\}
             },
         },
         .command = .run_dev,
-        .expect = .{ .success_stdout_exact = "42\n" },
+        .expect = .{ .warning_stdout_exact = "42\n" },
     },
     runDevBodyCase(140, "B140", "nested record function fields can be called",
         \\main! = || {
-        \\    r = { inner: { f: |x| x + 1 } }
-        \\    Stdout.line!(I64.to_str((r.inner.f)(41)))
+        \\    r = { inner: { f: |x| x + 1.I64 } }
+        \\    Stdout.line!(I64.to_str((r.inner.f)(41.I64)))
         \\}
     , "42\n"),
     runDevBodyCase(141, "B141", "tag payload records can contain callable fields",
         \\Value := [Wrap({ f : I64 -> I64 })]
         \\
         \\main! = || {
-        \\    v = Wrap({ f: |x| x + 1 })
+        \\    v = Wrap({ f: |x| x + 1.I64 })
         \\    out = match v {
-        \\        Wrap(r) => (r.f)(41)
+        \\        Wrap(r) => (r.f)(41.I64)
         \\    }
         \\    Stdout.line!(I64.to_str(out))
         \\}
     , "42\n"),
     runDevBodyCase(142, "B142", "record function fields can be boxed and unboxed",
         \\main! = || {
-        \\    r = { f: |x| x + 1 }
+        \\    r = { f: |x| x + 1.I64 }
         \\    g = Box.unbox(Box.box(r.f))
-        \\    Stdout.line!(I64.to_str(g(41)))
+        \\    Stdout.line!(I64.to_str(g(41.I64)))
         \\}
     , "42\n"),
     checkBodyCase(143, "B143", "duplicate attached method definitions are diagnostics",
@@ -1858,7 +1858,7 @@ const tests = [_]CliBugSpec{
         \\
         \\main! = || {
         \\    out = apply(|x| {
-        \\        return x + 1
+        \\        return x + 1.I64
         \\        x
         \\    })
         \\    Stdout.line!(I64.to_str(out))
@@ -1869,11 +1869,11 @@ const tests = [_]CliBugSpec{
         \\
         \\main! = || {
         \\    v = F(|x| {
-        \\        return x + 1
+        \\        return x + 1.I64
         \\        x
         \\    })
         \\    out = match v {
-        \\        F(f) => f(41)
+        \\        F(f) => f(41.I64)
         \\    }
         \\    Stdout.line!(I64.to_str(out))
         \\}
@@ -1881,10 +1881,10 @@ const tests = [_]CliBugSpec{
     runDevBodyCase(146, "B146", "return works inside boxed closures",
         \\main! = || {
         \\    f = Box.unbox(Box.box(|x| {
-        \\        return x + 1
+        \\        return x + 1.I64
         \\        x
         \\    }))
-        \\    Stdout.line!(I64.to_str(f(41)))
+        \\    Stdout.line!(I64.to_str(f(41.I64)))
         \\}
     , "42\n"),
     runDevCleanFailureBodyCase(147, "B147", "break in record-stored closures inside loops is rejected cleanly",
@@ -1912,19 +1912,19 @@ const tests = [_]CliBugSpec{
     ),
     runDevBodyCase(149, "B149", "record destructuring preserves callable fields",
         \\main! = || {
-        \\    { f } = { f: |x| x + 1 }
-        \\    Stdout.line!(I64.to_str(f(41)))
+        \\    { f } = { f: |x| x + 1.I64 }
+        \\    Stdout.line!(I64.to_str(f(41.I64)))
         \\}
     , "42\n"),
     runDevBodyCase(150, "B150", "renamed record destructuring preserves callable fields",
         \\main! = || {
-        \\    { f: g } = { f: |x| x + 1 }
-        \\    Stdout.line!(I64.to_str(g(41)))
+        \\    { f: g } = { f: |x| x + 1.I64 }
+        \\    Stdout.line!(I64.to_str(g(41.I64)))
         \\}
     , "42\n"),
     runDevBodyCase(151, "B151", "tuple destructuring preserves callable elements",
         \\main! = || {
-        \\    (f, n) = (|x| x + 1, 41.I64)
+        \\    (f, n) = (|x| x + 1.I64, 41.I64)
         \\    Stdout.line!(I64.to_str(f(n)))
         \\}
     , "42\n"),
@@ -1933,11 +1933,11 @@ const tests = [_]CliBugSpec{
         \\
         \\main! = || {
         \\    { f } = A.r
-        \\    Stdout.line!(I64.to_str(f(41)))
+        \\    Stdout.line!(I64.to_str(f(41.I64)))
         \\}
     ,
         \\A :: [].{
-        \\    r = { f: |x| x + 1 }
+        \\    r = { f: |x| x + 1.I64 }
         \\}
     , "42\n"),
     runDevTwoFileCase(153, "B153", "imported callable tag payloads survive parameter destructuring",
@@ -1949,9 +1949,9 @@ const tests = [_]CliBugSpec{
         \\    Value := [F((I64 -> I64))]
         \\
         \\    v : Value
-        \\    v = F(|x| x + 1)
+        \\    v = F(|x| x + 1.I64)
         \\
-        \\    run = |F(f)| f(41)
+        \\    run = |F(f)| f(41.I64)
         \\}
     , "42\n"),
     runDevThreeFileCase(154, "B154", "transitive nominal equality has the original owner environment",
@@ -2028,11 +2028,11 @@ const tests = [_]CliBugSpec{
         \\    Value := [F((I64 -> I64))]
         \\
         \\    v : Value
-        \\    v = F(|x| x + 1)
+        \\    v = F(|x| x + 1.I64)
         \\
         \\    run : Value -> I64
         \\    run = |value| match value {
-        \\        F(f) => f(41)
+        \\        F(f) => f(41.I64)
         \\    }
         \\}
     , "42\n"),
@@ -2041,7 +2041,7 @@ const tests = [_]CliBugSpec{
         \\
         \\main! = || {
         \\    f = Box.unbox(A.boxed)
-        \\    Stdout.line!(I64.to_str(f(41)))
+        \\    Stdout.line!(I64.to_str(f(41.I64)))
         \\}
     ,
         \\import B
@@ -2053,7 +2053,7 @@ const tests = [_]CliBugSpec{
     ,
         \\B :: [].{
         \\    boxed : Box((I64 -> I64))
-        \\    boxed = Box.box(|x| x + 1)
+        \\    boxed = Box.box(|x| x + 1.I64)
         \\}
     , "42\n"),
     runDevThreeFileCase(158, "B158", "transitive static-dispatch methods returning functions keep owner environments",
@@ -2073,7 +2073,7 @@ const tests = [_]CliBugSpec{
         \\B :: [].{
         \\    Maker := { tag : I64 }.{
         \\        make : Maker -> (I64 -> I64)
-        \\        make = |_| |x| x + 1
+        \\        make = |_| |x| x + 1.I64
         \\    }
         \\
         \\    m : Maker
@@ -2128,10 +2128,10 @@ const tests = [_]CliBugSpec{
         \\    Tree(a) := [Node(Box(Tree(a)), Box(Tree(a))), Leaf(a)]
         \\
         \\    a : Tree(I64)
-        \\    a = Node(Box.box(Leaf(41)), Box.box(Leaf(1)))
+        \\    a = Node(Box.box(Leaf(41.I64)), Box.box(Leaf(1)))
         \\
         \\    b : Tree(I64)
-        \\    b = Node(Box.box(Leaf(41)), Box.box(Leaf(1)))
+        \\    b = Node(Box.box(Leaf(41.I64)), Box.box(Leaf(1)))
         \\}
     , "True\n"),
     runDevBodyCase(165, "B165", "Str.inspect handles empty-error list payloads",
@@ -2323,7 +2323,7 @@ const tests = [_]CliBugSpec{
         \\A :: [].{
         \\    Value := [F(Box((I64 -> I64)))]
         \\    v : Value
-        \\    v = F(Box.box(|x| x + 1))
+        \\    v = F(Box.box(|x| x + 1.I64))
         \\}
     , "42\n"),
     runDevTwoFileCase(188, "B188", "qualified imported record field access works for primitive fields",
