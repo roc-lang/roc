@@ -5750,9 +5750,34 @@ pub const Interpreter = struct {
         if (std.math.isNan(sv) or std.math.isInf(sv)) {
             val.write(Dst, 0);
         } else {
-            val.write(Dst, @intFromFloat(sv));
+            val.write(Dst, floatToIntWrap(Src, Dst, sv));
         }
         return val;
+    }
+
+    fn floatToIntWrap(comptime Src: type, comptime Dst: type, sv: Src) Dst {
+        const truncated = @trunc(sv);
+        const int_info = @typeInfo(Dst).int;
+
+        if (int_info.bits <= 64) {
+            const U = std.meta.Int(.unsigned, int_info.bits);
+            const modulus: Src = @floatFromInt(@as(u128, 1) << int_info.bits);
+            var remainder = @mod(truncated, modulus);
+            if (remainder < 0) remainder += modulus;
+            if (remainder >= modulus) remainder = 0;
+            const unsigned: U = @intFromFloat(remainder);
+            return @bitCast(unsigned);
+        }
+
+        const min_val: Src = if (int_info.signedness == .signed)
+            @floatFromInt(std.math.minInt(Dst))
+        else
+            0;
+        const max_val: Src = @floatFromInt(std.math.maxInt(Dst));
+        if (truncated >= min_val and truncated <= max_val) {
+            return @intFromFloat(truncated);
+        }
+        return 0;
     }
 
     fn floatToIntTry(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
@@ -6115,10 +6140,15 @@ pub const Interpreter = struct {
                 (if (av > bv) av -% bv else bv -% av)
             else
                 (if (av > bv) av - bv else bv - av),
-            .div, .div_trunc => if (bv != 0) @divTrunc(av, bv) else 0,
-            .rem => if (bv != 0) @rem(av, bv) else 0,
-            .mod => if (bv != 0) @mod(av, bv) else 0,
+            .div, .div_trunc => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) av else @divTrunc(av, bv)) else 0,
+            .rem => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) 0 else @rem(av, bv)) else 0,
+            .mod => if (bv != 0) (if (signedMinDivOverflow(T, av, bv)) 0 else @mod(av, bv)) else 0,
         };
+    }
+
+    fn signedMinDivOverflow(comptime T: type, av: T, bv: T) bool {
+        if (@typeInfo(T).int.signedness != .signed) return false;
+        return av == std.math.minInt(T) and bv == -1;
     }
 
     /// Generic float binary operation.
@@ -6212,7 +6242,12 @@ pub const Interpreter = struct {
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {
         const Bits = std.math.Log2Int(T);
         const max_bits = @typeInfo(T).int.bits;
-        if (amount >= max_bits) return 0;
+        if (amount >= max_bits) {
+            return switch (op) {
+                .shr => if (@typeInfo(T).int.signedness == .signed and av < 0) @as(T, -1) else 0,
+                .shl, .shr_zf => 0,
+            };
+        }
         const shift: Bits = @intCast(amount);
         return switch (op) {
             .shl => av << shift,

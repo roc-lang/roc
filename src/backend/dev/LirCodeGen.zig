@@ -5681,6 +5681,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             tgt_signed: bool,
         };
 
+        const TryUnsafeOffsets = struct {
+            success: u32,
+            value: u32,
+        };
+
+        fn tryUnsafeOffsets(self: *Self, ret_layout: layout.Idx) TryUnsafeOffsets {
+            const ret_layout_val = self.layout_store.getLayout(ret_layout);
+            if (ret_layout_val.tag != .struct_) {
+                std.debug.panic("try_unsafe result expected struct layout, got {s}", .{@tagName(ret_layout_val.tag)});
+            }
+            const struct_idx = ret_layout_val.data.struct_.idx;
+            return .{
+                .success = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+                .value = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+            };
+        }
+
         fn floatDecTryUnsafeInfo(op: anytype) FloatDecTryUnsafeInfo {
             return switch (op) {
                 .f32_to_i8_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
@@ -5733,6 +5750,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.zeroStackArea(result_offset, size_align.size);
 
             const info = floatDecTryUnsafeInfo(ll.op);
+            const offsets = self.tryUnsafeOffsets(ll.ret_layout);
 
             switch (info.tgt_kind) {
                 .int => {
@@ -5753,6 +5771,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(target_bits));
                         try builder.addImmArg(@intCast(target_is_signed));
                         try builder.addImmArg(@intCast(val_size));
+                        try builder.addImmArg(@intCast(offsets.success));
+                        try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, fn_addr, .dec_to_int_try_unsafe);
 
                         self.codegen.freeGeneral(parts.low);
@@ -5776,6 +5796,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(target_bits));
                         try builder.addImmArg(@intCast(target_is_signed));
                         try builder.addImmArg(@intCast(val_size));
+                        try builder.addImmArg(@intCast(offsets.success));
+                        try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, fn_addr, .f64_to_int_try_unsafe);
 
                         self.codegen.freeFloat(freg);
@@ -5792,6 +5814,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addRegArg(parts.low);
                         try builder.addRegArg(parts.high);
+                        try builder.addImmArg(@intCast(offsets.success));
+                        try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, fn_addr, .dec_to_f32_try_unsafe);
 
                         self.codegen.freeGeneral(parts.low);
@@ -5812,6 +5836,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
                         // Float arg already in position
+                        try builder.addImmArg(@intCast(offsets.success));
+                        try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, fn_addr, .f64_to_f32_try_unsafe);
 
                         self.codegen.freeFloat(freg);
@@ -5831,6 +5857,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(parts.low);
                     try builder.addRegArg(parts.high);
+                    try builder.addImmArg(@intCast(offsets.success));
+                    try builder.addImmArg(@intCast(offsets.value));
                     try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
                     self.codegen.freeGeneral(parts.low);

@@ -20,15 +20,15 @@ pub const tests = [_]TestCase{
         .known_bug = true,
     },
     .{
-        .name = "bughunt B005: signed min-int division overflow is a Roc crash",
+        .name = "bughunt B005: signed min-int division overflow wraps",
         .source = "(-128.I8) // -1.I8",
-        .expected = .{ .crash = {} },
+        .expected = .{ .inspect_str = "-128" },
         .known_bug = true,
     },
     .{
-        .name = "bughunt B006: signed min-int negate is a Roc crash",
+        .name = "bughunt B006: signed min-int negate wraps",
         .source = "I8.negate(-128)",
-        .expected = .{ .crash = {} },
+        .expected = .{ .inspect_str = "-128" },
         .known_bug = true,
     },
     .{
