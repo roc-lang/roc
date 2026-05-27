@@ -3231,6 +3231,7 @@ fn printUsage() void {
     , .{});
 }
 
+/// Runs the CLI bughunt repro harness.
 pub fn main() !void {
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();

@@ -7,6 +7,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+/// Compiler bug repros found during bug hunting.
 pub const tests = [_]TestCase{
     .{
         .name = "bughunt B004: polymorphic function inside tuple constant is concretely sealed",
