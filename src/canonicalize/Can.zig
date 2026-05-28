@@ -1167,6 +1167,17 @@ fn processAssociatedBlock(
     // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
     // were added in their declaration scope, making them visible to all child scopes.
 
+    // The next three setup loops only do real work when this block contains nested
+    // type declarations. Scan once and skip them entirely when there are none —
+    // this is the common case and the per-statement dispatch through the switch
+    // otherwise costs a non-trivial chunk of canon time for large blocks.
+    const has_nested_type_decls = blk: {
+        for (self.parse_ir.store.statementSlice(assoc.statements)) |sid| {
+            if (self.parse_ir.store.getStatement(sid) == .type_decl) break :blk true;
+        }
+        break :blk false;
+    };
+
     // FIRST: Add decl aliases to current scope BEFORE processing nested blocks.
     // This is critical so nested scopes can access parent decls via scope chain lookup.
     // For example, in:
@@ -1214,7 +1225,7 @@ fn processAssociatedBlock(
     // Now that parent decls are aliased, nested scopes can access them via scope chain lookup.
     // We must do this BEFORE we set up aliases for nested items, because those aliases
     // need to point to patterns that exist after nested processing completes.
-    for (self.parse_ir.store.statementSlice(assoc.statements)) |nested_stmt_idx| {
+    if (has_nested_type_decls) { for (self.parse_ir.store.statementSlice(assoc.statements)) |nested_stmt_idx| {
         const nested_stmt = self.parse_ir.store.getStatement(nested_stmt_idx);
         if (nested_stmt == .type_decl) {
             const nested_type_decl = nested_stmt.type_decl;
@@ -1241,12 +1252,12 @@ fn processAssociatedBlock(
                 try self.processAssociatedBlock(nested_qualified_idx, nested_relative_idx, nested_type_ident, nested_assoc, true);
             }
         }
-    }
+    } }
 
     // THIRD: Introduce type aliases and nested item aliases into this scope
     // We only add unqualified and type-qualified names; fully qualified names are
     // already in the parent scope and accessible via scope nesting
-    for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
+    if (has_nested_type_decls) { for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
         const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
         switch (assoc_stmt) {
             .type_decl => |nested_type_decl| {
@@ -1291,7 +1302,7 @@ fn processAssociatedBlock(
                 // to be re-introduced AFTER that call completes
             },
         }
-    }
+    } }
 
     // Process the associated items (canonicalize their bodies)
     try self.processAssociatedItemsSecondPass(qualified_name_idx, type_name, assoc.statements);
@@ -1299,11 +1310,27 @@ fn processAssociatedBlock(
     // After processing, introduce anno-only defs into the associated block scope
     // (They were just created by processAssociatedItemsSecondPass)
     // We only add unqualified and type-qualified names; fully qualified is in parent scope
-    for (self.parse_ir.store.statementSlice(assoc.statements)) |anno_stmt_idx| {
+    const post_stmts = self.parse_ir.store.statementSlice(assoc.statements);
+    for (post_stmts, 0..) |anno_stmt_idx, post_i| {
         const anno_stmt = self.parse_ir.store.getStatement(anno_stmt_idx);
         switch (anno_stmt) {
             .type_anno => |type_anno| {
                 if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
+                    // If the next stmt is a decl with a matching identifier, this anno was
+                    // already paired with that decl in processAssociatedItemsSecondPass and
+                    // the aliases we'd add here were already added there — skip.
+                    if (post_i + 1 < post_stmts.len) {
+                        const next_stmt = self.parse_ir.store.getStatement(post_stmts[post_i + 1]);
+                        if (next_stmt == .decl) {
+                            const next_pattern = self.parse_ir.store.getPattern(next_stmt.decl.pattern);
+                            if (next_pattern == .ident) {
+                                if (self.parse_ir.tokens.resolveIdentifier(next_pattern.ident.ident_tok)) |decl_ident| {
+                                    if (anno_ident.eql(decl_ident)) continue;
+                                }
+                            }
+                        }
+                    }
+
                     // Build fully qualified name (e.g., "Test.MyBool.len")
                     const parent_text = self.env.getIdent(qualified_name_idx);
                     const anno_text = self.env.getIdent(anno_ident);
