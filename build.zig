@@ -2957,30 +2957,10 @@ pub fn build(b: *std.Build) void {
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins_bc_file, "builtins.bc");
 
-    const llvm_embedded_source: []const u8 = if (target.result.os.tag == .macos) blk: {
-        const darwin_compat_obj = b.addObject(.{
-            .name = "roc_llvm_darwin_compat",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/llvm_compile/darwin_compat.zig"),
-                .target = target,
-                .optimize = .ReleaseFast,
-                .strip = true,
-                .pic = true,
-                .single_threaded = true,
-                .link_libc = true,
-            }),
-        });
-        _ = llvm_embedded_files.addCopyFile(darwin_compat_obj.getEmittedBin(), "darwin_compat.o");
-        break :blk (
-            \\pub const builtins_bc = @embedFile("builtins.bc");
-            \\pub const darwin_compat_o = @embedFile("darwin_compat.o");
-            \\
-        );
-    } else (
+    const llvm_embedded_source: []const u8 =
         \\pub const builtins_bc = @embedFile("builtins.bc");
-        \\pub const darwin_compat_o = "";
         \\
-    );
+    ;
 
     const llvm_embedded_module = b.createModule(.{
         .root_source_file = llvm_embedded_files.add("llvm_embedded.zig", llvm_embedded_source),

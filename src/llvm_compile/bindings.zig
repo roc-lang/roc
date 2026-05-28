@@ -89,6 +89,16 @@ pub const Module = opaque {
     /// Returns true on error, false on success.
     pub const link = LLVMLinkModules2;
     extern fn LLVMLinkModules2(Dest: *Module, Src: *Module) Bool;
+
+    pub const verify = LLVMVerifyModule;
+    extern fn LLVMVerifyModule(M: *Module, Action: VerifierFailureAction, OutMessage: *[*:0]const u8) Bool;
+};
+
+/// Controls how LLVM reports module verifier failures.
+pub const VerifierFailureAction = enum(c_int) {
+    AbortProcess,
+    PrintMessage,
+    ReturnStatus,
 };
 
 /// Frees a message string allocated by LLVM.

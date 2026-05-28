@@ -1562,11 +1562,12 @@ pub const MonoLlvmCodeGen = struct {
         const lo = try self.coerceScalar(value, .i64, false);
         const hi = (self.wip orelse return error.CompilationFailed).bin(.lshr, value, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
         const hi64 = try self.coerceScalar(hi, .i64, false);
-        try self.callBuiltinVoid("roc_builtins_int_to_str", &.{ try self.ptrType(), .i64, .i64, .i32, .i1, try self.ptrType() }, &.{
+        const byte_width: u8 = @intCast(bits / 8);
+        try self.callBuiltinVoid("roc_builtins_int_to_str", &.{ try self.ptrType(), .i64, .i64, .i8, .i1, try self.ptrType() }, &.{
             self.slot(target).ptr,
             lo,
             hi64,
-            builder.intValue(.i32, bits) catch return error.OutOfMemory,
+            builder.intValue(.i8, byte_width) catch return error.OutOfMemory,
             builder.intValue(.i1, @intFromBool(arg_layout.isSigned())) catch return error.OutOfMemory,
             self.rocOps(),
         });

@@ -5,6 +5,10 @@
 //! - Numeric overflow functions (for compiler-rt)
 //! - Dev backend wrapper functions (for roc build --opt=dev)
 
+const std = @import("std");
+
+pub const panic = std.debug.no_panic;
+
 // Export key functions that might need compiler-rt symbols
 comptime {
     // Export overflow functions that might need compiler-rt symbols

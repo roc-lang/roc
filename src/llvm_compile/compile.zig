@@ -146,35 +146,6 @@ fn emitMergedBitcodeToObjectFile(
     defer module.dispose();
     // Note: mem_buf is consumed by parseBitcodeInContext2
 
-    // Load and merge builtin bitcode into the user module.
-    // This makes all builtin functions available.
-    {
-        const builtin_bitcode = llvm_embedded.builtins_bc;
-        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
-            builtin_bitcode.ptr,
-            builtin_bitcode.len,
-            "roc_builtins",
-            bindings.Bool.False,
-        );
-
-        var builtin_module: *bindings.Module = undefined;
-        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
-            builtin_mem_buf.dispose();
-            return Error.BitcodeParseError;
-        }
-        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
-
-        // Set the builtin module's target triple and data layout to match the user module.
-        builtin_module.setTargetTriple(module.getTargetTriple());
-        builtin_module.setDataLayout(module.getDataLayout());
-
-        // Link builtins into user module (destroys builtin_module on success)
-        if (module.link(builtin_module).toBool()) {
-            return Error.ModuleLinkFailed;
-        }
-        // Note: builtin_module is now invalid - do NOT dispose it
-    }
-
     const triple, const dispose_triple = blk: {
         if (options.use_module_target_triple) {
             break :blk .{ module.getTargetTriple(), false };
@@ -183,6 +154,9 @@ fn emitMergedBitcodeToObjectFile(
         break :blk .{ bindings.GetDefaultTargetTriple(), true };
     };
     defer if (dispose_triple) bindings.disposeMessage(triple);
+    if (!options.use_module_target_triple) {
+        module.setTargetTriple(triple);
+    }
 
     // Get target from triple
     var target: *bindings.Target = undefined;
@@ -215,6 +189,47 @@ fn emitMergedBitcodeToObjectFile(
         false, // emulated_tls
     );
     defer target_machine.dispose();
+
+    // Load and merge builtin bitcode into the user module.
+    // This makes all builtin functions available.
+    {
+        const builtin_bitcode = llvm_embedded.builtins_bc;
+        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+            builtin_bitcode.ptr,
+            builtin_bitcode.len,
+            "roc_builtins",
+            bindings.Bool.False,
+        );
+
+        var builtin_module: *bindings.Module = undefined;
+        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
+            builtin_mem_buf.dispose();
+            return Error.BitcodeParseError;
+        }
+        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
+
+        // Set the builtin module's target triple and data layout to match the user module.
+        builtin_module.setTargetTriple(triple);
+        const module_data_layout = module.getDataLayout();
+        if (std.mem.len(module_data_layout) == 0) {
+            module.setDataLayout(builtin_module.getDataLayout());
+        } else {
+            builtin_module.setDataLayout(module_data_layout);
+        }
+
+        // Link builtins into user module (destroys builtin_module on success)
+        if (module.link(builtin_module).toBool()) {
+            return Error.ModuleLinkFailed;
+        }
+        // Note: builtin_module is now invalid - do NOT dispose it
+    }
+
+    var verify_error: [*:0]const u8 = undefined;
+    if (module.verify(.ReturnStatus, &verify_error).toBool()) {
+        std.debug.print("{s}\n", .{verify_error});
+        bindings.disposeMessage(verify_error);
+        return Error.CompilationFailed;
+    }
 
     // Set up emit options
     const default_coverage = bindings.TargetMachine.EmitOptions.Coverage{
@@ -256,6 +271,7 @@ fn emitMergedBitcodeToObjectFile(
     // Emit merged module to object file
     var emit_error: [*:0]const u8 = undefined;
     if (target_machine.emitToFile(module, &emit_error, &emit_options)) {
+        std.debug.print("{s}\n", .{emit_error});
         bindings.disposeMessage(emit_error);
         return Error.CompilationFailed;
     }
@@ -399,17 +415,6 @@ fn linkSharedLibraryMacos(
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
-    const darwin_compat_path = createTempPath(allocator, ".darwin_compat.o") catch return Error.TempFileError;
-    defer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(darwin_compat_path, 0)) catch {};
-        allocator.free(darwin_compat_path);
-    }
-
-    std.fs.cwd().writeFile(.{
-        .sub_path = std.mem.sliceTo(darwin_compat_path, 0),
-        .data = llvm_embedded.darwin_compat_o,
-    }) catch return Error.TempFileError;
-
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
@@ -420,7 +425,6 @@ fn linkSharedLibraryMacos(
             "-o",
             std.mem.sliceTo(shared_lib_path, 0),
             std.mem.sliceTo(object_path, 0),
-            std.mem.sliceTo(darwin_compat_path, 0),
         },
     }) catch return Error.LinkFailed;
     defer allocator.free(result.stdout);
