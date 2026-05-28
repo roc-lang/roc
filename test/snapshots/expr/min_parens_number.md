@@ -28,8 +28,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus
-	(e-num (value "8")))
+(e-dispatch-call (method "negate") (constraint-fn-var 38)
+	(receiver
+		(e-num (value "8")))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

@@ -1301,12 +1301,12 @@ const Formatter = struct {
             .typed_int => |ti| {
                 try fmt.pushTokenText(ti.token);
                 try fmt.push('.');
-                try fmt.pushTokenText(ti.type_token);
+                try fmt.pushAll(fmt.ast.env.getIdent(ti.type_ident));
             },
             .typed_frac => |tf| {
                 try fmt.pushTokenText(tf.token);
                 try fmt.push('.');
-                try fmt.pushTokenText(tf.type_token);
+                try fmt.pushAll(fmt.ast.env.getIdent(tf.type_ident));
             },
             .list => |l| {
                 try fmt.formatCollection(region, .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
@@ -1792,6 +1792,18 @@ const Formatter = struct {
             .frac => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);
+            },
+            .typed_int => |n| {
+                region = n.region;
+                try fmt.formatIdent(n.number_tok, null);
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
+            },
+            .typed_frac => |n| {
+                region = n.region;
+                try fmt.formatIdent(n.number_tok, null);
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
             },
             .record => |r| {
                 region = r.region;

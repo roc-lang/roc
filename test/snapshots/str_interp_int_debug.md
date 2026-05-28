@@ -33,7 +33,7 @@ NO CHANGE
 ~~~clojure
 (e-string
 	(e-literal (string "zero: "))
-	(e-call (constraint-fn-var 39)
+	(e-call (constraint-fn-var 59)
 		(e-lookup-external
 			(builtin))
 		(e-num (value "0")))

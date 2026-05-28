@@ -36,6 +36,10 @@ pub const builtin_loading = @import("builtin_loading.zig");
 pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 /// Checked-artifact compile-time evaluation finalizer
 pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
+/// Compiler-owned RocOps environment for compile-time evaluation
+pub const CompilerHost = @import("compiler_host.zig");
+/// Stores compile-time interpreter results in ConstStore
+pub const ConstStoreWriter = @import("const_store_writer.zig");
 /// Builtin types for type checking
 pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 /// Crash context for host crash handling
@@ -85,8 +89,16 @@ pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 /// Bytebox runner for wasm modules.
 pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     pub const EvalError = error{WasmExecFailed};
+    pub const RunWasmStrResult = struct {
+        output: []u8,
+        allocation_count: u32,
+    };
 
     pub fn runWasmStr(_: std.mem.Allocator, _: []const u8, _: bool) EvalError![]u8 {
+        return error.WasmExecFailed;
+    }
+
+    pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: bool) EvalError!RunWasmStrResult {
         return error.WasmExecFailed;
     }
 } else @import("wasm_runner.zig");
@@ -102,6 +114,8 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
+    std.testing.refAllDecls(@import("compiler_host.zig"));
+    std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("test_helpers.zig"));
     std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));

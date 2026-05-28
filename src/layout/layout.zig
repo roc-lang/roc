@@ -126,11 +126,6 @@ pub const Idx = enum(@Type(.{
         };
     }
 
-    /// Sentinel for call expressions where the function is resolved by name
-    /// (e.g., external method calls like `List.map`), not by closure dispatch.
-    /// The dev backend resolves these via symbol lookup, so no closure layout is needed.
-    pub const named_fn: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type) - 1);
-
     /// Default numeric type for unbound/polymorphic numbers.
     /// Dec is the default in the new Roc compiler.
     pub const default_num: Idx = .dec;

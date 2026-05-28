@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         host: [
-            ubuntu-22.04, # Linux x64 host
+            ubuntu-24.04, # Linux x64 host
             macos-15-intel, # macOS x64 host
             macos-15, # macOS ARM64 host
             windows-2022, # Windows x64 host
@@ -25,9 +25,9 @@ jobs:
           ]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # 2.0.5
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.15.2
           use-cache: false
@@ -87,7 +87,7 @@ jobs:
         include:
           # Test x64musl executables on Linux x64
           - target: x64musl
-            target_os: ubuntu-22.04
+            target_os: ubuntu-24.04
             arch: x64
           # Test arm64musl executables on Linux ARM64
           - target: arm64musl

@@ -89,6 +89,13 @@ test "echo platform: list concat with refcounted elements issue 9316 (dev backen
     try runEchoExpectOutput(&.{"--opt=dev"}, "test/echo/issue_9316.roc", "[\"BAZ\", \"DUCK\", \"XYZ\", \"ABC\"]\n");
 }
 
+test "echo platform: cmd-test OOM repro compiles and runs (interpreter)" {
+    try runEchoExpectOutput(&.{}, "test/echo/repro_oom_cmd_test.roc", "");
+}
+test "echo platform: cmd-test OOM repro compiles and runs (dev backend)" {
+    try runEchoExpectOutput(&.{"--opt=dev"}, "test/echo/repro_oom_cmd_test.roc", "");
+}
+
 test "echo platform: no main is not a default app (interpreter)" {
     try runEchoExpectFailure(&.{"--opt=interpreter"}, "test/echo/no_main.roc");
 }

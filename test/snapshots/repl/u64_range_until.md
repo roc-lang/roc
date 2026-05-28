@@ -1,13 +1,13 @@
 # META
 ~~~ini
-description=U64.until - creates a list of integers from start to end (exclusive)
+description=U64.until - creates an iterator of integers from start to end (exclusive)
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» 0.U64.until(3.U64)
-» 1.U64.until(1.U64)
-» 5.U64.until(3.U64)
+» Iter.fold(0.U64.until(3.U64), [], |acc, item| acc.append(item))
+» Iter.fold(1.U64.until(1.U64), [], |acc, item| acc.append(item))
+» Iter.fold(5.U64.until(3.U64), [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [0, 1, 2]

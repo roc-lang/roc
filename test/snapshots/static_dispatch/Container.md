@@ -391,11 +391,11 @@ func = {
 							(e-num (value "100"))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dispatch-call (method "get_or") (constraint-fn-var 264)
+				(e-dispatch-call (method "get_or") (constraint-fn-var 344)
 					(receiver
-						(e-dispatch-call (method "flat_map") (constraint-fn-var 244)
+						(e-dispatch-call (method "flat_map") (constraint-fn-var 304)
 							(receiver
-								(e-dispatch-call (method "map") (constraint-fn-var 216)
+								(e-dispatch-call (method "map") (constraint-fn-var 256)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))
@@ -403,10 +403,12 @@ func = {
 										(e-lambda
 											(args
 												(p-assign (ident "x")))
-											(e-binop (op "add")
-												(e-lookup-local
-													(p-assign (ident "x")))
-												(e-num (value "1")))))))
+											(e-dispatch-call (method "plus") (constraint-fn-var 254)
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "x"))))
+												(args
+													(e-num (value "1"))))))))
 							(args
 								(e-lambda
 									(args
@@ -414,10 +416,12 @@ func = {
 									(e-nominal (nominal "Container")
 										(e-tag (name "Value")
 											(args
-												(e-binop (op "add")
-													(e-lookup-local
-														(p-assign (ident "x")))
-													(e-num (value "2"))))))))))
+												(e-dispatch-call (method "plus") (constraint-fn-var 296)
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "x"))))
+													(args
+														(e-num (value "2")))))))))))
 					(args
 						(e-num (value "0")))))
 			(e-lookup-local

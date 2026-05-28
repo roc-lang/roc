@@ -80,38 +80,46 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 43)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "sub")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-num (value "1")))))
+					(e-dispatch-call (method "minus") (constraint-fn-var 76)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-num (value "1"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-num (value "2")))))
+					(e-dispatch-call (method "times") (constraint-fn-var 111)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-num (value "2"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "div")
-						(e-lookup-local
-							(p-assign (ident "y")))
-						(e-num (value "2"))))))))
+					(e-dispatch-call (method "div_by") (constraint-fn-var 144)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "y"))))
+						(args
+							(e-num (value "2")))))))))
 ~~~
 # TYPES
 ~~~clojure

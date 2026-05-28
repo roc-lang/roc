@@ -4,25 +4,28 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 
-const ir = @import("LIR.zig");
+const lir_defs = @import("LIR.zig");
 
 const Allocator = std.mem.Allocator;
 
-const CFStmt = ir.CFStmt;
-const CFStmtId = ir.CFStmtId;
-const CFSwitchBranch = ir.CFSwitchBranch;
-const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
-const LirProcSpec = ir.LirProcSpec;
-const LirProcSpecId = ir.LirProcSpecId;
-const Local = ir.Local;
-const LocalId = ir.LocalId;
-const LocalSpan = ir.LocalSpan;
-const Symbol = ir.Symbol;
+const CFStmt = lir_defs.CFStmt;
+const CFStmtId = lir_defs.CFStmtId;
+const CFSwitchBranch = lir_defs.CFSwitchBranch;
+const CFSwitchBranchSpan = lir_defs.CFSwitchBranchSpan;
+const JoinPoint = lir_defs.JoinPoint;
+const JoinPointSpan = lir_defs.JoinPointSpan;
+const LirProcSpec = lir_defs.LirProcSpec;
+const LirProcSpecId = lir_defs.LirProcSpecId;
+const Local = lir_defs.Local;
+const LocalId = lir_defs.LocalId;
+const LocalSpan = lir_defs.LocalSpan;
+const Symbol = lir_defs.Symbol;
 
 const Self = @This();
 
 cf_stmts: std.ArrayList(CFStmt),
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
+join_points: std.ArrayList(JoinPoint),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
 proc_specs: std.ArrayList(LirProcSpec),
@@ -35,6 +38,7 @@ pub fn init(allocator: Allocator) Self {
     return .{
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
+        .join_points = std.ArrayList(JoinPoint).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
         .proc_specs = std.ArrayList(LirProcSpec).empty,
@@ -48,6 +52,7 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
+    self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
@@ -66,9 +71,51 @@ pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLi
     return self.strings.insert(self.allocator, text);
 }
 
+/// Interns string backing bytes and returns a literal view into them.
+pub fn insertStringView(
+    self: *Self,
+    backing: []const u8,
+    offset: u32,
+    len: u32,
+) Allocator.Error!lir_defs.StrLiteral {
+    const offset_usize: usize = offset;
+    const len_usize: usize = len;
+    if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LirStore invariant violated: string literal view exceeded backing bytes", .{});
+        }
+        unreachable;
+    }
+
+    return .{
+        .backing = try self.insertString(backing),
+        .offset = offset,
+        .len = len,
+    };
+}
+
 /// Returns the text for an interned string literal.
 pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
+}
+
+/// Returns the bytes used by one string literal view.
+pub fn getStringLiteral(self: *const Self, literal: lir_defs.StrLiteral) []const u8 {
+    const backing = self.getString(literal.backing);
+    const offset: usize = literal.offset;
+    const len: usize = literal.len;
+    if (offset > backing.len or len > backing.len - offset) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
+        }
+        unreachable;
+    }
+    return backing[offset..][0..len];
+}
+
+/// Returns the full backing bytes for one string literal view.
+pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) []const u8 {
+    return self.getString(literal.backing);
 }
 
 /// Registers one LIR local and returns its id.
@@ -180,6 +227,30 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) []CFSwitchB
         }
     }
     return self.cf_switch_branches.items[span.start..][0..span.len];
+}
+
+/// Appends join-point entries and returns the corresponding flat-storage span.
+pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.Error!JoinPointSpan {
+    if (join_points.len == 0) return JoinPointSpan.empty();
+
+    const start = @as(u32, @intCast(self.join_points.items.len));
+    try self.join_points.appendSlice(self.allocator, join_points);
+    return .{ .start = start, .len = @intCast(join_points.len) };
+}
+
+/// Resolves a join-point span to its stored slice.
+pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) []const JoinPoint {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.join_points.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: join-point span start={d} len={d} exceeds join-point storage len={d}",
+                .{ span.start, span.len, self.join_points.items.len },
+            );
+        }
+    }
+    return self.join_points.items[span.start..][0..span.len];
 }
 
 /// Appends a proc specification and returns its id.

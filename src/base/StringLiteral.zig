@@ -50,6 +50,36 @@ pub const Store = struct {
     // Must match builtins.utils.REFCOUNT_STATIC_DATA without making base depend on builtins.
     const static_refcount_value: isize = 0;
 
+    pub const Entry = struct {
+        idx: Idx,
+        bytes: []const u8,
+    };
+
+    pub const Iterator = struct {
+        store: *const Store,
+        pos: usize = 0,
+
+        pub fn next(self: *Iterator) ?Entry {
+            const buffer_items = self.store.buffer.items.items;
+
+            while (true) {
+                self.pos = std.mem.alignForward(usize, self.pos, static_refcount_alignment);
+                if (self.pos + entry_header_size > buffer_items.len) return null;
+
+                const str_len = std.mem.bytesAsValue(u32, buffer_items[self.pos .. self.pos + len_size]).*;
+                const content_start = self.pos + entry_header_size;
+                const content_end = content_start + str_len;
+                if (content_end > buffer_items.len) return null;
+
+                self.pos = content_end;
+                return .{
+                    .idx = @enumFromInt(@as(u32, @intCast(content_start))),
+                    .bytes = buffer_items[content_start..content_end],
+                };
+            }
+        }
+    };
+
     pub const Buffer = struct {
         items: std.array_list.Aligned(u8, static_refcount_alignment_value) = .empty,
 
@@ -202,6 +232,10 @@ pub const Store = struct {
         return .{
             .buffer = try Buffer.initCapacity(gpa, bytes),
         };
+    }
+
+    pub fn iterator(self: *const Store) Iterator {
+        return .{ .store = self };
     }
 
     /// Deinitialize a `Store`'s memory.

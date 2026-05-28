@@ -41,10 +41,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-not
-	(e-tag (name "C")
-		(args
-			(e-num (value "2")))))
+(e-dispatch-call (method "not") (constraint-fn-var 40)
+	(receiver
+		(e-tag (name "C")
+			(args
+				(e-num (value "2")))))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

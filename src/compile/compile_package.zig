@@ -67,6 +67,20 @@ const AtomicUsize = std.atomic.Value(usize);
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
 
+const stage_timers_supported = !threading.is_freestanding;
+const StageTimer = if (stage_timers_supported) std.time.Timer else void;
+
+fn startStageTimer() ?StageTimer {
+    if (comptime !stage_timers_supported) return null;
+    return std.time.Timer.start() catch null;
+}
+
+fn readStageTimer(timer: *?StageTimer) u64 {
+    if (comptime !stage_timers_supported) return 0;
+    if (timer.*) |*active| return active.read();
+    return 0;
+}
+
 // FileProvider was removed in favour of the unified Io abstraction (src/io/Io.zig).
 // Callers that previously used FileProvider now use Io.readFile / Io.fileExists directly.
 
@@ -195,7 +209,7 @@ const ModuleState = struct {
             if (semantic.checked_artifact == null) {
                 if (semantic.module_env) |e| {
                     // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                    // with e.gpa (page_allocator in multi-threaded mode).
+                    // with e.gpa (smp_allocator in multi-threaded mode).
                     const env_alloc = e.gpa;
                     const source = e.common.source;
                     if (comptime trace_build) {
@@ -216,6 +230,9 @@ const ModuleState = struct {
         self.imports.deinit(gpa);
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing external_imports (len={})\n", .{ self.name, self.external_imports.items.len });
+        }
+        for (self.external_imports.items) |import_name| {
+            gpa.free(import_name);
         }
         self.external_imports.deinit(gpa);
         if (comptime trace_build) {
@@ -304,6 +321,7 @@ pub const ArtifactPublicationInputs = struct {
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
+    problem_store: ?*check.problem.Store = null,
 };
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
@@ -474,6 +492,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -512,6 +532,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -965,7 +987,7 @@ pub const PackageEnv = struct {
         // to CommonEnv remains valid after this function returns.
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(self.gpa);
-        // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
+        defer allocators.deinit();
         const parse_ast = parse.parse(&allocators, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             st.phase = .Canonicalize;
@@ -1120,7 +1142,7 @@ pub const PackageEnv = struct {
         }
 
         // canonicalize using the AST
-        const canon_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var canonicalize_timer = startStageTimer();
 
         var imported_modules = std.ArrayList(CanonicalizeImport).empty;
         defer imported_modules.deinit(self.gpa);
@@ -1157,23 +1179,17 @@ pub const PackageEnv = struct {
             std.fs.path.dirname(st.path) orelse self.root_dir,
         );
 
-        const canon_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_canonicalize_ns += @intCast(canon_end - canon_start);
-        }
+        self.total_canonicalize_ns += readStageTimer(&canonicalize_timer);
 
         // Collect canonicalization diagnostics
-        const canon_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var canonicalize_diagnostics_timer = startStageTimer();
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
-        const canon_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_canonicalize_diagnostics_ns += @intCast(canon_diag_end - canon_diag_start);
-        }
+        self.total_canonicalize_diagnostics_ns += readStageTimer(&canonicalize_diagnostics_timer);
 
         st.phase = .TypeCheck;
         try self.enqueue(module_id);
@@ -1279,6 +1295,7 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -1371,8 +1388,12 @@ pub const PackageEnv = struct {
 
     /// Standalone type checking function that can be called from other tools (e.g., snapshot tool)
     /// This ensures all tools use the exact same type checking logic as production builds
+    ///
+    /// `check_alloc` owns checker/session data that dies with `TypeCheckOutput.deinit`.
+    /// `artifact_alloc` owns any published checked artifact returned in `TypeCheckOutput`.
     pub fn typeCheckModule(
-        gpa: Allocator,
+        check_alloc: Allocator,
+        artifact_alloc: Allocator,
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
@@ -1382,7 +1403,7 @@ pub const PackageEnv = struct {
         _: ?Io,
     ) !TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
-        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = env.qualified_module_ident,
@@ -1394,14 +1415,14 @@ pub const PackageEnv = struct {
         };
 
         // Create module_envs map for explicit imported modules used during canonicalization
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
         errdefer module_envs_map.deinit();
 
-        const owner_envs = try buildCheckOwnerEnvs(gpa, imported_envs, imported_artifacts, available_artifacts);
-        defer gpa.free(owner_envs);
+        const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts);
+        defer check_alloc.free(owner_envs);
 
         var checker = try Check.initWithOwnerModules(
-            gpa,
+            check_alloc,
             &env.types,
             env,
             imported_envs,
@@ -1410,6 +1431,7 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
         try checker.checkFile();
@@ -1426,8 +1448,8 @@ pub const PackageEnv = struct {
             };
         }
 
-        var checked_artifact = try publishCheckedArtifactFromCheckedModule(
-            gpa,
+        var checked_artifact = publishCheckedArtifactFromCheckedModule(
+            artifact_alloc,
             env,
             imported_envs,
             imported_artifacts,
@@ -1436,9 +1458,16 @@ pub const PackageEnv = struct {
                 .platform_app_relation = null,
                 .explicit_roots = &.{},
                 .available_artifacts = available_artifacts,
+                .problem_store = &checker.problems,
             },
-        );
-        errdefer checked_artifact.deinit(gpa);
+        ) catch |err| switch (err) {
+            error.CompileTimeProblem => return .{
+                .checker = checker,
+                .checked_artifact = null,
+            },
+            else => |other| return other,
+        };
+        errdefer checked_artifact.deinit(artifact_alloc);
 
         return .{
             .checker = checker,
@@ -1508,6 +1537,7 @@ pub const PackageEnv = struct {
                 .platform_app_relation = publication.platform_app_relation,
                 .explicit_roots = publication.explicit_roots,
                 .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+                .problem_store = publication.problem_store,
             },
         );
     }
@@ -1595,8 +1625,9 @@ pub const PackageEnv = struct {
         const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
         defer self.gpa.free(available_artifacts);
 
-        const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var check_timer = startStageTimer();
         var typecheck_output = try typeCheckModule(
+            self.gpa,
             self.gpa,
             env,
             self.builtin_modules.builtin_module.env,
@@ -1610,13 +1641,10 @@ pub const PackageEnv = struct {
         if (typecheck_output.checked_artifact != null) {
             st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
         }
-        const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_type_checking_ns += @intCast(check_end - check_start);
-        }
+        self.total_type_checking_ns += readStageTimer(&check_timer);
 
         // Build reports from problems
-        const check_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var check_diagnostics_timer = startStageTimer();
         var rb = try ReportBuilder.init(
             self.gpa,
             env,
@@ -1630,13 +1658,11 @@ pub const PackageEnv = struct {
         );
         defer rb.deinit();
         for (typecheck_output.checker.problems.problems.items) |prob| {
-            const rep = rb.build(prob) catch continue;
+            var rep = try rb.build(prob);
+            errdefer rep.deinit();
             try st.reports.append(self.gpa, rep);
         }
-        const check_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
-        }
+        self.total_check_diagnostics_ns += readStageTimer(&check_diagnostics_timer);
 
         // Comptime evaluator is managed inside typeCheckModule, no need to deinit here
 

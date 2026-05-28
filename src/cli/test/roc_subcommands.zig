@@ -7,6 +7,25 @@ fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     return util.buildIsolatedTestEnvMap(allocator, null);
 }
 
+test "CLI test cache roots are distinct" {
+    const allocator = std.testing.allocator;
+
+    const first = try util.createIsolatedTestCacheDirs(allocator);
+    defer first.deinit(allocator);
+
+    const second = try util.createIsolatedTestCacheDirs(allocator);
+    defer second.deinit(allocator);
+
+    try std.testing.expect(!std.mem.eql(u8, first.roc_cache_dir, second.roc_cache_dir));
+    try std.testing.expect(!std.mem.eql(u8, first.zig_local_cache_dir, second.zig_local_cache_dir));
+
+    var first_dir = try std.fs.openDirAbsolute(first.roc_cache_dir, .{});
+    first_dir.close();
+
+    var second_dir = try std.fs.openDirAbsolute(second.roc_cache_dir, .{});
+    second_dir.close();
+}
+
 test "roc check writes parse errors to stderr" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -1195,6 +1214,75 @@ test "roc check returns exit code 1 for errors" {
     try testing.expect(result.term == .Exited and result.term.Exited == 1);
 }
 
+test "roc check reports comptime division by zero without panicking" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_div_zero.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check reports comptime modulo by zero without panicking" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_mod_zero.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check reports large default Dec scientific literal without panicking" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_default_dec.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check preserves numeric literal constraints before reporting large default Dec scientific literal" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_list_default_dec.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check treats integral scientific notation as integer syntax sugar" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/scientific_integer_u8.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Found 0 error(s)") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
 test "roc run returns exit code 2 for warnings (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -1417,18 +1505,38 @@ test "roc test runs expects in Parser type module (interpreter)" {
     const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
-    // 3. Should have run 2 tests (extract count from "(N)" in output)
+    // 3. Should have run 7 tests (extract count from "(N)" in output)
     const count = blk: {
         const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
         const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
-    try testing.expect(count == 2);
+    try testing.expect(count == 7);
 }
 
 test "roc test runs expects in Parser type module (dev)" {
-    // TODO: dev backend compilation fails for test/package_simple_parser/Parser.roc
-    return error.SkipZigTest;
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=dev", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // 2. Output indicates tests passed
+    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    try testing.expect(has_passed);
+
+    // 3. Should have run 7 tests (extract count from "(N)" in output)
+    const count = blk: {
+        const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
+        const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
+        break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
+    };
+    try testing.expect(count == 7);
 }
 
 test "roc test polymorphic list reverse with numeric literal does not overflow (interpreter)" {
@@ -1533,6 +1641,70 @@ test "roc test issue 9392 numeric utility expects are deterministic with no cach
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try expectRocTestAllPassed(result2, "All (11) tests passed");
+}
+
+test "roc run issue 9208 open union tag before Exit matches wildcard" {
+    const gpa = std.testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/fx-open/test_bar_error.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .Exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
+        else => {
+            std.debug.print("roc run terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "exited with other error: Bar") != null);
+}
+
+test "roc build issue 9435 hosted nominal return builds without mono panic" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "hosted_nominal_return" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    const result = try util.runRoc(
+        gpa,
+        &.{ "build", "--opt=dev", "--no-cache", output_arg },
+        "test/hosted_nominal_return/repro.roc",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .Exited => |code| try std.testing.expect(code != 134),
+        .Signal => |sig| {
+            std.debug.print("roc build crashed with signal {}\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.BuildCrashed;
+        },
+        else => {
+            std.debug.print("roc build terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.BuildCrashed;
+        },
+    }
+
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "panic") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "mono nominal materialization") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "published instantiated nominal backing") == null);
 }
 
 test "roc docs Builtin.roc succeeds" {

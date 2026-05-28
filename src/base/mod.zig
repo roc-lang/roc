@@ -12,6 +12,7 @@ pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
 pub const safe_memory = @import("safe_memory.zig");
+pub const signal_handler = @import("signal_handler.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
 
 pub const target = @import("target.zig");
@@ -163,6 +164,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
     std.testing.refAllDecls(@import("safe_memory.zig"));
+    std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));

@@ -22,10 +22,10 @@
 //!
 //! A single-threaded parent process manages up to N concurrent child
 //! processes (one per test). The parent runs the frontend once, lowers through
-//! checked artifacts to an ARC-inserted LIR runtime image, and allocates that
-//! image in shared memory. Children inherit or map that runtime image and run
-//! backend evaluation only; they never inspect CIR, checked artifacts, MIR, or
-//! IR. Children write only outcome text/metadata back through a pipe. The
+//! checked modules to an ARC-inserted LIR image, and allocates that
+//! image in shared memory. Children inherit or map that LIR image and run
+//! backend evaluation only; they never inspect CIR, checked modules, or
+//! post-check IRs. Children write only outcome text/metadata back through a pipe. The
 //! parent multiplexes pipe reads using poll().
 //!
 //! This avoids the fork-in-multithreaded-process hazard: forking from
@@ -95,6 +95,7 @@ pub const TestCase = struct {
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
+        allocations_at_most: AllocationExpectation,
         problem: void,
         crash: void,
         problem_and_crash: void,
@@ -102,11 +103,17 @@ pub const TestCase = struct {
         pub fn display(self: Expected) ?[]const u8 {
             return switch (self) {
                 .inspect_str => |value| value,
+                .allocations_at_most => |value| value.output,
                 .problem => null,
                 .crash => null,
                 .problem_and_crash => null,
             };
         }
+    };
+
+    pub const AllocationExpectation = struct {
+        output: []const u8,
+        max_allocations: u32,
     };
 
     pub const Skip = packed struct {
@@ -206,6 +213,7 @@ const WireHeader = extern struct {
 const has_fork = builtin.os.tag != .windows;
 
 const BackendEvalFn = *const fn (std.mem.Allocator, *const LoweredProgram) anyerror![]u8;
+const BackendEvalWithStatsFn = *const fn (std.mem.Allocator, *const LoweredProgram) anyerror!helpers.EvalRunResult;
 
 /// Result of a forked backend evaluation.
 const ForkResult = union(enum) {
@@ -219,12 +227,20 @@ const ForkResult = union(enum) {
     fork_failed: void,
 };
 
+/// Result of a forked backend evaluation that includes host-observed allocation stats.
+const ForkStatsResult = union(enum) {
+    success: helpers.EvalRunResult,
+    child_error: []const u8,
+    signal_death: u8,
+    fork_failed: void,
+};
+
 /// Fork a child process to evaluate a backend, communicating the result via pipe.
 ///
-/// The child calls `eval_fn(page_allocator, lowered_runtime_image)`, where
-/// `lowered_runtime_image` is already a zero-copy view over ARC-inserted LIR
+/// The child calls `eval_fn(page_allocator, lowered_lir_image)`, where
+/// `lowered_lir_image` is already a zero-copy view over ARC-inserted LIR
 /// allocated in shared memory. Backend children must not inspect CIR, checked
-/// artifacts, MIR, or IR; they write only the resulting string to the pipe and
+/// modules, or post-check IRs; they write only the resulting string to the pipe and
 /// `_exit(0)`. On error they `_exit(1)`.
 ///
 /// The parent reads the pipe until EOF (important: before waitpid to avoid pipe
@@ -348,6 +364,125 @@ fn forkAndEval(
     return .{ .success = owned };
 }
 
+fn forkAndEvalWithStats(
+    eval_fn: BackendEvalWithStatsFn,
+    lowered: *const LoweredProgram,
+) ForkStatsResult {
+    if (comptime !has_fork or coverage_mode) {
+        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+            return .{ .child_error = @errorName(err) };
+        };
+        return .{ .success = result };
+    }
+
+    const disable_fork =
+        (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_NO_FORK") catch null) != null;
+    if (disable_fork) {
+        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+            return .{ .child_error = @errorName(err) };
+        };
+        return .{ .success = result };
+    }
+
+    const pipe_fds = posix.pipe() catch {
+        return .{ .fork_failed = {} };
+    };
+    const pipe_read = pipe_fds[0];
+    const pipe_write = pipe_fds[1];
+
+    const fork_result = posix.fork() catch {
+        posix.close(pipe_read);
+        posix.close(pipe_write);
+        return .{ .fork_failed = {} };
+    };
+
+    if (fork_result == 0) {
+        posix.close(pipe_read);
+
+        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        const child_alloc = child_arena.allocator();
+        const result = eval_fn(child_alloc, lowered) catch |err| {
+            const name = @errorName(err);
+            var w: usize = 0;
+            while (w < name.len) {
+                w += posix.write(pipe_write, name[w..]) catch break;
+            }
+            posix.close(pipe_write);
+            std.c._exit(2);
+        };
+
+        const header: [4]u8 = @bitCast(result.allocation_count);
+        var written: usize = 0;
+        while (written < header.len) {
+            written += posix.write(pipe_write, header[written..]) catch {
+                posix.close(pipe_write);
+                std.c._exit(1);
+            };
+        }
+        written = 0;
+        while (written < result.output.len) {
+            written += posix.write(pipe_write, result.output[written..]) catch {
+                posix.close(pipe_write);
+                std.c._exit(1);
+            };
+        }
+
+        posix.close(pipe_write);
+        std.c._exit(0);
+    }
+
+    posix.close(pipe_write);
+
+    var result_buf: std.ArrayListUnmanaged(u8) = .empty;
+    var read_buf: [4096]u8 = undefined;
+    var read_error = false;
+    while (true) {
+        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+            read_error = true;
+            break;
+        };
+        if (bytes_read == 0) break;
+        result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+            read_error = true;
+            break;
+        };
+    }
+    posix.close(pipe_read);
+
+    const wait_result = posix.waitpid(fork_result, 0);
+    const status = wait_result.status;
+    const termination_signal: u8 = @truncate(status & 0x7f);
+
+    if (termination_signal != 0) {
+        result_buf.deinit(std.heap.page_allocator);
+        return .{ .signal_death = termination_signal };
+    }
+
+    const exit_code: u8 = @truncate((status >> 8) & 0xff);
+    if (exit_code == 2) {
+        const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
+            result_buf.deinit(std.heap.page_allocator);
+            return .{ .child_error = "ChildExecFailed" };
+        };
+        return .{ .child_error = owned };
+    }
+    if (exit_code != 0 or read_error or result_buf.items.len < 4) {
+        result_buf.deinit(std.heap.page_allocator);
+        return .{ .child_error = "ChildExecFailed" };
+    }
+
+    const allocation_count: u32 = @bitCast(result_buf.items[0..4].*);
+    const output = std.heap.page_allocator.dupe(u8, result_buf.items[4..]) catch {
+        result_buf.deinit(std.heap.page_allocator);
+        return .{ .child_error = "ChildExecFailed" };
+    };
+    result_buf.deinit(std.heap.page_allocator);
+    return .{ .success = .{
+        .output = output,
+        .allocation_count = allocation_count,
+    } };
+}
+
 //
 // Parse and canonicalize (shared by all backends)
 //
@@ -366,6 +501,22 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors",
+                        .has_backend_details = false,
+                        .backends = undefined,
+                    };
+                };
+                defer compiled.deinit(allocator);
+                break :blk EvalTimings{
+                    .parse_ns = compiled.resources.parse_ns,
+                    .canonicalize_ns = compiled.resources.canonicalize_ns,
+                    .typecheck_ns = compiled.resources.typecheck_ns,
+                };
+            },
+            .allocations_at_most => blk: {
+                var compiled = helpers.compileProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                    return .{
+                        .status = .fail,
+                        .message = "INVALID_SYNTAX — skipped allocation test has parse/check/lower errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -449,9 +600,143 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
 fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
     return switch (tc.expected) {
         .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip),
+        .allocations_at_most => |expected| runAllocationTest(allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
         .crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false),
         .problem_and_crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true),
+    };
+}
+
+fn runAllocationTest(
+    allocator: std.mem.Allocator,
+    source_kind: helpers.SourceKind,
+    src: []const u8,
+    imports: []const helpers.ModuleSource,
+    expected: TestCase.AllocationExpectation,
+    skip: TestCase.Skip,
+) !TestOutcome {
+    var compiled = try helpers.compileProgram(allocator, source_kind, src, imports);
+    defer compiled.deinit(allocator);
+
+    const timings = EvalTimings{
+        .parse_ns = compiled.resources.parse_ns,
+        .canonicalize_ns = compiled.resources.canonicalize_ns,
+        .typecheck_ns = compiled.resources.typecheck_ns,
+    };
+
+    const skips = if (comptime coverage_mode)
+        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
+    else
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+
+    const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
+        helpers.lirInterpreterStrWithStats,
+        helpers.devEvaluatorStrWithStats,
+        helpers.wasmEvaluatorStrWithStats,
+        helpers.devEvaluatorStrWithStats, // llvm placeholder
+    };
+
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    var first_ok: ?[]const u8 = null;
+    var any_failure = false;
+    var first_message: ?[]const u8 = null;
+
+    for (0..NUM_BACKENDS) |i| {
+        if (i == 1 and !DEV_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
+        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
+        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) {
+            backends[i] = .{ .status = .not_implemented };
+            continue;
+        }
+        if (skips[i]) {
+            backends[i] = .{ .status = .skip };
+            continue;
+        }
+
+        var timer = Timer.start() catch unreachable;
+        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const fork_result = forkAndEvalWithStats(eval_fns[i], lowered);
+        const dur = timer.read();
+
+        switch (fork_result) {
+            .success => |result| {
+                const value_ok = std.mem.eql(u8, expected.output, result.output);
+                const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, result.output) else true;
+                const allocation_ok = result.allocation_count <= expected.max_allocations;
+
+                if (!value_ok or !agreement_ok) {
+                    backends[i] = .{ .status = .wrong_value, .value = result.output, .duration_ns = dur };
+                    if (first_message == null) {
+                        first_message = try std.fmt.allocPrint(
+                            allocator,
+                            "{s} output mismatch: expected \"{s}\", got \"{s}\"",
+                            .{ BACKEND_NAMES[i], expected.output, result.output },
+                        );
+                    }
+                    any_failure = true;
+                } else if (!allocation_ok) {
+                    backends[i] = .{
+                        .status = .fail,
+                        .value = try std.fmt.allocPrint(allocator, "allocations: {d}", .{result.allocation_count}),
+                        .duration_ns = dur,
+                    };
+                    if (first_message == null) {
+                        first_message = try std.fmt.allocPrint(
+                            allocator,
+                            "{s} allocated {d} time(s), expected at most {d}",
+                            .{ BACKEND_NAMES[i], result.allocation_count, expected.max_allocations },
+                        );
+                    }
+                    any_failure = true;
+                } else {
+                    backends[i] = .{
+                        .status = .pass,
+                        .value = try std.fmt.allocPrint(allocator, "{s} (allocations: {d})", .{ result.output, result.allocation_count }),
+                        .duration_ns = dur,
+                    };
+                    if (first_ok == null) first_ok = result.output;
+                }
+            },
+            .child_error => |err_name| {
+                backends[i] = .{ .status = .fail, .value = err_name, .duration_ns = dur };
+                any_failure = true;
+            },
+            .signal_death => |sig| {
+                var sig_buf: [32]u8 = undefined;
+                const sig_str = std.fmt.bufPrint(&sig_buf, "signal: {d}", .{sig}) catch "signal: ?";
+                backends[i] = .{ .status = .fail, .value = allocator.dupe(u8, sig_str) catch "signal", .duration_ns = dur };
+                any_failure = true;
+            },
+            .fork_failed => {
+                backends[i] = .{ .status = .fail, .value = "ForkFailed", .duration_ns = dur };
+                any_failure = true;
+            },
+        }
+    }
+
+    const final_timings = EvalTimings{
+        .parse_ns = timings.parse_ns,
+        .canonicalize_ns = timings.canonicalize_ns,
+        .typecheck_ns = timings.typecheck_ns,
+        .interpreter_ns = backends[0].duration_ns,
+        .dev_ns = backends[1].duration_ns,
+        .wasm_ns = backends[2].duration_ns,
+        .llvm_ns = backends[3].duration_ns,
+    };
+
+    return .{
+        .status = if (any_failure) .fail else .pass,
+        .message = first_message,
+        .timings = final_timings,
+        .has_backend_details = true,
+        .backends = backends,
+        .expected_str = expected.output,
     };
 }
 
@@ -518,6 +803,7 @@ fn runInspectTest(
             .success => |str| {
                 const expected_str = switch (expected) {
                     .inspect_str => |value| value,
+                    .allocations_at_most => unreachable,
                     .problem => unreachable,
                     .crash => unreachable,
                     .problem_and_crash => unreachable,
@@ -1169,7 +1455,7 @@ fn printHelp() void {
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
-        \\  --timeout <MS>        Per-test hang timeout in ms (default: 30000).
+        \\  --timeout <MS>        Per-test hang timeout in ms (default: 30000, 120000 on musl).
         \\
         \\COVERAGE:
         \\  Use `zig build coverage-eval` to build with coverage instrumentation.
@@ -1588,8 +1874,12 @@ pub fn main() !void {
     var wall_timer = Timer.start() catch unreachable;
 
     // Default timeout: 30s under parallel load, 10s with single child.
+    // Native musl CI has enough process-startup variance for the larger shared
+    // harness default to be more reliable, especially for heavy boundary tests.
     const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
         cli.timeout_ms
+    else if (builtin.abi == .musl)
+        120_000
     else if (max_children <= 1)
         10_000
     else

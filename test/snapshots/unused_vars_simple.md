@@ -198,10 +198,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "number")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "number")))
-				(e-num (value "1")))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 152)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "number"))))
+				(args
+					(e-num (value "1"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -210,39 +212,45 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "a"))
-					(e-call (constraint-fn-var 110)
+					(e-call (constraint-fn-var 190)
 						(e-lookup-local
 							(p-assign (ident "unused_regular")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "b"))
-					(e-call (constraint-fn-var 123)
+					(e-call (constraint-fn-var 223)
 						(e-lookup-local
 							(p-assign (ident "used_underscore")))
 						(e-num (value "10"))))
 				(s-let
 					(p-assign (ident "c"))
-					(e-call (constraint-fn-var 140)
+					(e-call (constraint-fn-var 260)
 						(e-lookup-local
 							(p-assign (ident "unused_underscore")))
 						(e-num (value "15"))))
 				(s-let
 					(p-assign (ident "d"))
-					(e-call (constraint-fn-var 158)
+					(e-call (constraint-fn-var 298)
 						(e-lookup-local
 							(p-assign (ident "used_regular")))
 						(e-num (value "20"))))
-				(e-binop (op "add")
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "a")))
-							(e-lookup-local
-								(p-assign (ident "b"))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 303)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 301)
+							(receiver
+								(e-dispatch-call (method "plus") (constraint-fn-var 299)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "b"))))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "c"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "c"))))
-					(e-lookup-local
-						(p-assign (ident "d"))))))))
+							(p-assign (ident "d")))))))))
 ~~~
 # TYPES
 ~~~clojure
