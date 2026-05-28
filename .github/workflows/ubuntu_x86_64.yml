@@ -15,7 +15,7 @@ jobs:
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Check for duplicate authors
         run: diff <(sort authors) <(sort authors | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
