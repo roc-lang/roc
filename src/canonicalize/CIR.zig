@@ -873,6 +873,16 @@ pub const Import = struct {
             available_modules: []const *const @import("ModuleEnv.zig"),
         ) void {
             const import_count: usize = @intCast(self.imports.len());
+            if (import_count == 0) return;
+
+            var name_to_idx = std.StringHashMap(u32).init(env.gpa);
+            defer name_to_idx.deinit();
+            name_to_idx.ensureTotalCapacity(@intCast(available_modules.len)) catch return;
+            for (available_modules, 0..) |module_env, module_idx| {
+                const gop = name_to_idx.getOrPutAssumeCapacity(module_env.module_name);
+                if (!gop.found_existing) gop.value_ptr.* = @intCast(module_idx);
+            }
+
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
                 const current = self.resolved_modules.items.items[i];
