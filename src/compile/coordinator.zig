@@ -85,34 +85,28 @@ const is_freestanding = threading.is_freestanding;
 const threads_available = !is_freestanding;
 const Thread = threading.Thread;
 
-/// Allocators for a worker thread. Each worker has its own instance.
-/// This ensures thread-safe allocations without contention.
-///
-/// Design rationale:
-/// - `gpa`: For long-lived data (ModuleEnv, source). In MT mode, this is
-///   page_allocator for thread safety. Data allocated here is stored in
-///   ModuleEnv.gpa and freed during module cleanup.
-/// - `arena`: For temporary allocations within a task (reports, diagnostics).
-///   Reset between tasks to reduce allocation pressure.
+/// Set by workerThread to point at the current task's scratch arena.
+/// Read by getWorkerScratch on the worker thread to allocate task-internal
+/// scratch (Check.init, Interpreter.init, canon temporaries) cheaply.
+threadlocal var worker_scratch_arena: ?Allocator = null;
+
+/// Per-worker scratch arena. Reset between tasks. Used for allocations whose
+/// lifetime is bounded by a single task — Check/Interpreter internal scratch,
+/// canon temporaries, etc. Allocations that escape the task (Reports, etc.)
+/// must use the smp_allocator instead.
 pub const WorkerAllocators = struct {
-    /// General purpose allocator for long-lived data (ModuleEnv, source).
-    /// In multi-threaded mode, this is page_allocator for thread safety.
-    gpa: Allocator,
-
-    /// Arena for temporary allocations within a task.
-    /// Reset between tasks to reduce allocation pressure.
-    arena: Allocator,
-
-    /// Underlying arena implementation
+    backing: Allocator,
     arena_impl: std.heap.ArenaAllocator,
 
     pub fn init(backing: Allocator) WorkerAllocators {
-        var arena_impl = std.heap.ArenaAllocator.init(backing);
         return .{
-            .gpa = backing,
-            .arena_impl = arena_impl,
-            .arena = arena_impl.allocator(),
+            .backing = backing,
+            .arena_impl = std.heap.ArenaAllocator.init(backing),
         };
+    }
+
+    pub fn arena(self: *WorkerAllocators) Allocator {
+        return self.arena_impl.allocator();
     }
 
     pub fn deinit(self: *WorkerAllocators) void {
@@ -471,6 +465,16 @@ pub const Coordinator = struct {
             std.heap.smp_allocator
         else
             self.gpa;
+    }
+
+    /// Get an allocator for task-internal scratch allocations that do NOT escape
+    /// the current task. In multi-threaded mode this is the worker's arena, which
+    /// gets reset between tasks (so per-task setup of Check/Interpreter scratch
+    /// is reused across tasks for free). Falls back to the regular worker allocator
+    /// when no arena is bound (single-threaded mode or non-worker context).
+    pub fn getWorkerScratch(self: *const Coordinator) Allocator {
+        if (worker_scratch_arena) |a| return a;
+        return self.getWorkerAllocator();
     }
 
     pub fn init(
@@ -2166,9 +2170,8 @@ pub const Coordinator = struct {
         const env = task.module_env;
         const ast = task.cached_ast;
 
-        // Extract qualified imports from AST to set up placeholders for external modules
-        // Use worker allocator for temporary allocations during canonicalization (thread-safe)
-        const canon_alloc = self.getWorkerAllocator();
+        // Canon's temporary scratch is task-local — use the arena.
+        const canon_alloc = self.getWorkerScratch();
         const qualified_imports = module_discovery.extractQualifiedImportsFromAST(ast, canon_alloc) catch &[_][]const u8{};
         defer {
             for (qualified_imports) |qi| canon_alloc.free(qi);
@@ -2299,8 +2302,9 @@ pub const Coordinator = struct {
         env.imports.resolveImports(env, task.imported_envs);
         env.store.resolvePendingLookups(env, task.imported_envs);
 
-        // Type check - use worker allocator for thread safety
-        const check_alloc = self.getWorkerAllocator();
+        // Check/Interpreter internal state is task-local; allocate from the
+        // worker arena so the per-task setup doesn't trip the allocator.
+        const check_alloc = self.getWorkerScratch();
         var checker = compile_package.PackageEnv.typeCheckModule(
             check_alloc,
             env,
@@ -2405,23 +2409,18 @@ pub const Coordinator = struct {
         var worker_allocs = WorkerAllocators.init(backing);
         defer worker_allocs.deinit();
 
+        worker_scratch_arena = worker_allocs.arena();
+        defer worker_scratch_arena = null;
+
         while (true) {
-            // Check shutdown flag before blocking on the next task.
-            // This ensures workers exit promptly instead of draining
-            // remaining buffered tasks after shutdown() is called.
             if (self.shutting_down.load(.acquire)) break;
 
-            // Block until a task is available. Returns null when the channel
-            // is closed and drained.
             const t = self.task_channel.recv() orelse break;
 
-            // Execute task
             const result = self.executeTaskInline(t);
 
-            // Reset arena between tasks to reclaim temporary allocations
             worker_allocs.resetArena();
 
-            // Send result
             self.result_channel.send(result) catch break;
         }
     }
