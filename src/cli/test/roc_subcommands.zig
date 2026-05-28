@@ -7,6 +7,221 @@ fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
     return util.buildIsolatedTestEnvMap(allocator, null);
 }
 
+const GeneratedModuleGraphConfig = struct {
+    /// Total number of .roc files to generate. One is main.roc, the rest are
+    /// T*.roc type modules imported by main.roc.
+    roc_file_count: usize,
+    /// Number of value symbols to generate in every .roc file.
+    symbols_per_file: usize,
+};
+
+fn writeGeneratedModuleGraphProject(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    config: GeneratedModuleGraphConfig,
+) !void {
+    try std.testing.expect(config.roc_file_count > 0);
+    try std.testing.expect(config.symbols_per_file > 0);
+
+    try writeGeneratedPackageModule(dir, config);
+
+    var module_idx: usize = 1;
+    while (module_idx < config.roc_file_count) : (module_idx += 1) {
+        try writeGeneratedTypeModule(allocator, dir, config, module_idx);
+    }
+}
+
+fn writeGeneratedPackageModule(
+    dir: std.fs.Dir,
+    config: GeneratedModuleGraphConfig,
+) !void {
+    var file = try dir.createFile("main.roc", .{});
+    defer file.close();
+
+    var write_buffer: [4096]u8 = undefined;
+    var writer = file.writer(&write_buffer);
+    const out = &writer.interface;
+
+    const type_module_count = config.roc_file_count - 1;
+
+    try out.writeAll("package [\n");
+    var module_idx: usize = 1;
+    while (module_idx <= type_module_count) : (module_idx += 1) {
+        try out.print("    T{d},\n", .{module_idx});
+    }
+    try out.writeAll("] {}\n\n");
+
+    module_idx = 1;
+    while (module_idx <= type_module_count) : (module_idx += 1) {
+        try out.print("import T{d}\n", .{module_idx});
+    }
+    try out.writeAll("\n");
+
+    var symbol_idx: usize = 1;
+    while (symbol_idx <= config.symbols_per_file) : (symbol_idx += 1) {
+        try out.print("p{d} : {{}}\n", .{symbol_idx});
+        if (symbol_idx == 1) {
+            if (type_module_count > 0) {
+                try out.writeAll("p1 = T1.s1\n\n");
+            } else {
+                try out.writeAll("p1 = {}\n\n");
+            }
+        } else {
+            try out.print("p{d} = p{d}\n\n", .{ symbol_idx, symbol_idx - 1 });
+        }
+    }
+
+    try out.flush();
+}
+
+fn writeGeneratedTypeModule(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    config: GeneratedModuleGraphConfig,
+    module_idx: usize,
+) !void {
+    const file_name = try std.fmt.allocPrint(allocator, "T{d}.roc", .{module_idx});
+    defer allocator.free(file_name);
+
+    var file = try dir.createFile(file_name, .{});
+    defer file.close();
+
+    var write_buffer: [4096]u8 = undefined;
+    var writer = file.writer(&write_buffer);
+    const out = &writer.interface;
+
+    // Keep the graph acyclic: T2..Tn import T1, and main.roc imports all T*.roc.
+    if (module_idx > 1) {
+        try out.writeAll("import T1\n\n");
+    }
+
+    try out.print("T{d} := [].{{\n", .{module_idx});
+
+    var symbol_idx: usize = 1;
+    while (symbol_idx <= config.symbols_per_file) : (symbol_idx += 1) {
+        try out.print("    s{d} : {{}}\n", .{symbol_idx});
+        if (symbol_idx == 1) {
+            if (module_idx > 1) {
+                try out.writeAll("    s1 = T1.s1\n\n");
+            } else {
+                try out.writeAll("    s1 = {}\n\n");
+            }
+        } else {
+            try out.print("    s{d} = s{d}\n\n", .{ symbol_idx, symbol_idx - 1 });
+        }
+    }
+
+    try out.writeAll("}\n");
+    try out.flush();
+}
+
+fn runGeneratedModuleGraphCheck(
+    allocator: std.mem.Allocator,
+    config: GeneratedModuleGraphConfig,
+) !void {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeGeneratedModuleGraphProject(allocator, tmp_dir.dir, config);
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+
+    try tmp_dir.dir.makePath("roc-cache");
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+
+    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
+    defer allocator.free(roc_path);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("ROC_CACHE_DIR", cache_path);
+
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ roc_path, "check", main_path },
+        .cwd = cwd_path,
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    const cached_module_count = try countModuleCacheFiles(allocator, cache_path);
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print(
+            \\roc check failed for generated module graph:
+            \\  roc files: {d}
+            \\  symbols per file: {d}
+            \\  cached modules before failure: {d}
+            \\  term: {}
+            \\
+        , .{
+            config.roc_file_count,
+            config.symbols_per_file,
+            cached_module_count,
+            result.term,
+        });
+        printTruncatedOutput("stdout", result.stdout);
+        printTruncatedOutput("stderr", result.stderr);
+    }
+    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    if (cached_module_count != config.roc_file_count) {
+        std.debug.print(
+            "expected {d} cached module files for generated module graph, found {d}\n",
+            .{ config.roc_file_count, cached_module_count },
+        );
+    }
+    try std.testing.expectEqual(config.roc_file_count, cached_module_count);
+}
+
+fn countModuleCacheFiles(allocator: std.mem.Allocator, cache_path: []const u8) !usize {
+    var cache_dir = std.fs.cwd().openDir(cache_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return 0,
+        else => return err,
+    };
+    defer cache_dir.close();
+
+    var walker = try cache_dir.walk(allocator);
+    defer walker.deinit();
+
+    var count: usize = 0;
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.endsWith(u8, entry.basename, ".meta")) continue;
+        if (std.mem.endsWith(u8, entry.basename, ".tmp")) continue;
+
+        count += 1;
+    }
+
+    return count;
+}
+
+fn printTruncatedOutput(label: []const u8, bytes: []const u8) void {
+    const max_len = 4096;
+    if (bytes.len <= max_len) {
+        std.debug.print("{s}:\n{s}\n", .{ label, bytes });
+        return;
+    }
+
+    std.debug.print("{s} (first {d} of {d} bytes):\n{s}\n", .{
+        label,
+        max_len,
+        bytes.len,
+        bytes[0..max_len],
+    });
+}
+
 test "roc check writes parse errors to stderr" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -73,6 +288,34 @@ test "roc check succeeds on valid file" {
     const has_error = std.mem.indexOf(u8, result.stderr, "Failed to check") != null or
         std.mem.indexOf(u8, result.stderr, "error") != null;
     try testing.expect(!has_error);
+}
+
+test "roc check generated module graph succeeds with 1 file and 1 symbol" {
+    try runGeneratedModuleGraphCheck(std.testing.allocator, .{
+        .roc_file_count = 1,
+        .symbols_per_file = 1,
+    });
+}
+
+test "roc check generated module graph succeeds with 5 files and 5 symbols" {
+    try runGeneratedModuleGraphCheck(std.testing.allocator, .{
+        .roc_file_count = 5,
+        .symbols_per_file = 5,
+    });
+}
+
+test "roc check generated module graph handles many symbols per file" {
+    try runGeneratedModuleGraphCheck(std.testing.allocator, .{
+        .roc_file_count = 2,
+        .symbols_per_file = 20_000,
+    });
+}
+
+test "roc check generated module graph handles many imported files" {
+    try runGeneratedModuleGraphCheck(std.testing.allocator, .{
+        .roc_file_count = 500,
+        .symbols_per_file = 5,
+    });
 }
 
 test "roc version outputs at least 5 chars to stdout" {
