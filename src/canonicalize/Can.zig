@@ -69,7 +69,7 @@ const PlaceholderInfo = struct {
 };
 
 /// Aliases for one item in an associated block, populated by
-/// processAssociatedItemsFirstPass and drained by processAssociatedBlock
+/// registerAssociatedItemPlaceholders and drained by processAssociatedBlock
 /// into the child scope. Avoids the FIRST setup loop's per-item
 /// insertQualifiedIdent + scopeLookup rebuild.
 const AssocAlias = struct {
@@ -113,7 +113,7 @@ type_decl_stmt_by_ast_idx: std.AutoHashMapUnmanaged(AST.Statement.Idx, Statement
 /// scanning declarations.
 explicit_root_names: []const []const u8 = &.{},
 explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .{},
-/// Per-block alias data populated during processAssociatedItemsFirstPass and
+/// Per-block alias data populated during registerAssociatedItemPlaceholders and
 /// drained by processAssociatedBlock after scopeEnter. Keyed by the assoc
 /// block's fully-qualified parent name (e.g., "Module.T1").
 pending_assoc_aliases: std.AutoHashMapUnmanaged(Ident.Idx, std.ArrayListUnmanaged(AssocAlias)) = .{},
@@ -1083,7 +1083,7 @@ fn processTypeDeclFirstPass(
 
     // Process associated items completely (both symbol introduction and canonicalization)
     // This eliminates the need for a separate third pass
-    // Unless defer_associated_blocks is true (when called from processAssociatedItemsFirstPass
+    // Unless defer_associated_blocks is true (when called from registerAssociatedItemPlaceholders
     // to handle sibling type forward references)
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
@@ -1426,7 +1426,7 @@ fn introduceNestedItemAliases(
 
 /// Process an associated block: introduce all items, set up scope with aliases, and canonicalize
 /// When skip_first_pass is true, placeholders were already created by a recursive call to
-/// processAssociatedItemsFirstPass, so we skip directly to scope entry and body processing.
+/// registerAssociatedItemPlaceholders, so we skip directly to scope entry and body processing.
 /// relative_name is the type's name without module prefix (null for module-level associated blocks)
 fn processAssociatedBlock(
     self: *Self,
@@ -1440,7 +1440,7 @@ fn processAssociatedBlock(
     // First, introduce placeholder patterns for all associated items
     // (Skip if this is a nested call where placeholders were already created)
     if (!skip_first_pass) {
-        try self.processAssociatedItemsFirstPass(qualified_name_idx, relative_name_idx, type_name, assoc.statements);
+        try self.registerAssociatedItemPlaceholders(qualified_name_idx, relative_name_idx, type_name, assoc.statements);
     }
 
     // Now enter a new scope for the associated block where both qualified and unqualified names work
@@ -1462,18 +1462,7 @@ fn processAssociatedBlock(
     // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
     // were added in their declaration scope, making them visible to all child scopes.
 
-    // The next three setup loops only do real work when this block contains nested
-    // type declarations. Scan once and skip them entirely when there are none —
-    // this is the common case and the per-statement dispatch through the switch
-    // otherwise costs a non-trivial chunk of canon time for large blocks.
-    const has_nested_type_decls = blk: {
-        for (self.parse_ir.store.statementSlice(assoc.statements)) |sid| {
-            if (self.parse_ir.store.getStatement(sid) == .type_decl) break :blk true;
-        }
-        break :blk false;
-    };
-
-    // Drain the per-decl aliases collected by processAssociatedItemsFirstPass into
+    // Drain the per-decl aliases collected by registerAssociatedItemPlaceholders into
     // the child scope so nested scopes and sibling bodies can resolve unqualified
     // and type-qualified references.
     if (self.pending_assoc_aliases.fetchRemove(qualified_name_idx)) |kv| {
@@ -1485,140 +1474,12 @@ fn processAssociatedBlock(
         }
     }
 
-    // SECOND: Process nested type declarations' associated blocks.
-    // Now that parent decls are aliased, nested scopes can access them via scope chain lookup.
-    // We must do this BEFORE we set up aliases for nested items, because those aliases
-    // need to point to patterns that exist after nested processing completes.
-    for (self.parse_ir.store.statementSlice(assoc.statements)) |nested_stmt_idx| {
-        const nested_stmt = self.parse_ir.store.getStatement(nested_stmt_idx);
-        if (nested_stmt == .type_decl) {
-            const nested_type_decl = nested_stmt.type_decl;
-            if (nested_type_decl.associated) |nested_assoc| {
-                const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
-                const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
-
-                // Build fully qualified name for the nested type
-                const parent_text = self.env.getIdent(qualified_name_idx);
-                const nested_type_text = self.env.getIdent(nested_type_ident);
-                const nested_qualified_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
-
-                // Build relative name for the nested type (without module prefix)
-                // If relative_name_idx is not null, use it as the parent (e.g., "Parent.Nested")
-                // If relative_name_idx is null (module root), just use the nested type's name
-                const nested_relative_idx = if (relative_name_idx) |rel_idx| blk: {
-                    const rel_parent_text = self.env.getIdent(rel_idx);
-                    break :blk try self.env.insertQualifiedIdent(rel_parent_text, nested_type_text);
-                } else nested_type_ident;
-
-                // Recursively process the nested type's associated block
-                // Skip first pass because placeholders were already created by
-                // processAssociatedItemsFirstPass Phase 2b
-                const nested_type_decl_idx = self.scopeLookupTypeDecl(nested_qualified_idx) orelse
-                    std.debug.panic(
-                        "canonicalize associated-block invariant violated: missing nested type decl for {s}",
-                        .{self.env.getIdent(nested_qualified_idx)},
-                    );
-                try self.processAssociatedBlock(nested_type_decl_idx, nested_qualified_idx, nested_relative_idx, nested_type_ident, nested_assoc, true);
-            }
-        }
-    }
-
-    // THIRD: Introduce type aliases and nested item aliases into this scope
-    // We only add unqualified and type-qualified names; fully qualified names are
-    // already in the parent scope and accessible via scope nesting
-    for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
-        const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
-        switch (assoc_stmt) {
-            .type_decl => |nested_type_decl| {
-                const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
-                const unqualified_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
-
-                // Build fully qualified name (e.g., "Test.MyBool")
-                const parent_text = self.env.getIdent(qualified_name_idx);
-                const nested_type_text = self.env.getIdent(unqualified_ident);
-                const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, nested_type_text);
-
-                // Introduce type aliases (fully qualified is already in parent scope from processTypeDeclFirstPass)
-                if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
-                    const assoc_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                    // Add unqualified alias (e.g., "Bar" -> the fully qualified type)
-                    try assoc_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
-
-                    // Add user-facing qualified alias (e.g., "Foo.Bar" -> the fully qualified type)
-                    // This allows users to write "Foo.Bar" in type annotations
-                    // Re-fetch nested_type_text since insertQualifiedIdent may have reallocated
-                    const type_name_text_str = self.env.getIdent(type_name);
-                    const nested_type_text_str = self.env.getIdent(unqualified_ident);
-                    const user_qualified_ident_idx = try self.env.insertQualifiedIdent(type_name_text_str, nested_type_text_str);
-                    try assoc_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, qualified_type_decl_idx);
-                }
-
-                // Introduce associated items of nested types into this scope (recursively)
-                // Now that nested blocks have been processed, these patterns exist and can be aliased.
-                // This allows qualified access like "Inner.val" and "Inner.Deep.deepVal" from the parent scope.
-                if (nested_type_decl.associated) |nested_assoc| {
-                    try self.introduceNestedItemAliases(qualified_ident_idx, nested_type_text, nested_assoc.statements);
-                }
-            },
-            .decl => {
-                // Decl aliases were already added in the FIRST pass above
-                // (before processing nested blocks, so nested scopes can see parent decls)
-            },
-            else => {
-                // Note: .type_anno is not handled here because anno-only patterns
-                // are created during processAssociatedItemsSecondPass, so they need
-                // to be re-introduced AFTER that call completes
-            },
-        }
-    }
-
-    // Process the associated items (canonicalize their bodies)
-    try self.processAssociatedItemsSecondPass(qualified_name_idx, relative_name_idx, type_name, assoc.statements);
-
-    // After processing, introduce anno-only defs into the associated block scope
-    // (They were just created by processAssociatedItemsSecondPass)
-    // We only add unqualified and type-qualified names; fully qualified is in parent scope
-    for (self.parse_ir.store.statementSlice(assoc.statements)) |anno_stmt_idx| {
-        const anno_stmt = self.parse_ir.store.getStatement(anno_stmt_idx);
-        switch (anno_stmt) {
-            .type_anno => |type_anno| {
-                if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
-                    // Build fully qualified name (e.g., "Test.MyBool.len")
-                    const parent_text = self.env.getIdent(qualified_name_idx);
-                    const anno_text = self.env.getIdent(anno_ident);
-                    const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
-
-                    // Look up the fully qualified pattern (from parent scope via nesting)
-                    switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
-                        .found => |pattern_idx| {
-                            const assoc_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                            // Add unqualified name (e.g., "len")
-                            try assoc_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
-
-                            // Add type-qualified name (e.g., "List.len")
-                            // Re-fetch strings since insertQualifiedIdent may have reallocated the ident store
-                            const parent_type_text_refetched = self.env.getIdent(type_name);
-                            const anno_text_refetched = self.env.getIdent(anno_ident);
-                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text_refetched, anno_text_refetched);
-                            try assoc_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                        },
-                        .not_found => {
-                            // This can happen if the type_anno was followed by a matching decl
-                            // (in which case it's not an anno-only def)
-                        },
-                    }
-                }
-            },
-            else => {},
-        }
-    }
+    try self.canonicalizeAssociatedItems(qualified_name_idx, relative_name_idx, type_name, assoc.statements);
 }
 
 /// Look up an existing placeholder pattern for an associated-block item.
 /// Resolves to the same Pattern.Idx whether the placeholder came from
-/// processAssociatedItemsFirstPass (qualified name in parent scope) or
+/// registerAssociatedItemPlaceholders (qualified name in parent scope) or
 /// from canonicalizeExpr's forward_references path (unqualified name
 /// in current scope). Adopts a forward_references entry into the
 /// canonical association by registering it under the qualified name and
@@ -1629,28 +1490,30 @@ fn findOrCreateAssocPattern(
     decl_ident: Ident.Idx,
     pattern_region: Region,
 ) std.mem.Allocator.Error!CIR.Pattern.Idx {
-    // 1. Existing placeholder under the fully-qualified name (FirstPass).
     if (self.scopeLookup(.ident, qualified_ident) == .found) {
         return self.scopeLookup(.ident, qualified_ident).found;
     }
 
-    // 2. forward_references entry under the unqualified name in current scope —
-    //    body canon previously couldn't find this ident and created a placeholder.
-    //    Reuse that placeholder so the def and the body refer to the same pattern.
-    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    if (current_scope.forward_references.fetchRemove(decl_ident)) |kv| {
-        const placeholder = kv.value.pattern_idx;
-        var mut_regions = kv.value.reference_regions;
-        mut_regions.deinit(self.env.gpa);
-        try current_scope.idents.put(self.env.gpa, qualified_ident, placeholder);
-        if (self.scopes.items.len >= 2) {
-            const parent_scope = &self.scopes.items[self.scopes.items.len - 2];
-            try parent_scope.idents.put(self.env.gpa, qualified_ident, placeholder);
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        const scope = &self.scopes.items[scope_idx];
+        if (scope.forward_references.fetchRemove(qualified_ident)) |kv| {
+            const placeholder = kv.value.pattern_idx;
+            var mut_regions = kv.value.reference_regions;
+            mut_regions.deinit(self.env.gpa);
+            try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
+            return placeholder;
         }
-        return placeholder;
+        if (scope.forward_references.fetchRemove(decl_ident)) |kv| {
+            const placeholder = kv.value.pattern_idx;
+            var mut_regions = kv.value.reference_regions;
+            mut_regions.deinit(self.env.gpa);
+            try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
+            return placeholder;
+        }
     }
 
-    // 3. Fresh pattern.
     const ident_pattern = Pattern{ .assign = .{ .ident = qualified_ident } };
     const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
     try self.handleScopeIntroduceResult(
@@ -1658,11 +1521,21 @@ fn findOrCreateAssocPattern(
         qualified_ident,
         pattern_region,
     );
+    try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
+    return new_pattern_idx;
+}
+
+fn registerAssocPatternQualifiers(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    try current_scope.idents.put(self.env.gpa, qualified_ident, pattern_idx);
     if (self.scopes.items.len >= 2) {
         const parent_scope = &self.scopes.items[self.scopes.items.len - 2];
-        try parent_scope.idents.put(self.env.gpa, qualified_ident, new_pattern_idx);
+        try parent_scope.idents.put(self.env.gpa, qualified_ident, pattern_idx);
     }
-    return new_pattern_idx;
 }
 
 /// Canonicalize an associated item declaration with a qualified name
@@ -1738,11 +1611,12 @@ fn canonicalizeAssociatedDeclWithAnno(
     return def_idx;
 }
 
-/// Second pass helper: Canonicalize associated item definitions
-fn processAssociatedItemsSecondPass(
+/// Walk an associated block's statements in source order, fully canonicalizing
+/// each one — including nested type declarations and their associated blocks.
+fn canonicalizeAssociatedItems(
     self: *Self,
     parent_name: Ident.Idx,
-    relative_parent_name: ?Ident.Idx,
+    relative_name_idx: ?Ident.Idx,
     type_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
@@ -1755,9 +1629,36 @@ fn processAssociatedItemsSecondPass(
         const stmt_idx = stmt_idxs[i];
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
-            .type_decl => {
-                // Skip nested type declarations - they're already processed by processAssociatedItemsFirstPass Phase 2
-                // which calls processAssociatedBlock for each nested type
+            .type_decl => |nested_type_decl| {
+                const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+                const nested_qualified_idx = try self.env.insertQualifiedIdent(
+                    self.env.getIdent(parent_name),
+                    self.env.getIdent(nested_type_ident),
+                );
+
+                if (nested_type_decl.associated) |nested_assoc| {
+                    const nested_relative_idx = if (relative_name_idx) |rel_idx|
+                        try self.env.insertQualifiedIdent(self.env.getIdent(rel_idx), self.env.getIdent(nested_type_ident))
+                    else
+                        nested_type_ident;
+                    try self.processAssociatedBlock(nested_qualified_idx, nested_relative_idx, nested_type_ident, nested_assoc, true);
+                }
+
+                if (self.scopeLookupTypeDecl(nested_qualified_idx)) |nested_type_decl_idx| {
+                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                    try current_scope.introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
+
+                    const user_qualified_ident_idx = try self.env.insertQualifiedIdent(
+                        self.env.getIdent(type_name),
+                        self.env.getIdent(nested_type_ident),
+                    );
+                    try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
+                }
+
+                if (nested_type_decl.associated) |nested_assoc| {
+                    try self.introduceNestedItemAliases(nested_qualified_idx, self.env.getIdent(nested_type_ident), nested_assoc.statements);
+                }
             },
             .type_anno => |ta| {
                 const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
@@ -2113,7 +2014,7 @@ fn registerUserFacingName(
 
 /// First pass helper: Process associated items and introduce them into scope with qualified names
 /// relative_parent_name is the parent path without the module prefix (null for top-level in module)
-fn processAssociatedItemsFirstPass(
+fn registerAssociatedItemPlaceholders(
     self: *Self,
     parent_name: Ident.Idx,
     relative_parent_name: ?Ident.Idx,
@@ -2250,7 +2151,7 @@ fn processAssociatedItemsFirstPass(
         switch (stmt) {
             .decl => |decl| {
                 // Create placeholder for declarations so they can be referenced by sibling types
-                // processAssociatedItemsSecondPass will later use updatePlaceholder to replace these
+                // canonicalizeAssociatedItems will later use updatePlaceholder to replace these
                 const pattern = self.parse_ir.store.getPattern(decl.pattern);
                 if (pattern == .ident) {
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
@@ -2301,7 +2202,7 @@ fn processAssociatedItemsFirstPass(
             },
             .type_anno => |type_anno| {
                 // Create placeholder for anno-only defs so they can be referenced by sibling types
-                // processAssociatedItemsSecondPass will later use updatePlaceholder to replace these
+                // canonicalizeAssociatedItems will later use updatePlaceholder to replace these
                 if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
                     const qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_name), self.env.getIdent(anno_ident));
 
@@ -2374,7 +2275,7 @@ fn processAssociatedItemsFirstPass(
                 };
 
                 // Recursively create placeholders for this nested block's items
-                try self.processAssociatedItemsFirstPass(qualified_idx, nested_relative_name, type_ident, assoc.statements);
+                try self.registerAssociatedItemPlaceholders(qualified_idx, nested_relative_name, type_ident, assoc.statements);
             }
         }
     }
@@ -2665,7 +2566,7 @@ pub fn canonicalizeFile(
     }
 
     // Phase 1.6: Now process all deferred type declaration associated blocks
-    // processAssociatedBlock creates placeholders for associated items via processAssociatedItemsFirstPass
+    // processAssociatedBlock creates placeholders for associated items via registerAssociatedItemPlaceholders
     // This introduces nested types (like Foo.Bar) that other type declarations may reference
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
@@ -3519,7 +3420,7 @@ fn createAnnoOnlyDef(
         switch (self.scopeLookup(.ident, ident)) {
             .found => |existing_pattern| {
                 // Note: We don't remove from placeholder_idents here. The calling code
-                // (processAssociatedItemsSecondPass) will call updatePlaceholder to do that.
+                // (canonicalizeAssociatedItems) will call updatePlaceholder to do that.
                 break :placeholder_check existing_pattern;
             },
             .not_found => {
@@ -3561,7 +3462,7 @@ fn createAnnoOnlyDef(
     };
 
     // Note: We don't update placeholders here. For associated items, the calling code
-    // (processAssociatedItemsSecondPass) will update all three identifiers (qualified,
+    // (canonicalizeAssociatedItems) will update all three identifiers (qualified,
     // type-qualified, unqualified). For top-level items, there are no placeholders to update.
 
     // Create the e_anno_only expression

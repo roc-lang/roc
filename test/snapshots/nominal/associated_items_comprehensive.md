@@ -2370,155 +2370,135 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Multi.b"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1078)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Multi.a"))))
-			(args
-				(e-num (value "5")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Multi.a")))
+			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Multi.c"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1110)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Multi.b"))))
-			(args
-				(e-num (value "2")))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Multi.b")))
+			(e-num (value "2"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer1.outerVal"))
+		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer1.Inner1.innerVal"))
 		(e-num (value "200")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer1.outerVal"))
-		(e-num (value "100")))
+		(p-assign (ident "associated_items_comprehensive.Outer2.shared"))
+		(e-num (value "50")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer2.shared"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.doubled"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1232)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))))
-			(args
-				(e-num (value "2")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer2.shared"))
-		(e-num (value "50")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))
-		(e-num (value "42")))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter")))
+			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer3.first"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))
-		(e-num (value "2")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1324)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))))
-			(args
-				(e-num (value "1")))))
+		(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))
+		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer4.val"))
 		(e-num (value "1")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Level1.Level2.Level3.val3"))
-		(e-num (value "30")))
+		(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))
+		(e-num (value "2")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Level1.Level2.val2"))
-		(e-num (value "20")))
+		(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Level1.val1"))
 		(e-num (value "10")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1508)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))))
+		(p-assign (ident "associated_items_comprehensive.Level1.Level2.val2"))
+		(e-num (value "20")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1506)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))
-			(args
-				(e-num (value "2")))))
+		(p-assign (ident "associated_items_comprehensive.Level1.Level2.Level3.val3"))
+		(e-num (value "30")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.CrossRef.top"))
 		(e-num (value "5")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))
-		(e-num (value "99")))
+		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.CrossRef.top")))
+			(e-num (value "2"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.CrossRef.top")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ForwardDeep.usesDeepNested"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.D4.v4"))
-		(e-num (value "4000")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.v3"))
-		(e-num (value "3000")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.D1.D2.v2"))
-		(e-num (value "2000")))
+		(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))
+		(e-num (value "99")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.D1.v1"))
 		(e-num (value "1000")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.DeepForward.A.B.C.deepest"))
-		(e-num (value "777")))
+		(p-assign (ident "associated_items_comprehensive.D1.D2.v2"))
+		(e-num (value "2000")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.v3"))
+		(e-num (value "3000")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.D4.v4"))
+		(e-num (value "4000")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.DeepForward.usesDeeply"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.DeepForward.A.B.C.deepest"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.DeepForward.A.B.C.deepest"))
+		(e-num (value "777")))
+	(d-let
 		(p-assign (ident "associated_items_comprehensive.Max1.Max2.Max3.Max4.Max5.deepestValue"))
 		(e-num (value "5555")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1876)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1844)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1812)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1780)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.val1"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.val1"))
 		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Full.val1")))
+			(e-num (value "1"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Full.L2.val2")))
+			(e-num (value "1"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3")))
+			(e-num (value "1"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))
 		(e-num (value "888")))
@@ -2527,6 +2507,9 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))
+		(e-num (value "111")))
+	(d-let
 		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.usesOuter"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))))
@@ -2534,71 +2517,56 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))
 		(e-num (value "222")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))
-		(e-num (value "111")))
-	(d-let
 		(p-assign (ident "associated_items_comprehensive.ScopeNested.usesNested"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Annotated.NestedAnnotated.alsoTyped"))
-		(e-num (value "111"))
-		(annotation
-			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Annotated.typed"))
 		(e-num (value "999"))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2341)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))))
-			(args
-				(e-num (value "5")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2309)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))))
-			(args
-				(e-num (value "4")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2277)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))))
-			(args
-				(e-num (value "3")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2245)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.start"))))
-			(args
-				(e-num (value "2")))))
+		(p-assign (ident "associated_items_comprehensive.Annotated.NestedAnnotated.alsoTyped"))
+		(e-num (value "111"))
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.start"))
 		(e-num (value "1")))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Chain.start")))
+			(e-num (value "2"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1")))
+			(e-num (value "3"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2")))
+			(e-num (value "4"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3")))
+			(e-num (value "5"))))
+	(d-let
 		(p-assign (ident "associated_items_comprehensive.Circular.sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2435)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2403)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "associated_items_comprehensive.Circular.a"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "associated_items_comprehensive.Circular.b"))))))
-			(args
+		(e-binop (op "add")
+			(e-binop (op "add")
 				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Circular.c"))))))
+					(p-assign (ident "associated_items_comprehensive.Circular.a")))
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Circular.b"))))
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Circular.c")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Circular.a"))
 		(e-num (value "10")))
@@ -2609,60 +2577,50 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.Circular.c"))
 		(e-num (value "30")))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2668)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val")))))
+		(p-assign (ident "associated_items_comprehensive.Ultimate.base"))
+		(e-num (value "100"))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2658)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Ultimate.base")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward")))))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2698)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2688)
-					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2678)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
-							(args
-								(e-lookup-local
-									(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))))))
+		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Ultimate.base")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))
 		(e-num (value "50"))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.base"))
-		(e-num (value "100"))
-		(annotation
-			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.InnerScope.innerItem"))
-		(e-num (value "20")))
+		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))
+		(e-binop (op "add")
+			(e-binop (op "add")
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "associated_items_comprehensive.Ultimate.base")))
+					(e-lookup-local
+						(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))
+			(e-lookup-local
+				(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.outerItem"))
 		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.InnerScope.innerItem"))
+		(e-num (value "20")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.badAccess"))
 		(e-lookup-local
@@ -2689,6 +2647,9 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "grandchildVal"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))
+		(e-num (value "50")))
+	(d-let
 		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3.goodAccess"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))))
@@ -2699,9 +2660,6 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt.badDeepAccess"))
 		(e-lookup-local
 			(p-assign (ident "otherVal"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))
-		(e-num (value "50")))
 	(d-let
 		(p-assign (ident "simple1"))
 		(e-lookup-local
@@ -3291,8 +3249,8 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "_d"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "_d"))
 		(patt (type "Dec"))
+		(patt (type "_d"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -3568,8 +3526,8 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "_d"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "_d"))
 		(expr (type "Dec"))
+		(expr (type "_d"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))

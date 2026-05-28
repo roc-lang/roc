@@ -715,6 +715,9 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
 	(d-let
+		(p-assign (ident "progressive_qualification.Parent.sharedVal"))
+		(e-num (value "999")))
+	(d-let
 		(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))
 		(e-num (value "10")))
 	(d-let
@@ -732,9 +735,6 @@ test6_combined = Container.Nested.combined # 35
 		(p-assign (ident "progressive_qualification.Parent.Child2.useParent"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.sharedVal"))
-		(e-num (value "999")))
 	(d-let
 		(p-assign (ident "progressive_qualification.Parent.sumChildren"))
 		(e-dispatch-call (method "plus") (constraint-fn-var 415)
@@ -765,6 +765,12 @@ test6_combined = Container.Nested.combined # 35
 		(p-assign (ident "progressive_qualification.Parent2.Nested.val"))
 		(e-num (value "2")))
 	(d-let
+		(p-assign (ident "progressive_qualification.Container.outerA"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Container.outerB"))
+		(e-num (value "20")))
+	(d-let
 		(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))
 		(e-num (value "5")))
 	(d-let
@@ -789,12 +795,6 @@ test6_combined = Container.Nested.combined # 35
 			(args
 				(e-lookup-local
 					(p-assign (ident "progressive_qualification.Container.outerB"))))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.outerA"))
-		(e-num (value "10")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.outerB"))
-		(e-num (value "20")))
 	(d-let
 		(p-assign (ident "fromModule"))
 		(e-lookup-local

@@ -483,15 +483,6 @@ UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
-CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
-CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
-CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:382:13:382:17
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:385:9:385:13
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:388:5:388:9
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:392:1:392:5
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:393:1:393:5
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:394:1:394:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -538,132 +529,6 @@ The unused variable is declared here:
 ```
            ^^^^
 
-
-**CIRCULAR VALUE DEFINITION**
-The value `associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3` is part of a recursive non-function definition cycle.
-
-Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
-
-**associated_items_truly_comprehensive.md:167:13:167:17:**
-```roc
-            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)
-```
-            ^^^^
-
-
-**CIRCULAR VALUE DEFINITION**
-The value `associated_items_truly_comprehensive.D3_Pattern2.L2.val2` is part of a recursive non-function definition cycle.
-
-Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
-
-**associated_items_truly_comprehensive.md:170:9:170:13:**
-```roc
-        val2 = D3_Pattern2.L2.L3.val3 + 10      # Forward ref to L3 val (qualified)
-```
-        ^^^^
-
-
-**CIRCULAR VALUE DEFINITION**
-The value `associated_items_truly_comprehensive.D3_Pattern2.val1` is part of a recursive non-function definition cycle.
-
-Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.
-
-**associated_items_truly_comprehensive.md:173:5:173:9:**
-```roc
-    val1 = D3_Pattern2.L2.val2 + 5              # Forward ref to L2 val (qualified)
-```
-    ^^^^
-
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:382:13:382:17:**
-```roc
-            val3 = val4 + 1                                 # Unqualified
-```
-            ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:385:9:385:13:**
-```roc
-        val2 = D5_Pattern2.L2.L3.val3 + 1                  # Qualified
-```
-        ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:388:5:388:9:**
-```roc
-    val1 = val2 + 1                                         # Unqualified
-```
-    ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:392:1:392:5:**
-```roc
-d5_4 = D5_Pattern2.L2.L3.val3                   # 1001
-```
-^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:393:1:393:5:**
-```roc
-d5_5 = D5_Pattern2.L2.val2                      # 1002
-```
-^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:394:1:394:5:**
-```roc
-d5_6 = D5_Pattern2.val1                         # 1003
-```
-^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -2744,24 +2609,20 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D1_Backward.first"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.a"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1309)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.b"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.c"))))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.b")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.c")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.b"))
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.c"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1307)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.d"))))
-			(args
-				(e-num (value "5")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.d")))
+			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.d"))
 		(e-num (value "20")))
@@ -2780,26 +2641,26 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.outerVal"))
 		(e-num (value "43")))
 	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Qual.outerVal"))
+		(e-num (value "44")))
+	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Qual.Inner.innerVal"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Qual.outerVal"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Qual.outerVal"))
-		(e-num (value "44")))
+		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.outerVal"))
+		(e-num (value "45")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.Inner.innerVal"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.outerVal"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.outerVal"))
-		(e-num (value "45")))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner.innerVal"))
-		(e-num (value "46")))
-	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner.outerVal"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner.innerVal"))))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner.innerVal"))
+		(e-num (value "46")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner.innerVal"))
 		(e-num (value "47")))
@@ -2809,12 +2670,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner.innerVal"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1551)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB.valB"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB.valB")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB.valB"))
 		(e-num (value "48")))
@@ -2823,357 +2682,313 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "50")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB.valB"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1613)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA.valA"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1675)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2"))))
-			(args
-				(e-num (value "5")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA.valA")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1707)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))))
-			(args
-				(e-num (value "10")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal")))
+			(e-num (value "10"))))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2")))
+			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2"))
 		(e-num (value "20")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1769)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.val1"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.val2"))))))
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.val1"))
+		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.val2"))
 		(e-num (value "200")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.val1"))
-		(e-num (value "100")))
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.L3.val3"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.val1")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.val2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3"))
-		(e-runtime-error (tag "circular_value_definition")))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.val1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2"))
-		(e-runtime-error (tag "circular_value_definition")))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3")))
+			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.val1"))
-		(e-runtime-error (tag "circular_value_definition")))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.L2.val2")))
+			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.L3.val3"))
 		(e-num (value "1000")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1831)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.L3.val3"))))
-			(args
-				(e-num (value "2")))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.L3.val3")))
+			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.val1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1863)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.val2"))))
-			(args
-				(e-num (value "2")))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1925)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1"))))
-			(args
-				(e-num (value "10")))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1927)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1"))))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.val2")))
+			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1"))
 		(e-num (value "5")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1989)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.val1"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.val2"))))))
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1")))
+			(e-num (value "10"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.val2"))
-		(e-num (value "2")))
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.val2"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.val1"))
 		(e-num (value "1")))
 	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.val2"))
+		(e-num (value "2")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.L3.val3"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.val1")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.val2")))))
+	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2053)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1"))))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2051)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1"))))
-			(args
-				(e-num (value "2")))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1")))
+			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.val1"))
 		(e-num (value "7")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2a.val2a"))
+		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a.val3a"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2b.val2b"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2a.val2a"))
-		(e-num (value "10")))
+		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2b.val2b"))
+		(e-num (value "20")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2b.L3b.val3b"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a.val3a"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2b.val2b"))
-		(e-num (value "20")))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2207)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2175)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.val1"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.val2"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.val3"))))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.val3"))
-		(e-num (value "3")))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.val1"))
+		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.val2"))
 		(e-num (value "2")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.val1"))
-		(e-num (value "1")))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.val3"))
+		(e-num (value "3")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4.val4"))
+		(e-binop (op "add")
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.val1")))
+				(e-lookup-local
+					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.val2"))))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.val3")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4.val4"))
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.val3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2269)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4.val4"))))
-			(args
-				(e-num (value "2")))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4.val4")))
+			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2301)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.val3"))))
-			(args
-				(e-num (value "2")))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.val3")))
+			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.val1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2333)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.val2"))))
-			(args
-				(e-num (value "2")))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.val2")))
+			(e-num (value "2"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4.val4"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2429)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))))
-			(args
-				(e-num (value "2")))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2397)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))))))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))
 		(e-num (value "10")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2395)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))))
-			(args
-				(e-num (value "1")))))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2")))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2493)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2"))))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2491)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.val1"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2"))))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2"))
-		(e-num (value "5")))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4.val4"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3")))
+			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.val1"))
 		(e-num (value "1")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2619)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2587)
-					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2555)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.val1"))))
-							(args
-								(e-lookup-local
-									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.val2"))))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.val3"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.val4"))))))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.val1")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2")))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.val4"))
-		(e-num (value "4")))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4.val4"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3")))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2")))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.val3"))
-		(e-num (value "3")))
+		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.val2"))
+		(e-num (value "5")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.val1"))
+		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.val2"))
 		(e-num (value "2")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.val1"))
-		(e-num (value "1")))
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.val3"))
+		(e-num (value "3")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.val4"))
+		(e-num (value "4")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.L5.val5"))
+		(e-binop (op "add")
+			(e-binop (op "add")
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.val1")))
+					(e-lookup-local
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.val2"))))
+				(e-lookup-local
+					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.val3"))))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.val4")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5.val5"))
 		(e-num (value "999")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2681)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5.val5"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5.val5")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2713)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val4"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val4")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2745)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.val3"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.val3")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2777)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val2"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val2")))
+			(e-num (value "1"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2909)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2907)
-					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2905)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))))
-							(args
-								(e-lookup-local
-									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.val2"))))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2871)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))
-			(args
-				(e-num (value "2")))))
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3")))
+			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))
 		(e-num (value "5")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2903)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2839)
-			(receiver
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.L5.val5"))
+		(e-binop (op "add")
+			(e-binop (op "add")
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1")))
+					(e-lookup-local
+						(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.val2"))))
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))
-			(args
-				(e-num (value "10")))))
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4")))))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3")))
+			(e-num (value "2"))))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.val2"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4")))
+			(e-num (value "1"))))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.val"))
+		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.val"))
+		(e-num (value "2")))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.useOuter"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.val"))))
+	(d-let
+		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.useLocal"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.val"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.L3.val"))
 		(e-num (value "3")))
@@ -3190,35 +3005,19 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.L3.val"))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.val"))
-		(e-num (value "2")))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.useOuter"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.val"))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.useLocal"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_truly_comprehensive.Shadowing.L2.val"))))
-	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.Shadowing.val"))
-		(e-num (value "1")))
-	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.External1.hidden"))
 		(e-num (value "777")))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.Annotated.L2.alsoTyped"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 3178)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.Annotated.typed"))))
-			(args
-				(e-num (value "1"))))
+		(p-assign (ident "associated_items_truly_comprehensive.Annotated.typed"))
+		(e-num (value "888"))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
-		(p-assign (ident "associated_items_truly_comprehensive.Annotated.typed"))
-		(e-num (value "888"))
+		(p-assign (ident "associated_items_truly_comprehensive.Annotated.L2.alsoTyped"))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "associated_items_truly_comprehensive.Annotated.typed")))
+			(e-num (value "1")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
@@ -3888,9 +3687,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "e where [e.plus : e, e -> e]"))
+		(patt (type "e where [e.plus : e, e -> e]"))
+		(patt (type "e where [e.plus : e, e -> e]"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -4222,9 +4021,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "e where [e.plus : e, e -> e]"))
+		(expr (type "e where [e.plus : e, e -> e]"))
+		(expr (type "e where [e.plus : e, e -> e]"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
