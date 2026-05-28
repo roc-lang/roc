@@ -2053,6 +2053,40 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildInvalidNumericLiteralReport(
+        self: *Self,
+        data: InvalidNumericLiteral,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
+        errdefer report.deinit();
+
+        const expected_type = try report.addOwnedString(self.getFormattedString(data.expected_type));
+
+        try D.renderSlice(&.{
+            D.bytes("This number literal does not fit in the inferred type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("The inferred type is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
+
+        return report;
+    }
+
     /// Build a report for when an anonymous type doesn't support equality
     fn buildTypeDoesNotSupportEquality(
         self: *Self,
@@ -3258,42 +3292,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_error_name);
-
-        return report;
-    }
-
-    fn buildInvalidNumericLiteralReport(self: *Self, data: InvalidNumericLiteral) !Report {
-        var report = Report.init(self.gpa, "INVALID NUMERIC LITERAL", .runtime_error);
-        errdefer report.deinit();
-
-        try D.renderSlice(&.{
-            D.bytes("This numeric literal cannot be represented as the expected type:"),
-        }, self, &report);
-        try report.document.addLineBreak();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("The expected type is:"),
-        }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        const expected_type_str = try report.addOwnedString(self.getFormattedString(data.expected_type));
-        try report.document.addCodeBlock(expected_type_str);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        if (data.is_fractional) {
-            try D.renderSlice(&.{
-                D.bytes("Fractional numeric literals cannot be used as integer types."),
-            }, self, &report);
-        } else {
-            try D.renderSlice(&.{
-                D.bytes("The value is outside the valid range for that type."),
-            }, self, &report);
-        }
 
         return report;
     }

@@ -683,6 +683,9 @@ pub const NumeralInfo = struct {
     /// checker did not need exact Dec range facts for it.
     fits_dec: ?bool,
 
+    /// Representation requirements for fractional literals.
+    frac_requirements: ?FracRequirements = null,
+
     /// Source region for error reporting
     region: base.Region,
 
@@ -704,6 +707,7 @@ pub const NumeralInfo = struct {
             .is_negative = is_negative,
             .is_fractional = is_fractional,
             .fits_dec = null,
+            .frac_requirements = null,
             .region = region,
         };
     }
@@ -716,6 +720,7 @@ pub const NumeralInfo = struct {
             .is_negative = false, // u128 values are never negative
             .is_fractional = is_fractional,
             .fits_dec = null,
+            .frac_requirements = null,
             .region = region,
         };
     }
@@ -730,6 +735,10 @@ pub const NumeralInfo = struct {
             .is_negative = is_negative,
             .is_fractional = is_fractional,
             .fits_dec = fits_dec,
+            .frac_requirements = if (is_fractional and fits_dec != null)
+                .{ .fits_in_f32 = true, .fits_in_dec = fits_dec.? }
+            else
+                null,
             .region = region,
         };
     }

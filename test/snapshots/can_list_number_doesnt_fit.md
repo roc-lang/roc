@@ -8,21 +8,19 @@ type=expr
 [1.U8, 2.U8, 300]
 ~~~
 # EXPECTED
-INVALID NUMERIC LITERAL - can_list_number_doesnt_fit.md:1:14:1:17
+INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
-**INVALID NUMERIC LITERAL**
-This numeric literal cannot be represented as the expected type:
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
 **can_list_number_doesnt_fit.md:1:14:1:17:**
 ```roc
 [1.U8, 2.U8, 300]
 ```
              ^^^
 
-The expected type is:
+The inferred type is:
 
     U8
-
-The value is outside the valid range for that type.
 
 # TOKENS
 ~~~zig

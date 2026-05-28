@@ -12,9 +12,20 @@ y = 1.23e45
 z = 0.5
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - can_frac_literal.md:3:5:3:12
 # PROBLEMS
-NIL
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**can_frac_literal.md:3:5:3:12:**
+```roc
+y = 1.23e45
+```
+    ^^^^^^^
+
+The inferred type is:
+
+    Dec
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Float,
@@ -59,10 +70,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Dec"))
-		(patt (type "F64"))
+		(patt (type "Error"))
 		(patt (type "Dec")))
 	(expressions
 		(expr (type "Dec"))
-		(expr (type "F64"))
+		(expr (type "Error"))
 		(expr (type "Dec"))))
 ~~~

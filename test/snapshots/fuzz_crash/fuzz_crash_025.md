@@ -39,7 +39,7 @@ PARSE ERROR - fuzz_crash_025.md:12:48:12:49
 PARSE ERROR - fuzz_crash_025.md:13:1:13:2
 PARSE ERROR - fuzz_crash_025.md:13:3:13:4
 PARSE ERROR - fuzz_crash_025.md:13:4:13:5
-INVALID NUMERIC LITERAL - fuzz_crash_025.md:12:5:12:48
+INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -142,19 +142,17 @@ f =8
    ^
 
 
-**INVALID NUMERIC LITERAL**
-This numeric literal cannot be represented as the expected type:
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
 **fuzz_crash_025.md:12:5:12:48:**
 ```roc
 e = 3402823669209384634633746074317682114553.14: I8
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The expected type is:
+The inferred type is:
 
     U128
-
-Fractional numeric literals cannot be used as integer types.
 
 # TOKENS
 ~~~zig

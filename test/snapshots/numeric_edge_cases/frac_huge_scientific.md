@@ -8,9 +8,20 @@ type=expr
 1.0e100
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - frac_huge_scientific.md:1:1:1:8
 # PROBLEMS
-NIL
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**frac_huge_scientific.md:1:1:1:8:**
+```roc
+1.0e100
+```
+^^^^^^^
+
+The inferred type is:
+
+    Dec
+
 # TOKENS
 ~~~zig
 Float,
@@ -30,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "F64"))
+(expr (type "Error"))
 ~~~

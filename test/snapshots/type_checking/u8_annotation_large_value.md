@@ -9,21 +9,19 @@ x : U8
 x = 500
 ~~~
 # EXPECTED
-INVALID NUMERIC LITERAL - u8_annotation_large_value.md:2:5:2:8
+INVALID NUMBER - u8_annotation_large_value.md:2:5:2:8
 # PROBLEMS
-**INVALID NUMERIC LITERAL**
-This numeric literal cannot be represented as the expected type:
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
 **u8_annotation_large_value.md:2:5:2:8:**
 ```roc
 x = 500
 ```
     ^^^
 
-The expected type is:
+The inferred type is:
 
     U8
-
-The value is outside the valid range for that type.
 
 # TOKENS
 ~~~zig

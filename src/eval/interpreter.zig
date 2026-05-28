@@ -220,7 +220,6 @@ pub const Interpreter = struct {
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
-    const division_by_zero_message = "Division by zero";
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
     pub const ErasedCallableInterpreterContext = extern struct {
@@ -587,9 +586,28 @@ pub const Interpreter = struct {
         return error.RuntimeError;
     }
 
-    fn divisionByZero(self: *LirInterpreter) Error {
-        self.roc_env.runtime_error_message = division_by_zero_message;
-        return error.DivisionByZero;
+    fn divisionByZeroMessageForLayout(self: *const LirInterpreter, layout_idx: layout_mod.Idx) []const u8 {
+        return switch (layout_idx) {
+            .u8 => "U8 division by zero",
+            .i8 => "I8 division by zero",
+            .u16 => "U16 division by zero",
+            .i16 => "I16 division by zero",
+            .u32 => "U32 division by zero",
+            .i32 => "I32 division by zero",
+            .u64 => "U64 division by zero",
+            .i64 => "I64 division by zero",
+            .u128 => "U128 division by zero",
+            .i128 => "I128 division by zero",
+            .dec => "Dec division by zero",
+            else => self.invariantFailed(
+                "LIR/interpreter invariant violated: division by zero reported for non-crashing numeric layout {d}",
+                .{@intFromEnum(layout_idx)},
+            ),
+        };
+    }
+
+    fn divisionByZero(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error {
+        return self.triggerCrash(self.divisionByZeroMessageForLayout(layout_idx));
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
@@ -4850,22 +4868,22 @@ pub const Interpreter = struct {
         if (is_division_like) {
             switch (kind) {
                 .unsigned_int => |bits| switch (bits) {
-                    8 => if (b.read(u8) == 0) return self.divisionByZero(),
-                    16 => if (b.read(u16) == 0) return self.divisionByZero(),
-                    32 => if (b.read(u32) == 0) return self.divisionByZero(),
-                    64 => if (b.read(u64) == 0) return self.divisionByZero(),
-                    128 => if (b.read(u128) == 0) return self.divisionByZero(),
+                    8 => if (b.read(u8) == 0) return self.divisionByZero(arg_layout),
+                    16 => if (b.read(u16) == 0) return self.divisionByZero(arg_layout),
+                    32 => if (b.read(u32) == 0) return self.divisionByZero(arg_layout),
+                    64 => if (b.read(u64) == 0) return self.divisionByZero(arg_layout),
+                    128 => if (b.read(u128) == 0) return self.divisionByZero(arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
                 },
                 .signed_int => |bits| switch (bits) {
-                    8 => if (b.read(i8) == 0) return self.divisionByZero(),
-                    16 => if (b.read(i16) == 0) return self.divisionByZero(),
-                    32 => if (b.read(i32) == 0) return self.divisionByZero(),
-                    64 => if (b.read(i64) == 0) return self.divisionByZero(),
-                    128 => if (b.read(i128) == 0) return self.divisionByZero(),
+                    8 => if (b.read(i8) == 0) return self.divisionByZero(arg_layout),
+                    16 => if (b.read(i16) == 0) return self.divisionByZero(arg_layout),
+                    32 => if (b.read(i32) == 0) return self.divisionByZero(arg_layout),
+                    64 => if (b.read(i64) == 0) return self.divisionByZero(arg_layout),
+                    128 => if (b.read(i128) == 0) return self.divisionByZero(arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
                 },
-                .dec => if (b.read(i128) == 0) return self.divisionByZero(),
+                .dec => if (b.read(i128) == 0) return self.divisionByZero(arg_layout),
                 .float => {},
             }
         }

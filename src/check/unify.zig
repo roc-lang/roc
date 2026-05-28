@@ -2288,11 +2288,11 @@ const Unifier = struct {
         );
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            var merged_constraint = two_constraints.b;
+            var constraint = two_constraints.b;
             if (two_constraints.a.origin == .from_numeral and two_constraints.b.origin == .from_numeral) {
-                merged_constraint.num_literal = mergeNumeralInfo(two_constraints.a.num_literal, two_constraints.b.num_literal);
+                constraint.num_literal = mergeFromNumeralLiteralInfo(two_constraints.a.num_literal, two_constraints.b.num_literal);
             }
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(merged_constraint);
+            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
@@ -2302,20 +2302,6 @@ const Unifier = struct {
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
-    }
-
-    fn mergeNumeralInfo(a: ?types_mod.NumeralInfo, b: ?types_mod.NumeralInfo) ?types_mod.NumeralInfo {
-        const a_info = a orelse return b;
-        var merged = b orelse return a;
-        merged.is_negative = merged.is_negative or a_info.is_negative;
-        merged.is_fractional = merged.is_fractional or a_info.is_fractional;
-        merged.fits_dec = if (a_info.fits_dec == false or merged.fits_dec == false)
-            false
-        else if (a_info.fits_dec == true or merged.fits_dec == true)
-            true
-        else
-            null;
-        return merged;
     }
 
     /// Unify two static dispatch constraints
@@ -2443,6 +2429,46 @@ const Unifier = struct {
         };
     }
 };
+
+fn mergeFromNumeralLiteralInfo(
+    a: ?types_mod.NumeralInfo,
+    b: ?types_mod.NumeralInfo,
+) ?types_mod.NumeralInfo {
+    const a_info = a orelse return b;
+    const b_info = b orelse return a;
+
+    var merged = if (!numeralInfoFitsDec(a_info)) a_info else b_info;
+    merged.is_negative = a_info.is_negative or b_info.is_negative;
+    merged.is_fractional = a_info.is_fractional or b_info.is_fractional;
+    merged.fits_dec = mergeFitsDec(a_info.fits_dec, b_info.fits_dec);
+    merged.frac_requirements = mergeFracRequirements(a_info, b_info);
+    return merged;
+}
+
+fn mergeFitsDec(a: ?bool, b: ?bool) ?bool {
+    if (a == false or b == false) return false;
+    if (a == true or b == true) return true;
+    return null;
+}
+
+fn mergeFracRequirements(
+    a: types_mod.NumeralInfo,
+    b: types_mod.NumeralInfo,
+) ?types_mod.FracRequirements {
+    if (!a.is_fractional) return b.frac_requirements;
+    if (!b.is_fractional) return a.frac_requirements;
+
+    const a_req = a.frac_requirements orelse return null;
+    const b_req = b.frac_requirements orelse return null;
+    return a_req.unify(b_req);
+}
+
+fn numeralInfoFitsDec(info: types_mod.NumeralInfo) bool {
+    if (!info.is_fractional) return true;
+    if (info.fits_dec) |fits| return fits;
+    const requirements = info.frac_requirements orelse return false;
+    return requirements.fits_in_dec;
+}
 
 /// A list of constraint that should apply to concrete type
 pub const DeferredConstraintCheck = struct {
