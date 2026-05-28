@@ -302,7 +302,7 @@ jobs:
 
       - name: valgrind snapshots
         run: |
-          ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
+          ./ci/valgrind_snapshots.sh
 
   zig-cross-compile:
     needs: check-once
