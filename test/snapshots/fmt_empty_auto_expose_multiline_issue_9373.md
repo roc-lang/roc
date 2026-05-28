@@ -7,7 +7,7 @@ type=snippet
 ~~~roc
 import A .B as
     X1
-import A .B .C as 
+import A .B .C as
     X2
 import A .B .C .D as
     X3
@@ -38,17 +38,14 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 import A
-	.B as
-X1exposing []
+	.B as X1 exposing []
 import A
 	.B
-	.C as
-X2exposing []
+	.C as X2 exposing []
 import A
 	.B
 	.C
-	.D as
-X3exposing []
+	.D as X3 exposing []
 ~~~
 # CANONICALIZE
 ~~~clojure

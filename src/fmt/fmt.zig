@@ -496,11 +496,21 @@ const Formatter = struct {
                         } else {
                             try fmt.pushAll(" as");
                         }
-                        flushed = try fmt.flushCommentsBefore(a);
-                        if (!flushed) {
-                            try fmt.push(' ');
+                        // Only preserve newlines between `as` and the alias if there
+                        // is an actual comment there. A bare source newline like
+                        // `as\n    X1` should normalize to ` as X1`; otherwise we
+                        // strand the alias on its own line and (with auto-expose)
+                        // glue it directly to `exposing` (see issue #9373).
+                        if (fmt.hasCommentBefore(a)) {
+                            flushed = try fmt.flushCommentsBefore(a);
+                            if (!flushed) {
+                                try fmt.push(' ');
+                            } else {
+                                try fmt.pushIndent();
+                            }
                         } else {
-                            try fmt.pushIndent();
+                            try fmt.push(' ');
+                            flushed = false;
                         }
                     } else {
                         try fmt.pushAll(" as ");
@@ -2699,6 +2709,17 @@ const Formatter = struct {
 
     fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
         return fmt.flushCommentsBeforeMin(tokenIdx, 0);
+    }
+
+    /// True iff the source text between the previous token and `tokenIdx`
+    /// contains an actual `#` comment. Use this to decide whether to preserve
+    /// inter-token whitespace, since `flushCommentsBefore` always emits any
+    /// source newlines it finds (which is wrong for places where bare line
+    /// breaks should be normalized to a single space).
+    fn hasCommentBefore(fmt: *Formatter, tokenIdx: Token.Idx) bool {
+        const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
+        const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
+        return std.mem.indexOfScalar(u8, fmt.ast.env.source[start..end], '#') != null;
     }
 
     /// Like `flushCommentsBefore`, but ensures at least `min_leading_newlines` newlines
