@@ -146,7 +146,7 @@ test "check type - i64 annotation with fractional literal fails type checking" {
         \\x : I64
         \\x = 3.14
     ;
-    try checkTypesModule(source, .fail, "INVALID NUMERIC LITERAL");
+    try checkTypesModule(source, .fail, "INVALID NUMBER");
 }
 
 test "check type - string plus number should fail" {

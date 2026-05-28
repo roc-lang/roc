@@ -443,6 +443,7 @@ pub const NumeralLiteral = extern struct {
 
     pub const negative_flag: u32 = 1;
     pub const fractional_flag: u32 = 2;
+    pub const decimal_point_flag: u32 = 4;
     pub const SafeList = collections.SafeList(@This());
 
     pub fn isNegative(self: NumeralLiteral) bool {
@@ -451,6 +452,10 @@ pub const NumeralLiteral = extern struct {
 
     pub fn isFractional(self: NumeralLiteral) bool {
         return (self.flags & fractional_flag) != 0;
+    }
+
+    pub fn hadDecimalPoint(self: NumeralLiteral) bool {
+        return (self.flags & decimal_point_flag) != 0;
     }
 };
 
@@ -2896,6 +2901,7 @@ pub fn recordNumeralLiteral(
     after_decimal_digit_count: u32,
     is_negative: bool,
     is_fractional: bool,
+    had_decimal_point: bool,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
     const digits_start: u32 = @intCast(self.numeral_digit_bytes.len());
@@ -2909,7 +2915,8 @@ pub fn recordNumeralLiteral(
         .after_len = @intCast(after.len),
         .after_decimal_digit_count = after_decimal_digit_count,
         .flags = (if (is_negative) NumeralLiteral.negative_flag else 0) |
-            (if (is_fractional) NumeralLiteral.fractional_flag else 0),
+            (if (is_fractional) NumeralLiteral.fractional_flag else 0) |
+            (if (had_decimal_point) NumeralLiteral.decimal_point_flag else 0),
     };
     for (self.numeral_literals.items.items) |*existing| {
         if (existing.node_idx == raw_node) {

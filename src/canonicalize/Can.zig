@@ -5322,6 +5322,7 @@ fn recordNumeralLiteralForExpr(
         literal.after_decimal_digit_count,
         literal.isNegative(),
         literal.kind == .frac,
+        literal.flags.had_decimal_point,
     );
 }
 

@@ -1290,18 +1290,21 @@ fn mkFlexWithFromNumeralConstraint(
     return flex_var;
 }
 
-fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
-    const literal = self.cir.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+fn recordedNumeralLiteralForExpr(self: *const Self, expr_idx: CIR.Expr.Idx) ModuleEnv.NumeralLiteral {
+    return self.cir.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("missing recorded exact numeral for expression {}", .{@intFromEnum(expr_idx)});
         }
         unreachable;
     };
+}
+
+fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
+    const literal = self.recordedNumeralLiteralForExpr(expr_idx);
     const text = try numeralLiteralDecimalText(self.gpa, self.cir, literal);
     defer self.gpa.free(text);
     const fits_dec = builtins.dec.RocDec.fromNonemptySlice(text) != null;
-    const source_text = self.cir.getSource(region);
-    const is_fractional = literal.after_decimal_digit_count != 0 or std.mem.indexOfScalar(u8, source_text, '.') != null;
+    const is_fractional = literal.after_decimal_digit_count != 0 or literal.hadDecimalPoint();
     return types_mod.NumeralInfo.fromExact(literal.isNegative(), is_fractional, fits_dec, region);
 }
 
@@ -4371,8 +4374,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } else {
                 // Unsuffixed small Dec literal - create constrained flex var
                 const scaled_value = frac.value.toRocDec().num;
-                const source_has_decimal = std.mem.indexOfScalar(u8, self.cir.getSource(expr_region), '.') != null;
-                const is_fractional = source_has_decimal or frac.value.denominator_power_of_ten != 0;
+                const literal = self.recordedNumeralLiteralForExpr(expr_idx);
+                const is_fractional = literal.hadDecimalPoint() or frac.value.denominator_power_of_ten != 0;
                 const literal_value: i128 = if (is_fractional) scaled_value else frac.value.numerator;
                 var num_literal_info = types_mod.NumeralInfo.fromI128(
                     literal_value,
@@ -9016,7 +9019,7 @@ fn validateBuiltinFromNumeralLiteral(
         .i32 => validateSignedFromNumeralLiteral(i32, num_literal),
         .i64 => validateSignedFromNumeralLiteral(i64, num_literal),
         .i128 => validateSignedFromNumeralLiteral(i128, num_literal),
-        .dec => validateDecFromNumeralLiteral(num_literal, false),
+        .dec => validateDecFromNumeralLiteral(num_literal),
         .f32, .f64 => null,
         .num_unbound, .int_unbound => null,
     };
@@ -9071,9 +9074,7 @@ fn validateSignedFromNumeralLiteral(
 
 fn validateDecFromNumeralLiteral(
     num_literal: types_mod.NumeralInfo,
-    strict_exact_integer: bool,
 ) ?BuiltinFromNumeralLiteralProblem {
-    _ = strict_exact_integer;
     if (num_literal.fits_dec) |fits| {
         return if (fits) null else .out_of_range;
     }
@@ -9118,7 +9119,7 @@ fn reportInvalidBuiltinFromNumeralInfo(
     env: *Env,
 ) Allocator.Error!bool {
     const literal_problem = if (num_kind == .dec)
-        validateDecFromNumeralLiteral(num_literal, true)
+        validateDecFromNumeralLiteral(num_literal)
     else
         validateBuiltinFromNumeralLiteral(num_kind, num_literal);
     if (literal_problem == null) return false;
