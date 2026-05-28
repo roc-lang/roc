@@ -77,9 +77,9 @@ bar = |f| f(dbg (42))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({} -> a) => a"))
-		(patt (type "({} -> a) => a")))
+		(patt (type "({} -> a) -> a"))
+		(patt (type "({} -> a) -> a")))
 	(expressions
-		(expr (type "({} -> a) => a"))
-		(expr (type "({} -> a) => a"))))
+		(expr (type "({} -> a) -> a"))
+		(expr (type "({} -> a) -> a"))))
 ~~~
