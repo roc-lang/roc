@@ -1616,48 +1616,68 @@ fn processAssociatedBlock(
     }
 }
 
+/// Look up an existing placeholder pattern for an associated-block item.
+/// Resolves to the same Pattern.Idx whether the placeholder came from
+/// processAssociatedItemsFirstPass (qualified name in parent scope) or
+/// from canonicalizeExpr's forward_references path (unqualified name
+/// in current scope). Adopts a forward_references entry into the
+/// canonical association by registering it under the qualified name and
+/// clearing the pending reference.
+fn findOrCreateAssocPattern(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    decl_ident: Ident.Idx,
+    pattern_region: Region,
+) std.mem.Allocator.Error!CIR.Pattern.Idx {
+    // 1. Existing placeholder under the fully-qualified name (FirstPass).
+    if (self.scopeLookup(.ident, qualified_ident) == .found) {
+        return self.scopeLookup(.ident, qualified_ident).found;
+    }
+
+    // 2. forward_references entry under the unqualified name in current scope —
+    //    body canon previously couldn't find this ident and created a placeholder.
+    //    Reuse that placeholder so the def and the body refer to the same pattern.
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    if (current_scope.forward_references.fetchRemove(decl_ident)) |kv| {
+        const placeholder = kv.value.pattern_idx;
+        var mut_regions = kv.value.reference_regions;
+        mut_regions.deinit(self.env.gpa);
+        try current_scope.idents.put(self.env.gpa, qualified_ident, placeholder);
+        if (self.scopes.items.len >= 2) {
+            const parent_scope = &self.scopes.items[self.scopes.items.len - 2];
+            try parent_scope.idents.put(self.env.gpa, qualified_ident, placeholder);
+        }
+        return placeholder;
+    }
+
+    // 3. Fresh pattern.
+    const ident_pattern = Pattern{ .assign = .{ .ident = qualified_ident } };
+    const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
+    try self.handleScopeIntroduceResult(
+        try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true),
+        qualified_ident,
+        pattern_region,
+    );
+    if (self.scopes.items.len >= 2) {
+        const parent_scope = &self.scopes.items[self.scopes.items.len - 2];
+        try parent_scope.idents.put(self.env.gpa, qualified_ident, new_pattern_idx);
+    }
+    return new_pattern_idx;
+}
+
 /// Canonicalize an associated item declaration with a qualified name
 fn canonicalizeAssociatedDecl(
     self: *Self,
     decl: AST.Statement.Decl,
     qualified_ident: Ident.Idx,
+    decl_ident: Ident.Idx,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
 
-    // Create or upgrade the pattern for this declaration
-    // Unlike the old two-pass system, we create the pattern on demand now
-    const pattern_idx = blk: {
-        const lookup_result = self.scopeLookup(.ident, qualified_ident);
-        switch (lookup_result) {
-            .found => |pattern| break :blk pattern,
-            .not_found => {
-                // Pattern doesn't exist yet - create it now
-                const ident_pattern = Pattern{
-                    .assign = .{ .ident = qualified_ident },
-                };
-                const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
-
-                // Introduce it into BOTH the current scope (for sibling references)
-                // and the parent scope (for external references after scope exit)
-                try self.handleScopeIntroduceResult(
-                    try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true),
-                    qualified_ident,
-                    pattern_region,
-                );
-
-                // Also introduce into parent scope so it persists after associated block scope exits
-                if (self.scopes.items.len >= 2) {
-                    const parent_scope = &self.scopes.items[self.scopes.items.len - 2];
-                    try parent_scope.idents.put(self.env.gpa, qualified_ident, new_pattern_idx);
-                }
-
-                break :blk new_pattern_idx;
-            },
-        }
-    };
+    const pattern_idx = try self.findOrCreateAssocPattern(qualified_ident, decl_ident, pattern_region);
 
     // Canonicalize the body expression in expression context (RHS of assignment)
     const saved_stmt_pos = self.in_statement_position;
@@ -1682,6 +1702,7 @@ fn canonicalizeAssociatedDeclWithAnno(
     self: *Self,
     decl: AST.Statement.Decl,
     qualified_ident: Ident.Idx,
+    decl_ident: Ident.Idx,
     type_anno_idx: CIR.TypeAnno.Idx,
     mb_where_clauses: ?CIR.WhereClause.Span,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
@@ -1690,37 +1711,7 @@ fn canonicalizeAssociatedDeclWithAnno(
 
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
 
-    // Create or upgrade the pattern for this declaration
-    // Unlike the old two-pass system, we create the pattern on demand now
-    const pattern_idx = blk: {
-        const lookup_result = self.scopeLookup(.ident, qualified_ident);
-        switch (lookup_result) {
-            .found => |pattern| break :blk pattern,
-            .not_found => {
-                // Pattern doesn't exist yet - create it now
-                const ident_pattern = Pattern{
-                    .assign = .{ .ident = qualified_ident },
-                };
-                const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
-
-                // Introduce it into BOTH the current scope (for sibling references)
-                // and the parent scope (for external references after scope exit)
-                try self.handleScopeIntroduceResult(
-                    try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true),
-                    qualified_ident,
-                    pattern_region,
-                );
-
-                // Also introduce into parent scope so it persists after associated block scope exits
-                if (self.scopes.items.len >= 2) {
-                    const parent_scope = &self.scopes.items[self.scopes.items.len - 2];
-                    try parent_scope.idents.put(self.env.gpa, qualified_ident, new_pattern_idx);
-                }
-
-                break :blk new_pattern_idx;
-            },
-        }
-    };
+    const pattern_idx = try self.findOrCreateAssocPattern(qualified_ident, decl_ident, pattern_region);
 
     // Canonicalize the body expression in expression context (RHS of assignment)
     const saved_stmt_pos = self.in_statement_position;
@@ -1841,6 +1832,7 @@ fn processAssociatedItemsSecondPass(
                                     const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
                                         decl,
                                         qualified_idx,
+                                        decl_ident,
                                         type_anno_idx,
                                         where_clauses,
                                     );
@@ -1950,7 +1942,7 @@ fn processAssociatedItemsSecondPass(
                         seen_method.value_ptr.* = {};
 
                         // Canonicalize with the qualified name
-                        const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
+                        const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx, decl_ident);
                         try self.env.store.addScratchDef(def_idx);
                         try self.recordGlobalValueDef(def_idx);
 
