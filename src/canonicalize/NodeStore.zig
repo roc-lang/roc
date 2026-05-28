@@ -4201,6 +4201,17 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
         }
     }
 
+    if (nodes_len == 0) return;
+
+    // Index imported envs by module name once. First occurrence wins.
+    var name_to_env = std.StringHashMap(*const @TypeOf(env.*)).init(env.gpa);
+    defer name_to_env.deinit();
+    name_to_env.ensureTotalCapacity(@intCast(imported_envs.len)) catch return;
+    for (imported_envs) |ie| {
+        const gop = name_to_env.getOrPutAssumeCapacity(ie.module_name);
+        if (!gop.found_existing) gop.value_ptr.* = ie;
+    }
+
     // Iterate through all nodes to find pending lookups
     var i: usize = 0;
     while (i < nodes_len) : (i += 1) {
@@ -4239,14 +4250,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     std.debug.print("[PENDING]   base_import_name={s} base_member_name={s}\n", .{ base_import_name, base_member_name });
                 }
 
-                // Find the target module env
-                var target_env: ?*const @TypeOf(env.*) = null;
-                for (imported_envs) |imported_env| {
-                    if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
-                        target_env = imported_env;
-                        break;
-                    }
-                }
+                const target_env = name_to_env.get(base_import_name);
 
                 if (target_env) |tenv| {
                     if (comptime trace_pending) {
@@ -4343,14 +4347,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     else
                         import_name;
 
-                    // Find the target module env
-                    var target_env: ?*const @TypeOf(env.*) = null;
-                    for (imported_envs) |imported_env| {
-                        if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
-                            target_env = imported_env;
-                            break;
-                        }
-                    }
+                    const target_env = name_to_env.get(base_import_name);
 
                     if (target_env) |tenv| {
                         if (comptime trace_pending) {
@@ -4414,14 +4411,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     else
                         import_name;
 
-                    // Find the target module env
-                    var target_env: ?*const @TypeOf(env.*) = null;
-                    for (imported_envs) |imported_env| {
-                        if (std.mem.eql(u8, imported_env.module_name, base_import_name)) {
-                            target_env = imported_env;
-                            break;
-                        }
-                    }
+                    const target_env = name_to_env.get(base_import_name);
 
                     if (target_env) |tenv| {
                         if (comptime trace_pending) {
