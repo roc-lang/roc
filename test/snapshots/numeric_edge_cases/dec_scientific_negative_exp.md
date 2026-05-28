@@ -8,9 +8,20 @@ type=expr
 1.23456789012345678e-10
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - dec_scientific_negative_exp.md:1:1:1:24
 # PROBLEMS
-NIL
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**dec_scientific_negative_exp.md:1:1:1:24:**
+```roc
+1.23456789012345678e-10
+```
+^^^^^^^^^^^^^^^^^^^^^^^
+
+The inferred type is:
+
+    Dec
+
 # TOKENS
 ~~~zig
 Float,
@@ -30,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Error"))
 ~~~

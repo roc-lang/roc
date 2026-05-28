@@ -959,7 +959,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 for (state.slots) |*slot_opt| {
                     if (slot_opt.*) |*slot| {
                         const elapsed: u64 = @intCast(@max(0, now - slot.start_ms));
-                        if (elapsed > state.timeout_ms and !slot.timed_out) {
+                        const kill_after_ms = state.timeout_ms +| cfg.timeout_report_grace_ms;
+                        if (elapsed > kill_after_ms and !slot.timed_out) {
                             slot.timed_out = true;
                             _ = slot.child.kill() catch {};
                         }
@@ -1019,9 +1020,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
             };
 
+            const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
             var watch = Watch{
                 .child_ptr = &child,
-                .deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms)),
+                .deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(kill_after_ms)),
                 .timed_out = std.atomic.Value(bool).init(false),
                 .done = std.atomic.Value(bool).init(false),
             };

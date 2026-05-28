@@ -1600,6 +1600,7 @@ fn printHelp() void {
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
+        \\                        Default: 30000, 120000 on musl.
         \\                        LLVM uses a separate 420000ms backend budget.
         \\
         \\COVERAGE:
@@ -1846,6 +1847,7 @@ const WorkerTrace = struct {
 
 fn effectiveHangTimeoutMs(cli: harness.StandardArgs, max_children: usize) u64 {
     if (cli.timeout_provided and cli.timeout_ms > 0) return cli.timeout_ms;
+    if (builtin.abi == .musl) return 120_000;
     return if (max_children <= 1) 10_000 else 30_000;
 }
 
@@ -2037,7 +2039,8 @@ pub fn main() !void {
 
     var wall_timer = Timer.start() catch unreachable;
 
-    // Default timeout: 30s under parallel load, 10s with single child.
+    // Native musl CI has enough process-startup variance for the larger shared
+    // harness default to be more reliable, especially for heavy boundary tests.
     const hang_timeout_ms: u64 = effectiveHangTimeoutMs(cli, max_children);
 
     // Build a worker_argv_template so Windows can spawn `Child` workers that

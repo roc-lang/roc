@@ -25,50 +25,70 @@ const LirProcSpec = lir.LirProcSpec;
 const LirProcSpecId = lir.LirProcSpecId;
 const StrLiteral = lir.LIR.StrLiteral;
 
-fn getLlvmTriple() []const u8 {
-    const arch = switch (builtin.cpu.arch) {
-        .x86_64 => "x86_64",
-        .aarch64 => "aarch64",
-        .x86 => "i686",
-        .arm, .armeb => "arm",
-        .thumb, .thumbeb => "thumb",
-        .wasm32 => "wasm32",
-        .wasm64 => "wasm64",
-        .riscv32 => "riscv32",
-        .riscv64 => "riscv64",
-        else => "unknown",
-    };
-
-    const vendor_os = switch (builtin.os.tag) {
-        .windows => "-w64-windows",
-        .macos => "-apple-macosx13.0.0",
-        .ios => "-apple-ios",
-        .linux => "-unknown-linux",
-        .freebsd => "-unknown-freebsd",
-        .openbsd => "-unknown-openbsd",
-        .netbsd => "-unknown-netbsd",
-        .freestanding => "-unknown-unknown",
-        .wasi => "-wasi",
-        else => "-unknown-unknown",
-    };
-
-    const abi = switch (builtin.os.tag) {
-        .windows => "-gnu",
-        .linux => switch (builtin.abi) {
-            .musleabihf => "-musleabihf",
-            .gnueabihf => "-gnueabihf",
-            .musleabi => "-musleabi",
-            .gnueabi => "-gnueabi",
-            .musl => "-musl",
-            .gnu => "-gnu",
-            .android => "-android",
-            else => "-gnu",
+fn getLlvmTriple(target: std.Target) []const u8 {
+    return switch (target.cpu.arch) {
+        .x86_64 => switch (target.os.tag) {
+            .windows => if (target.abi == .msvc) "x86_64-pc-windows-msvc" else "x86_64-w64-windows-gnu",
+            .macos => "x86_64-apple-macosx13.0.0",
+            .linux => switch (target.abi) {
+                .musl => "x86_64-unknown-linux-musl",
+                .android => "x86_64-unknown-linux-android",
+                else => "x86_64-unknown-linux-gnu",
+            },
+            .freebsd => "x86_64-unknown-freebsd",
+            .openbsd => "x86_64-unknown-openbsd",
+            .netbsd => "x86_64-unknown-netbsd",
+            .freestanding => "x86_64-unknown-unknown",
+            else => "x86_64-unknown-unknown",
         },
-        .freestanding, .wasi => "",
-        else => "",
+        .aarch64 => switch (target.os.tag) {
+            .windows => if (target.abi == .msvc) "aarch64-pc-windows-msvc" else "aarch64-w64-windows-gnu",
+            .macos => "aarch64-apple-macosx13.0.0",
+            .ios => "aarch64-apple-ios",
+            .linux => switch (target.abi) {
+                .musl => "aarch64-unknown-linux-musl",
+                .android => "aarch64-unknown-linux-android",
+                else => "aarch64-unknown-linux-gnu",
+            },
+            .freebsd => "aarch64-unknown-freebsd",
+            .openbsd => "aarch64-unknown-openbsd",
+            .netbsd => "aarch64-unknown-netbsd",
+            .freestanding => "aarch64-unknown-unknown",
+            else => "aarch64-unknown-unknown",
+        },
+        .x86 => switch (target.os.tag) {
+            .windows => if (target.abi == .msvc) "i686-pc-windows-msvc" else "i686-w64-windows-gnu",
+            .linux => switch (target.abi) {
+                .musl => "i686-unknown-linux-musl",
+                .android => "i686-unknown-linux-android",
+                else => "i686-unknown-linux-gnu",
+            },
+            .freestanding => "i686-unknown-unknown",
+            else => "i686-unknown-unknown",
+        },
+        .arm, .armeb, .thumb, .thumbeb => switch (target.os.tag) {
+            .linux => switch (target.abi) {
+                .musleabihf => "arm-unknown-linux-musleabihf",
+                .gnueabihf => "arm-unknown-linux-gnueabihf",
+                .musleabi => "arm-unknown-linux-musleabi",
+                .gnueabi => "arm-unknown-linux-gnueabi",
+                else => "arm-unknown-linux-gnueabihf",
+            },
+            .freestanding => "arm-unknown-unknown",
+            else => "arm-unknown-unknown",
+        },
+        .wasm32 => switch (target.os.tag) {
+            .wasi => "wasm32-wasi",
+            else => "wasm32-unknown-unknown",
+        },
+        .wasm64 => switch (target.os.tag) {
+            .wasi => "wasm64-wasi",
+            else => "wasm64-unknown-unknown",
+        },
+        .riscv32 => "riscv32-unknown-unknown",
+        .riscv64 => "riscv64-unknown-unknown",
+        else => "unknown-unknown-unknown",
     };
-
-    return arch ++ vendor_os ++ abi;
 }
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
@@ -171,7 +191,7 @@ pub const MonoLlvmCodeGen = struct {
         return .{
             .allocator = allocator,
             .target = builtin.target,
-            .triple = getLlvmTriple(),
+            .triple = getLlvmTriple(builtin.target),
             .store = store,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
@@ -187,7 +207,7 @@ pub const MonoLlvmCodeGen = struct {
     pub fn initWithTarget(allocator: Allocator, store: *const lir.LirStore, target: std.Target) MonoLlvmCodeGen {
         var self = init(allocator, store);
         self.target = target;
-        self.triple = getLlvmTriple();
+        self.triple = getLlvmTriple(target);
         return self;
     }
 
@@ -406,6 +426,9 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn configureExportCallConv(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, builder: *LlvmBuilder) void {
+        if (self.target.os.tag == .windows) {
+            func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
+        }
         if (self.target.cpu.arch != .x86_64) return;
         if (self.target.os.tag == .windows) {
             func.setCallConv(.win64cc, builder);

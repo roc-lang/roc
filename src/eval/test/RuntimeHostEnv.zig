@@ -220,7 +220,7 @@ pub const CrashBoundary = struct {
         self.env.restoreJumpBuf(self.prev_jmp_buf);
     }
 
-    pub fn set(self: *CrashBoundary) c_int {
+    pub inline fn set(self: *CrashBoundary) c_int {
         return setjmp(&self.env.jmp_buf);
     }
 };
