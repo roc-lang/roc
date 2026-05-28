@@ -16,17 +16,3 @@
    fun:enframe
    fun:__libc_malloc_impl
 }
-
-# Zig's Linux directory iterator uses getdents64 and then compares entry
-# names against "." and "..". Valgrind can report a conditional jump on
-# uninitialised bytes in that stdlib path while the snapshot tool is only
-# discovering files to test.
-{
-   zig-std-dir-iterator-snapshot-collection
-   Memcheck:Cond
-   fun:eqlBytes
-   fun:eql__anon_*
-   fun:nextLinux
-   fun:fs.Dir.Iterator__struct_*.next
-   fun:main.collectWorkItems
-}
