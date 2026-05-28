@@ -8,9 +8,23 @@ type=expr
 person.age + 5
 ~~~
 # EXPECTED
-NIL
+POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
 # PROBLEMS
-NIL
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**record_access_in_expression.md:1:1:1:15:**
+```roc
+person.age + 5
+```
+^^^^^^^^^^^^^^
+
+
+Its type is:
+```roc
+a where [a.plus : a, Dec -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,OpPlus,Int,

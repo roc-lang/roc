@@ -87,6 +87,7 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: crash at end of block in if branch does not fire on untaken path",
         \\{
+        \\    f : Dec -> Dec
         \\    f = |x| {
         \\        if x == 0 {
         \\            crash "division by zero"
@@ -122,12 +123,12 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: dbg statement in block",
         \\{
-        \\    x = 42
+        \\    x = 42.I64
         \\    dbg x
-        \\    x + 1
+        \\    x + 1.I64
         \\}
     ,
-        &.{dbg("42.0")},
+        &.{dbg("42")},
         .returned,
     ),
     exprTest(
@@ -144,22 +145,23 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: dbg integer literal",
         \\{
-        \\    dbg 42
-        \\    123
+        \\    dbg 42.I64
+        \\    123.I64
         \\}
     ,
-        &.{dbg("42.0")},
+        &.{dbg("42")},
         .returned,
     ),
     exprTest(
         "host effects: dbg negative integer",
         \\{
+        \\    x : I64
         \\    x = -99
         \\    dbg x
         \\    x
         \\}
     ,
-        &.{dbg("-99.0")},
+        &.{dbg("-99")},
         .returned,
     ),
     exprTest(
@@ -218,23 +220,23 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: dbg tuple",
         \\{
-        \\    t = (1, "two", 3)
+        \\    t = (1.I64, "two", 3.I64)
         \\    dbg t
         \\    t
         \\}
     ,
-        &.{dbg("(1.0, \"two\", 3.0)")},
+        &.{dbg("(1, \"two\", 3)")},
         .returned,
     ),
     exprTest(
         "host effects: dbg record",
         \\{
-        \\    r = { name: "Alice", age: 30 }
+        \\    r = { name: "Alice", age: 30.I64 }
         \\    dbg r
         \\    r
         \\}
     ,
-        &.{dbg("{ age: 30.0, name: \"Alice\" }")},
+        &.{dbg("{ age: 30, name: \"Alice\" }")},
         .returned,
     ),
     exprTest(
@@ -263,20 +265,21 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: dbg tag with payload",
         \\{
-        \\    x = Ok(42)
+        \\    x = Ok(42.I64)
         \\    dbg x
-        \\    match x { Ok(n) => n, Err(_) => 0 }
+        \\    match x { Ok(n) => n, Err(_) => 0.I64 }
         \\}
     ,
-        &.{dbg("Ok(42.0)")},
+        &.{dbg("Ok(42)")},
         .returned,
     ),
     exprTest(
         "host effects: dbg function value",
         \\{
-        \\    f = |x| x + 1
+        \\    f : I64 -> I64
+        \\    f = |x| x + 1.I64
         \\    dbg f
-        \\    f(5)
+        \\    f(5.I64)
         \\}
     ,
         &.{dbg("<function>")},
@@ -285,27 +288,27 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: dbg expression form returns unit",
         \\{
-        \\    x = 42
+        \\    x = 42.I64
         \\    dbg x
-        \\    x + 1
+        \\    x + 1.I64
         \\}
     ,
-        &.{dbg("42.0")},
+        &.{dbg("42")},
         .returned,
     ),
     exprTest(
         "host effects: multiple dbg calls in sequence",
         \\{
-        \\    x = 1
-        \\    y = 2
-        \\    z = 3
+        \\    x = 1.I64
+        \\    y = 2.I64
+        \\    z = 3.I64
         \\    dbg x
         \\    dbg y
         \\    dbg z
         \\    x + y + z
         \\}
     ,
-        &.{ dbg("1.0"), dbg("2.0"), dbg("3.0") },
+        &.{ dbg("1"), dbg("2"), dbg("3") },
         .returned,
     ),
     exprTest(
@@ -385,27 +388,29 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: dbg inside function body",
         \\{
+        \\    double : I64 -> I64
         \\    double = |x| {
         \\        dbg x
-        \\        x * 2
+        \\        x * 2.I64
         \\    }
-        \\    double(21)
+        \\    double(21.I64)
         \\}
     ,
-        &.{dbg("21.0")},
+        &.{dbg("21")},
         .returned,
     ),
     exprTest(
         "host effects: dbg function called multiple times",
         \\{
+        \\    f : I64 -> I64
         \\    f = |x| {
         \\        dbg x
         \\        x
         \\    }
-        \\    f(1) + f(2) + f(3)
+        \\    f(1.I64) + f(2.I64) + f(3.I64)
         \\}
     ,
-        &.{ dbg("1.0"), dbg("2.0"), dbg("3.0") },
+        &.{ dbg("1"), dbg("2"), dbg("3") },
         .returned,
     ),
     exprTest(
@@ -435,14 +440,14 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: dbg variable after mutation in binding",
         \\{
-        \\    x = 10
+        \\    x = 10.I64
         \\    dbg x
-        \\    y = x + 5
+        \\    y = x + 5.I64
         \\    dbg y
         \\    y
         \\}
     ,
-        &.{ dbg("10.0"), dbg("15.0") },
+        &.{ dbg("10"), dbg("15") },
         .returned,
     ),
     exprTest(
@@ -459,9 +464,10 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: issue 8729 tuple pattern var reassignment in while loop",
         \\{
-        \\    get_pair = |n| ("word", n + 1)
-        \\    var $index = 0
-        \\    while $index < 3 {
+        \\    get_pair : I64 -> (Str, I64)
+        \\    get_pair = |n| ("word", n + 1.I64)
+        \\    var $index = 0.I64
+        \\    while $index < 3.I64 {
         \\        (word, $index) = get_pair($index)
         \\        dbg word
         \\    }
@@ -480,7 +486,7 @@ pub const tests = [_]TestCase{
         \\    if True {
         \\        dbg "same"
         \\    }
-        \\    0
+        \\    {}
         \\}
     ,
         &.{ dbg("\"same\""), dbg("\"same\"") },
@@ -502,7 +508,7 @@ pub const tests = [_]TestCase{
         \\{
         \\    expect 1 == 0
         \\    dbg "after"
-        \\    0
+        \\    {}
         \\}
     ,
         &.{ expectFailed("expect failed"), dbg("\"after\"") },
@@ -514,7 +520,7 @@ pub const tests = [_]TestCase{
         \\    dbg "before"
         \\    expect 1 == 0
         \\    dbg "after"
-        \\    0
+        \\    {}
         \\}
     ,
         &.{ dbg("\"before\""), expectFailed("expect failed"), dbg("\"after\"") },
@@ -523,15 +529,16 @@ pub const tests = [_]TestCase{
     exprTest(
         "host effects: repeated host effects from recursion",
         \\{
+        \\    loop : I64 -> I64
         \\    loop = |n| {
-        \\        if n == 0 {
-        \\            0
+        \\        if n == 0.I64 {
+        \\            0.I64
         \\        } else {
         \\            dbg "tick"
-        \\            loop(n - 1)
+        \\            loop(n - 1.I64)
         \\        }
         \\    }
-        \\    loop(3)
+        \\    loop(3.I64)
         \\}
     ,
         &.{ dbg("\"tick\""), dbg("\"tick\""), dbg("\"tick\"") },
@@ -551,6 +558,7 @@ pub const tests = [_]TestCase{
     exprTest(
         "interpreter: crash at end of block in if branch",
         \\{
+        \\    f : Dec -> Dec
         \\    f = |x| {
         \\        if x == 0 {
         \\            crash "division by zero"
@@ -586,12 +594,12 @@ pub const tests = [_]TestCase{
     exprTest(
         "interpreter: dbg statement in block",
         \\{
-        \\    x = 42
+        \\    x = 42.I64
         \\    dbg x
-        \\    x + 1
+        \\    x + 1.I64
         \\}
     ,
-        &.{dbg("42.0")},
+        &.{dbg("42")},
         .returned,
     ),
     exprTest(
@@ -608,8 +616,8 @@ pub const tests = [_]TestCase{
     exprTest(
         "debug List.len expression",
         \\{
-        \\    dbg List.len([1, 2, 3])
-        \\    0
+        \\    dbg List.len([1.I64, 2.I64, 3.I64])
+        \\    {}
         \\}
     ,
         &.{dbg("3")},
@@ -618,22 +626,23 @@ pub const tests = [_]TestCase{
     exprTest(
         "dbg: integer literal",
         \\{
-        \\    dbg 42
-        \\    123
+        \\    dbg 42.I64
+        \\    123.I64
         \\}
     ,
-        &.{dbg("42.0")},
+        &.{dbg("42")},
         .returned,
     ),
     exprTest(
         "dbg: negative integer",
         \\{
+        \\    x : I64
         \\    x = -99
         \\    dbg x
         \\    x
         \\}
     ,
-        &.{dbg("-99.0")},
+        &.{dbg("-99")},
         .returned,
     ),
     exprTest(
@@ -703,23 +712,23 @@ pub const tests = [_]TestCase{
     exprTest(
         "dbg: tuple",
         \\{
-        \\    t = (1, "two", 3)
+        \\    t = (1.I64, "two", 3.I64)
         \\    dbg t
         \\    t
         \\}
     ,
-        &.{dbg("(1.0, \"two\", 3.0)")},
+        &.{dbg("(1, \"two\", 3)")},
         .returned,
     ),
     exprTest(
         "dbg: record",
         \\{
-        \\    r = { name: "Alice", age: 30 }
+        \\    r = { name: "Alice", age: 30.I64 }
         \\    dbg r
         \\    r
         \\}
     ,
-        &.{dbg("{ age: 30.0, name: \"Alice\" }")},
+        &.{dbg("{ age: 30, name: \"Alice\" }")},
         .returned,
     ),
     exprTest(
@@ -748,20 +757,21 @@ pub const tests = [_]TestCase{
     exprTest(
         "dbg: tag with payload",
         \\{
-        \\    x = Ok(42)
+        \\    x = Ok(42.I64)
         \\    dbg x
-        \\    match x { Ok(n) => n, Err(_) => 0 }
+        \\    match x { Ok(n) => n, Err(_) => 0.I64 }
         \\}
     ,
-        &.{dbg("Ok(42.0)")},
+        &.{dbg("Ok(42)")},
         .returned,
     ),
     exprTest(
         "dbg: function prints as unsupported or function marker",
         \\{
-        \\    f = |x| x + 1
+        \\    f : I64 -> I64
+        \\    f = |x| x + 1.I64
         \\    dbg f
-        \\    f(5)
+        \\    f(5.I64)
         \\}
     ,
         &.{dbgAny()},
@@ -770,27 +780,27 @@ pub const tests = [_]TestCase{
     exprTest(
         "dbg: expression form returns unit",
         \\{
-        \\    x = 42
+        \\    x = 42.I64
         \\    dbg x
-        \\    x + 1
+        \\    x + 1.I64
         \\}
     ,
-        &.{dbg("42.0")},
+        &.{dbg("42")},
         .returned,
     ),
     exprTest(
         "dbg: multiple dbg calls in sequence",
         \\{
-        \\    x = 1
-        \\    y = 2
-        \\    z = 3
+        \\    x = 1.I64
+        \\    y = 2.I64
+        \\    z = 3.I64
         \\    dbg x
         \\    dbg y
         \\    dbg z
         \\    x + y + z
         \\}
     ,
-        &.{ dbg("1.0"), dbg("2.0"), dbg("3.0") },
+        &.{ dbg("1"), dbg("2"), dbg("3") },
         .returned,
     ),
     exprTest(
@@ -870,27 +880,29 @@ pub const tests = [_]TestCase{
     exprTest(
         "dbg: inside function body",
         \\{
+        \\    double : I64 -> I64
         \\    double = |x| {
         \\        dbg x
-        \\        x * 2
+        \\        x * 2.I64
         \\    }
-        \\    double(21)
+        \\    double(21.I64)
         \\}
     ,
-        &.{dbg("21.0")},
+        &.{dbg("21")},
         .returned,
     ),
     exprTest(
         "dbg: function called multiple times",
         \\{
+        \\    f : I64 -> I64
         \\    f = |x| {
         \\        dbg x
         \\        x
         \\    }
-        \\    f(1) + f(2) + f(3)
+        \\    f(1.I64) + f(2.I64) + f(3.I64)
         \\}
     ,
-        &.{ dbg("1.0"), dbg("2.0"), dbg("3.0") },
+        &.{ dbg("1"), dbg("2"), dbg("3") },
         .returned,
     ),
     exprTest(
@@ -918,14 +930,14 @@ pub const tests = [_]TestCase{
     exprTest(
         "dbg: variable after mutation in binding",
         \\{
-        \\    x = 10
+        \\    x = 10.I64
         \\    dbg x
-        \\    y = x + 5
+        \\    y = x + 5.I64
         \\    dbg y
         \\    y
         \\}
     ,
-        &.{ dbg("10.0"), dbg("15.0") },
+        &.{ dbg("10"), dbg("15") },
         .returned,
     ),
     exprTestWithLiveAllocations(

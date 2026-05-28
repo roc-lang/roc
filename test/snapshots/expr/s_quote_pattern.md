@@ -51,7 +51,7 @@ NO CHANGE
 (e-match
 	(match
 		(cond
-			(e-not-implemented))
+			(e-runtime-error (tag "not_implemented")))
 		(branches
 			(branch
 				(patterns
@@ -60,7 +60,7 @@ NO CHANGE
 							(patterns
 								(p-num (value "35"))))))
 				(value
-					(e-not-implemented)))
+					(e-runtime-error (tag "not_implemented"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -69,15 +69,15 @@ NO CHANGE
 								(p-num (value "97"))
 								(p-num (value "98"))))))
 				(value
-					(e-not-implemented)))
+					(e-runtime-error (tag "not_implemented"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-underscore)))
 				(value
-					(e-not-implemented))))))
+					(e-runtime-error (tag "not_implemented")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

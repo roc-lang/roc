@@ -9,9 +9,22 @@ x : U8
 x = -1
 ~~~
 # EXPECTED
-NIL
+INVALID NUMERIC LITERAL - u8_negative_value.md:2:5:2:7
 # PROBLEMS
-NIL
+**INVALID NUMERIC LITERAL**
+This numeric literal cannot be represented as the expected type:
+**u8_negative_value.md:2:5:2:7:**
+```roc
+x = -1
+```
+    ^^
+
+The expected type is:
+
+    U8
+
+The value is outside the valid range for that type.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -46,7 +59,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U8")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "U8"))))
+		(expr (type "Error"))))
 ~~~

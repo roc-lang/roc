@@ -39,6 +39,7 @@ PARSE ERROR - fuzz_crash_025.md:12:48:12:49
 PARSE ERROR - fuzz_crash_025.md:13:1:13:2
 PARSE ERROR - fuzz_crash_025.md:13:3:13:4
 PARSE ERROR - fuzz_crash_025.md:13:4:13:5
+INVALID NUMERIC LITERAL - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -140,6 +141,20 @@ f =8
 ```
    ^
 
+
+**INVALID NUMERIC LITERAL**
+This numeric literal cannot be represented as the expected type:
+**fuzz_crash_025.md:12:5:12:48:**
+```roc
+e = 3402823669209384634633746074317682114553.14: I8
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The expected type is:
+
+    U128
+
+Fractional numeric literals cannot be used as integer types.
 
 # TOKENS
 ~~~zig
@@ -296,7 +311,7 @@ j = -17011687303715884105728
 		(patt (type "U8"))
 		(patt (type "U16"))
 		(patt (type "U32"))
-		(patt (type "U128"))
+		(patt (type "Error"))
 		(patt (type "I16"))
 		(patt (type "I32"))
 		(patt (type "I64"))
@@ -305,7 +320,7 @@ j = -17011687303715884105728
 		(expr (type "U8"))
 		(expr (type "U16"))
 		(expr (type "U32"))
-		(expr (type "U128"))
+		(expr (type "Error"))
 		(expr (type "I16"))
 		(expr (type "I32"))
 		(expr (type "I64"))

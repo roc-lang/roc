@@ -69,7 +69,7 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "$var"))
 				(e-tag (name "True")))
-			(s-break)
+			(s-runtime-error (tag "break_outside_loop"))
 			(s-reassign
 				(p-assign (ident "$var"))
 				(e-tag (name "False")))

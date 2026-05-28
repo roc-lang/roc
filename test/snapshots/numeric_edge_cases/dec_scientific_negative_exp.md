@@ -30,5 +30,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "F64"))
 ~~~

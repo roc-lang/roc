@@ -59,10 +59,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Dec"))
-		(patt (type "Dec"))
+		(patt (type "F64"))
 		(patt (type "Dec")))
 	(expressions
 		(expr (type "Dec"))
-		(expr (type "Dec"))
+		(expr (type "F64"))
 		(expr (type "Dec"))))
 ~~~

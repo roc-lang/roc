@@ -11,9 +11,21 @@ test = {
 }
 ~~~
 # EXPECTED
-NIL
+EFFECTFUL TOP-LEVEL VALUE - dbg_simple_test.md:1:8:4:2
 # PROBLEMS
-NIL
+**EFFECTFUL TOP-LEVEL VALUE**
+This top-level definition performs an effect while initializing.
+**dbg_simple_test.md:1:8:4:2:**
+```roc
+test = {
+    x = 42
+    dbg(x)
+}
+```
+
+
+Move the effect into a function body so it runs when the function is called.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,
@@ -62,7 +74,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{}")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "{}"))))
+		(expr (type "Error"))))
 ~~~

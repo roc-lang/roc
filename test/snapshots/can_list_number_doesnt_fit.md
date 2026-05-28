@@ -8,9 +8,22 @@ type=expr
 [1.U8, 2.U8, 300]
 ~~~
 # EXPECTED
-NIL
+INVALID NUMERIC LITERAL - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
-NIL
+**INVALID NUMERIC LITERAL**
+This numeric literal cannot be represented as the expected type:
+**can_list_number_doesnt_fit.md:1:14:1:17:**
+```roc
+[1.U8, 2.U8, 300]
+```
+             ^^^
+
+The expected type is:
+
+    U8
+
+The value is outside the valid range for that type.
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,CloseSquare,
@@ -37,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(U8)"))
+(expr (type "List(Error)"))
 ~~~
