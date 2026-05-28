@@ -813,7 +813,7 @@ fn introduceImmediateAssociatedTypeAliases(
     }
 }
 
-fn processTypeDeclFirstPass(
+fn registerTypeDecl(
     self: *Self,
     ast_stmt_idx: AST.Statement.Idx,
     type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
@@ -863,7 +863,7 @@ fn processTypeDeclFirstPass(
                         const relative_name_idx = type_header.relative_name;
 
                         // Process annotation and update the placeholder
-                        return try self.processTypeDeclFirstPassWithExisting(
+                        return try self.registerTypeDeclWithExisting(
                             ast_stmt_idx,
                             type_decl,
                             existing_stmt_idx,
@@ -1092,9 +1092,9 @@ fn processTypeDeclFirstPass(
     }
 }
 
-/// Helper for processTypeDeclFirstPass when we found an existing placeholder.
+/// Helper for registerTypeDecl when we found an existing placeholder.
 /// This avoids re-canonicalizing the header which would produce duplicate diagnostics.
-fn processTypeDeclFirstPassWithExisting(
+fn registerTypeDeclWithExisting(
     self: *Self,
     ast_stmt_idx: AST.Statement.Idx,
     type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
@@ -1425,7 +1425,7 @@ fn introduceNestedItemAliases(
 }
 
 /// Process an associated block: introduce all items, set up scope with aliases, and canonicalize
-/// When skip_first_pass is true, placeholders were already created by a recursive call to
+/// When skip_placeholder_registration is true, placeholders were already created by a recursive call to
 /// registerAssociatedItemPlaceholders, so we skip directly to scope entry and body processing.
 /// relative_name is the type's name without module prefix (null for module-level associated blocks)
 fn processAssociatedBlock(
@@ -1435,9 +1435,9 @@ fn processAssociatedBlock(
     relative_name_idx: ?Ident.Idx,
     type_name: Ident.Idx,
     assoc: anytype,
-    skip_first_pass: bool,
+    skip_placeholder_registration: bool,
 ) std.mem.Allocator.Error!void {
-    if (!skip_first_pass) {
+    if (!skip_placeholder_registration) {
         try self.registerAssociatedItemPlaceholders(qualified_name_idx, relative_name_idx, type_name, assoc.statements);
     }
 
@@ -2022,7 +2022,7 @@ fn registerAssociatedItemPlaceholders(
             const type_decl = stmt.type_decl;
             // Only process nominal/opaque types in this phase; aliases will be processed later
             if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
-                try self.processTypeDeclFirstPass(stmt_idx, type_decl, parent_name, relative_parent_name, true); // defer associated blocks
+                try self.registerTypeDecl(stmt_idx, type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
     }
@@ -2082,7 +2082,7 @@ fn registerAssociatedItemPlaceholders(
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
             if (type_decl.kind == .alias) {
-                try self.processTypeDeclFirstPass(stmt_idx, type_decl, parent_name, relative_parent_name, true); // defer associated blocks
+                try self.registerTypeDecl(stmt_idx, type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
     }
@@ -2355,7 +2355,7 @@ pub fn canonicalizeFile(
         switch (stmt) {
             .type_decl => |type_decl| {
                 if (type_decl.associated) |_| {
-                    try self.processTypeDeclFirstPass(stmt_id, type_decl, null, null, true); // defer associated blocks
+                    try self.registerTypeDecl(stmt_id, type_decl, null, null, true); // defer associated blocks
                 }
             },
             .decl => |decl| {
@@ -2790,7 +2790,7 @@ pub fn canonicalizeFile(
             for (scc_result.sccs.items) |scc| {
                 for (scc.items) |idx| {
                     const info = type_decls.items[idx];
-                    try self.processTypeDeclFirstPass(info.stmt_id, info.type_decl, null, null, false);
+                    try self.registerTypeDecl(info.stmt_id, info.type_decl, null, null, false);
                 }
             }
         }
@@ -11270,7 +11270,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     const node_region = self.parse_ir.tokenizedRegionToRegion(node.region);
     if (node.tag == .malformed) {
-        // Create a malformed type header node that will be caught by processTypeDeclFirstPass
+        // Create a malformed type header node that will be caught by registerTypeDecl
         return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .malformed_type_annotation = .{
             .region = node_region,
         } });
@@ -11435,7 +11435,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     const args = try self.env.store.typeAnnoSpanFrom(scratch_top);
 
     // For original headers from parsing, relative_name is the same as name
-    // (it will be differentiated when a qualified header is created in processTypeDeclFirstPass)
+    // (it will be differentiated when a qualified header is created in registerTypeDecl)
     return try self.env.addTypeHeader(.{
         .name = name_ident,
         .relative_name = name_ident,
