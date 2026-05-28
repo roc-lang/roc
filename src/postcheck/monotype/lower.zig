@@ -7069,7 +7069,7 @@ const BodyContext = struct {
                 .rest => |child| {
                     if (self.patternIsIgnored(child)) continue;
                     const rest_ty = try self.lowerType(self.view.bodies.patterns[@intFromEnum(child)].ty);
-                    const rest_value = try self.lowerRecordRestValue(value, value_ty, rest_ty);
+                    const rest_value = try self.lowerRecordRestValue(value, rest_ty);
                     const pat = try self.lowerPatternAtType(child, rest_ty);
                     success = try self.builder.program.addExpr(.{ .ty = result_ty, .data = .{ .let_ = .{
                         .bind = pat,
@@ -7085,10 +7085,8 @@ const BodyContext = struct {
     fn lowerRecordRestValue(
         self: *BodyContext,
         value: Ast.ExprId,
-        value_ty: Type.TypeId,
         rest_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        _ = value_ty;
         const rest_fields = self.constRecordFields(rest_ty);
         const fields = try self.allocator.alloc(Ast.FieldExpr, rest_fields.len);
         defer self.allocator.free(fields);
@@ -7644,7 +7642,7 @@ const BodyContext = struct {
                 .rest => |child| {
                     if (self.patternIsIgnored(child)) continue;
                     const rest_ty = try self.lowerType(self.view.bodies.patterns[@intFromEnum(child)].ty);
-                    const rest_value = try self.lowerRecordRestValue(value, value_ty, rest_ty);
+                    const rest_value = try self.lowerRecordRestValue(value, rest_ty);
                     try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtType(child, rest_ty),
                         .value = rest_value,

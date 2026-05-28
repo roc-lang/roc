@@ -496,9 +496,9 @@ Builtin :: [].{
 
 		## Put two lists together.
 		## ```roc
-		## [1, 2, 3].concat([4, 5])
+		## [1.I64, 2, 3].concat([4, 5])
 		##
-		## [0, 1, 2].concat([3, 4])
+		## [0.I64, 1, 2].concat([3, 4])
 		## ```
 		concat : List(item), List(item) -> List(item)
 
@@ -586,9 +586,9 @@ Builtin :: [].{
 
 		## Add a single element to the end of a list.
 		## ```roc
-		## [1, 2, 3].append(4)
+		## [1.I64, 2, 3].append(4)
 		##
-		## [0, 1, 2].append(3)
+		## [0.I64, 1, 2].append(3)
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| {
@@ -659,7 +659,7 @@ Builtin :: [].{
 		## Run the given function on each element of a list, and return all the
 		## elements for which the function returned `Bool.True`.
 		## ```roc
-		## [1, 2, 3, 4].keep_if(|num| num > 2)
+		## [1.I64, 2, 3, 4].keep_if(|num| num > 2)
 		## ```
 		## ## Performance Details
 		##
@@ -693,7 +693,7 @@ Builtin :: [].{
 		## Run the given function on each element of a list, and return all the
 		## elements for which the function returned `Bool.False`.
 		## ```roc
-		## [1, 2, 3, 4].drop_if(|num| num > 2)
+		## [1.I64, 2, 3, 4].drop_if(|num| num > 2)
 		## ```
 		## ## Performance Details
 		##
@@ -1654,7 +1654,7 @@ Builtin :: [].{
 
 		## Creates a new `Set` with a single value.
 		## ```roc
-		## Set.single(42)
+		## Set.single(42.I64)
 		## ```
 		single : item -> Set(item)
 		single = |elem| Items([elem])

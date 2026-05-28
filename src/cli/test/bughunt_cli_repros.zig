@@ -2816,8 +2816,7 @@ fn renderSource(
     return try stage4.toOwnedSlice(gpa);
 }
 
-fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8, repo_root: []const u8) !void {
-    _ = repo_root;
+fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
     const fx_platform = "../../../test/fx/platform/main.roc";
     const str_platform = "../../../test/str/platform/main.roc";
     const glue_platform = "../../../src/glue/platform/main.roc";
@@ -3028,7 +3027,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
         return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
     };
 
-    writeFiles(gpa, spec, test_dir, repo_root) catch |err| {
+    writeFiles(gpa, spec, test_dir) catch |err| {
         const msg = std.fmt.allocPrint(gpa, "failed to write source files: {}", .{err}) catch "failed to write source files";
         return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
     };

@@ -180,6 +180,8 @@ pub const CommonIdents = extern struct {
     ok: Ident.Idx,
     err: Ident.Idx,
     from_numeral: Ident.Idx,
+    join_with: Ident.Idx,
+    join_list_with: Ident.Idx,
     true_tag: Ident.Idx,
     false_tag: Ident.Idx,
     // from_utf8 result fields
@@ -276,6 +278,8 @@ pub const CommonIdents = extern struct {
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
+            .join_with = try common.insertIdent(gpa, Ident.for_text("join_with")),
+            .join_list_with = try common.insertIdent(gpa, Ident.for_text("join_list_with")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
             // from_utf8 result fields
@@ -375,6 +379,8 @@ pub const CommonIdents = extern struct {
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
+            .join_with = common.findIdent("join_with") orelse unreachable,
+            .join_list_with = common.findIdent("join_list_with") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
             .false_tag = common.findIdent("False") orelse unreachable,
             // from_utf8 result fields

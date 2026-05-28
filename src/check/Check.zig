@@ -8015,11 +8015,11 @@ fn listJoinWithListItemsMethodIdent(
     env: *Env,
     region: Region,
 ) Allocator.Error!?Ident.Idx {
-    if (!std.mem.eql(u8, self.cir.getIdentStoreConst().getText(constraint.fn_name), "join_with")) return null;
+    if (!constraint.fn_name.eql(self.cir.idents.join_with)) return null;
     if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
 
-    const list_ident = original_env.common.findIdent("List") orelse return null;
-    const join_list_with_ident = original_env.common.findIdent("join_list_with") orelse return null;
+    const list_ident = original_env.idents.list;
+    const join_list_with_ident = original_env.idents.join_list_with;
     const helper_ident = original_env.lookupMethodIdentConst(list_ident, join_list_with_ident) orelse return null;
 
     const helper_node_idx = original_env.getExposedNodeIndexById(helper_ident) orelse return null;
