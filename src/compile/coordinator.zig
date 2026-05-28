@@ -1212,24 +1212,17 @@ pub const Coordinator = struct {
                     imports.deinit(self.gpa);
                 }
 
-                // Add local imports (dupe strings since we'll free them)
-                // Read source files directly to compute hashes (more reliable than env)
+                // Add local imports - source is already loaded in the import's env.
                 for (mod.imports.items) |imp_id| {
                     if (pkg.getModule(imp_id)) |imp_mod| {
-                        // Compute source hash by reading the file
                         var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
-                        const imp_path = self.resolveModulePath(pkg.root_dir, imp_mod.name) catch null;
-                        if (imp_path) |path| {
-                            defer self.gpa.free(path);
-                            if (self.io.readFile(path, self.gpa) catch null) |source| {
-                                defer self.gpa.free(source);
-                                imp_source_hash = CacheManager.computeSourceHash(source);
-                            }
+                        if (imp_mod.env) |imp_env| {
+                            imp_source_hash = CacheManager.computeSourceHash(imp_env.common.source);
                         }
 
                         const mod_name = self.gpa.dupe(u8, imp_mod.name) catch continue;
                         imports.append(self.gpa, .{
-                            .package = "", // Local import - empty string, not owned
+                            .package = "",
                             .module = mod_name,
                             .source_hash = imp_source_hash,
                         }) catch {
@@ -1239,19 +1232,17 @@ pub const Coordinator = struct {
                     }
                 }
 
-                // Add external imports (these have format "pkg.Module")
+                // Add external imports - source is already loaded in the target module's env.
                 for (mod.external_imports.items) |ext_name| {
                     if (base.module_path.parseQualifiedImport(ext_name)) |qualified| {
-                        // Resolve the external package and compute source hash by reading file
                         var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
                         if (pkg.shorthands.get(qualified.qualifier)) |ext_pkg_name| {
                             if (self.packages.get(ext_pkg_name)) |ext_pkg| {
-                                const imp_path = self.resolveModulePath(ext_pkg.root_dir, qualified.module) catch null;
-                                if (imp_path) |path| {
-                                    defer self.gpa.free(path);
-                                    if (self.io.readFile(path, self.gpa) catch null) |source| {
-                                        defer self.gpa.free(source);
-                                        imp_source_hash = CacheManager.computeSourceHash(source);
+                                if (ext_pkg.module_names.get(qualified.module)) |ext_mod_id| {
+                                    if (ext_pkg.getModule(ext_mod_id)) |ext_mod| {
+                                        if (ext_mod.env) |ext_env| {
+                                            imp_source_hash = CacheManager.computeSourceHash(ext_env.common.source);
+                                        }
                                     }
                                 }
                             }

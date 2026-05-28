@@ -1560,7 +1560,9 @@ fn processAssociatedItemsSecondPass(
                                     try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
                                     // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
-                                    const type_qualified_ident_idx = blk2: {
+                                    const type_qualified_ident_idx = if (parent_name.eql(type_name))
+                                        qualified_idx
+                                    else blk2: {
                                         const type_text = self.env.getIdent(type_name);
                                         const decl_text = self.env.getIdent(decl_ident);
 
@@ -1650,8 +1652,12 @@ fn processAssociatedItemsSecondPass(
                         try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
                         // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
-                        const type_text = self.env.getIdent(type_name);
-                        const type_qualified_ident_idx = try self.env.insertQualifiedIdent(type_text, decl_text);
+                        const type_qualified_ident_idx = if (parent_name.eql(type_name))
+                            qualified_idx
+                        else blk2: {
+                            const type_text = self.env.getIdent(type_name);
+                            break :blk2 try self.env.insertQualifiedIdent(type_text, decl_text);
+                        };
 
                         // Find the scope where the parent type is defined (linear search backward)
                         var type_home_scope_idx: usize = 0; // Default to module scope if not found
