@@ -471,7 +471,13 @@ Builtin :: [].{
 				match iterator {
 					{ len_if_known, step } => {
 						len_if_known: match len_if_known {
-							Known(len) => Known(if len < n { len } else { n })
+							Known(len) => Known(
+								if len < n {
+									len
+								} else {
+									n
+								},
+							)
 							Unknown => Unknown
 						},
 						step: ||
@@ -499,7 +505,13 @@ Builtin :: [].{
 				match iterator {
 					{ len_if_known, step } => {
 						len_if_known: match len_if_known {
-							Known(len) => Known(if len < n { 0 } else { len - n })
+							Known(len) => Known(
+								if len < n {
+									0
+								} else {
+									len - n
+								},
+							)
 							Unknown => Unknown
 						},
 						step: ||
@@ -534,7 +546,7 @@ Builtin :: [].{
 					}
 				Unknown =>
 					List.iter(List.take_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-			}
+				}
 
 		## Returns an iterator that yields all items except the last `n`.
 		## If the source has `n` or fewer items, the result is empty.
@@ -558,7 +570,7 @@ Builtin :: [].{
 					}
 				Unknown =>
 					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-			}
+				}
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
@@ -2210,7 +2222,11 @@ Builtin :: [].{
 			## ```
 			to : U8, U8 -> Iter(U8)
 			to = |start, end| {
-				len_if_known: if start > end { Known(0) } else { Known(U8.to_u64(end) - U8.to_u64(start) + 1) },
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(U8.to_u64(end) - U8.to_u64(start) + 1)
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -2243,7 +2259,11 @@ Builtin :: [].{
 			## ```
 			until : U8, U8 -> Iter(U8)
 			until = |start, end| {
-				len_if_known: if start >= end { Known(0) } else { Known(U8.to_u64(end) - U8.to_u64(start)) },
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(U8.to_u64(end) - U8.to_u64(start))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -2596,7 +2616,11 @@ Builtin :: [].{
 			## ```
 			to : I8, I8 -> Iter(I8)
 			to = |start, end| {
-				len_if_known: if start > end { Known(0) } else { Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1)) },
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1))
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -2629,7 +2653,11 @@ Builtin :: [].{
 			## ```
 			until : I8, I8 -> Iter(I8)
 			until = |start, end| {
-				len_if_known: if start >= end { Known(0) } else { Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start))) },
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -3034,7 +3062,11 @@ Builtin :: [].{
 			## ```
 			to : U16, U16 -> Iter(U16)
 			to = |start, end| {
-				len_if_known: if start > end { Known(0) } else { Known(U16.to_u64(end) - U16.to_u64(start) + 1) },
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(U16.to_u64(end) - U16.to_u64(start) + 1)
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -3067,7 +3099,11 @@ Builtin :: [].{
 			## ```
 			until : U16, U16 -> Iter(U16)
 			until = |start, end| {
-				len_if_known: if start >= end { Known(0) } else { Known(U16.to_u64(end) - U16.to_u64(start)) },
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(U16.to_u64(end) - U16.to_u64(start))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -3480,7 +3516,11 @@ Builtin :: [].{
 			## ```
 			to : I16, I16 -> Iter(I16)
 			to = |start, end| {
-				len_if_known: if start > end { Known(0) } else { Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1)) },
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1))
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -3513,7 +3553,11 @@ Builtin :: [].{
 			## ```
 			until : I16, I16 -> Iter(I16)
 			until = |start, end| {
-				len_if_known: if start >= end { Known(0) } else { Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start))) },
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -3935,7 +3979,11 @@ Builtin :: [].{
 			## ```
 			to : U32, U32 -> Iter(U32)
 			to = |start, end| {
-				len_if_known: if start > end { Known(0) } else { Known(U32.to_u64(end) - U32.to_u64(start) + 1) },
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(U32.to_u64(end) - U32.to_u64(start) + 1)
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -3968,7 +4016,11 @@ Builtin :: [].{
 			## ```
 			until : U32, U32 -> Iter(U32)
 			until = |start, end| {
-				len_if_known: if start >= end { Known(0) } else { Known(U32.to_u64(end) - U32.to_u64(start)) },
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(U32.to_u64(end) - U32.to_u64(start))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -4419,7 +4471,11 @@ Builtin :: [].{
 			## ```
 			to : I32, I32 -> Iter(I32)
 			to = |start, end| {
-				len_if_known: if start > end { Known(0) } else { Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1)) },
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1))
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -4452,7 +4508,11 @@ Builtin :: [].{
 			## ```
 			until : I32, I32 -> Iter(I32)
 			until = |start, end| {
-				len_if_known: if start >= end { Known(0) } else { Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start))) },
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -4934,7 +4994,11 @@ Builtin :: [].{
 			## ```
 			until : U64, U64 -> Iter(U64)
 			until = |start, end| {
-				len_if_known: if start >= end { Known(0) } else { Known(end - start) },
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(end - start)
+				},
 				step: ||
 					if start < end {
 						One(
