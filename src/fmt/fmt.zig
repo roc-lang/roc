@@ -987,15 +987,12 @@ const Formatter = struct {
             fmt.curr_indent = record_indent;
         }
         try fmt.push('{');
-        if (fields.len == 0) {
-            // Just the extension, e.g. { .. } or { ..a }
-            try fmt.push(' ');
+        if (record_multiline) {
+            fmt.curr_indent += 1;
         } else {
-            if (record_multiline) {
-                fmt.curr_indent += 1;
-            } else {
-                try fmt.push(' ');
-            }
+            try fmt.push(' ');
+        }
+        if (fields.len > 0) {
             for (fields, 0..) |field_idx, i| {
                 const field_region = fmt.nodeRegion(@intFromEnum(field_idx));
                 if (record_multiline) {
