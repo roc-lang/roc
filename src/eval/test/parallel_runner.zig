@@ -1455,7 +1455,7 @@ fn printHelp() void {
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
-        \\  --timeout <MS>        Per-test hang timeout in ms (default: 30000).
+        \\  --timeout <MS>        Per-test hang timeout in ms (default: 30000, 120000 on musl).
         \\
         \\COVERAGE:
         \\  Use `zig build coverage-eval` to build with coverage instrumentation.
@@ -1874,8 +1874,12 @@ pub fn main() !void {
     var wall_timer = Timer.start() catch unreachable;
 
     // Default timeout: 30s under parallel load, 10s with single child.
+    // Native musl CI has enough process-startup variance for the larger shared
+    // harness default to be more reliable, especially for heavy boundary tests.
     const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
         cli.timeout_ms
+    else if (builtin.abi == .musl)
+        120_000
     else if (max_children <= 1)
         10_000
     else

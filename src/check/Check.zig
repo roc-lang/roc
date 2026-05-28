@@ -1092,19 +1092,19 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
 }
 
 fn builtinNumKindFromTypeName(self: *const Self, type_name: Ident.Idx) ?CIR.NumKind {
-    if (type_name.eql(self.cir.idents.u8)) return .u8;
-    if (type_name.eql(self.cir.idents.i8)) return .i8;
-    if (type_name.eql(self.cir.idents.u16)) return .u16;
-    if (type_name.eql(self.cir.idents.i16)) return .i16;
-    if (type_name.eql(self.cir.idents.u32)) return .u32;
-    if (type_name.eql(self.cir.idents.i32)) return .i32;
-    if (type_name.eql(self.cir.idents.u64)) return .u64;
-    if (type_name.eql(self.cir.idents.i64)) return .i64;
-    if (type_name.eql(self.cir.idents.u128)) return .u128;
-    if (type_name.eql(self.cir.idents.i128)) return .i128;
-    if (type_name.eql(self.cir.idents.f32)) return .f32;
-    if (type_name.eql(self.cir.idents.f64)) return .f64;
-    if (type_name.eql(self.cir.idents.dec)) return .dec;
+    if (type_name.eql(self.cir.idents.u8) or type_name.eql(self.cir.idents.u8_type)) return .u8;
+    if (type_name.eql(self.cir.idents.i8) or type_name.eql(self.cir.idents.i8_type)) return .i8;
+    if (type_name.eql(self.cir.idents.u16) or type_name.eql(self.cir.idents.u16_type)) return .u16;
+    if (type_name.eql(self.cir.idents.i16) or type_name.eql(self.cir.idents.i16_type)) return .i16;
+    if (type_name.eql(self.cir.idents.u32) or type_name.eql(self.cir.idents.u32_type)) return .u32;
+    if (type_name.eql(self.cir.idents.i32) or type_name.eql(self.cir.idents.i32_type)) return .i32;
+    if (type_name.eql(self.cir.idents.u64) or type_name.eql(self.cir.idents.u64_type)) return .u64;
+    if (type_name.eql(self.cir.idents.i64) or type_name.eql(self.cir.idents.i64_type)) return .i64;
+    if (type_name.eql(self.cir.idents.u128) or type_name.eql(self.cir.idents.u128_type)) return .u128;
+    if (type_name.eql(self.cir.idents.i128) or type_name.eql(self.cir.idents.i128_type)) return .i128;
+    if (type_name.eql(self.cir.idents.f32) or type_name.eql(self.cir.idents.f32_type)) return .f32;
+    if (type_name.eql(self.cir.idents.f64) or type_name.eql(self.cir.idents.f64_type)) return .f64;
+    if (type_name.eql(self.cir.idents.dec) or type_name.eql(self.cir.idents.dec_type)) return .dec;
     return null;
 }
 
@@ -3648,12 +3648,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
-                const num_literal_info = types_mod.NumeralInfo.fromI128(
+                var num_literal_info = types_mod.NumeralInfo.fromI128(
                     @as(i128, @as(u32, @bitCast(frac.value))),
                     frac.value < 0,
                     true,
                     expr_region,
                 );
+                num_literal_info.frac_requirements = .{
+                    .fits_in_f32 = true,
+                    .fits_in_dec = CIR.fitsInDec(@as(f64, @floatCast(frac.value))),
+                };
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
@@ -3663,12 +3667,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
-                const num_literal_info = types_mod.NumeralInfo.fromI128(
+                var num_literal_info = types_mod.NumeralInfo.fromI128(
                     @as(i128, @as(u64, @bitCast(frac.value))),
                     frac.value < 0,
                     true,
                     expr_region,
                 );
+                num_literal_info.frac_requirements = .{
+                    .fits_in_f32 = CIR.fitsInF32(frac.value),
+                    .fits_in_dec = CIR.fitsInDec(frac.value),
+                };
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
@@ -3678,12 +3686,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
             } else {
                 // Unsuffixed Dec literal - create constrained flex var
-                const num_literal_info = types_mod.NumeralInfo.fromI128(
+                var num_literal_info = types_mod.NumeralInfo.fromI128(
                     frac.value.num,
                     frac.value.num < 0,
                     true,
                     expr_region,
                 );
+                num_literal_info.frac_requirements = .{
+                    .fits_in_f32 = CIR.fitsInF32(frac.value.toF64()),
+                    .fits_in_dec = true,
+                };
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
@@ -3694,12 +3706,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } else {
                 // Unsuffixed small Dec literal - create constrained flex var
                 const scaled_value = frac.value.toRocDec().num;
-                const num_literal_info = types_mod.NumeralInfo.fromI128(
+                var num_literal_info = types_mod.NumeralInfo.fromI128(
                     scaled_value,
                     scaled_value < 0,
                     true,
                     expr_region,
                 );
+                const f64_val = frac.value.toF64();
+                num_literal_info.frac_requirements = .{
+                    .fits_in_f32 = CIR.fitsInF32(f64_val),
+                    .fits_in_dec = true,
+                };
                 const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                 _ = try self.unify(expr_var, flex_var, env);
             }
@@ -7389,6 +7406,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // If this constraint is already an error, the skip this pass
                         continue;
                     }
+                    if (!try self.validateFromNumeralLiteralForBuiltinNominal(
+                        deferred_constraint.var_,
+                        constraint,
+                        nominal_type,
+                        env,
+                    )) {
+                        continue;
+                    }
                     const method_ident = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
@@ -7573,6 +7598,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) continue;
+
+                    if (!try self.validateFromNumeralLiteralForBuiltinAlias(
+                        deferred_constraint.var_,
+                        constraint,
+                        alias,
+                        env,
+                    )) {
+                        continue;
+                    }
 
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
@@ -7973,6 +8007,82 @@ fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType)
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
     if (!nominal_type.origin_module.eql(self.cir.idents.builtin_module)) return false;
     return self.builtinNumKindFromTypeName(nominal_type.ident.ident_idx) != null;
+}
+
+fn validateFromNumeralLiteralForBuiltinNominal(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    nominal_type: types_mod.NominalType,
+    env: *Env,
+) Allocator.Error!bool {
+    return self.validateFromNumeralLiteralForBuiltinType(
+        dispatcher_var,
+        constraint,
+        nominal_type.origin_module,
+        nominal_type.ident.ident_idx,
+        env,
+    );
+}
+
+fn validateFromNumeralLiteralForBuiltinAlias(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    alias: types_mod.Alias,
+    env: *Env,
+) Allocator.Error!bool {
+    return self.validateFromNumeralLiteralForBuiltinType(
+        dispatcher_var,
+        constraint,
+        alias.origin_module,
+        alias.ident.ident_idx,
+        env,
+    );
+}
+
+fn validateFromNumeralLiteralForBuiltinType(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    origin_module: Ident.Idx,
+    type_ident: Ident.Idx,
+    env: *Env,
+) Allocator.Error!bool {
+    if (constraint.origin != .from_numeral) return true;
+    const num_literal = constraint.num_literal orelse return true;
+    if (!origin_module.eql(self.cir.idents.builtin_module)) return true;
+    const num_kind = self.builtinNumKindFromTypeName(type_ident) orelse return true;
+
+    if (numericLiteralFitsBuiltinKind(num_literal, num_kind)) return true;
+
+    const expected_type = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    _ = try self.problems.appendProblem(self.cir.gpa, .{ .invalid_numeric_literal = .{
+        .literal_var = dispatcher_var,
+        .expected_type = expected_type,
+        .is_fractional = num_literal.is_fractional,
+        .region = num_literal.region,
+    } });
+
+    try self.markConstraintFunctionAsError(constraint, env);
+    try self.unifyWith(dispatcher_var, .err, env);
+    return false;
+}
+
+fn numericLiteralFitsBuiltinKind(num_literal: types_mod.NumeralInfo, num_kind: CIR.NumKind) bool {
+    if (!num_literal.is_fractional) return true;
+
+    const requirements = num_literal.frac_requirements orelse return switch (num_kind) {
+        .f64, .f32 => true,
+        .dec => false,
+        else => true,
+    };
+
+    return switch (num_kind) {
+        .f64, .f32 => true,
+        .dec => requirements.fits_in_dec,
+        else => true,
+    };
 }
 
 fn satisfyImplicitEqualityConstraint(

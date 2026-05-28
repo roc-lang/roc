@@ -1214,6 +1214,75 @@ test "roc check returns exit code 1 for errors" {
     try testing.expect(result.term == .Exited and result.term.Exited == 1);
 }
 
+test "roc check reports comptime division by zero without panicking" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_div_zero.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check reports comptime modulo by zero without panicking" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_mod_zero.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check reports large default Dec scientific literal without panicking" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_default_dec.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check preserves numeric literal constraints before reporting large default Dec scientific literal" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_list_default_dec.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
+test "roc check treats integral scientific notation as integer syntax sugar" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/scientific_integer_u8.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkFailure(result);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "Found 0 error(s)") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+}
+
 test "roc run returns exit code 2 for warnings (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
