@@ -12631,19 +12631,14 @@ pub fn scopeIntroduceInternal(
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     const map = current_scope.itemsConst(item_kind);
 
-    var iter = map.iterator();
-    while (iter.next()) |entry| {
-        if (ident_idx.eql(entry.key_ptr.*)) {
-            // Duplicate in same scope - still introduce but return shadowing warning
-            try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+    if (map.get(ident_idx)) |existing| {
+        try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
 
-            // If this is a var declaration, record it in var_patterns
-            if (is_var and is_declaration) {
-                try self.recordVarFunction(pattern_idx);
-            }
-
-            return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
+        if (is_var and is_declaration) {
+            try self.recordVarFunction(pattern_idx);
         }
+
+        return Scope.IntroduceResult{ .shadowing_warning = existing };
     }
 
     // No conflicts, introduce successfully

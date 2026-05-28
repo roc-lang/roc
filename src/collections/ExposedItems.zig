@@ -55,19 +55,24 @@ pub const ExposedItems = struct {
 
     /// Set the node index for an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
     pub fn setNodeIndexById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, node_idx: u32) !void {
-        // First ensure the array is sorted so we can search
         self.items.ensureSorted(allocator);
 
-        // Find the existing entry and update its value
         const entries = self.items.entries.items;
-        for (entries) |*entry| {
-            if (entry.key == ident_idx) {
-                entry.value = node_idx;
+        var left: usize = 0;
+        var right: usize = entries.len;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const mid_key = entries[mid].key;
+            if (mid_key == ident_idx) {
+                entries[mid].value = node_idx;
                 return;
+            } else if (mid_key < ident_idx) {
+                left = mid + 1;
+            } else {
+                right = mid;
             }
         }
 
-        // If not found, add a new entry
         try self.items.put(allocator, ident_idx, node_idx);
     }
 
