@@ -1903,8 +1903,6 @@ fn processAssociatedItemsSecondPass(
                     // Register the method ident mapping for fast index-based lookup
                     try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, name_ident, qualified_idx);
 
-                    // Pattern is now available in scope (was created in createAnnoOnlyDef)
-
                     try self.env.store.addScratchDef(def_idx);
                 }
             },
@@ -2287,6 +2285,20 @@ fn processAssociatedItemsFirstPass(
 
                     // Register progressively qualified names at each scope level per the plan
                     try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
+
+                    // Also register the bare-type-qualified form (e.g., "U8.to_u64") so that
+                    // sibling methods in the same associated block can call this anno-only
+                    // method by that name during second-pass body canonicalization. The
+                    // decl-with-anno path already adds this alias from inside its second-pass
+                    // branch, but for anno-only methods the existing post-pass runs too late
+                    // (after sibling bodies have already been canonicalized).
+                    const parent_text_for_type = self.env.getIdent(parent_name);
+                    if (std.mem.lastIndexOfScalar(u8, parent_text_for_type, '.')) |last_dot| {
+                        const bare_type_text = parent_text_for_type[last_dot + 1 ..];
+                        const anno_text = self.env.getIdent(anno_ident);
+                        const type_qualified_idx = try self.env.insertQualifiedIdent(bare_type_text, anno_text);
+                        try current_scope.idents.put(self.env.gpa, type_qualified_idx, placeholder_pattern_idx);
+                    }
                 }
             },
             else => {
