@@ -1568,9 +1568,9 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
     try testing.expect(!did_panic);
 
-    // 2. Stderr should not contain "panic" or "Coordinator stuck"
+    // 2. Stderr should not contain "panic" or "Coordinator timeout"
     const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "Coordinator stuck") != null;
+        std.mem.indexOf(u8, result.stderr, "Coordinator timeout") != null;
     try testing.expect(!has_panic_text);
 
     // 3. Command should fail with a non-zero exit code (error, not success)

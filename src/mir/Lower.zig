@@ -47,7 +47,7 @@ const SymbolMetadata = union(enum) {
     },
     external_def: struct {
         module_idx: u32,
-        def_node_idx: u16,
+        def_node_idx: u32,
         display_ident_idx: Ident.Idx,
     },
 };
@@ -297,7 +297,7 @@ fn packLocalSymbolId(module_idx: u32, ident_idx: Ident.Idx) u64 {
     return (symbol_namespace_local << 63) | (@as(u64, module_idx) << 32) | @as(u64, ident_bits);
 }
 
-fn packExternalDefSymbolId(module_idx: u32, def_node_idx: u16) u64 {
+fn packExternalDefSymbolId(module_idx: u32, def_node_idx: u32) u64 {
     if (builtin.mode == .Debug) std.debug.assert(module_idx <= std.math.maxInt(u31));
     return (symbol_namespace_external_def << 63) | (@as(u64, module_idx) << 32) | @as(u64, def_node_idx);
 }
@@ -989,7 +989,7 @@ fn internSymbol(self: *Self, namespace_idx: u32, ident_idx: Ident.Idx) Allocator
     return symbol;
 }
 
-fn internExternalDefSymbol(self: *Self, module_idx: u32, def_node_idx: u16) Allocator.Error!MIR.Symbol {
+fn internExternalDefSymbol(self: *Self, module_idx: u32, def_node_idx: u32) Allocator.Error!MIR.Symbol {
     const module_env = self.all_module_envs[module_idx];
     if (!module_env.store.isDefNode(def_node_idx)) {
         if (builtin.mode == .Debug) {
@@ -1434,7 +1434,7 @@ fn lookupAssociatedMethodExternalDef(
 ) Allocator.Error!?struct {
     target_env: *const ModuleEnv,
     module_idx: u32,
-    def_node_idx: u16,
+    def_node_idx: u32,
     type_var: types.Var,
 } {
     const target_module_idx = self.findModuleForOriginMaybe(source_env, nominal.origin_module) orelse return null;
@@ -6010,7 +6010,7 @@ fn lookupMonomorphizedProcInst(
 fn lowerMonomorphizedExternalProcInst(
     self: *Self,
     target_module_idx: u32,
-    def_node_idx: u16,
+    def_node_idx: u32,
     fn_monotype: Monotype.Idx,
     fn_monotype_module_idx: u32,
 ) Allocator.Error!MIR.ExprId {

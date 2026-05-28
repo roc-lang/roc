@@ -619,9 +619,13 @@ pub const Interpreter = struct {
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try import_envs.ensureTotalCapacity(allocator, @intCast(total_import_count));
 
+            env.imports.resolveImports(env, all_module_envs);
+
             for (0..import_count) |i| {
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-                const module_env = resolveImportedModuleEnvInSlice(env, import_idx, all_module_envs) orelse continue;
+                const resolved_idx = env.imports.getResolvedModule(import_idx) orelse continue;
+                if (resolved_idx >= all_module_envs.len) continue;
+                const module_env = all_module_envs[resolved_idx];
 
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
@@ -636,9 +640,12 @@ pub const Interpreter = struct {
 
             if (app_env) |a_env| {
                 if (a_env != env) {
+                    a_env.imports.resolveImports(a_env, all_module_envs);
                     for (0..app_import_count) |i| {
                         const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-                        const module_env = resolveImportedModuleEnvInSlice(a_env, import_idx, all_module_envs) orelse continue;
+                        const resolved_idx = a_env.imports.getResolvedModule(import_idx) orelse continue;
+                        if (resolved_idx >= all_module_envs.len) continue;
+                        const module_env = all_module_envs[resolved_idx];
                         try import_envs.put(allocator, import_idx, module_env);
                     }
                 }

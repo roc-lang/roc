@@ -6124,7 +6124,7 @@ const ExternalType = struct {
 fn resolveVarFromExternal(
     self: *Self,
     import_idx: CIR.Import.Idx,
-    node_idx: u16,
+    node_idx: u32,
 ) std.mem.Allocator.Error!?ExternalType {
     const trace = tracy.trace(@src());
     defer trace.end();

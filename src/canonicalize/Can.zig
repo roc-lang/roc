@@ -797,8 +797,8 @@ fn processTypeDeclFirstPass(
     if (self.env.module_kind == .type_module) {
         if (qualified_name_idx.eql(self.env.display_module_name_idx)) {
             // This is the main type of the type module - set its node index
-            const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
-            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
+            const node_idx_u32: u32 = @intFromEnum(type_decl_stmt_idx);
+            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u32);
         }
     }
 
@@ -896,8 +896,8 @@ fn processTypeDeclFirstPassWithExisting(
     // what canonicalization produces for unqualified type module references.
     if (self.env.module_kind == .type_module) {
         if (qualified_name_idx.eql(self.env.display_module_name_idx)) {
-            const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
-            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
+            const node_idx_u32: u32 = @intFromEnum(type_decl_stmt_idx);
+            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u32);
         }
     }
 
@@ -1545,8 +1545,8 @@ fn processAssociatedItemsSecondPass(
                                     try self.env.store.addScratchDef(def_idx);
 
                                     // Register this associated item by its qualified name
-                                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                    const def_idx_u32: u32 = @intFromEnum(def_idx);
+                                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                                     // Register the method ident mapping for fast index-based lookup
                                     try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
@@ -1606,8 +1606,8 @@ fn processAssociatedItemsSecondPass(
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
                     // Register this associated item by its qualified name
-                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                    const def_idx_u32: u32 = @intFromEnum(def_idx);
+                    try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                     // Register the method ident mapping for fast index-based lookup
                     try self.env.registerMethodIdent(type_name, name_ident, qualified_idx);
@@ -1634,8 +1634,8 @@ fn processAssociatedItemsSecondPass(
                         try self.env.store.addScratchDef(def_idx);
 
                         // Register this associated item by its qualified name
-                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                        const def_idx_u32: u32 = @intFromEnum(def_idx);
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                         // Register the method ident mapping for fast index-based lookup
                         try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
@@ -1791,9 +1791,9 @@ fn processAssociatedItemsFirstPass(
                     // Register nested type for cross-module import so copy_import can find it.
                     // Register with both the fully qualified name AND the bare type name,
                     // since pending lookup resolution searches by bare name via findIdent.
-                    const node_idx_u16: u16 = @intCast(@intFromEnum(type_decl_idx));
-                    try self.env.setExposedNodeIndexById(fully_qualified_ident_idx, node_idx_u16);
-                    try self.env.setExposedNodeIndexById(nested_type_ident, node_idx_u16);
+                    const node_idx_u32: u32 = @intFromEnum(type_decl_idx);
+                    try self.env.setExposedNodeIndexById(fully_qualified_ident_idx, node_idx_u32);
+                    try self.env.setExposedNodeIndexById(nested_type_ident, node_idx_u32);
 
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
@@ -1848,9 +1848,9 @@ fn processAssociatedItemsFirstPass(
                 // Look up the type alias
                 if (self.scopeLookupTypeDecl(fully_qualified_ident_idx)) |type_decl_idx| {
                     // Register nested type alias for cross-module import
-                    const node_idx_u16: u16 = @intCast(@intFromEnum(type_decl_idx));
-                    try self.env.setExposedNodeIndexById(fully_qualified_ident_idx, node_idx_u16);
-                    try self.env.setExposedNodeIndexById(nested_type_ident, node_idx_u16);
+                    const node_idx_u32: u32 = @intFromEnum(type_decl_idx);
+                    try self.env.setExposedNodeIndexById(fully_qualified_ident_idx, node_idx_u32);
+                    try self.env.setExposedNodeIndexById(nested_type_ident, node_idx_u32);
 
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
@@ -2260,8 +2260,8 @@ pub fn canonicalizeFile(
                     // If exposed, register it
                     const ident_text = self.env.getIdent(name_ident);
                     if (self.exposed_ident_texts.contains(ident_text)) {
-                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                        const def_idx_u32: u32 = @intFromEnum(def_idx);
+                        try self.env.setExposedNodeIndexById(name_ident, def_idx_u32);
                     }
                 }
             }
@@ -2796,8 +2796,8 @@ pub fn canonicalizeFile(
                                 // If this identifier should be exposed, register it
                                 const ident_text = self.env.getIdent(name_ident);
                                 if (self.exposed_ident_texts.contains(ident_text)) {
-                                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                                    const def_idx_u32: u32 = @intFromEnum(def_idx);
+                                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u32);
                                 }
                             }
                         },
@@ -2810,8 +2810,8 @@ pub fn canonicalizeFile(
                             // If this identifier should be exposed, register it
                             const ident_text = self.env.getIdent(name_ident);
                             if (self.exposed_ident_texts.contains(ident_text)) {
-                                const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                                const def_idx_u32: u32 = @intFromEnum(def_idx);
+                                try self.env.setExposedNodeIndexById(name_ident, def_idx_u32);
                             }
                         },
                     }
@@ -2827,8 +2827,8 @@ pub fn canonicalizeFile(
                     // If this identifier should be exposed, register it
                     const ident_text = self.env.getIdent(name_ident);
                     if (self.exposed_ident_texts.contains(ident_text)) {
-                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                        const def_idx_u32: u32 = @intFromEnum(def_idx);
+                        try self.env.setExposedNodeIndexById(name_ident, def_idx_u32);
                     }
                 }
             },
@@ -3059,8 +3059,8 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
             const ident = base.Ident.for_text(ident_text);
             const idx = try self.env.insertIdent(ident);
             // Store the def index as u16 in exposed_items
-            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-            try self.env.setExposedNodeIndexById(idx, def_idx_u16);
+            const def_idx_u32: u32 = @intFromEnum(def_idx);
+            try self.env.setExposedNodeIndexById(idx, def_idx_u32);
         }
 
         _ = self.exposed_ident_texts.remove(ident_text);
@@ -5060,7 +5060,7 @@ pub fn canonicalizeExpr(
                                 break :nested_blk nested_path_buf[0..pos];
                             } else field_text;
 
-                            const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
+                            const target_node_idx_opt: ?u32 = if (auto_imported_type_info) |info| blk: {
                                 const module_env = info.env;
 
                                 // For auto-imported types with statement_idx (builtin types and platform modules),
@@ -5237,7 +5237,7 @@ pub fn canonicalizeExpr(
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(exposed_info.original_name);
-                            const target_node_idx_opt: ?u16 = blk: {
+                            const target_node_idx_opt: ?u32 = blk: {
                                 if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
                                     if (module_env.common.findIdent(field_text)) |target_ident| {
@@ -6337,7 +6337,7 @@ pub fn canonicalizeExpr(
 
             // Look up Try type for nominal wrapping (improves error messages)
             const try_ident = self.env.idents.@"try";
-            const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+            const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u32 } = blk: {
                 if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
                     switch (type_binding_loc.binding.*) {
                         .external_nominal => |ext| {
@@ -7102,7 +7102,7 @@ fn canonicalizeDoubleQuestionOp(
 
     // Look up Try type for nominal wrapping (improves error messages)
     const try_ident = self.env.idents.@"try";
-    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u32 } = blk: {
         if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
             switch (type_binding_loc.binding.*) {
                 .external_nominal => |ext| {
@@ -7316,7 +7316,7 @@ fn canonicalizeSingleQuestionBinop(
 
     // Look up Try type for nominal wrapping (improves error messages)
     const try_ident = self.env.idents.@"try";
-    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u32 } = blk: {
         if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
             switch (type_binding_loc.binding.*) {
                 .external_nominal => |ext| {
@@ -8233,7 +8233,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
             // Look up the target node index in the imported module
             // Convert identifier from current module to target module's interner
-            const target_node_idx: u16 = blk: {
+            const target_node_idx: u32 = blk: {
                 const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
                     // Module not in envs - can't resolve external type
                     return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
@@ -13104,7 +13104,7 @@ fn setExternalTypeBinding(
     module_ident: Ident.Idx,
     original_ident: Ident.Idx,
     original_type_name: []const u8,
-    target_node_idx: ?u16,
+    target_node_idx: ?u32,
     module_import_idx: CIR.Import.Idx,
     origin_region: Region,
     module_found_status: ModuleFoundStatus,
@@ -13683,7 +13683,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         // This means it's something like `SomeModule.someFunc(args)` where someFunc is a regular export
         // We need to look up the function and create a call
         const field_text = self.env.getIdent(method_name);
-        const target_node_idx_opt: ?u16 = blk: {
+        const target_node_idx_opt: ?u32 = blk: {
             if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
                 const module_env = auto_imported_type.env;
                 if (module_env.common.findIdent(field_text)) |target_ident| {
@@ -13790,7 +13790,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     // Regular module-qualified lookup for definitions (not tags)
     // Look up the target node index in the module's exposed_items
     const field_text = self.env.getIdent(field_name);
-    const target_node_idx_opt: ?u16 = blk: {
+    const target_node_idx_opt: ?u32 = blk: {
         if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
             const module_env = auto_imported_type.env;
             if (module_env.common.findIdent(field_text)) |target_ident| {

@@ -2854,7 +2854,7 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
 
 /// Check if a raw node index refers to a definition node.
 /// This is useful when exposed items might be either definitions or type declarations.
-pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
+pub fn isDefNode(store: *const NodeStore, node_idx: u32) bool {
     const nid: Node.Idx = @enumFromInt(node_idx);
     const node = store.nodes.get(nid);
     return node.tag == .def;
@@ -4266,7 +4266,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                     // 1. Full member_name directly (for nested module access like "Outer.Inner.inner")
                     // 2. Qualified name (for methods on opaque types like "Outer.method")
                     // 3. Base member name only (for simple exports)
-                    const target_node_idx_opt: ?u16 = blk: {
+                    const target_node_idx_opt: ?u32 = blk: {
                         // First try the full member_name (for nested module access)
                         if (tenv.common.findIdent(member_name)) |full_ident| {
                             if (tenv.getExposedNodeIndexById(full_ident)) |idx| {

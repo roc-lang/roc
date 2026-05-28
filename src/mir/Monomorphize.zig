@@ -39,7 +39,7 @@ fn packLocalPatternSourceKey(module_idx: u32, pattern_idx: CIR.Pattern.Idx) u64 
     return packCallableSourceKey(.local_pattern, module_idx, @intFromEnum(pattern_idx));
 }
 
-fn packExternalDefSourceKey(module_idx: u32, def_node_idx: u16) u64 {
+fn packExternalDefSourceKey(module_idx: u32, def_node_idx: u32) u64 {
     return packCallableSourceKey(.external_def, module_idx, def_node_idx);
 }
 
@@ -568,7 +568,7 @@ pub const Result = struct {
         return self.proc_template_ids_by_source.get(packLocalPatternSourceKey(module_idx, pattern_idx));
     }
 
-    pub fn getExternalProcTemplate(self: *const Result, module_idx: u32, def_node_idx: u16) ?ProcTemplateId {
+    pub fn getExternalProcTemplate(self: *const Result, module_idx: u32, def_node_idx: u32) ?ProcTemplateId {
         return self.proc_template_ids_by_source.get(packExternalDefSourceKey(module_idx, def_node_idx));
     }
 
@@ -2015,7 +2015,7 @@ pub const Pass = struct {
                 try self.scanModule(result, target.module_idx);
                 const target_env = self.all_module_envs[target.module_idx];
                 const def = target_env.store.getDef(target.def_idx);
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 try self.recordSourceExpr(
                     result,
                     packExternalDefSourceKey(target.module_idx, target_node_idx),
@@ -4197,7 +4197,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse return;
                 try self.propagateDemandedCallableFnMonotypeToValueExpr(
                     result,
@@ -6151,7 +6151,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| blk: {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 break :blk try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx);
             },
             else => null,
@@ -6616,7 +6616,7 @@ pub const Pass = struct {
         self: *Pass,
         source_module_idx: u32,
         target: ResolvedDispatchTarget,
-    ) Allocator.Error!struct { module_idx: u32, def_node_idx: u16 } {
+    ) Allocator.Error!struct { module_idx: u32, def_node_idx: u32 } {
         const source_env = self.all_module_envs[source_module_idx];
         const target_module_idx = target.module_idx orelse self.findModuleForOrigin(source_env, target.origin);
         const target_env = self.all_module_envs[target_module_idx];
@@ -7854,7 +7854,7 @@ pub const Pass = struct {
         self: *Pass,
         result: *Result,
         target_module_idx: u32,
-        target_node_idx: u16,
+        target_node_idx: u32,
     ) Allocator.Error!?ExprSource {
         try self.scanModule(result, target_module_idx);
 
@@ -7997,7 +7997,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| blk: {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 if (result.getExternalProcTemplate(target.module_idx, target_node_idx)) |template_id| {
                     break :blk template_id;
                 }
@@ -8240,7 +8240,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse return;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 if (result.getExternalProcTemplate(target.module_idx, target_node_idx)) |template_id| {
                     if (try self.selectDemandedTemplateProcInsts(
                         result,
@@ -8422,7 +8422,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| blk: {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
                 break :blk try self.resolveRecordFieldExpr(result, source.module_idx, source.expr_idx, field_name_module_idx, field_name, visiting);
             },
@@ -8467,7 +8467,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| blk: {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
                 break :blk try self.resolveTupleElemExpr(result, source.module_idx, source.expr_idx, elem_index, visiting);
             },
@@ -8533,7 +8533,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| blk: {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
                 break :blk try self.resolveTagPayloadExpr(
                     result,
@@ -8586,7 +8586,7 @@ pub const Pass = struct {
             },
             .e_lookup_required => |lookup| blk: {
                 const target = self.resolveRequiredLookupTarget(module_env, lookup) orelse break :blk null;
-                const target_node_idx: u16 = @intCast(@intFromEnum(target.def_idx));
+                const target_node_idx: u32 = @intFromEnum(target.def_idx);
                 const source = try self.resolveExternalDefSourceExpr(result, target.module_idx, target_node_idx) orelse break :blk null;
                 break :blk try self.resolveListElemExpr(result, source.module_idx, source.expr_idx, elem_index, visiting);
             },

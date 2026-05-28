@@ -729,6 +729,14 @@ pub const Coordinator = struct {
         });
     }
 
+    /// Recv timeout (multi-threaded mode) before treating a loop pass as making no progress.
+    const result_recv_timeout_ns: u64 = 10 * std.time.ns_per_ms;
+    /// Loop iterations without progress before the coordinator gives up.
+    /// In multi-threaded mode each idle iteration costs ~result_recv_timeout_ns, so the
+    /// effective wall-clock budget is roughly max_idle_iterations * result_recv_timeout_ns
+    /// (~10s with the current values).
+    const max_idle_iterations: usize = 1000;
+
     /// Main coordinator loop - unified for single and multi-threaded modes
     pub fn coordinatorLoop(self: *Coordinator) !void {
         var iterations_without_progress: usize = 0;
@@ -745,7 +753,7 @@ pub const Coordinator = struct {
             } else {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
-                if (self.result_channel.recvTimeout(10_000_000)) |result| { // 10ms timeout
+                if (self.result_channel.recvTimeout(result_recv_timeout_ns)) |result| {
                     _ = self.inflight.fetchSub(1, .monotonic);
                     try self.handleResult(result);
                     made_progress = true;
@@ -763,14 +771,21 @@ pub const Coordinator = struct {
                 iterations_without_progress = 0;
             } else {
                 iterations_without_progress += 1;
-                if (iterations_without_progress > 1000) {
+                if (iterations_without_progress > max_idle_iterations) {
                     if (comptime !threading.is_freestanding) {
                         const task_count = self.task_channel.len();
-                        std.debug.print("Coordinator stuck: remaining={}, tasks={}, inflight={}\n", .{
-                            self.total_remaining,
-                            task_count,
-                            self.inflight.load(.acquire),
-                        });
+                        const budget_s = (max_idle_iterations * result_recv_timeout_ns) / std.time.ns_per_s;
+                        std.debug.print(
+                            "Coordinator timeout (no progress for {d} loop iterations / ~{d}s in multi-threaded mode), indicating possible deadlock.\n" ++
+                                "  remaining={d}, tasks={d}, inflight={d}\n",
+                            .{
+                                max_idle_iterations,
+                                budget_s,
+                                self.total_remaining,
+                                task_count,
+                                self.inflight.load(.acquire),
+                            },
+                        );
                         // Print package/module states with detailed diagnostics
                         var pkg_it = self.packages.iterator();
                         while (pkg_it.next()) |entry| {
@@ -814,7 +829,7 @@ pub const Coordinator = struct {
                             }
                         }
                     }
-                    @panic("Coordinator stuck in infinite loop");
+                    @panic("Coordinator timeout: no progress for ~10s, indicating possible deadlock");
                 }
             }
         }
