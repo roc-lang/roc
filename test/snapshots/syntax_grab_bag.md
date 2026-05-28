@@ -1839,8 +1839,7 @@ import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*
 import BadName as GoodName
 import
 	BadNameMultiline
-		as
-		GoodNameMultiline
+		as GoodNameMultiline
 
 Map(a, b) : List(a), (a -> b) -> List(b)
 
