@@ -463,11 +463,12 @@ pub const Coordinator = struct {
     cache_buffers: std.ArrayList(CacheModule.CacheData),
 
     /// Get allocator for worker thread operations.
-    /// In multi-threaded mode, returns page_allocator which is guaranteed thread-safe.
-    /// In single-threaded mode, returns gpa for better performance.
+    /// In multi-threaded mode, returns smp_allocator: a thread-safe singleton with
+    /// per-thread freelists. Much fewer syscalls than raw page_allocator.
+    /// In single-threaded mode, returns gpa.
     pub fn getWorkerAllocator(self: *const Coordinator) Allocator {
         return if (threads_available and self.mode == .multi_threaded)
-            std.heap.page_allocator
+            std.heap.smp_allocator
         else
             self.gpa;
     }
@@ -595,14 +596,12 @@ pub const Coordinator = struct {
 
     /// Get the allocator to use for module data.
     /// Returns module_allocator if set (IPC mode), otherwise:
-    /// - In multi-threaded mode: page_allocator (guaranteed thread-safe)
-    /// - In single-threaded mode: gpa (better performance)
+    /// - In multi-threaded mode: smp_allocator (thread-safe, per-thread freelists)
+    /// - In single-threaded mode: gpa
     pub fn getModuleAllocator(self: *Coordinator) std.mem.Allocator {
         if (self.module_allocator) |alloc| return alloc;
-        // Use page_allocator in multi-threaded mode for thread safety.
-        // Module data is created by workers and used throughout canonicalization/type-checking.
         return if (threads_available and self.mode == .multi_threaded)
-            std.heap.page_allocator
+            std.heap.smp_allocator
         else
             self.gpa;
     }
@@ -2411,10 +2410,7 @@ pub const Coordinator = struct {
 
     /// Worker thread main function
     fn workerThread(self: *Coordinator) void {
-        // Each worker has its own allocators for thread safety.
-        // - gpa: page_allocator for long-lived data (ModuleEnv, source)
-        // - arena: for temporary allocations, reset between tasks
-        const backing = if (threads_available) std.heap.page_allocator else self.gpa;
+        const backing = if (threads_available) std.heap.smp_allocator else self.gpa;
         var worker_allocs = WorkerAllocators.init(backing);
         defer worker_allocs.deinit();
 
