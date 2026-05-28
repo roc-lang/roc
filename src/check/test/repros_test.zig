@@ -378,3 +378,23 @@ test "check - repro - bad inline if branch mismatch in utf8 byte loop" {
 
     try test_env.assertNoErrors();
 }
+
+test "check - repro - using dbg in a function does not make it effectful" {
+    const src =
+        \\main! = |_args| {}
+        \\
+        \\User := [
+        \\  LoggedIn(Str),
+        \\  Guest
+        \\].{
+        \\  welcome : User -> {}
+        \\  welcome = |self| match (self) {
+        \\    Guest => dbg "Welcome Guest"
+        \\    LoggedIn(name) => dbg Str.concat("Welcome Guest", name)
+        \\  }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
