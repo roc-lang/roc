@@ -1736,9 +1736,6 @@ fn canonicalizeAssociatedItems(
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(def_idx);
                                     const pattern_idx = def_cir.pattern;
-
-                                    try self.registerUserFacingName(qualified_idx, pattern_idx);
-
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                                     // Add unqualified name (e.g., "bar") to current scope only
@@ -1782,8 +1779,6 @@ fn canonicalizeAssociatedItems(
                 // If there's no matching decl, create an anno-only def
                 if (!has_matching_decl) {
                     const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
-
-                    // Build qualified name for the annotation (e.g., "Str.isEmpty")
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
@@ -1850,9 +1845,6 @@ fn canonicalizeAssociatedItems(
                         // so it can be referenced by unqualified and type-qualified names
                         const def_cir = self.env.store.getDef(def_idx);
                         const pattern_idx = def_cir.pattern;
-
-                        try self.registerUserFacingName(qualified_idx, pattern_idx);
-
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                         // Add unqualified name (e.g., "bar") to current scope only
@@ -2138,49 +2130,29 @@ fn registerAssociatedItemPlaceholders(
         }
     }
 
-    // Phase 2a: Introduce all value declarations and type annotations first (before processing associated blocks)
-    // This ensures that sibling items (like list_get_unsafe) are available
-    // when processing associated blocks (like List's)
+    // Introduce value placeholders for each .decl and .type_anno item so that
+    // bodies elsewhere in the file can refer to them via user-facing qualified
+    // names (e.g. `Str.is_empty(...)`) before the items themselves have been
+    // canonicalized in source order.
     for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
             .decl => |decl| {
-                // Create placeholder for declarations so they can be referenced by sibling types
-                // canonicalizeAssociatedItems will later use updatePlaceholder to replace these
                 const pattern = self.parse_ir.store.getPattern(decl.pattern);
                 if (pattern == .ident) {
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                     const pattern_ident_tok = pattern.ident.ident_tok;
                     if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                        // Build qualified name (e.g., "module.Foo.Bar.baz")
                         const qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_name), self.env.getIdent(decl_ident));
-
-                        // Create placeholder pattern with qualified name
-                        const placeholder_pattern = Pattern{
-                            .assign = .{
-                                .ident = qualified_idx,
-                            },
-                        };
-                        const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, pattern_region);
-
-                        // Register in parent scope only, tracking component parts
+                        const placeholder_pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = qualified_idx } }, pattern_region);
                         try self.placeholder_idents.put(self.env.gpa, qualified_idx, .{
                             .parent_qualified_idx = parent_name,
                             .item_name_idx = decl_ident,
                         });
-
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                         try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
-
-                        // Register progressively qualified names at each scope level per the plan:
-                        // - Module scope gets "Foo.Bar.baz" (user-facing fully qualified)
-                        // - Foo's scope gets "Bar.baz" (partially qualified)
-                        // - Bar's scope gets "baz" (unqualified)
                         try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
 
-                        // Stash unqualified + type-qualified aliases for processAssociatedBlock to
-                        // drain into the child scope after scopeEnter. Skips the per-item
-                        // insertQualifiedIdent + scopeLookup rebuild that the FIRST setup loop used to do.
                         const type_qualified_ident_idx = if (parent_name.eql(type_name))
                             qualified_idx
                         else
@@ -2196,29 +2168,16 @@ fn registerAssociatedItemPlaceholders(
                 }
             },
             .type_anno => |type_anno| {
-                // Create placeholder for anno-only defs so they can be referenced by sibling types
-                // canonicalizeAssociatedItems will later use updatePlaceholder to replace these
                 if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
                     const qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_name), self.env.getIdent(anno_ident));
-
                     const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
-                    const placeholder_pattern = Pattern{
-                        .assign = .{
-                            .ident = qualified_idx,
-                        },
-                    };
-                    const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-
-                    // Register in parent scope only, tracking component parts
+                    const placeholder_pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = qualified_idx } }, region);
                     try self.placeholder_idents.put(self.env.gpa, qualified_idx, .{
                         .parent_qualified_idx = parent_name,
                         .item_name_idx = anno_ident,
                     });
-
                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
-
-                    // Register progressively qualified names at each scope level per the plan
                     try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
 
                     // Also register the bare-type-qualified form (e.g., "U8.to_u64") so that
@@ -2236,18 +2195,12 @@ fn registerAssociatedItemPlaceholders(
                     }
                 }
             },
-            else => {
-                // Skip other statement types
-            },
+            else => {},
         }
     }
 
-    // Phase 2b: Recursively create placeholders for nested associated blocks.
-    // This ensures all deeply nested items are registered in the module scope
-    // so qualified access like "ForwardDeep.M1.M2.deepVal" works from anywhere.
-    // Note: We only do the first pass here (placeholder creation). The actual
-    // body canonicalization for nested blocks happens in processAssociatedBlock
-    // AFTER the parent scope is entered, so nested scopes can access parent items.
+    // Recursively pre-register nested associated blocks' type declarations so
+    // sibling-type annotations in the parent block can resolve forward references.
     for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
