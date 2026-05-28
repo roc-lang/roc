@@ -1279,9 +1279,33 @@ const Formatter = struct {
                     // Plain identifier: add () after it
                     try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
                     try fmt.pushAll("()");
-                } else if (right_expr == .apply or right_expr == .tag) {
-                    // Already has parens (apply) or tag: format normally
+                } else if (right_expr == .tag) {
+                    // Tag: format normally
                     try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                } else if (right_expr == .apply) {
+                    // The arrow parser strips the outer parens around the fn part
+                    // of an `apply` (because `->(...)` consumes the parens directly
+                    // rather than producing a tuple), so e.g. `10->(|x| x + 1)()`
+                    // parses to apply{fn=lambda, args=()}. Re-add those parens when
+                    // the fn would otherwise be ambiguous (see issue #9372).
+                    const apply = right_expr.apply;
+                    const apply_fn_idx = apply.@"fn";
+                    const apply_fn = fmt.ast.store.getExpr(apply_fn_idx);
+                    const fn_needs_parens = switch (apply_fn) {
+                        .ident, .tag, .apply, .tuple, .field_access, .tuple_access, .method_call, .list, .record, .string, .multiline_string, .string_part, .int, .frac, .typed_int, .typed_frac, .single_quote => false,
+                        else => true,
+                    };
+                    if (fn_needs_parens) {
+                        try fmt.push('(');
+                        try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
+                        try fmt.push(')');
+                        const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
+                        const fn_region = fmt.nodeRegion(@intFromEnum(apply_fn_idx));
+                        const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
+                        try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(apply.args), Formatter.formatExpr);
+                    } else {
+                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                    }
                 } else {
                     // Lambda or other expression: wrap in parens for round-trip safety
                     try fmt.push('(');
