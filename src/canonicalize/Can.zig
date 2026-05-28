@@ -1437,34 +1437,20 @@ fn processAssociatedBlock(
     assoc: anytype,
     skip_first_pass: bool,
 ) std.mem.Allocator.Error!void {
-    // First, introduce placeholder patterns for all associated items
-    // (Skip if this is a nested call where placeholders were already created)
     if (!skip_first_pass) {
         try self.registerAssociatedItemPlaceholders(qualified_name_idx, relative_name_idx, type_name, assoc.statements);
     }
 
-    // Now enter a new scope for the associated block where both qualified and unqualified names work
-    try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
+    try self.scopeEnter(self.env.gpa, false);
     defer self.scopeExit(self.env.gpa) catch unreachable;
 
-    // Mark this scope as being for an associated block
-    {
-        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-        current_scope.associated_type_name = type_name;
-    }
-
-    // Introduce the parent type itself into this scope so it can be referenced by its unqualified name
-    // For example, if we're processing MyBool's associated items, we need "MyBool" to resolve to "Test.MyBool"
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    current_scope.associated_type_name = type_name;
+
+    // Introduce the parent type itself into this scope so it can be referenced by its unqualified name.
+    // We already received the resolved parent_type_decl_idx as a parameter, so no scope lookup needed here.
     try current_scope.introduceTypeAlias(self.env.gpa, type_name, parent_type_decl_idx);
 
-    // Note: Sibling types and ancestor types are accessible via parent scope lookup.
-    // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
-    // were added in their declaration scope, making them visible to all child scopes.
-
-    // Drain the per-decl aliases collected by registerAssociatedItemPlaceholders into
-    // the child scope so nested scopes and sibling bodies can resolve unqualified
-    // and type-qualified references.
     if (self.pending_assoc_aliases.fetchRemove(qualified_name_idx)) |kv| {
         var aliases = kv.value;
         defer aliases.deinit(self.env.gpa);
@@ -1745,11 +1731,14 @@ fn canonicalizeAssociatedItems(
                                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                                     // Register the method ident mapping for fast index-based lookup
-                                    try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, decl_ident, qualified_idx);
+                                    try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, decl_ident, qualified_idx);
 
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(def_idx);
                                     const pattern_idx = def_cir.pattern;
+
+                                    try self.registerUserFacingName(qualified_idx, pattern_idx);
+
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                                     // Add unqualified name (e.g., "bar") to current scope only
@@ -1816,7 +1805,10 @@ fn canonicalizeAssociatedItems(
                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                     // Register the method ident mapping for fast index-based lookup
-                    try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, name_ident, qualified_idx);
+                    try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, name_ident, qualified_idx);
+
+                    const def_cir = self.env.store.getDef(def_idx);
+                    try self.registerUserFacingName(qualified_idx, def_cir.pattern);
 
                     try self.env.store.addScratchDef(def_idx);
                 }
@@ -1852,12 +1844,15 @@ fn canonicalizeAssociatedItems(
                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                         // Register the method ident mapping for fast index-based lookup
-                        try self.registerAssociatedMethodIdent(parent_name, relative_parent_name, type_name, decl_ident, qualified_idx);
+                        try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, decl_ident, qualified_idx);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names
                         const def_cir = self.env.store.getDef(def_idx);
                         const pattern_idx = def_cir.pattern;
+
+                        try self.registerUserFacingName(qualified_idx, pattern_idx);
+
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
                         // Add unqualified name (e.g., "bar") to current scope only
