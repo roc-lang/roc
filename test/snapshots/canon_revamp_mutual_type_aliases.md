@@ -9,7 +9,8 @@ A : B
 B : A
 ~~~
 # EXPECTED
-NIL
+MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
+UNDECLARED TYPE - canon_revamp_mutual_type_aliases.md:2:5:2:6
 # PROBLEMS
 **MUTUALLY RECURSIVE TYPE ALIASES**
 The type alias _B_ and _A_ form a recursive cycle.

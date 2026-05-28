@@ -14,7 +14,8 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
+UNUSED VARIABLE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `ghostName` in this scope.

@@ -68,6 +68,16 @@ const PlaceholderInfo = struct {
     item_name_idx: Ident.Idx, // The unqualified item name (e.g., "baz")
 };
 
+/// Aliases for one item in an associated block, populated by
+/// processAssociatedItemsFirstPass and drained by processAssociatedBlock
+/// into the child scope. Avoids the FIRST setup loop's per-item
+/// insertQualifiedIdent + scopeLookup rebuild.
+const AssocAlias = struct {
+    decl_ident: Ident.Idx,
+    type_qualified_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+};
+
 allocators: *base.Allocators,
 env: *ModuleEnv,
 parse_ir: *AST,
@@ -103,6 +113,10 @@ type_decl_stmt_by_ast_idx: std.AutoHashMapUnmanaged(AST.Statement.Idx, Statement
 /// scanning declarations.
 explicit_root_names: []const []const u8 = &.{},
 explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .{},
+/// Per-block alias data populated during processAssociatedItemsFirstPass and
+/// drained by processAssociatedBlock after scopeEnter. Keyed by the assoc
+/// block's fully-qualified parent name (e.g., "Module.T1").
+pending_assoc_aliases: std.AutoHashMapUnmanaged(Ident.Idx, std.ArrayListUnmanaged(AssocAlias)) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in
@@ -268,6 +282,10 @@ pub fn deinit(
     self.placeholder_idents.deinit(gpa);
     self.type_decl_stmt_by_ast_idx.deinit(gpa);
     self.explicit_root_defs.deinit(gpa);
+
+    var pending_iter = self.pending_assoc_aliases.valueIterator();
+    while (pending_iter.next()) |list| list.deinit(gpa);
+    self.pending_assoc_aliases.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -1422,7 +1440,7 @@ fn processAssociatedBlock(
     // First, introduce placeholder patterns for all associated items
     // (Skip if this is a nested call where placeholders were already created)
     if (!skip_first_pass) {
-        try self.processAssociatedItemsFirstPass(qualified_name_idx, relative_name_idx, assoc.statements);
+        try self.processAssociatedItemsFirstPass(qualified_name_idx, relative_name_idx, type_name, assoc.statements);
     }
 
     // Now enter a new scope for the associated block where both qualified and unqualified names work
@@ -1444,44 +1462,26 @@ fn processAssociatedBlock(
     // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
     // were added in their declaration scope, making them visible to all child scopes.
 
-    // FIRST: Add decl aliases to current scope BEFORE processing nested blocks.
-    // This is critical so nested scopes can access parent decls via scope chain lookup.
-    // For example, in:
-    //   ScopeNested := [OO].{
-    //       outer = 111
-    //       Nested := [NN].{ usesOuter = outer }  # 'outer' must be visible here
-    //   }
-    // We need 'outer' in ScopeNested's scope before processing Nested's block.
-    for (self.parse_ir.store.statementSlice(assoc.statements)) |decl_stmt_idx| {
-        const decl_stmt = self.parse_ir.store.getStatement(decl_stmt_idx);
-        if (decl_stmt == .decl) {
-            const decl = decl_stmt.decl;
-            const pattern = self.parse_ir.store.getPattern(decl.pattern);
-            if (pattern == .ident) {
-                const pattern_ident_tok = pattern.ident.ident_tok;
-                if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                    // Build fully qualified name (e.g., "Test.MyBool.my_not")
-                    const parent_text = self.env.getIdent(qualified_name_idx);
-                    const decl_text = self.env.getIdent(decl_ident);
-                    const fully_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+    // The next three setup loops only do real work when this block contains nested
+    // type declarations. Scan once and skip them entirely when there are none —
+    // this is the common case and the per-statement dispatch through the switch
+    // otherwise costs a non-trivial chunk of canon time for large blocks.
+    const has_nested_type_decls = blk: {
+        for (self.parse_ir.store.statementSlice(assoc.statements)) |sid| {
+            if (self.parse_ir.store.getStatement(sid) == .type_decl) break :blk true;
+        }
+        break :blk false;
+    };
 
-                    // Look up the fully qualified pattern (from module scope via nesting)
-                    switch (self.scopeLookup(.ident, fully_qualified_ident_idx)) {
-                        .found => |pattern_idx| {
-                            // Add unqualified name (e.g., "my_not")
-                            try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
-
-                            // Add type-qualified name (e.g., "MyBool.my_not")
-                            // Re-fetch strings since insertQualifiedIdent may have reallocated the ident store
-                            const parent_type_text_refetched = self.env.getIdent(type_name);
-                            const decl_text_refetched = self.env.getIdent(decl_ident);
-                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text_refetched, decl_text_refetched);
-                            try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                        },
-                        .not_found => {},
-                    }
-                }
-            }
+    // Drain the per-decl aliases collected by processAssociatedItemsFirstPass into
+    // the child scope so nested scopes and sibling bodies can resolve unqualified
+    // and type-qualified references.
+    if (self.pending_assoc_aliases.fetchRemove(qualified_name_idx)) |kv| {
+        var aliases = kv.value;
+        defer aliases.deinit(self.env.gpa);
+        for (aliases.items) |alias| {
+            try current_scope.idents.put(self.env.gpa, alias.decl_ident, alias.pattern_idx);
+            try current_scope.idents.put(self.env.gpa, alias.type_qualified_ident, alias.pattern_idx);
         }
     }
 
@@ -2117,6 +2117,7 @@ fn processAssociatedItemsFirstPass(
     self: *Self,
     parent_name: Ident.Idx,
     relative_parent_name: ?Ident.Idx,
+    type_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     // Multi-phase approach for sibling types:
@@ -2280,6 +2281,21 @@ fn processAssociatedItemsFirstPass(
                         // - Foo's scope gets "Bar.baz" (partially qualified)
                         // - Bar's scope gets "baz" (unqualified)
                         try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
+
+                        // Stash unqualified + type-qualified aliases for processAssociatedBlock to
+                        // drain into the child scope after scopeEnter. Skips the per-item
+                        // insertQualifiedIdent + scopeLookup rebuild that the FIRST setup loop used to do.
+                        const type_qualified_ident_idx = if (parent_name.eql(type_name))
+                            qualified_idx
+                        else
+                            try self.env.insertQualifiedIdent(self.env.getIdent(type_name), self.env.getIdent(decl_ident));
+                        const gop = try self.pending_assoc_aliases.getOrPut(self.env.gpa, parent_name);
+                        if (!gop.found_existing) gop.value_ptr.* = .{};
+                        try gop.value_ptr.append(self.env.gpa, .{
+                            .decl_ident = decl_ident,
+                            .type_qualified_ident = type_qualified_ident_idx,
+                            .pattern_idx = placeholder_pattern_idx,
+                        });
                     }
                 }
             },
@@ -2358,7 +2374,7 @@ fn processAssociatedItemsFirstPass(
                 };
 
                 // Recursively create placeholders for this nested block's items
-                try self.processAssociatedItemsFirstPass(qualified_idx, nested_relative_name, assoc.statements);
+                try self.processAssociatedItemsFirstPass(qualified_idx, nested_relative_name, type_ident, assoc.statements);
             }
         }
     }
