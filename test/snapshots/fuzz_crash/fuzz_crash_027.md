@@ -231,7 +231,6 @@ TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
-TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
 # PROBLEMS
 **LEADING ZERO**
@@ -1028,71 +1027,6 @@ But the function's return type is:
     Try({}, _d)
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:100:9:148:2:**
-```roc
-main! = |_| { # Yeah Ie
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # Comd
-		tag
-
-	# Jusnt!
-
-	...
-	match_time(
-		..., #
-	)
-	some_func(
-		dbg # bug
-			42, # Aft expr
-	)
-	crash "Unreachtement
-	tag_with = Ok(number)
-	ited = "Hello, ${world}"
-	list = [
-		add_one(
-			dbg # Afin list
-e[, # afarg
-		),	456, # ee
-	]
-	for n in list {
-	line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-	m_tuple = (
-		123,
-		"World",
-		tag1,
-		Ok(world), # Thisnt
-		(nested, tuple),
-		[1, 2, 3],
-	)
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
-} # Commenl decl
-```
-
-It has the type:
-
-    List(Error) => Error
-
-But the annotation say it should be:
-
-    List(Error) -> Error
-
-**Hint:** This function is effectful, but a pure function is expected.
 
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.
