@@ -19,11 +19,15 @@ fn main() {
     // dunce can be removed once ziglang/zig#5109 is fixed
     let bitcode_path = dunce::canonicalize(Path::new(".")).unwrap();
 
-    // workaround for github.com/ziglang/zig/issues/20501
+    // Keep Zig's global cache private to this build script.
     #[cfg(target_os = "macos")]
-    let zig_cache_dir = tempdir().expect("Failed to create temp directory for zig cache");
+    let zig_global_cache_dir =
+        tempdir().expect("Failed to create temp directory for zig global cache");
     #[cfg(target_os = "macos")]
-    std::env::set_var("ZIG_GLOBAL_CACHE_DIR", zig_cache_dir.path().as_os_str());
+    std::env::set_var(
+        "ZIG_GLOBAL_CACHE_DIR",
+        zig_global_cache_dir.path().as_os_str(),
+    );
 
     // OBJECT FILES
     #[cfg(windows)]
@@ -56,9 +60,9 @@ fn main() {
     .unwrap();
 
     #[cfg(target_os = "macos")]
-    zig_cache_dir
+    zig_global_cache_dir
         .close()
-        .expect("Failed to delete temp dir zig_cache_dir.");
+        .expect("Failed to delete temp dir zig_global_cache_dir.");
 }
 
 fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name: &str) {
@@ -70,17 +74,30 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
 
     println!("Compiling zig object `{zig_object}` to: {src_obj}");
 
-    // workaround for github.com/ziglang/zig/issues/20501
-    #[cfg(target_os = "macos")]
-    let _ = fs::remove_dir_all("./.zig-cache");
-
     let mut zig_cmd = zig();
 
     zig_cmd
         .current_dir(bitcode_path)
         .args(["build", zig_object, "-Drelease=true"]);
 
+    // The bitcode and bitcode_bc build scripts can run at the same time.
+    // Use a fresh local cache for every Zig command; sharing .zig-cache can
+    // make in-flight Zig builds fail with FileNotFound on macOS CI.
+    #[cfg(target_os = "macos")]
+    let zig_local_cache_dir =
+        tempdir().expect("Failed to create temp directory for zig local cache");
+    #[cfg(target_os = "macos")]
+    zig_cmd.env(
+        "ZIG_LOCAL_CACHE_DIR",
+        zig_local_cache_dir.path().as_os_str(),
+    );
+
     run_command(zig_cmd, 0);
+
+    #[cfg(target_os = "macos")]
+    zig_local_cache_dir
+        .close()
+        .expect("Failed to delete temp dir zig_local_cache_dir.");
 
     println!("Moving zig object `{zig_object}` to: {dest_obj}");
 

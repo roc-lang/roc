@@ -15,7 +15,7 @@ jobs:
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: run fuzz tests - ok to merge if this one fails # for now!
         run: |

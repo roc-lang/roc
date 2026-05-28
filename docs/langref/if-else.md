@@ -60,7 +60,7 @@ You write an `if` without an `else`, but only when the body of the `if` evaluate
 ```roc
 if foo {
     do_something!()
-} 
+}
 ```
 
 It is essentially equivalent to:

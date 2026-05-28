@@ -24,8 +24,10 @@ fn reserveTestCacheRoot(allocator: std.mem.Allocator) ![]u8 {
 
     while (true) {
         const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
+        const random = std.crypto.random.int(u64);
+        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x}-{d}", .{
             @as(u64, @intCast(std.time.nanoTimestamp())),
+            random,
             cache_dir_id,
         });
         defer allocator.free(cache_leaf);
