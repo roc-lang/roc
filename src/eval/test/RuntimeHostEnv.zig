@@ -111,6 +111,7 @@ termination: Termination = .returned,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
 allocation_call_count: u32 = 0,
+longjmp_on_crash: bool = true,
 
 pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
     // The allocation_tracker grows from inside rocAllocFn, which on Windows
@@ -153,6 +154,11 @@ pub fn checkForLeaks(self: *RuntimeHostEnv) LeakError!void {
 /// Public function `allocationCallCount`.
 pub fn allocationCallCount(self: *const RuntimeHostEnv) u32 {
     return self.allocation_call_count;
+}
+
+/// Controls whether the crash callback exits through the active crash boundary.
+pub fn setLongjmpOnCrash(self: *RuntimeHostEnv, enabled: bool) void {
+    self.longjmp_on_crash = enabled;
 }
 
 /// Public function `get_ops`.
@@ -214,7 +220,7 @@ pub const CrashBoundary = struct {
         self.env.restoreJumpBuf(self.prev_jmp_buf);
     }
 
-    pub fn set(self: *CrashBoundary) c_int {
+    pub inline fn set(self: *CrashBoundary) c_int {
         return setjmp(&self.env.jmp_buf);
     }
 };
@@ -263,9 +269,11 @@ fn rocCrashedFn(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) v
     self.appendEvent(.crashed, crashed_args.utf8_bytes[0..crashed_args.len]);
     self.termination = .crashed;
 
-    if (self.active_jmp_buf) |active_jmp_buf| {
-        self.active_jmp_buf = null;
-        longjmp(active_jmp_buf, 1);
+    if (self.longjmp_on_crash) {
+        if (self.active_jmp_buf) |active_jmp_buf| {
+            self.active_jmp_buf = null;
+            longjmp(active_jmp_buf, 1);
+        }
     }
 }
 

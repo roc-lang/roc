@@ -393,8 +393,9 @@ test "parseStandardArgsFromSlice parses --worker and --worker-backend without po
 /// callbacks for test execution, serialization, and deserialization.
 pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
     return struct {
-        /// Run one test in the forked child. Called with an arena allocator.
-        runTest: *const fn (Allocator, Spec) Result,
+        /// Run one test in the forked child. Called with an arena allocator
+        /// and the same timeout budget enforced by the parent watchdog.
+        runTest: *const fn (Allocator, Spec, u64) Result,
         /// Serialize a result to the pipe fd.
         serialize: *const fn (posix.fd_t, Result) void,
         /// Deserialize a result from the accumulated pipe buffer.
@@ -410,6 +411,10 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         /// Use setsid() + kill(-pid) for process group cleanup.
         /// Enable when children spawn subprocesses (e.g., roc build).
         use_process_groups: bool = false,
+        /// Extra parent-watchdog time after the child-visible timeout budget.
+        /// Runners that enforce finer-grained timeouts inside the child use
+        /// this to let the child serialize its attributed timeout result.
+        timeout_report_grace_ms: u64 = 0,
         /// On Windows, reuse child runner processes across tests. Disable this
         /// for runners whose tests need a fresh runner process per spec, so
         /// each logical test has one process boundary and one result frame.
@@ -454,7 +459,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             _ = std.c.raise(posix.SIG.INT);
         }
 
-        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize) bool {
+        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64) bool {
             if (comptime !has_fork) return false;
 
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
@@ -478,7 +483,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
                 const allocator = arena.allocator();
 
-                const result = cfg.runTest(allocator, specs[test_idx]);
+                const result = cfg.runTest(allocator, specs[test_idx], timeout_ms);
                 cfg.serialize(pipe_fds[1], result);
                 posix.close(pipe_fds[1]);
                 std.c._exit(0);
@@ -545,7 +550,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 if (worker_argv_template) |tmpl| {
                     runChildPool(specs, results, max_children, timeout_ms, gpa, tmpl);
                 } else {
-                    runSequential(specs, results, gpa);
+                    runSequential(specs, results, gpa, timeout_ms);
                 }
                 return;
             }
@@ -585,7 +590,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             // Fill initial slots
             for (slots) |*slot| {
                 if (next_test >= specs.len) break;
-                if (!launchChild(slot, specs, next_test)) {
+                if (!launchChild(slot, specs, next_test, timeout_ms)) {
                     results[next_test] = cfg.default_result;
                     completed += 1;
                 }
@@ -626,7 +631,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         completed += 1;
 
                         if (next_test < specs.len) {
-                            if (!launchChild(&slots[slot_idx], specs, next_test)) {
+                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms)) {
                                 results[next_test] = cfg.default_result;
                                 completed += 1;
                             }
@@ -641,7 +646,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     for (slots) |*slot_opt| {
                         if (slot_opt.*) |*slot| {
                             const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
-                            if (elapsed > timeout_ms) {
+                            const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
+                            if (elapsed > kill_after_ms and !slot.timed_out) {
                                 slot.timed_out = true;
                                 const test_name = cfg.getName(specs[slot.test_index]);
                                 std.debug.print("\n  HANG  {s}  ({d}ms) — killing\n", .{ test_name, elapsed });
@@ -676,13 +682,13 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// Sequential fallback for platforms without fork (Windows).
         /// Effectively unused under the Child-based path; kept as defense in
         /// depth for callers that don't build a `worker_argv_template`.
-        fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator) void {
+        fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator, timeout_ms: u64) void {
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);
                 if (cfg.onTestStarted) |cb| cb(spec);
-                const unstable_result = cfg.runTest(arena.allocator(), spec);
+                const unstable_result = cfg.runTest(arena.allocator(), spec, timeout_ms);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
             }
         }
@@ -727,7 +733,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             template: []const []const u8,
         ) void {
             if (comptime builtin.os.tag != .windows) {
-                runSequential(specs, results, gpa);
+                runSequential(specs, results, gpa, timeout_ms);
                 return;
             }
             if (!cfg.windows_persistent_workers) {
@@ -953,7 +959,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 for (state.slots) |*slot_opt| {
                     if (slot_opt.*) |*slot| {
                         const elapsed: u64 = @intCast(@max(0, now - slot.start_ms));
-                        if (elapsed > state.timeout_ms and !slot.timed_out) {
+                        const kill_after_ms = state.timeout_ms +| cfg.timeout_report_grace_ms;
+                        if (elapsed > kill_after_ms and !slot.timed_out) {
                             slot.timed_out = true;
                             _ = slot.child.kill() catch {};
                         }
@@ -1013,9 +1020,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
             };
 
+            const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
             var watch = Watch{
                 .child_ptr = &child,
-                .deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms)),
+                .deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(kill_after_ms)),
                 .timed_out = std.atomic.Value(bool).init(false),
                 .done = std.atomic.Value(bool).init(false),
             };

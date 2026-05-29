@@ -12,8 +12,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const bindings = @import("bindings.zig");
+const llvm_embedded = @import("llvm_embedded");
 
 const Allocator = std.mem.Allocator;
+
+var temp_path_counter = std.atomic.Value(usize).init(0);
 
 // Platform-specific i128 ABI Handling
 //
@@ -143,35 +146,6 @@ fn emitMergedBitcodeToObjectFile(
     defer module.dispose();
     // Note: mem_buf is consumed by parseBitcodeInContext2
 
-    // Load and merge builtin bitcode into the user module.
-    // This makes all builtin functions available.
-    {
-        const builtin_bitcode = @embedFile("builtins.bc");
-        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
-            builtin_bitcode.ptr,
-            builtin_bitcode.len,
-            "roc_builtins",
-            bindings.Bool.False,
-        );
-
-        var builtin_module: *bindings.Module = undefined;
-        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
-            builtin_mem_buf.dispose();
-            return Error.BitcodeParseError;
-        }
-        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
-
-        // Set the builtin module's target triple and data layout to match the user module.
-        builtin_module.setTargetTriple(module.getTargetTriple());
-        builtin_module.setDataLayout(module.getDataLayout());
-
-        // Link builtins into user module (destroys builtin_module on success)
-        if (module.link(builtin_module).toBool()) {
-            return Error.ModuleLinkFailed;
-        }
-        // Note: builtin_module is now invalid - do NOT dispose it
-    }
-
     const triple, const dispose_triple = blk: {
         if (options.use_module_target_triple) {
             break :blk .{ module.getTargetTriple(), false };
@@ -180,6 +154,9 @@ fn emitMergedBitcodeToObjectFile(
         break :blk .{ bindings.GetDefaultTargetTriple(), true };
     };
     defer if (dispose_triple) bindings.disposeMessage(triple);
+    if (!options.use_module_target_triple) {
+        module.setTargetTriple(triple);
+    }
 
     // Get target from triple
     var target: *bindings.Target = undefined;
@@ -212,6 +189,47 @@ fn emitMergedBitcodeToObjectFile(
         false, // emulated_tls
     );
     defer target_machine.dispose();
+
+    // Load and merge builtin bitcode into the user module.
+    // This makes all builtin functions available.
+    {
+        const builtin_bitcode = llvm_embedded.builtins_bc;
+        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+            builtin_bitcode.ptr,
+            builtin_bitcode.len,
+            "roc_builtins",
+            bindings.Bool.False,
+        );
+
+        var builtin_module: *bindings.Module = undefined;
+        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
+            builtin_mem_buf.dispose();
+            return Error.BitcodeParseError;
+        }
+        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
+
+        // Set the builtin module's target triple and data layout to match the user module.
+        builtin_module.setTargetTriple(triple);
+        const module_data_layout = module.getDataLayout();
+        if (std.mem.len(module_data_layout) == 0) {
+            module.setDataLayout(builtin_module.getDataLayout());
+        } else {
+            builtin_module.setDataLayout(module_data_layout);
+        }
+
+        // Link builtins into user module (destroys builtin_module on success)
+        if (module.link(builtin_module).toBool()) {
+            return Error.ModuleLinkFailed;
+        }
+        // Note: builtin_module is now invalid - do NOT dispose it
+    }
+
+    var verify_error: [*:0]const u8 = undefined;
+    if (module.verify(.ReturnStatus, &verify_error).toBool()) {
+        std.debug.print("{s}\n", .{verify_error});
+        bindings.disposeMessage(verify_error);
+        return Error.CompilationFailed;
+    }
 
     // Set up emit options
     const default_coverage = bindings.TargetMachine.EmitOptions.Coverage{
@@ -253,6 +271,7 @@ fn emitMergedBitcodeToObjectFile(
     // Emit merged module to object file
     var emit_error: [*:0]const u8 = undefined;
     if (target_machine.emitToFile(module, &emit_error, &emit_options)) {
+        std.debug.print("{s}\n", .{emit_error});
         bindings.disposeMessage(emit_error);
         return Error.CompilationFailed;
     }
@@ -406,7 +425,6 @@ fn linkSharedLibraryMacos(
             "-o",
             std.mem.sliceTo(shared_lib_path, 0),
             std.mem.sliceTo(object_path, 0),
-            "src/llvm_compile/darwin_compat.o",
         },
     }) catch return Error.LinkFailed;
     defer allocator.free(result.stdout);
@@ -428,18 +446,17 @@ fn linkSharedLibraryMacos(
 
 /// Create a unique temporary file path for an artifact output.
 fn createTempPath(allocator: Allocator, extension: []const u8) ![:0]const u8 {
-    // Generate a unique filename using timestamp
-    const timestamp = std.time.nanoTimestamp();
-    const timestamp_low: u64 = @truncate(@as(u128, @bitCast(timestamp)));
-    const random_suffix: u32 = @truncate(timestamp_low);
+    const counter = temp_path_counter.fetchAdd(1, .monotonic);
+    const random_hi = std.crypto.random.int(u64);
+    const random_lo = std.crypto.random.int(u64);
 
     // Use appropriate temp directory for each platform
     const tmp_prefix = if (builtin.os.tag == .windows) "C:\\Windows\\Temp\\roc_llvm_" else "/tmp/roc_llvm_";
 
     const str = try std.fmt.allocPrint(
         allocator,
-        "{s}{x}_{x}{s}",
-        .{ tmp_prefix, timestamp_low, random_suffix, extension },
+        "{s}{x}_{x}_{x}{s}",
+        .{ tmp_prefix, random_hi, random_lo, counter, extension },
     );
     // Convert to null-terminated by reallocating with extra byte
     const result = try allocator.allocSentinel(u8, str.len, 0);

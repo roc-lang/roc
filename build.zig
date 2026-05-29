@@ -2962,17 +2962,7 @@ pub fn build(b: *std.Build) void {
     });
     llvm_codegen_module.addImport("layout", roc_modules.layout);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
-
-    roc_modules.eval.addAnonymousImport("llvm_compile", .{
-        .root_source_file = b.path("src/llvm_compile/mod.zig"),
-        .imports = &.{
-            .{ .name = "layout", .module = roc_modules.layout },
-            .{ .name = "backend", .module = roc_modules.backend },
-            .{ .name = "lir", .module = roc_modules.lir },
-            .{ .name = "llvm_codegen", .module = llvm_codegen_module },
-            .{ .name = "build_options", .module = roc_modules.build_options },
-        },
-    });
+    llvm_codegen_module.addImport("builtins", roc_modules.builtins);
 
     const builtins_bc_obj = b.addObject(.{
         .name = "roc_builtins_bc",
@@ -2996,29 +2986,30 @@ pub fn build(b: *std.Build) void {
     _ = builtins_bc_obj.getEmittedBin();
     const builtins_bc_file = builtins_bc_obj.getEmittedLlvmBc();
 
-    const copy_builtins_bc = b.addUpdateSourceFiles();
-    copy_builtins_bc.addCopyFileToSource(builtins_bc_file, "src/llvm_compile/builtins.bc");
-    roc_exe.step.dependOn(&copy_builtins_bc.step);
+    const llvm_embedded_files = b.addWriteFiles();
+    _ = llvm_embedded_files.addCopyFile(builtins_bc_file, "builtins.bc");
 
-    if (target.result.os.tag == .macos) {
-        const darwin_compat_obj = b.addObject(.{
-            .name = "roc_llvm_darwin_compat",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/llvm_compile/darwin_compat.zig"),
-                .target = target,
-                .optimize = .ReleaseFast,
-                .strip = true,
-                .pic = true,
-                .single_threaded = true,
-                .link_libc = true,
-            }),
-        });
-        const darwin_compat_file = darwin_compat_obj.getEmittedBin();
-        const copy_darwin_compat = b.addUpdateSourceFiles();
-        copy_darwin_compat.addCopyFileToSource(darwin_compat_file, "src/llvm_compile/darwin_compat.o");
-        copy_builtins_bc.step.dependOn(&copy_darwin_compat.step);
-        roc_exe.step.dependOn(&copy_darwin_compat.step);
-    }
+    const llvm_embedded_source: []const u8 =
+        \\pub const builtins_bc = @embedFile("builtins.bc");
+        \\
+    ;
+
+    const llvm_embedded_module = b.createModule(.{
+        .root_source_file = llvm_embedded_files.add("llvm_embedded.zig", llvm_embedded_source),
+    });
+    roc_exe.step.dependOn(&llvm_embedded_files.step);
+
+    roc_modules.eval.addAnonymousImport("llvm_compile", .{
+        .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        .imports = &.{
+            .{ .name = "layout", .module = roc_modules.layout },
+            .{ .name = "backend", .module = roc_modules.backend },
+            .{ .name = "lir", .module = roc_modules.lir },
+            .{ .name = "llvm_codegen", .module = llvm_codegen_module },
+            .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "llvm_embedded", .module = llvm_embedded_module },
+        },
+    });
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -3034,7 +3025,6 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
-    snapshot_exe.step.dependOn(&copy_builtins_bc.step);
     try addLlvmSupportToStep(
         b,
         snapshot_exe,
@@ -3043,7 +3033,7 @@ pub fn build(b: *std.Build) void {
         user_llvm_path,
         roc_modules,
         llvm_codegen_module,
-        &copy_builtins_bc.step,
+        llvm_embedded_module,
         zstd,
     );
     if (snapshot_exe.root_module.resolved_target.?.result.os.tag != .windows or
@@ -3078,7 +3068,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/build/test_harness.zig"),
     }));
     eval_test_exe.step.dependOn(&write_compiled_builtins.step);
-    eval_test_exe.step.dependOn(&copy_builtins_bc.step);
     try addLlvmSupportToStep(
         b,
         eval_test_exe,
@@ -3087,7 +3076,7 @@ pub fn build(b: *std.Build) void {
         user_llvm_path,
         roc_modules,
         llvm_codegen_module,
-        &copy_builtins_bc.step,
+        llvm_embedded_module,
         zstd,
     );
     if (eval_test_exe.root_module.resolved_target.?.result.os.tag != .windows or
@@ -3126,7 +3115,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/build/test_harness.zig"),
     }));
     eval_host_effects_exe.step.dependOn(&write_compiled_builtins.step);
-    eval_host_effects_exe.step.dependOn(&copy_builtins_bc.step);
     try addLlvmSupportToStep(
         b,
         eval_host_effects_exe,
@@ -3135,7 +3123,7 @@ pub fn build(b: *std.Build) void {
         user_llvm_path,
         roc_modules,
         llvm_codegen_module,
-        &copy_builtins_bc.step,
+        llvm_embedded_module,
         zstd,
     );
     if (eval_host_effects_exe.root_module.resolved_target.?.result.os.tag != .windows or
@@ -3487,7 +3475,7 @@ pub fn build(b: *std.Build) void {
             user_llvm_path,
             roc_modules,
             llvm_codegen_module,
-            &copy_builtins_bc.step,
+            llvm_embedded_module,
             zstd,
         );
         if (snapshot_test.root_module.resolved_target.?.result.os.tag != .windows or
@@ -3536,7 +3524,7 @@ pub fn build(b: *std.Build) void {
             user_llvm_path,
             roc_modules,
             llvm_codegen_module,
-            &copy_builtins_bc.step,
+            llvm_embedded_module,
             zstd,
         );
         if (builtin_doc_test.root_module.resolved_target.?.result.os.tag != .windows or
@@ -3577,7 +3565,23 @@ pub fn build(b: *std.Build) void {
         });
         roc_modules.addAll(cli_test);
         cli_test.linkLibrary(zstd.artifact("zstd"));
-        add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
+        try addLlvmSupportToStep(
+            b,
+            cli_test,
+            target,
+            use_system_llvm,
+            user_llvm_path,
+            roc_modules,
+            llvm_codegen_module,
+            llvm_embedded_module,
+            zstd,
+        );
+        if (cli_test.root_module.resolved_target.?.result.os.tag != .windows or
+            cli_test.root_module.resolved_target.?.result.abi != .msvc)
+        {
+            cli_test.root_module.link_libcpp = true;
+        }
+        add_tracy(b, roc_modules.build_options, cli_test, target, true, flag_enable_tracy);
         cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cli_test.step.dependOn(&write_compiled_builtins.step);
 
@@ -3781,7 +3785,6 @@ pub fn build(b: *std.Build) void {
                     .root_source_file = b.path("src/build/test_harness.zig"),
                 }));
                 eval_coverage_exe.step.dependOn(&write_compiled_builtins.step);
-                eval_coverage_exe.step.dependOn(&copy_builtins_bc.step);
                 try addLlvmSupportToStep(
                     b,
                     eval_coverage_exe,
@@ -3790,7 +3793,7 @@ pub fn build(b: *std.Build) void {
                     user_llvm_path,
                     roc_modules,
                     llvm_codegen_module,
-                    &copy_builtins_bc.step,
+                    llvm_embedded_module,
                     zstd,
                 );
                 if (eval_coverage_exe.root_module.resolved_target.?.result.os.tag != .windows or
@@ -4452,13 +4455,12 @@ fn addLlvmSupportToStep(
     user_llvm_path: ?[]const u8,
     roc_modules: anytype,
     llvm_codegen_module: *std.Build.Module,
-    builtins_bc_step: *Step,
+    llvm_embedded_module: *std.Build.Module,
     zstd: *Dependency,
 ) !void {
     const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
     step.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
     step.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-    step.step.dependOn(builtins_bc_step);
     try addStaticLlvmOptionsToModule(step.root_module);
     step.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -4468,6 +4470,7 @@ fn addLlvmSupportToStep(
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "llvm_embedded", .module = llvm_embedded_module },
         },
     });
     step.linkLibrary(zstd.artifact("zstd"));

@@ -345,6 +345,16 @@ pub fn roc_builtins_dbg_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.
     roc_ops.dbg(str_ptr.asSlice());
 }
 
+/// Report a failed `expect` using static message bytes owned by generated code.
+pub fn roc_builtins_roc_expect_failed(msg_bytes: [*]const u8, msg_len: usize, roc_ops: *RocOps) callconv(.c) void {
+    roc_ops.expectFailed(msg_bytes[0..msg_len]);
+}
+
+/// Report a Roc crash using static message bytes owned by generated code.
+pub fn roc_builtins_roc_crashed(msg_bytes: [*]const u8, msg_len: usize, roc_ops: *RocOps) callconv(.c) void {
+    roc_ops.crash(msg_bytes[0..msg_len]);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // List Wrappers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -789,6 +799,11 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
             .length = slice.len,
         };
     }
+}
+
+/// Build a RocStr from static literal bytes owned by generated code.
+pub fn roc_builtins_str_from_literal(out: *RocStr, bytes: [*]const u8, len: usize, roc_ops: *RocOps) callconv(.c) void {
+    writeRocStrFromSlice(out, bytes[0..len], roc_ops);
 }
 
 /// Wrapper: decToStrC (decomposed i128)

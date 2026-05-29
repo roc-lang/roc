@@ -12,7 +12,7 @@
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
 //!   3. **WASM backend** — statement-only LIR compiled to wasm.
-//!   4. **LLVM backend** — currently not implemented for statement-only LIR.
+//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
 //! This catches bugs where a backend produces a value of the right type but
@@ -43,8 +43,8 @@
 //! ## Hang detection
 //!
 //! Integrated into the parent's poll() loop. If a child has been running
-//! longer than the timeout (default 30s), the parent SIGKILLs it. No
-//! separate watchdog thread is needed.
+//! longer than the timeout (default 30s for interpreter/dev/wasm, 7 minutes
+//! for LLVM), the parent SIGKILLs it. No separate watchdog thread is needed.
 //!
 //! ## Usage
 //!
@@ -138,14 +138,20 @@ const BackendDetail = struct {
     value: ?[]const u8 = null,
     duration_ns: u64 = 0,
 
-    const Status = enum { pass, fail, wrong_value, skip, not_implemented };
+    const Status = enum { pass, fail, wrong_value, timeout, skip, not_implemented, not_run };
 };
 
 const NUM_BACKENDS = 4; // interpreter, dev, wasm, llvm
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev", "wasm", "llvm" };
+const LLVM_BACKEND_INDEX = 3;
+/// Ubuntu ARM Nix CI measured these LLVM crash-test evaluations at roughly
+/// 305-310s. Use a 7 minute LLVM-only budget so that slow LLVM codegen can
+/// finish while the other backends keep the normal eval timeout.
+const LLVM_BACKEND_TIMEOUT_MS: u64 = 420_000;
+const BACKEND_TIMEOUT_REPORT_GRACE_MS: u64 = 5_000;
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
-const LLVM_BACKEND_IMPLEMENTED = false;
+const LLVM_BACKEND_IMPLEMENTED = eval.backendAvailable(.llvm);
 
 /// Set from `cli.verbose` in `main` after arg parsing. Read by `onTestStarted`,
 /// which is registered as a comptime Pool callback and can't take a closure.
@@ -224,11 +230,35 @@ const ForkResult = union(enum) {
     success: []const u8,
     /// Child exited non-zero (eval function returned an error).
     child_error: []const u8,
+    /// Child exceeded the backend timeout and was killed.
+    timed_out: void,
     /// Child was killed by a signal (e.g. SIGSEGV=11, SIGKILL=9).
     signal_death: u8,
     /// fork() or pipe() syscall failed.
     fork_failed: void,
 };
+
+fn remainingPollTimeoutMs(deadline_ms: ?i64) i32 {
+    const deadline = deadline_ms orelse return -1;
+    const remaining = deadline - std.time.milliTimestamp();
+    if (remaining <= 0) return 0;
+    return @intCast(@min(remaining, std.math.maxInt(i32)));
+}
+
+fn killForkedBackend(pid: posix.pid_t) void {
+    posix.kill(-pid, posix.SIG.KILL) catch {
+        posix.kill(pid, posix.SIG.KILL) catch {};
+    };
+}
+
+fn drainClosedPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) bool {
+    var read_buf: [4096]u8 = undefined;
+    while (true) {
+        const bytes_read = posix.read(fd, &read_buf) catch return false;
+        if (bytes_read == 0) return true;
+        buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch return false;
+    }
+}
 
 /// Result of a forked backend evaluation that includes host-observed allocation stats.
 const ForkStatsResult = union(enum) {
@@ -251,6 +281,7 @@ const ForkStatsResult = union(enum) {
 fn forkAndEval(
     eval_fn: BackendEvalFn,
     lowered: *const LoweredProgram,
+    timeout_ms: u64,
 ) ForkResult {
     if (comptime !has_fork or coverage_mode) {
         const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
@@ -283,6 +314,7 @@ fn forkAndEval(
     if (fork_result == 0) {
         // === Child process ===
         posix.close(pipe_read);
+        _ = std.c.setsid();
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
         // immediately so the OS reclaims everything — no deinit needed.
@@ -314,25 +346,71 @@ fn forkAndEval(
 
     // === Parent process ===
     posix.close(pipe_write);
+    defer posix.close(pipe_read);
 
     // Read pipe FIRST (before waitpid) to avoid deadlock when child output
-    // exceeds the pipe buffer (~64KB). The read returns EOF when the child
-    // exits and the write end is closed.
+    // exceeds the pipe buffer (~64KB). Use poll() so a hung backend child is
+    // attributed here instead of waiting for the outer per-test watchdog.
     var result_buf: std.ArrayListUnmanaged(u8) = .empty;
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
+    const deadline_ms: ?i64 = if (timeout_ms > 0)
+        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
+    else
+        null;
     while (true) {
-        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+        var poll_fds = [_]posix.pollfd{.{
+            .fd = pipe_read,
+            .events = posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL,
+            .revents = 0,
+        }};
+        const poll_timeout = remainingPollTimeoutMs(deadline_ms);
+        if (poll_timeout == 0) {
+            killForkedBackend(fork_result);
+            _ = posix.waitpid(fork_result, 0);
+            result_buf.deinit(std.heap.page_allocator);
+            return .{ .timed_out = {} };
+        }
+
+        const poll_count = posix.poll(&poll_fds, poll_timeout) catch {
             read_error = true;
             break;
         };
-        if (bytes_read == 0) break;
-        result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+        if (poll_count == 0) {
+            killForkedBackend(fork_result);
+            _ = posix.waitpid(fork_result, 0);
+            result_buf.deinit(std.heap.page_allocator);
+            return .{ .timed_out = {} };
+        }
+
+        const revents = poll_fds[0].revents;
+        if (revents & posix.POLL.IN != 0) {
+            const bytes_read = posix.read(pipe_read, &read_buf) catch {
+                read_error = true;
+                break;
+            };
+            if (bytes_read == 0) break;
+            result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+                read_error = true;
+                break;
+            };
+        }
+        if (revents & posix.POLL.HUP != 0) {
+            if (!drainClosedPipe(pipe_read, &result_buf)) read_error = true;
+            break;
+        }
+        if (revents & (posix.POLL.ERR | posix.POLL.NVAL) != 0) {
             read_error = true;
             break;
-        };
+        }
     }
-    posix.close(pipe_read);
+
+    if (read_error) {
+        killForkedBackend(fork_result);
+        _ = posix.waitpid(fork_result, 0);
+        result_buf.deinit(std.heap.page_allocator);
+        return .{ .child_error = "ChildExecFailed" };
+    }
 
     // Now reap the child.
     const wait_result = posix.waitpid(fork_result, 0);
@@ -354,7 +432,7 @@ fn forkAndEval(
         };
         return .{ .child_error = owned };
     }
-    if (exit_code != 0 or read_error) {
+    if (exit_code != 0) {
         result_buf.deinit(std.heap.page_allocator);
         return .{ .child_error = "ChildExecFailed" };
     }
@@ -494,10 +572,10 @@ fn forkAndEvalWithStats(
 // Test execution — unified interpreter + backend comparison
 //
 
-fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
+fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestOutcome {
     // If every backend is skipped, still validate the front-end so we catch
     // syntax errors in skipped tests rather than silently ignoring them.
-    if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm) {
+    if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm and tc.skip.llvm) {
         const timings = switch (tc.expected) {
             .inspect_str => blk: {
                 var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
@@ -572,7 +650,12 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
         };
     }
 
-    const outcome = runSingleTestInner(allocator, tc) catch |err| {
+    const deadline_ms: ?i64 = if (timeout_ms > 0)
+        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
+    else
+        null;
+
+    const outcome = runSingleTestInner(allocator, tc, deadline_ms) catch |err| {
         return .{
             .status = .fail,
             .message = @errorName(err),
@@ -600,13 +683,56 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
     return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
 }
 
-fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase) !TestOutcome {
+fn backendImplemented(index: usize) bool {
+    return switch (index) {
+        0 => true,
+        1 => DEV_BACKEND_IMPLEMENTED,
+        2 => WASM_BACKEND_IMPLEMENTED,
+        3 => LLVM_BACKEND_IMPLEMENTED,
+        else => unreachable,
+    };
+}
+
+fn initBackendRows(skips: [NUM_BACKENDS]bool) [NUM_BACKENDS]BackendDetail {
+    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    for (&backends, 0..) |*backend, i| {
+        backend.* = if (!backendImplemented(i))
+            .{ .status = .not_implemented }
+        else if (skips[i])
+            .{ .status = .skip }
+        else
+            .{ .status = .not_run };
+    }
+    return backends;
+}
+
+fn remainingBackendBudgetMs(deadline_ms: ?i64) u64 {
+    const deadline = deadline_ms orelse return 0;
+    const remaining = deadline - std.time.milliTimestamp();
+    return if (remaining <= 0) 0 else @intCast(remaining);
+}
+
+fn deadlineExpired(deadline_ms: ?i64) bool {
+    return if (deadline_ms) |deadline| std.time.milliTimestamp() >= deadline else false;
+}
+
+fn backendUsesStandardTimeout(index: usize) bool {
+    return index != LLVM_BACKEND_INDEX;
+}
+
+fn backendTimeoutBudgetMs(index: usize, standard_deadline_ms: ?i64) u64 {
+    if (standard_deadline_ms == null) return 0;
+    if (index == LLVM_BACKEND_INDEX) return LLVM_BACKEND_TIMEOUT_MS;
+    return remainingBackendBudgetMs(standard_deadline_ms);
+}
+
+fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, deadline_ms: ?i64) !TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip),
+        .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, deadline_ms),
         .allocations_at_most => |expected| runAllocationTest(allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
-        .crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false),
-        .problem_and_crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true),
+        .crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, deadline_ms),
+        .problem_and_crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, deadline_ms),
     };
 }
 
@@ -750,6 +876,7 @@ fn runInspectTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
     skip: TestCase.Skip,
+    deadline_ms: ?i64,
 ) !TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
     defer compiled.deinit(allocator);
@@ -764,41 +891,34 @@ fn runInspectTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
         helpers.wasmEvaluatorInspectedStr,
-        helpers.devEvaluatorInspectedStr, // llvm placeholder
+        helpers.llvmEvaluatorInspectedStr,
     };
 
-    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    var backends = initBackendRows(skips);
     var first_ok: ?[]const u8 = null;
     var any_failure = false;
+    var any_timeout = false;
 
     for (0..NUM_BACKENDS) |i| {
-        if (i == 1 and !DEV_BACKEND_IMPLEMENTED) {
-            backends[i] = .{ .status = .not_implemented };
+        if (backends[i].status != .not_run) {
             continue;
         }
-        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) {
-            backends[i] = .{ .status = .not_implemented };
-            continue;
-        }
-        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) {
-            backends[i] = .{ .status = .not_implemented };
-            continue;
-        }
-        if (skips[i]) {
-            backends[i] = .{ .status = .skip };
-            continue;
+        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline_ms)) {
+            backends[i] = .{ .status = .timeout };
+            any_timeout = true;
+            break;
         }
 
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered);
+        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
         const dur = timer.read();
         trace.log("finished backend {s} for inspected source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 
@@ -826,6 +946,11 @@ fn runInspectTest(
                 backends[i] = .{ .status = .fail, .value = err_name, .duration_ns = dur };
                 any_failure = true;
             },
+            .timed_out => {
+                backends[i] = .{ .status = .timeout, .duration_ns = dur };
+                any_timeout = true;
+                break;
+            },
             .signal_death => |sig| {
                 var sig_buf: [32]u8 = undefined;
                 const sig_str = std.fmt.bufPrint(&sig_buf, "signal: {d}", .{sig}) catch "signal: ?";
@@ -849,6 +974,15 @@ fn runInspectTest(
         .llvm_ns = backends[3].duration_ns,
     };
 
+    if (any_timeout) {
+        return .{
+            .status = .timeout,
+            .timings = final_timings,
+            .has_backend_details = true,
+            .backends = backends,
+            .expected_str = display_expected,
+        };
+    }
     if (any_failure) {
         return .{
             .status = .fail,
@@ -919,6 +1053,7 @@ fn runCrashTest(
     imports: []const helpers.ModuleSource,
     skip: TestCase.Skip,
     require_problems: bool,
+    deadline_ms: ?i64,
 ) !TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
     defer compiled.deinit(allocator);
@@ -977,39 +1112,32 @@ fn runCrashTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
         helpers.wasmEvaluatorInspectedStr,
-        helpers.devEvaluatorInspectedStr, // llvm placeholder
+        helpers.llvmEvaluatorInspectedStr,
     };
 
-    var backends: [NUM_BACKENDS]BackendDetail = undefined;
+    var backends = initBackendRows(skips);
     var any_failure = false;
+    var any_timeout = false;
 
     for (0..NUM_BACKENDS) |i| {
-        if (i == 1 and !DEV_BACKEND_IMPLEMENTED) {
-            backends[i] = .{ .status = .not_implemented };
+        if (backends[i].status != .not_run) {
             continue;
         }
-        if (i == 2 and !WASM_BACKEND_IMPLEMENTED) {
-            backends[i] = .{ .status = .not_implemented };
-            continue;
-        }
-        if (i == 3 and !LLVM_BACKEND_IMPLEMENTED) {
-            backends[i] = .{ .status = .not_implemented };
-            continue;
-        }
-        if (skips[i]) {
-            backends[i] = .{ .status = .skip };
-            continue;
+        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline_ms)) {
+            backends[i] = .{ .status = .timeout };
+            any_timeout = true;
+            break;
         }
 
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered);
+        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
         const dur = timer.read();
 
         switch (fork_result) {
@@ -1024,6 +1152,11 @@ fn runCrashTest(
             .success => |value| {
                 backends[i] = .{ .status = .wrong_value, .value = value, .duration_ns = dur };
                 any_failure = true;
+            },
+            .timed_out => {
+                backends[i] = .{ .status = .timeout, .duration_ns = dur };
+                any_timeout = true;
+                break;
             },
             .signal_death => |sig| {
                 var sig_buf: [32]u8 = undefined;
@@ -1048,6 +1181,14 @@ fn runCrashTest(
         .llvm_ns = backends[3].duration_ns,
     };
 
+    if (any_timeout) {
+        return .{
+            .status = .timeout,
+            .timings = final_timings,
+            .has_backend_details = true,
+            .backends = backends,
+        };
+    }
     if (any_failure) {
         return .{
             .status = .fail,
@@ -1198,9 +1339,9 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 /// and serializes via the eval wire protocol.
 /// The "RUN <name>" log is emitted by the parent via `onTestStarted` (gated
 /// on --verbose) so it stays coherent across N workers; see `Pool` config below.
-fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
+fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestResult {
     var timer = Timer.start() catch unreachable;
-    const outcome = runSingleTest(allocator, tc);
+    const outcome = runSingleTest(allocator, tc, timeout_ms);
     const duration = timer.read();
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
     if (outcome.has_backend_details) backends = outcome.backends;
@@ -1322,7 +1463,7 @@ fn retryFailedForAttribution(
                 else
                     BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "no detail returned") catch null },
                 .crashed => BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "isolated worker crashed") catch null },
-                .timed_out => BackendDetail{ .status = .fail, .value = gpa.dupe(u8, "isolated worker timed out") catch null },
+                .timed_out => BackendDetail{ .status = .timeout },
             };
         }
 
@@ -1418,6 +1559,11 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .timeout_result = timeout_result,
     .stabilizeResult = &stabilizeResult,
     .getName = getTestName,
+    // Backend children enforce the real backend timeout. The outer worker gets
+    // enough extra time for the LLVM-only budget plus a short cleanup/reporting
+    // window, so it can serialize the backend row that timed out instead of
+    // being killed at the same instant.
+    .timeout_report_grace_ms = LLVM_BACKEND_TIMEOUT_MS + BACKEND_TIMEOUT_REPORT_GRACE_MS,
     .onTestStarted = &onTestStarted,
 });
 
@@ -1444,8 +1590,6 @@ fn printHelp() void {
         \\Runs eval tests across backends (interpreter, dev, wasm, llvm) in parallel
         \\and compares results via Str.inspect. Each backend evaluation runs in
         \\a forked child process for crash isolation.
-        \\(WASM and LLVM backends are currently marked NOT_IMPLEMENTED until
-        \\ statement-only code generation is implemented for each.)
         \\
         \\USAGE:
         \\  zig build test-eval               Run with defaults.
@@ -1459,7 +1603,9 @@ fn printHelp() void {
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
-        \\  --timeout <MS>        Per-test hang timeout in ms (default: 30000, 120000 on musl).
+        \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
+        \\                        Default: 30000, 120000 on musl.
+        \\                        LLVM uses a separate 420000ms backend budget.
         \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
@@ -1476,6 +1622,7 @@ fn printHelp() void {
         \\    interp   - interpreter evaluation
         \\    dev      - dev backend codegen + native execution
         \\    wasm     - wasm backend codegen + bytebox execution
+        \\    llvm     - LLVM backend codegen + native execution
         \\
         \\  A performance summary table is printed after all tests with min, max,
         \\  mean, median, standard deviation, P95, and total for each phase, plus
@@ -1491,7 +1638,7 @@ fn printHelp() void {
         \\    PASS  - all backends ran and agreed
         \\    FAIL  - value mismatch or backend disagreement
         \\    CRASH - segfault or panic in generated code (detected via fork isolation)
-        \\    HANG  - test exceeded the per-test timeout (killed by watchdog)
+        \\    HANG  - test or backend exceeded the per-test timeout
         \\    SKIP  - one or more backends were skipped
         \\
         \\DEBUGGING:
@@ -1522,7 +1669,7 @@ fn printHelp() void {
 ///       interpreter:    PASS (12.0ms)
 ///       dev:            PASS (41.3ms)
 ///       wasm:           FAIL 'WasmExecFailed' (25.2ms)
-///       llvm:           NOT_IMPLEMENTED
+///       llvm:           PASS (38.7ms)
 fn writeFailureDetail(r: TestResult) void {
     if (r.expected_str) |es| {
         std.debug.print("        expected:       {s}\n", .{es});
@@ -1550,8 +1697,14 @@ fn writeFailureDetail(r: TestResult) void {
                 if (bd.duration_ns > 0) std.debug.print(" ({d:.1}ms)", .{ms});
                 std.debug.print("\n", .{});
             },
+            .timeout => {
+                std.debug.print("        {s}:{s}TIMEOUT", .{ name, padding(name.len) });
+                if (bd.duration_ns > 0) std.debug.print(" ({d:.1}ms)", .{ms});
+                std.debug.print("\n", .{});
+            },
             .skip => std.debug.print("        {s}:{s}SKIP\n", .{ name, padding(name.len) }),
             .not_implemented => std.debug.print("        {s}:{s}NOT_IMPLEMENTED\n", .{ name, padding(name.len) }),
+            .not_run => std.debug.print("        {s}:{s}NOT_RUN\n", .{ name, padding(name.len) }),
         }
     }
 }
@@ -1573,6 +1726,7 @@ fn writeTimingBreakdown(t: EvalTimings) void {
         .{ .name = "interp", .ns = t.interpreter_ns },
         .{ .name = "dev", .ns = t.dev_ns },
         .{ .name = "wasm", .ns = t.wasm_ns },
+        .{ .name = "llvm", .ns = t.llvm_ns },
     };
     var first = true;
     for (fields) |f| {
@@ -1606,6 +1760,8 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     defer dev_times.deinit(gpa);
     var wasm_times: std.ArrayListUnmanaged(u64) = .empty;
     defer wasm_times.deinit(gpa);
+    var llvm_times: std.ArrayListUnmanaged(u64) = .empty;
+    defer llvm_times.deinit(gpa);
 
     for (results) |r| {
         const t = r.timings;
@@ -1615,6 +1771,7 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
         if (t.interpreter_ns > 0) try interp_times.append(gpa, t.interpreter_ns);
         if (t.dev_ns > 0) try dev_times.append(gpa, t.dev_ns);
         if (t.wasm_ns > 0) try wasm_times.append(gpa, t.wasm_ns);
+        if (t.llvm_ns > 0) try llvm_times.append(gpa, t.llvm_ns);
     }
 
     std.debug.print("\n=== Performance Summary (ms) ===\n", .{});
@@ -1625,6 +1782,7 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     harness.printStatsRow("interp", computeTimingStats(interp_times.items));
     harness.printStatsRow("dev", computeTimingStats(dev_times.items));
     harness.printStatsRow("wasm", computeTimingStats(wasm_times.items));
+    harness.printStatsRow("llvm", computeTimingStats(llvm_times.items));
 
     // Slowest 5 tests by total duration
     const TopEntry = struct {
@@ -1691,6 +1849,12 @@ const WorkerTrace = struct {
         std.debug.print("[worker {d}us +{d}us] {s}\n", .{ since_start_us, since_last_us, label });
     }
 };
+
+fn effectiveHangTimeoutMs(cli: harness.StandardArgs, max_children: usize) u64 {
+    if (cli.timeout_provided and cli.timeout_ms > 0) return cli.timeout_ms;
+    if (builtin.abi == .musl) return 120_000;
+    return if (max_children <= 1) 10_000 else 30_000;
+}
 
 fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
     for (args) |arg| {
@@ -1766,13 +1930,14 @@ pub fn main() !void {
         if (idx >= tests.len) std.process.exit(2);
         var tc = tests[idx];
         if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
+        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
 
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
         trace_worker.stamp("pre runSingleTest");
         var timer = Timer.start() catch unreachable;
-        const outcome = runSingleTest(arena.allocator(), tc);
+        const outcome = runSingleTest(arena.allocator(), tc, worker_timeout_ms);
         const duration = timer.read();
         trace_worker.stamp("post runSingleTest");
         var backends: [NUM_BACKENDS]BackendDetail = undefined;
@@ -1796,6 +1961,7 @@ pub fn main() !void {
     // until stdin EOFs. Amortizes the per-Child process-boot cost across
     // many tests on the same worker.
     if (cli.worker_stream) {
+        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
@@ -1818,7 +1984,7 @@ pub fn main() !void {
             _ = arena.reset(.retain_capacity);
 
             var timer = Timer.start() catch unreachable;
-            const outcome = runSingleTest(arena.allocator(), tests[idx]);
+            const outcome = runSingleTest(arena.allocator(), tests[idx], worker_timeout_ms);
             const duration = timer.read();
             var backends: [NUM_BACKENDS]BackendDetail = undefined;
             if (outcome.has_backend_details) backends = outcome.backends;
@@ -1854,7 +2020,7 @@ pub fn main() !void {
         for (tests, 0..) |tc, i| {
             _ = arena.reset(.retain_capacity);
 
-            const outcome = runSingleTest(arena.allocator(), tc);
+            const outcome = runSingleTest(arena.allocator(), tc, 0);
 
             switch (outcome.status) {
                 .pass => passed += 1,
@@ -1890,17 +2056,9 @@ pub fn main() !void {
 
     var wall_timer = Timer.start() catch unreachable;
 
-    // Default timeout: 30s under parallel load, 10s with single child.
     // Native musl CI has enough process-startup variance for the larger shared
     // harness default to be more reliable, especially for heavy boundary tests.
-    const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
-        cli.timeout_ms
-    else if (builtin.abi == .musl)
-        120_000
-    else if (max_children <= 1)
-        10_000
-    else
-        30_000;
+    const hang_timeout_ms: u64 = effectiveHangTimeoutMs(cli, max_children);
 
     // Build a worker_argv_template so Windows can spawn `Child` workers that
     // re-invoke this binary with `--worker <idx>`. On POSIX the template is
@@ -1964,6 +2122,7 @@ pub fn main() !void {
                 if (r.message) |msg| {
                     std.debug.print("        {s}\n", .{msg});
                 }
+                writeFailureDetail(r);
             },
             .skip => {
                 skipped += 1;

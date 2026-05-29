@@ -612,7 +612,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     };
 }
 
-fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase) TestResult {
+fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase, _: u64) TestResult {
     var timer = Timer.start() catch unreachable;
     const outcome = runSingleTest(allocator, tc);
     const duration_ns = timer.read();

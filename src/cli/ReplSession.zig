@@ -253,7 +253,8 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
 
     return switch (self.backend_kind) {
         .interpreter => eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered),
-        .dev, .llvm => eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered),
+        .dev => eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered),
+        .llvm => eval.test_helpers.llvmEvaluatorInspectedStr(self.allocator, &compiled.lowered),
         .wasm => eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.lowered),
     };
 }

@@ -287,7 +287,7 @@ pub const Interpreter = struct {
             }
         }
 
-        fn set(self: *CrashBoundary) c_int {
+        inline fn set(self: *CrashBoundary) c_int {
             if (sljmp.supported) {
                 return setjmp(&self.env.jmp_buf);
             }

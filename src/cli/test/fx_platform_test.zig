@@ -53,16 +53,14 @@ fn runDevBackendHostSelfTest(
     try env_map.put("ROC_CACHE_DIR", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
-    const build_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            util.roc_binary_path,
-            "build",
-            "--opt=dev",
-            "--no-cache",
-            output_arg,
-            roc_file,
-        },
+    const build_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "build",
+        "--opt=dev",
+        "--no-cache",
+        output_arg,
+        roc_file,
+    }, .{
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
@@ -86,12 +84,10 @@ fn runDevBackendHostSelfTest(
         },
     }
 
-    return try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            output_path,
-            self_test_flag,
-        },
+    return try util.runChildWithTimeout(allocator, &[_][]const u8{
+        output_path,
+        self_test_flag,
+    }, .{
         .max_output_bytes = 10 * 1024 * 1024,
     });
 }
@@ -127,16 +123,14 @@ fn buildAndRunDevBackendApp(
     try env_map.put("ROC_CACHE_DIR", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
-    const build_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            util.roc_binary_path,
-            "build",
-            "--opt=dev",
-            "--no-cache",
-            output_arg,
-            roc_file,
-        },
+    const build_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "build",
+        "--opt=dev",
+        "--no-cache",
+        output_arg,
+        roc_file,
+    }, .{
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
@@ -164,9 +158,7 @@ fn buildAndRunDevBackendApp(
         try inspect(allocator, output_path);
     }
 
-    return try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{output_path},
+    return try util.runChildWithTimeout(allocator, &[_][]const u8{output_path}, .{
         .max_output_bytes = 10 * 1024 * 1024,
     });
 }
@@ -780,14 +772,13 @@ test "fx platform run from different cwd" {
     defer env_map.deinit();
 
     // Run roc from the test/fx directory with a relative path to app.roc
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            roc_abs_path,
-            "app.roc",
-        },
+    const run_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
+        roc_abs_path,
+        "app.roc",
+    }, .{
         .cwd = "test/fx",
         .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1312,9 +1303,8 @@ test "fx platform inline expect fails in dev backend binary" {
     try util.checkSuccess(build_result);
 
     // Run the built binary
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{"./issue8517"},
+    const run_result = try util.runChildWithTimeout(allocator, &[_][]const u8{"./issue8517"}, .{
+        .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
