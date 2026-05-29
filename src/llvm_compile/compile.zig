@@ -374,6 +374,16 @@ fn linkSharedLibrary(
         .linux, .freebsd, .openbsd, .netbsd => {
             try args.append(allocator, "ld.lld");
             try args.append(allocator, "-shared");
+            // The eval-test-runner is a static-musl binary whose dlopen does not
+            // resolve a loaded library's own PLT/GOT (no dynamic-loader symbol
+            // binding), so default (preemptible, lazily-bound) intra-library
+            // calls like roc_builtins_dec_to_str leave GOT slots null and jump to
+            // 0x0. -Bsymbolic binds intra-library global references to their local
+            // definitions at link time (direct calls / RELATIVE relocs that musl
+            // always applies at load); -z now additionally forces eager binding.
+            try args.append(allocator, "-Bsymbolic");
+            try args.append(allocator, "-z");
+            try args.append(allocator, "now");
             try args.append(allocator, "-o");
             try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
