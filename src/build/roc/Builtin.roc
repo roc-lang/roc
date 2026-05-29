@@ -455,6 +455,122 @@ Builtin :: [].{
 				Skip({ rest, .. }) => Iter.fold(rest, acc, step)
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
+
+		## Returns an iterator that yields at most the first `n` items of this iterator.
+		## If the source has fewer than `n` items, all of them are yielded.
+		## ```roc
+		## expect Iter.fold(Iter.take_first(List.iter([1, 2, 3, 4, 5]), 3), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		##
+		## expect Iter.fold(Iter.take_first(List.iter([1, 2]), 5), [], |acc, item| acc.append(item)) == [1, 2]
+		## ```
+		take_first : Iter(item), U64 -> Iter(item)
+		take_first = |iterator, n|
+			if n == 0 {
+				range_done()
+			} else {
+				match iterator {
+					{ len_if_known, step } => {
+						len_if_known: match len_if_known {
+							Known(len) => Known(
+								if len < n {
+									len
+								} else {
+									n
+								},
+							)
+							Unknown => Unknown
+						},
+						step: ||
+							match step() {
+								Done => Done
+								Skip({ count, rest }) => Skip({ count, rest: Iter.take_first(rest, n) })
+								One({ item, rest }) => One({ item, rest: Iter.take_first(rest, n - 1) })
+							},
+					}
+				}
+			}
+
+		## Returns an iterator that skips the first `n` items of this iterator.
+		## If the source has `n` or fewer items, the result is empty.
+		## ```roc
+		## expect Iter.fold(Iter.drop_first(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [3, 4, 5]
+		##
+		## expect Iter.fold(Iter.drop_first(List.iter([1, 2, 3]), 10), [], |acc, item| acc.append(item)) == []
+		## ```
+		drop_first : Iter(item), U64 -> Iter(item)
+		drop_first = |iterator, n|
+			if n == 0 {
+				iterator
+			} else {
+				match iterator {
+					{ len_if_known, step } => {
+						len_if_known: match len_if_known {
+							Known(len) => Known(
+								if len < n {
+									0
+								} else {
+									len - n
+								},
+							)
+							Unknown => Unknown
+						},
+						step: ||
+							match step() {
+								Done => Done
+								Skip({ count, rest }) => Skip({ count, rest: Iter.drop_first(rest, n) })
+								One({ item: _, rest }) => Skip({ count: 1, rest: Iter.drop_first(rest, n - 1) })
+							},
+					}
+				}
+			}
+
+		## Returns an iterator that yields the last `n` items of this iterator.
+		## If the source has fewer than `n` items, all of them are yielded.
+		##
+		## When the source iterator's length is unknown, this materializes the
+		## source into a list to find where the last `n` items begin. Avoid
+		## calling this on iterators whose length is unknown and might be huge.
+		## ```roc
+		## expect Iter.fold(Iter.take_last(List.iter([1, 2, 3, 4, 5]), 3), [], |acc, item| acc.append(item)) == [3, 4, 5]
+		##
+		## expect Iter.fold(Iter.take_last(List.iter([1, 2]), 5), [], |acc, item| acc.append(item)) == [1, 2]
+		## ```
+		take_last : Iter(item), U64 -> Iter(item)
+		take_last = |iterator, n|
+			match iterator.len_if_known {
+				Known(len) =>
+					if len <= n {
+						iterator
+					} else {
+						Iter.drop_first(iterator, len - n)
+					}
+				Unknown =>
+					List.iter(List.take_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
+				}
+
+		## Returns an iterator that yields all items except the last `n`.
+		## If the source has `n` or fewer items, the result is empty.
+		##
+		## When the source iterator's length is unknown, this materializes the
+		## source into a list to find where the last `n` items begin. Avoid
+		## calling this on iterators whose length is unknown and might be huge.
+		## ```roc
+		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		##
+		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3]), 10), [], |acc, item| acc.append(item)) == []
+		## ```
+		drop_last : Iter(item), U64 -> Iter(item)
+		drop_last = |iterator, n|
+			match iterator.len_if_known {
+				Known(len) =>
+					if len <= n {
+						range_done()
+					} else {
+						Iter.take_first(iterator, len - n)
+					}
+				Unknown =>
+					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
+				}
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
@@ -2126,7 +2242,11 @@ Builtin :: [].{
 			## ```
 			to : U8, U8 -> Iter(U8)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(U8.to_u64(end) - U8.to_u64(start) + 1)
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -2159,7 +2279,11 @@ Builtin :: [].{
 			## ```
 			until : U8, U8 -> Iter(U8)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(U8.to_u64(end) - U8.to_u64(start))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -2512,7 +2636,11 @@ Builtin :: [].{
 			## ```
 			to : I8, I8 -> Iter(I8)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1))
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -2545,7 +2673,11 @@ Builtin :: [].{
 			## ```
 			until : I8, I8 -> Iter(I8)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -2950,7 +3082,11 @@ Builtin :: [].{
 			## ```
 			to : U16, U16 -> Iter(U16)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(U16.to_u64(end) - U16.to_u64(start) + 1)
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -2983,7 +3119,11 @@ Builtin :: [].{
 			## ```
 			until : U16, U16 -> Iter(U16)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(U16.to_u64(end) - U16.to_u64(start))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -3396,7 +3536,11 @@ Builtin :: [].{
 			## ```
 			to : I16, I16 -> Iter(I16)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1))
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -3429,7 +3573,11 @@ Builtin :: [].{
 			## ```
 			until : I16, I16 -> Iter(I16)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -3851,7 +3999,11 @@ Builtin :: [].{
 			## ```
 			to : U32, U32 -> Iter(U32)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(U32.to_u64(end) - U32.to_u64(start) + 1)
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -3884,7 +4036,11 @@ Builtin :: [].{
 			## ```
 			until : U32, U32 -> Iter(U32)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(U32.to_u64(end) - U32.to_u64(start))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -4335,7 +4491,11 @@ Builtin :: [].{
 			## ```
 			to : I32, I32 -> Iter(I32)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1))
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -4368,7 +4528,11 @@ Builtin :: [].{
 			## ```
 			until : I32, I32 -> Iter(I32)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
+				},
 				step: ||
 					if start < end {
 						One(
@@ -4810,7 +4974,14 @@ Builtin :: [].{
 			## ```
 			to : U64, U64 -> Iter(U64)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					match U64.add_checked(end - start, 1) {
+						Ok(len) => Known(len)
+						Err(Overflow) => Unknown
+					}
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -4843,7 +5014,11 @@ Builtin :: [].{
 			## ```
 			until : U64, U64 -> Iter(U64)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					Known(end - start)
+				},
 				step: ||
 					if start < end {
 						One(
@@ -5336,7 +5511,17 @@ Builtin :: [].{
 			## ```
 			to : I64, I64 -> Iter(I64)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					match I64.sub_checked(end, start) {
+						Ok(diff) => match I64.add_checked(diff, 1) {
+							Ok(d1) => Known(I64.to_u64_wrap(d1))
+							Err(Overflow) => Unknown
+						}
+						Err(Overflow) => Unknown
+					}
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -5369,7 +5554,14 @@ Builtin :: [].{
 			## ```
 			until : I64, I64 -> Iter(I64)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					match I64.sub_checked(end, start) {
+						Ok(diff) => Known(I64.to_u64_wrap(diff))
+						Err(Overflow) => Unknown
+					}
+				},
 				step: ||
 					if start < end {
 						One(
@@ -5827,7 +6019,17 @@ Builtin :: [].{
 			## ```
 			to : U128, U128 -> Iter(U128)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					match U128.to_u64_try(end - start) {
+						Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
+							Ok(len) => Known(len)
+							Err(Overflow) => Unknown
+						}
+						Err(OutOfRange) => Unknown
+					}
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -5860,7 +6062,14 @@ Builtin :: [].{
 			## ```
 			until : U128, U128 -> Iter(U128)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					match U128.to_u64_try(end - start) {
+						Ok(len) => Known(len)
+						Err(OutOfRange) => Unknown
+					}
+				},
 				step: ||
 					if start < end {
 						One(
@@ -6393,7 +6602,20 @@ Builtin :: [].{
 			## ```
 			to : I128, I128 -> Iter(I128)
 			to = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start > end {
+					Known(0)
+				} else {
+					match I128.sub_checked(end, start) {
+						Ok(diff) => match I128.to_u64_try(diff) {
+							Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
+								Ok(len) => Known(len)
+								Err(Overflow) => Unknown
+							}
+							Err(OutOfRange) => Unknown
+						}
+						Err(Overflow) => Unknown
+					}
+				},
 				step: ||
 					if start <= end {
 						One(
@@ -6426,7 +6648,17 @@ Builtin :: [].{
 			## ```
 			until : I128, I128 -> Iter(I128)
 			until = |start, end| {
-				len_if_known: Unknown,
+				len_if_known: if start >= end {
+					Known(0)
+				} else {
+					match I128.sub_checked(end, start) {
+						Ok(diff) => match I128.to_u64_try(diff) {
+							Ok(len) => Known(len)
+							Err(OutOfRange) => Unknown
+						}
+						Err(Overflow) => Unknown
+					}
+				},
 				step: ||
 					if start < end {
 						One(
