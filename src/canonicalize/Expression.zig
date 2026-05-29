@@ -150,7 +150,7 @@ pub const Expr = union(enum) {
     /// ```
     e_lookup_external: struct {
         module_idx: CIR.Import.Idx,
-        target_node_idx: u16,
+        target_node_idx: u32,
         ident_idx: Ident.Idx,
         region: Region,
     },
@@ -279,7 +279,7 @@ pub const Expr = union(enum) {
     /// ```
     e_nominal_external: struct {
         module_idx: CIR.Import.Idx,
-        target_node_idx: u16,
+        target_node_idx: u32,
         backing_expr: Expr.Idx,
         backing_type: NominalBackingType,
     },

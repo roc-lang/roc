@@ -197,12 +197,12 @@ pub fn addExposedById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident
 }
 
 /// Retrieves the node index associated with an exposed identifier.
-pub fn getNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u16 {
+pub fn getNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, ident_idx: Ident.Idx) ?u32 {
     return self.exposed_items.getNodeIndexById(allocator, @bitCast(ident_idx));
 }
 
 /// Associates a node index with an exposed identifier.
-pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u16) !void {
+pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) !void {
     return try self.exposed_items.setNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
 }
 

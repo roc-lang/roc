@@ -3088,7 +3088,7 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
 
 /// Check if a raw node index refers to a definition node.
 /// This is useful when exposed items might be either definitions or type declarations.
-pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
+pub fn isDefNode(store: *const NodeStore, node_idx: u32) bool {
     const nid: Node.Idx = @enumFromInt(node_idx);
     const node = store.nodes.get(nid);
     return node.tag == .def;

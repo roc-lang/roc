@@ -7512,7 +7512,7 @@ fn categorizeLocalValueRef(
 fn categorizeImportedValueRef(
     module: TypedCIR.Module,
     import_idx: CIR.Import.Idx,
-    target_node_idx: u16,
+    target_node_idx: u32,
     imports: []const PublishImportArtifact,
 ) ResolvedValueRef {
     const resolved_module_idx = module.resolvedImportModule(import_idx) orelse {

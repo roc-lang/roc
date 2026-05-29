@@ -491,7 +491,7 @@ pub const NumericSuffixType = extern struct {
         local: CIR.Statement.Idx,
         external: struct {
             import_idx: CIR.Import.Idx,
-            target_node_idx: u16,
+            target_node_idx: u32,
         },
     };
 
@@ -501,7 +501,7 @@ pub const NumericSuffixType = extern struct {
             .local => .{ .local = @enumFromInt(self.data1) },
             .external => .{ .external = .{
                 .import_idx = @enumFromInt(self.data1),
-                .target_node_idx = @intCast(self.data2),
+                .target_node_idx = self.data2,
             } },
         };
     }
@@ -3031,25 +3031,24 @@ pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
 }
 
 /// Associates a node index with an exposed identifier.
-pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16) !void {
+pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) !void {
     return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
 }
 
 /// Retrieves the node index associated with an exposed identifier, if any.
-pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
+pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
     return self.common.getNodeIndexById(self.gpa, ident_idx);
 }
 
 /// Get the exposed node index for a type given its statement index.
 /// This is used for auto-imported builtin types where we have the statement index pre-computed.
 /// For auto-imported types, the statement index IS the node/var index directly.
-pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
+pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u32 {
 
     // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables
     // indexed by their statement index, not by their position in arrays.
-    const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));
-    return node_idx;
+    return @intFromEnum(stmt_idx);
 }
 
 /// Ensures that the exposed items are sorted by identifier index.

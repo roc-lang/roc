@@ -873,6 +873,18 @@ pub const Import = struct {
             available_modules: []const *const @import("ModuleEnv.zig"),
         ) void {
             const import_count: usize = @intCast(self.imports.len());
+            if (import_count == 0) return;
+
+            // Index modules by name once. First occurrence wins, matching the
+            // "first match in iteration order" semantics of the previous linear scan.
+            var name_to_idx = std.StringHashMap(u32).init(env.gpa);
+            defer name_to_idx.deinit();
+            name_to_idx.ensureTotalCapacity(@intCast(available_modules.len)) catch return;
+            for (available_modules, 0..) |module_env, module_idx| {
+                const gop = name_to_idx.getOrPutAssumeCapacity(module_env.module_name);
+                if (!gop.found_existing) gop.value_ptr.* = @intCast(module_idx);
+            }
+
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
                 const current = self.resolved_modules.items.items[i];
@@ -880,12 +892,8 @@ pub const Import = struct {
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                // Find matching module in available_modules by comparing module names
-                for (available_modules, 0..) |module_env, module_idx| {
-                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
-                        self.setResolvedModule(import_idx, @intCast(module_idx));
-                        break;
-                    }
+                if (name_to_idx.get(import_name)) |module_idx| {
+                    self.setResolvedModule(import_idx, module_idx);
                 }
             }
         }
