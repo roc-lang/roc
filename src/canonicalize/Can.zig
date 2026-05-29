@@ -1248,6 +1248,12 @@ fn canonicalizeAssociatedItems(
                         self.env.getIdent(nested_type_ident),
                     );
                     try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
+
+                    // Also publish the user-facing qualified name (e.g. `Test.MyBool`)
+                    // at the module scope so references from outside the associated
+                    // block — like `x = Test.MyBool.method(...)` at top level —
+                    // can still resolve the nested type after this scope is exited.
+                    try self.scopes.items[0].introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
                 }
 
                 if (nested_type_decl.associated) |nested_assoc| {
