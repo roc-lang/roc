@@ -15,18 +15,7 @@ Foo := [Whatever].{
 # EXPECTED
 NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `labeled` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_labeled` to suppress this warning.
-The unused variable is declared here:
-**canon_revamp_decl_only_before_anno_pair.md:2:14:2:21:**
-```roc
-    useful = labeled
-```
-             ^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -72,9 +61,9 @@ Foo := [Whatever].{
 	(d-let
 		(p-assign (ident "Foo.useful"))
 		(e-lookup-local
-			(p-assign (ident "labeled"))))
+			(p-assign (ident "Foo.labeled"))))
 	(d-let
-		(p-assign (ident "labeled"))
+		(p-assign (ident "Foo.labeled"))
 		(e-tag (name "Whatever"))
 		(annotation
 			(ty-lookup (name "Foo") (local))))

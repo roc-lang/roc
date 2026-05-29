@@ -4782,18 +4782,6 @@ But _Inner_ was already declared here:
 ```
 
 
-**UNUSED VARIABLE**
-Variable `val2` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val2` to suppress this warning.
-The unused variable is declared here:
-**associated_items_complete_all_patterns.md:63:27:63:31:**
-```roc
-            val3 = val1 + val2
-```
-                          ^^^^
-
-
 **DUPLICATE DEFINITION**
 The name `val1` is being redeclared in this scope.
 
@@ -4968,30 +4956,6 @@ But _L2_ was already declared here:
         val2 = val1 * 3
     }
 ```
-
-
-**UNUSED VARIABLE**
-Variable `val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_complete_all_patterns.md:129:38:129:42:**
-```roc
-                val4 = val1 + val2 + val3
-```
-                                     ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `L3.val3` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_L3.val3` to suppress this warning.
-The unused variable is declared here:
-**associated_items_complete_all_patterns.md:129:38:129:42:**
-```roc
-                val4 = val1 + val2 + val3
-```
-                                     ^^^^
 
 
 **DUPLICATE DEFINITION**
@@ -5424,30 +5388,6 @@ But _L2_ was already declared here:
         }
     }
 ```
-
-
-**UNUSED VARIABLE**
-Variable `val4` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_val4` to suppress this warning.
-The unused variable is declared here:
-**associated_items_complete_all_patterns.md:278:49:278:53:**
-```roc
-                    val5 = val1 + val2 + val3 + val4
-```
-                                                ^^^^
-
-
-**UNUSED VARIABLE**
-Variable `L4.val4` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_L4.val4` to suppress this warning.
-The unused variable is declared here:
-**associated_items_complete_all_patterns.md:278:49:278:53:**
-```roc
-                    val5 = val1 + val2 + val3 + val4
-```
-                                                ^^^^
 
 
 **DUPLICATE DEFINITION**
@@ -8920,9 +8860,9 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-num (value "20")))
 	(d-let
 		(p-assign (ident "val1"))
@@ -8945,7 +8885,7 @@ L2 := [DS].{
 		(p-assign (ident "val1"))
 		(e-num (value "30")))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -8956,7 +8896,7 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "d3_4"))
 		(e-dot-access (field "val1")
@@ -8989,10 +8929,10 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "val2")))
+				(p-assign (ident "Test.L2.val2")))
 			(e-num (value "2"))))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "mul")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9021,14 +8961,14 @@ L2 := [DS].{
 				(e-lookup-local
 					(p-assign (ident "val1")))
 				(e-lookup-local
-					(p-assign (ident "val2"))))
+					(p-assign (ident "Test.L2.val2"))))
 			(e-lookup-local
 				(p-assign (ident "val3")))))
 	(d-let
-		(p-assign (ident "val3"))
+		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "3")))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "val1"))
@@ -9041,7 +8981,7 @@ L2 := [DS].{
 		(p-assign (ident "val1"))
 		(e-num (value "10")))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9052,7 +8992,7 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
@@ -9060,7 +9000,7 @@ L2 := [DS].{
 				(e-lookup-local
 					(p-assign (ident "val1")))
 				(e-lookup-local
-					(p-assign (ident "val2"))))
+					(p-assign (ident "Test.L2.val2"))))
 			(e-lookup-local
 				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
@@ -9077,10 +9017,10 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val2")))
+				(p-assign (ident "Test.L2.val2")))
 			(e-num (value "1"))))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9101,7 +9041,7 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
@@ -9109,11 +9049,11 @@ L2 := [DS].{
 				(e-lookup-local
 					(p-assign (ident "val1")))
 				(e-lookup-local
-					(p-assign (ident "val2"))))
+					(p-assign (ident "Test.L2.val2"))))
 			(e-lookup-local
 				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9139,14 +9079,14 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val2")))
+				(p-assign (ident "Test.L2.val2")))
 			(e-lookup-local
 				(p-assign (ident "val3")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "8")))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-num (value "4")))
 	(d-let
 		(p-assign (ident "d4_6"))
@@ -9165,7 +9105,7 @@ L2 := [DS].{
 				(p-assign (ident "val1")))
 			(e-num (value "50"))))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9206,19 +9146,19 @@ L2 := [DS].{
 					(e-lookup-local
 						(p-assign (ident "val1")))
 					(e-lookup-local
-						(p-assign (ident "val2"))))
+						(p-assign (ident "Test.L2.val2"))))
 				(e-lookup-local
 					(p-assign (ident "val3"))))
 			(e-lookup-local
 				(p-assign (ident "val4")))))
 	(d-let
-		(p-assign (ident "val4"))
+		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-num (value "4")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "3")))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "val1"))
@@ -9231,7 +9171,7 @@ L2 := [DS].{
 		(p-assign (ident "val1"))
 		(e-num (value "100")))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9242,7 +9182,7 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
@@ -9250,7 +9190,7 @@ L2 := [DS].{
 				(e-lookup-local
 					(p-assign (ident "val1")))
 				(e-lookup-local
-					(p-assign (ident "val2"))))
+					(p-assign (ident "Test.L2.val2"))))
 			(e-lookup-local
 				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
@@ -9261,7 +9201,7 @@ L2 := [DS].{
 					(e-lookup-local
 						(p-assign (ident "val1")))
 					(e-lookup-local
-						(p-assign (ident "val2"))))
+						(p-assign (ident "Test.L2.val2"))))
 				(e-lookup-local
 					(p-assign (ident "Test.L2.L3.val3"))))
 			(e-lookup-local
@@ -9279,7 +9219,7 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
 		(e-binop (op "add")
@@ -9288,7 +9228,7 @@ L2 := [DS].{
 					(e-lookup-local
 						(p-assign (ident "val1")))
 					(e-lookup-local
-						(p-assign (ident "val2"))))
+						(p-assign (ident "Test.L2.val2"))))
 				(e-lookup-local
 					(p-assign (ident "Test.L2.L3.val3"))))
 			(e-lookup-local
@@ -9300,11 +9240,11 @@ L2 := [DS].{
 				(e-lookup-local
 					(p-assign (ident "val1")))
 				(e-lookup-local
-					(p-assign (ident "val2"))))
+					(p-assign (ident "Test.L2.val2"))))
 			(e-lookup-local
 				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9344,7 +9284,7 @@ L2 := [DS].{
 		(e-lookup-local
 			(p-assign (ident "d5_l3_val_after_l4"))))
 	(d-let
-		(p-assign (ident "val2"))
+		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
 			(e-lookup-local
 				(p-assign (ident "val1")))
@@ -9355,7 +9295,7 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "val1")))
 			(e-lookup-local
-				(p-assign (ident "val2")))))
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
@@ -9363,7 +9303,7 @@ L2 := [DS].{
 				(e-lookup-local
 					(p-assign (ident "val1")))
 				(e-lookup-local
-					(p-assign (ident "val2"))))
+					(p-assign (ident "Test.L2.val2"))))
 			(e-lookup-local
 				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
@@ -9374,7 +9314,7 @@ L2 := [DS].{
 					(e-lookup-local
 						(p-assign (ident "val1")))
 					(e-lookup-local
-						(p-assign (ident "val2"))))
+						(p-assign (ident "Test.L2.val2"))))
 				(e-lookup-local
 					(p-assign (ident "Test.L2.L3.val3"))))
 			(e-lookup-local
@@ -9786,7 +9726,7 @@ L2 := [DS].{
 		(patt (type "{ val1: _field, .. }"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "{ val1: _field, .. }"))
 		(patt (type "{ val1: _field, .. }"))
@@ -9794,52 +9734,44 @@ L2 := [DS].{
 		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "{ val1: _field, .. }"))
 		(patt (type "{ val1: _field, .. }"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "Dec"))
+		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
@@ -9847,26 +9779,34 @@ L2 := [DS].{
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "{ val1: _field, .. }"))
@@ -10073,7 +10013,7 @@ L2 := [DS].{
 		(expr (type "{ val1: _field, .. }"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "{ val1: _field, .. }"))
 		(expr (type "{ val1: _field, .. }"))
@@ -10081,52 +10021,44 @@ L2 := [DS].{
 		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "{ val1: _field, .. }"))
 		(expr (type "{ val1: _field, .. }"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "Dec"))
+		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
@@ -10134,26 +10066,34 @@ L2 := [DS].{
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "{ val1: _field, .. }"))

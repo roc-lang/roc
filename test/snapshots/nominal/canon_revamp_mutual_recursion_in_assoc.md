@@ -16,18 +16,7 @@ Tree := [Leaf, Node].{
 # EXPECTED
 NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `isOdd` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_isOdd` to suppress this warning.
-The unused variable is declared here:
-**canon_revamp_mutual_recursion_in_assoc.md:3:18:3:23:**
-```roc
-    isEven = |t| isOdd(t)
-```
-                 ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -96,7 +85,7 @@ Tree := [Leaf, Node].{
 				(p-assign (ident "t")))
 			(e-call
 				(e-lookup-local
-					(p-assign (ident "isOdd")))
+					(p-assign (ident "Tree.isOdd")))
 				(e-lookup-local
 					(p-assign (ident "t")))))
 		(annotation
@@ -104,7 +93,7 @@ Tree := [Leaf, Node].{
 				(ty-lookup (name "Tree") (local))
 				(ty-lookup (name "Tree") (local)))))
 	(d-let
-		(p-assign (ident "isOdd"))
+		(p-assign (ident "Tree.isOdd"))
 		(e-lambda
 			(args
 				(p-assign (ident "t")))

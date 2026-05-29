@@ -150,8 +150,10 @@ pub const Store = struct {
     pub fn freshN(self: *Self, count: usize) Allocator.Error!Var {
         std.debug.assert(count > 0);
         const first_slot_int: u32 = @intCast(self.slots.backing.len());
-        try self.descs.backing.ensureTotalCapacity(self.gpa, self.descs.backing.len() + count);
-        try self.slots.backing.items.ensureTotalCapacity(self.gpa, self.slots.backing.len() + count);
+        const descs_len: usize = @intCast(self.descs.backing.len());
+        const slots_len: usize = @intCast(self.slots.backing.len());
+        try self.descs.backing.ensureTotalCapacity(self.gpa, descs_len + count);
+        try self.slots.backing.items.ensureTotalCapacity(self.gpa, slots_len + count);
         var i: usize = 0;
         while (i < count) : (i += 1) {
             const desc_idx = self.descs.appendAssumeCapacity(.{

@@ -454,260 +454,6 @@ UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
 UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
 UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `second` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_second` to suppress this warning.
-The unused variable is declared here:
-**associated_items_comprehensive.md:13:13:13:19:**
-```roc
-    first = second      # Forward reference - should work
-```
-            ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Outer2.usesOuter` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:58:12:58:35:**
-```roc
-depth2_4 = Outer2.Inner2.usesOuter      # 50
-```
-           ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Full.val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:205:24:205:39:**
-```roc
-                val4 = Full.L2.L3.val3 + 1
-```
-                       ^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Full.val4` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:208:28:208:46:**
-```roc
-                    val5 = Full.L2.L3.L4.val4 + 1
-```
-                           ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Chain.step2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:281:25:281:45:**
-```roc
-                step3 = Chain.Mid.Deep.step2 * 4
-```
-                        ^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `ForwardDeep.deepVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:126:22:126:47:**
-```roc
-    usesDeepNested = ForwardDeep.M1.M2.deepVal  # Forward ref through 2 levels
-```
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Level1.val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:106:12:106:37:**
-```roc
-depth3_3 = Level1.Level2.Level3.val3            # 30
-```
-           ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `grandchildVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:401:27:401:40:**
-```roc
-    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
-```
-                          ^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Chain.step1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:278:21:278:36:**
-```roc
-            step2 = Chain.Mid.step1 * 3
-```
-                    ^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Chain.step3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:284:29:284:56:**
-```roc
-                    final = Chain.Mid.Deep.Deeper.step3 * 5
-```
-                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Full.val5` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:218:12:218:33:**
-```roc
-depth5_6 = Full.L2.L3.L4.L5.val5            # 5
-```
-           ^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Outer2.doubled` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:59:12:59:33:**
-```roc
-depth2_5 = Outer2.Inner2.doubled        # 100
-```
-           ^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Outer3.nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:63:13:63:33:**
-```roc
-    first = Outer3.Inner3.nested        # Forward ref to nested item
-```
-            ^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Outer1.innerVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:46:12:46:34:**
-```roc
-depth2_2 = Outer1.Inner1.innerVal       # 200
-```
-           ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Annotated.alsoTyped` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:264:13:264:48:**
-```roc
-annoTest2 = Annotated.NestedAnnotated.alsoTyped     # 111
-```
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `D1.v2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:158:12:158:20:**
-```roc
-depth4_2 = D1.D2.v2                 # 2000
-```
-           ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Chain.final` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:294:10:294:45:**
-```roc
-chain5 = Chain.Mid.Deep.Deeper.Deepest.final            # 120
-```
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Max1.deepestValue` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:192:12:192:49:**
-```roc
-depth5_1 = Max1.Max2.Max3.Max4.Max5.deepestValue    # 5555
-```
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Ultimate.b2forward` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:321:33:321:59:**
-```roc
-        b1val = Ultimate.base + Ultimate.Branch2.b2forward
-```
-                                ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Outer4.valA` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:81:16:81:34:**
-```roc
-        valB = Outer4.InnerA.valA + 1   # Reference sibling nested type
-```
-               ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Ultimate.innerSum` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:334:100:334:138:**
-```roc
-            usesEverything = Ultimate.base + Ultimate.Branch1.b1val + Ultimate.Branch2.b2forward + Ultimate.Branch1.Branch1Inner.innerSum
-```
-                                                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Circular.a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:303:11:303:21:**
-```roc
-    sum = Circular.a + Circular.b + Circular.c
-```
-          ^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:350:24:350:29:**
-```roc
-errModuleUnqualified = value  # ERROR: 'value' not in scope at module level
-```
-                       ^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `leaf1Val` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -717,50 +463,6 @@ Is there an `import` or `exposing` missing up-top?
             badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
 ```
                               ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Ultimate.usesEverything` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:342:13:342:57:**
-```roc
-ultimate5 = Ultimate.Branch2.Branch2Inner.usesEverything        # 550
-```
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `CrossRef.middle` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:116:20:116:39:**
-```roc
-            deep = CrossRef.Mid.middle + CrossRef.top  # Ref to parent and grandparent
-```
-                   ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `otherVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:423:25:423:33:**
-```roc
-        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
-```
-                        ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Level1.val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:105:12:105:30:**
-```roc
-depth3_2 = Level1.Level2.val2                   # 20
-```
-           ^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -775,47 +477,14 @@ errTryOuter = outerItem      # ERROR: not in scope
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `Ultimate.b1val` in this scope.
+Nothing is named `otherVal` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_comprehensive.md:325:40:325:62:**
+**associated_items_comprehensive.md:423:25:423:33:**
 ```roc
-            innerSum = Ultimate.base + Ultimate.Branch1.b1val
+        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
 ```
-                                       ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `D1.v3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:159:12:159:23:**
-```roc
-depth4_3 = D1.D2.D3.v3              # 3000
-```
-           ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `CrossRef.deep` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:122:12:122:34:**
-```roc
-depth3_6 = CrossRef.Mid.Deep.deep               # 15
-```
-           ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `Full.val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:202:20:202:32:**
-```roc
-            val3 = Full.L2.val2 + 1
-```
-                   ^^^^^^^^^^^^
+                        ^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -830,25 +499,47 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `Outer4.valB` in this scope.
+Nothing is named `grandchildVal` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_comprehensive.md:86:13:86:31:**
+**associated_items_comprehensive.md:401:27:401:40:**
 ```roc
-depth2_10 = Outer4.InnerB.valB          # 3
+    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
 ```
-            ^^^^^^^^^^^^^^^^^^
+                          ^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `D1.v4` in this scope.
+Nothing is named `Outer3.nested` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_comprehensive.md:160:12:160:26:**
+**associated_items_comprehensive.md:63:13:63:33:**
 ```roc
-depth4_4 = D1.D2.D3.D4.v4           # 4000
+    first = Outer3.Inner3.nested        # Forward ref to nested item
 ```
-           ^^^^^^^^^^^^^^
+            ^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Ultimate.b2forward` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:321:33:321:59:**
+```roc
+        b1val = Ultimate.base + Ultimate.Branch2.b2forward
+```
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:350:24:350:29:**
+```roc
+errModuleUnqualified = value  # ERROR: 'value' not in scope at module level
+```
+                       ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -863,6 +554,17 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `ForwardDeep.deepVal` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:126:22:126:47:**
+```roc
+    usesDeepNested = ForwardDeep.M1.M2.deepVal  # Forward ref through 2 levels
+```
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named `DeepForward.deepest` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -871,17 +573,6 @@ Is there an `import` or `exposing` missing up-top?
     usesDeeply = DeepForward.A.B.C.deepest
 ```
                  ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `ScopeNested.inner` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:246:18:246:42:**
-```roc
-    usesNested = ScopeNested.Nested.inner
-```
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -2625,9 +2316,9 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Forward.first"))
 		(e-lookup-local
-			(p-assign (ident "second"))))
+			(p-assign (ident "associated_items_comprehensive.Forward.second"))))
 	(d-let
-		(p-assign (ident "second"))
+		(p-assign (ident "associated_items_comprehensive.Forward.second"))
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "forward1"))
@@ -2636,7 +2327,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "forward2"))
 		(e-lookup-local
-			(p-assign (ident "second"))))
+			(p-assign (ident "associated_items_comprehensive.Forward.second"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Multi.a"))
 		(e-num (value "10")))
@@ -2681,7 +2372,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth2_2"))
 		(e-lookup-local
-			(p-assign (ident "Outer1.innerVal"))))
+			(p-assign (ident "associated_items_comprehensive.Outer1.Inner1.innerVal"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer2.shared"))
 		(e-num (value "50")))
@@ -2702,11 +2393,11 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth2_4"))
 		(e-lookup-local
-			(p-assign (ident "Outer2.usesOuter"))))
+			(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))))
 	(d-let
 		(p-assign (ident "depth2_5"))
 		(e-lookup-local
-			(p-assign (ident "Outer2.doubled"))))
+			(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.doubled"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer3.first"))
 		(e-lookup-local
@@ -2721,7 +2412,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth2_7"))
 		(e-lookup-local
-			(p-assign (ident "Outer3.nested"))))
+			(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer4.val"))
 		(e-num (value "1")))
@@ -2732,7 +2423,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "Outer4.valA")))
+				(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA")))
 			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "depth2_8"))
@@ -2741,11 +2432,11 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth2_9"))
 		(e-lookup-local
-			(p-assign (ident "Outer4.valA"))))
+			(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))))
 	(d-let
 		(p-assign (ident "depth2_10"))
 		(e-lookup-local
-			(p-assign (ident "Outer4.valB"))))
+			(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Level1.val1"))
 		(e-num (value "10")))
@@ -2762,11 +2453,11 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth3_2"))
 		(e-lookup-local
-			(p-assign (ident "Level1.val2"))))
+			(p-assign (ident "associated_items_comprehensive.Level1.Level2.val2"))))
 	(d-let
 		(p-assign (ident "depth3_3"))
 		(e-lookup-local
-			(p-assign (ident "Level1.val3"))))
+			(p-assign (ident "associated_items_comprehensive.Level1.Level2.Level3.val3"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.CrossRef.top"))
 		(e-num (value "5")))
@@ -2780,7 +2471,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "CrossRef.middle")))
+				(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle")))
 			(e-lookup-local
 				(p-assign (ident "associated_items_comprehensive.CrossRef.top")))))
 	(d-let
@@ -2790,11 +2481,11 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth3_5"))
 		(e-lookup-local
-			(p-assign (ident "CrossRef.middle"))))
+			(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))))
 	(d-let
 		(p-assign (ident "depth3_6"))
 		(e-lookup-local
-			(p-assign (ident "CrossRef.deep"))))
+			(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ForwardDeep.usesDeepNested"))
 		(e-lookup-local
@@ -2809,7 +2500,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth3_8"))
 		(e-lookup-local
-			(p-assign (ident "ForwardDeep.deepVal"))))
+			(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.D1.v1"))
 		(e-num (value "1000")))
@@ -2829,15 +2520,15 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth4_2"))
 		(e-lookup-local
-			(p-assign (ident "D1.v2"))))
+			(p-assign (ident "associated_items_comprehensive.D1.D2.v2"))))
 	(d-let
 		(p-assign (ident "depth4_3"))
 		(e-lookup-local
-			(p-assign (ident "D1.v3"))))
+			(p-assign (ident "associated_items_comprehensive.D1.D2.D3.v3"))))
 	(d-let
 		(p-assign (ident "depth4_4"))
 		(e-lookup-local
-			(p-assign (ident "D1.v4"))))
+			(p-assign (ident "associated_items_comprehensive.D1.D2.D3.D4.v4"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.DeepForward.usesDeeply"))
 		(e-lookup-local
@@ -2855,7 +2546,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth5_1"))
 		(e-lookup-local
-			(p-assign (ident "Max1.deepestValue"))))
+			(p-assign (ident "associated_items_comprehensive.Max1.Max2.Max3.Max4.Max5.deepestValue"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.val1"))
 		(e-num (value "1")))
@@ -2869,19 +2560,19 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "Full.val2")))
+				(p-assign (ident "associated_items_comprehensive.Full.L2.val2")))
 			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "Full.val3")))
+				(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3")))
 			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "Full.val4")))
+				(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4")))
 			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "depth5_2"))
@@ -2890,19 +2581,19 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "depth5_3"))
 		(e-lookup-local
-			(p-assign (ident "Full.val2"))))
+			(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))))
 	(d-let
 		(p-assign (ident "depth5_4"))
 		(e-lookup-local
-			(p-assign (ident "Full.val3"))))
+			(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))))
 	(d-let
 		(p-assign (ident "depth5_5"))
 		(e-lookup-local
-			(p-assign (ident "Full.val4"))))
+			(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))))
 	(d-let
 		(p-assign (ident "depth5_6"))
 		(e-lookup-local
-			(p-assign (ident "Full.val5"))))
+			(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))
 		(e-num (value "888")))
@@ -2931,7 +2622,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.ScopeNested.usesNested"))
 		(e-lookup-local
-			(p-assign (ident "ScopeNested.inner"))))
+			(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Annotated.typed"))
 		(e-num (value "999"))
@@ -2949,7 +2640,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "annoTest2"))
 		(e-lookup-local
-			(p-assign (ident "Annotated.alsoTyped"))))
+			(p-assign (ident "associated_items_comprehensive.Annotated.NestedAnnotated.alsoTyped"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.start"))
 		(e-num (value "1")))
@@ -2963,19 +2654,19 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "Chain.step1")))
+				(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1")))
 			(e-num (value "3"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "Chain.step2")))
+				(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2")))
 			(e-num (value "4"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "Chain.step3")))
+				(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "chain1"))
@@ -2984,37 +2675,37 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "chain2"))
 		(e-lookup-local
-			(p-assign (ident "Chain.step1"))))
+			(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))))
 	(d-let
 		(p-assign (ident "chain3"))
 		(e-lookup-local
-			(p-assign (ident "Chain.step2"))))
+			(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))))
 	(d-let
 		(p-assign (ident "chain4"))
 		(e-lookup-local
-			(p-assign (ident "Chain.step3"))))
+			(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))))
 	(d-let
 		(p-assign (ident "chain5"))
 		(e-lookup-local
-			(p-assign (ident "Chain.final"))))
+			(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Circular.sum"))
 		(e-binop (op "add")
 			(e-binop (op "add")
 				(e-lookup-local
-					(p-assign (ident "Circular.a")))
+					(p-assign (ident "associated_items_comprehensive.Circular.a")))
 				(e-lookup-local
-					(p-assign (ident "Circular.b"))))
+					(p-assign (ident "associated_items_comprehensive.Circular.b"))))
 			(e-lookup-local
-				(p-assign (ident "Circular.c")))))
+				(p-assign (ident "associated_items_comprehensive.Circular.c")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Circular.a"))
 		(e-num (value "10")))
 	(d-let
-		(p-assign (ident "Circular.b"))
+		(p-assign (ident "associated_items_comprehensive.Circular.b"))
 		(e-num (value "20")))
 	(d-let
-		(p-assign (ident "Circular.c"))
+		(p-assign (ident "associated_items_comprehensive.Circular.c"))
 		(e-num (value "30")))
 	(d-let
 		(p-assign (ident "circTest"))
@@ -3038,7 +2729,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(e-lookup-local
 				(p-assign (ident "associated_items_comprehensive.Ultimate.base")))
 			(e-lookup-local
-				(p-assign (ident "Ultimate.b1val"))))
+				(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
@@ -3054,11 +2745,11 @@ errTryGrand = grandchildVal # ERROR: not in scope
 					(e-lookup-local
 						(p-assign (ident "associated_items_comprehensive.Ultimate.base")))
 					(e-lookup-local
-						(p-assign (ident "Ultimate.b1val"))))
+						(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))
 				(e-lookup-local
-					(p-assign (ident "Ultimate.b2forward"))))
+					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))
 			(e-lookup-local
-				(p-assign (ident "Ultimate.innerSum")))))
+				(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum")))))
 	(d-let
 		(p-assign (ident "ultimate1"))
 		(e-lookup-local
@@ -3066,19 +2757,19 @@ errTryGrand = grandchildVal # ERROR: not in scope
 	(d-let
 		(p-assign (ident "ultimate2"))
 		(e-lookup-local
-			(p-assign (ident "Ultimate.b1val"))))
+			(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))
 	(d-let
 		(p-assign (ident "ultimate3"))
 		(e-lookup-local
-			(p-assign (ident "Ultimate.b2forward"))))
+			(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))
 	(d-let
 		(p-assign (ident "ultimate4"))
 		(e-lookup-local
-			(p-assign (ident "Ultimate.innerSum"))))
+			(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))))
 	(d-let
 		(p-assign (ident "ultimate5"))
 		(e-lookup-local
-			(p-assign (ident "Ultimate.usesEverything"))))
+			(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))))
 	(d-let
 		(p-assign (ident "errModuleUnqualified"))
 		(e-lookup-local
@@ -3461,62 +3152,6 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "Dec"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "Dec"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "Dec"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
-		(patt (type "_d"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -3525,35 +3160,91 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "_d"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "U64"))
+		(patt (type "Dec"))
 		(patt (type "_d"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "d where [d.times : d, Dec -> d]"))
-		(patt (type "d where [d.times : d, Dec -> d]"))
-		(patt (type "d where [d.times : d, Dec -> d]"))
 		(patt (type "Dec"))
-		(patt (type "d where [d.times : d, Dec -> d]"))
-		(patt (type "d where [d.times : d, Dec -> d]"))
-		(patt (type "d where [d.times : d, Dec -> d]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "_d"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
+		(patt (type "Dec"))
+		(patt (type "_d"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "d where [d.plus : d, Dec -> d]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "_d"))
+		(patt (type "Dec"))
+		(patt (type "_d"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "U64"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "U64"))
-		(patt (type "_d"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
 		(patt (type "_d"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -3738,62 +3429,6 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "Dec"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "Dec"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "Dec"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
-		(expr (type "_d"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -3802,35 +3437,91 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "_d"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "U64"))
+		(expr (type "Dec"))
 		(expr (type "_d"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "d where [d.times : d, Dec -> d]"))
-		(expr (type "d where [d.times : d, Dec -> d]"))
-		(expr (type "d where [d.times : d, Dec -> d]"))
 		(expr (type "Dec"))
-		(expr (type "d where [d.times : d, Dec -> d]"))
-		(expr (type "d where [d.times : d, Dec -> d]"))
-		(expr (type "d where [d.times : d, Dec -> d]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "_d"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
+		(expr (type "Dec"))
+		(expr (type "_d"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "d where [d.plus : d, Dec -> d]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "_d"))
+		(expr (type "Dec"))
+		(expr (type "_d"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "U64"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "U64"))
-		(expr (type "_d"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
 		(expr (type "_d"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))

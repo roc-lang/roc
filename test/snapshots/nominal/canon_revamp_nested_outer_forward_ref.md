@@ -18,18 +18,7 @@ Outer := [Whatever].{
 # EXPECTED
 NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `parentItem` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_parentItem` to suppress this warning.
-The unused variable is declared here:
-**canon_revamp_nested_outer_forward_ref.md:4:22:4:32:**
-```roc
-        usesParent = parentItem
-```
-                     ^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -90,11 +79,11 @@ Outer := [Whatever].{
 	(d-let
 		(p-assign (ident "Outer.Inner.usesParent"))
 		(e-lookup-local
-			(p-assign (ident "parentItem")))
+			(p-assign (ident "Outer.parentItem")))
 		(annotation
 			(ty-lookup (name "Outer") (local))))
 	(d-let
-		(p-assign (ident "parentItem"))
+		(p-assign (ident "Outer.parentItem"))
 		(e-tag (name "Whatever"))
 		(annotation
 			(ty-lookup (name "Outer") (local))))

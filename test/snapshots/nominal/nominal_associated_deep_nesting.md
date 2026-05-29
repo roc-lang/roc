@@ -35,17 +35,6 @@ deepType : Foo.Level1.Level2.Level3
            ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Foo.value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nominal_associated_deep_nesting.md:12:13:12:43:**
-```roc
-deepValue = Foo.Level1.Level2.Level3.value
-```
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -137,7 +126,7 @@ deepType = C
 	(d-let
 		(p-assign (ident "deepValue"))
 		(e-lookup-local
-			(p-assign (ident "Foo.value")))
+			(p-assign (ident "Foo.Level1.Level2.Level3.value")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
@@ -166,7 +155,7 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec"))
+		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "Error")))
 	(type_decls
@@ -179,7 +168,7 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr (type "Dec"))
+		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "Error"))))
 ~~~
