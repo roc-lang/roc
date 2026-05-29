@@ -1066,7 +1066,10 @@ fn findOrCreateAssocPattern(
     pattern_region: Region,
 ) std.mem.Allocator.Error!CIR.Pattern.Idx {
     if (self.scopeLookup(.ident, qualified_ident) == .found) {
-        return self.scopeLookup(.ident, qualified_ident).found;
+        const found = self.scopeLookup(.ident, qualified_ident).found;
+        self.drainForwardReferences(qualified_ident, type_qualified_ident, decl_ident);
+        self.rebindPlaceholderPatternIdent(found, qualified_ident);
+        return found;
     }
 
     var scope_idx = self.scopes.items.len;
@@ -1109,6 +1112,43 @@ fn findOrCreateAssocPattern(
     return new_pattern_idx;
 }
 
+/// Remove any forward_reference entries keyed by the names a definition
+/// adopts, freeing their reference_regions lists. Called by
+/// findOrCreateAssocPattern when the placeholder pattern was already published
+/// to a scope's idents map and scopeLookup returned it directly, so the
+/// forward_references entries that point at that placeholder no longer need
+/// to flag an undefined reference at scope-pop time.
+fn drainForwardReferences(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    type_qualified_ident: ?Ident.Idx,
+    decl_ident: Ident.Idx,
+) void {
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        const scope = &self.scopes.items[scope_idx];
+        if (scope.forward_references.fetchRemove(qualified_ident)) |kv| {
+            var mut_regions = kv.value.reference_regions;
+            mut_regions.deinit(self.env.gpa);
+        }
+        if (type_qualified_ident) |tq| {
+            if (!tq.eql(qualified_ident)) {
+                if (scope.forward_references.fetchRemove(tq)) |kv| {
+                    var mut_regions = kv.value.reference_regions;
+                    mut_regions.deinit(self.env.gpa);
+                }
+            }
+        }
+        if (!decl_ident.eql(qualified_ident)) {
+            if (scope.forward_references.fetchRemove(decl_ident)) |kv| {
+                var mut_regions = kv.value.reference_regions;
+                mut_regions.deinit(self.env.gpa);
+            }
+        }
+    }
+}
+
 /// Update an existing pattern node's stored identifier in place. Used to
 /// promote a forward-reference placeholder pattern (whose original ident
 /// matched the reference site spelling, e.g. `b`) to the canonical qualified
@@ -1125,6 +1165,23 @@ fn rebindPlaceholderPatternIdent(
     if (node.tag != .pattern_identifier) return;
     node.setPayload(.{ .pattern_identifier = .{ .ident = @bitCast(new_ident) } });
     self.env.store.nodes.set(node_idx, node);
+}
+
+/// Publish the relative (module-prefix-stripped) qualified name of an
+/// associated item at the module scope, so user-written lookups that omit
+/// the module prefix (e.g. `One.Two.Three.Four.value` when the module is
+/// `TestModule`) resolve to the same pattern as the module-prefixed form.
+fn publishRelativeAssocName(
+    self: *Self,
+    relative_name_idx: ?Ident.Idx,
+    decl_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    const rel_idx = relative_name_idx orelse return;
+    const rel_text = self.env.getIdent(rel_idx);
+    const decl_text = self.env.getIdent(decl_ident);
+    const rel_qualified = try self.env.insertQualifiedIdent(rel_text, decl_text);
+    try self.scopes.items[0].idents.put(self.env.gpa, rel_qualified, pattern_idx);
 }
 
 fn registerAssocPatternQualifiers(
@@ -1382,6 +1439,7 @@ fn canonicalizeAssociatedItems(
                                     // with the existing builtin bindings.
                                     if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
                                         try self.scopes.items[0].idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                                        try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
                                     }
 
                                     // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
@@ -1431,7 +1489,40 @@ fn canonicalizeAssociatedItems(
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
-                    const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
+
+                    // Adopt any pre-existing forward-reference placeholder keyed by
+                    // the type-qualified name (e.g. `Str.count_utf8_bytes` inside
+                    // `Builtin.Str`) so reference sites and the anno def share one
+                    // Pattern.Idx. `createAnnoOnlyDef` already handles the
+                    // qualified-form key; do the type-qualified form here.
+                    const adopted_pattern_idx: ?CIR.Pattern.Idx = blk_adopt: {
+                        const tq_for_adopt = if (parent_name.eql(type_name))
+                            qualified_idx
+                        else blk_tq: {
+                            const tn = self.env.getIdent(type_name);
+                            const nn = self.env.getIdent(name_ident);
+                            break :blk_tq try self.env.insertQualifiedIdent(tn, nn);
+                        };
+                        if (tq_for_adopt.eql(qualified_idx)) break :blk_adopt null;
+                        var s_idx = self.scopes.items.len;
+                        while (s_idx > 0) {
+                            s_idx -= 1;
+                            const scope_ptr = &self.scopes.items[s_idx];
+                            if (scope_ptr.forward_references.fetchRemove(tq_for_adopt)) |kv| {
+                                var mut_regions = kv.value.reference_regions;
+                                mut_regions.deinit(self.env.gpa);
+                                _ = scope_ptr.idents.remove(tq_for_adopt);
+                                self.rebindPlaceholderPatternIdent(kv.value.pattern_idx, qualified_idx);
+                                break :blk_adopt kv.value.pattern_idx;
+                            }
+                        }
+                        break :blk_adopt null;
+                    };
+
+                    const def_idx = if (adopted_pattern_idx) |adopted|
+                        try self.createAnnoOnlyDefWithPattern(adopted, qualified_idx, type_anno_idx, where_clauses, region)
+                    else
+                        try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
                     try self.env.setExposedNodeIndexById(qualified_idx, @intFromEnum(def_idx));
                     try self.env.registerMethodIdent(type_name, name_ident, qualified_idx);
@@ -1477,6 +1568,10 @@ fn canonicalizeAssociatedItems(
                         try anno_scope_ptr.idents.put(self.env.gpa, anno_type_qualified_idx, anno_pattern_idx);
                         if (anno_scope_idx == 0) break;
                         anno_scope_idx -= 1;
+                    }
+
+                    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
+                        try self.publishRelativeAssocName(relative_name_idx, name_ident, anno_pattern_idx);
                     }
                 }
             },
@@ -1531,6 +1626,7 @@ fn canonicalizeAssociatedItems(
                         // with the existing bindings.
                         if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
                             try self.scopes.items[0].idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                            try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
                         }
 
                         // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
@@ -2684,6 +2780,37 @@ fn createAnnoOnlyDef(
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 
     // Create and return the def
+    return try self.env.addDef(.{
+        .pattern = pattern_idx,
+        .expr = anno_only_expr,
+        .annotation = annotation_idx,
+        .kind = .let,
+    }, region);
+}
+
+/// Build an anno-only def reusing a pre-existing pattern (typically a
+/// forward-reference placeholder adopted by the caller), so lookup sites that
+/// already point at that placeholder pattern resolve to this def.
+fn createAnnoOnlyDefWithPattern(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    ident: base.Ident.Idx,
+    type_anno_idx: TypeAnno.Idx,
+    where_clauses: ?WhereClause.Span,
+    region: Region,
+) std.mem.Allocator.Error!CIR.Def.Idx {
+    try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
+
+    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+        .ident = ident,
+    } }, region);
+
+    const annotation = CIR.Annotation{
+        .anno = type_anno_idx,
+        .where = where_clauses,
+    };
+    const annotation_idx = try self.env.addAnnotation(annotation, region);
+
     return try self.env.addDef(.{
         .pattern = pattern_idx,
         .expr = anno_only_expr,
