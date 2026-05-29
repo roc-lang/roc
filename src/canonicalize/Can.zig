@@ -1756,6 +1756,9 @@ fn processAssociatedItemsSecondPass(
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     const stmt_idxs = self.parse_ir.store.statementSlice(statements);
+    var seen_value_methods = std.AutoHashMapUnmanaged(Ident.Idx, void){};
+    defer seen_value_methods.deinit(self.env.gpa);
+
     var i: usize = 0;
     while (i < stmt_idxs.len) : (i += 1) {
         const stmt_idx = stmt_idxs[i];
@@ -1808,6 +1811,7 @@ fn processAssociatedItemsSecondPass(
                         const decl = next_stmt.decl;
                         // Check if the declaration pattern matches the annotation name
                         const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                        const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                         if (pattern == .ident) {
                             const pattern_ident_tok = pattern.ident.ident_tok;
                             if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
@@ -1823,6 +1827,15 @@ fn processAssociatedItemsSecondPass(
 
                                         break :blk2 try self.env.insertQualifiedIdent(parent_text, decl_text);
                                     };
+                                    const seen_method = try seen_value_methods.getOrPut(self.env.gpa, decl_ident);
+                                    if (seen_method.found_existing) {
+                                        try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                                            .ident = decl_ident,
+                                            .region = pattern_region,
+                                        } });
+                                        break :blk true;
+                                    }
+                                    seen_method.value_ptr.* = {};
 
                                     // Canonicalize with the qualified name and type annotation
                                     const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
@@ -1892,6 +1905,15 @@ fn processAssociatedItemsSecondPass(
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
+                    const seen_method = try seen_value_methods.getOrPut(self.env.gpa, name_ident);
+                    if (seen_method.found_existing) {
+                        try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                            .ident = name_ident,
+                            .region = region,
+                        } });
+                        continue;
+                    }
+                    seen_method.value_ptr.* = {};
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
                     try self.recordGlobalValueDef(def_idx);
@@ -1919,6 +1941,15 @@ fn processAssociatedItemsSecondPass(
                         const parent_text = self.env.getIdent(parent_name);
                         const decl_text = self.env.getIdent(decl_ident);
                         const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+                        const seen_method = try seen_value_methods.getOrPut(self.env.gpa, decl_ident);
+                        if (seen_method.found_existing) {
+                            try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                                .ident = decl_ident,
+                                .region = pattern_region,
+                            } });
+                            continue;
+                        }
+                        seen_method.value_ptr.* = {};
 
                         // Canonicalize with the qualified name
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
@@ -2480,6 +2511,10 @@ pub fn canonicalizeFile(
                                     .ident = decl_ident,
                                     .region = pattern_region,
                                     .original_region = original_region,
+                                } });
+                                try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                                    .ident = decl_ident,
+                                    .region = pattern_region,
                                 } });
                             },
                             // is_var=false, so var-related errors can't occur
@@ -3533,20 +3568,29 @@ fn createAnnoOnlyDef(
 fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?TypeAnnoIdent) std.mem.Allocator.Error!void {
     // Check if this declaration matches the last type annotation
     var mb_validated_anno: ?Annotation.Idx = null;
+    const ast_pattern = self.parse_ir.store.getPattern(decl.pattern);
+
+    if (ast_pattern != .ident) {
+        const string_idx = try self.env.insertString("destructuring declaration");
+        const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
+        try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+            .stmt = string_idx,
+            .region = region,
+        } });
+        return;
+    }
+
     if (mb_last_anno) |anno_info| {
-        const ast_pattern = self.parse_ir.store.getPattern(decl.pattern);
-        if (ast_pattern == .ident) {
-            const pattern_ident = ast_pattern.ident;
-            if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
-                if (anno_info.name.eql(decl_ident)) {
-                    // This declaration matches the type annotation
-                    const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
-                }
+        const pattern_ident = ast_pattern.ident;
+        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
+            if (anno_info.name.eql(decl_ident)) {
+                // This declaration matches the type annotation
+                const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
+                mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
             }
-            // Note: If resolveIdentifier returns null, the identifier token is malformed.
-            // The parser already handles this; we just don't match it with the annotation.
         }
+        // Note: If resolveIdentifier returns null, the identifier token is malformed.
+        // The parser already handles this; we just don't match it with the annotation.
     }
 
     // Canonicalize the decl (with the validated anno)
@@ -3717,6 +3761,12 @@ fn handleScopeIntroduceResult(
                 .region = region,
                 .original_region = original_region,
             } });
+            if (self.scopes.items.len == 1) {
+                try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                    .ident = ident,
+                    .region = region,
+                } });
+            }
         },
         .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {
             if (builtin.mode == .Debug) {
@@ -5272,6 +5322,7 @@ fn recordNumeralLiteralForExpr(
         literal.after_decimal_digit_count,
         literal.isNegative(),
         literal.kind == .frac,
+        literal.flags.had_decimal_point,
     );
 }
 
@@ -5326,6 +5377,32 @@ pub fn canonicalizeExpr(
             if (ast_fn == .ident) {
                 const ident_expr = ast_fn.ident;
                 const qualifier_tokens = self.parse_ir.store.tokenSlice(ident_expr.qualifiers);
+                if (qualifier_tokens.len > 1) {
+                    const receiver_token = @as(Token.Idx, @intCast(qualifier_tokens[qualifier_tokens.len - 1]));
+                    const receiver_token_tag = self.parse_ir.tokens.tokens.items(.tag)[@intCast(receiver_token)];
+                    if (receiver_token_tag == .NoSpaceDotLowerIdent or receiver_token_tag == .DotLowerIdent) {
+                        const scratch_top = self.parse_ir.store.scratchTokenTop();
+                        for (qualifier_tokens[0 .. qualifier_tokens.len - 1]) |qualifier_token| {
+                            try self.parse_ir.store.addScratchToken(qualifier_token);
+                        }
+                        const receiver_qualifiers = try self.parse_ir.store.tokenSpanFrom(scratch_top);
+                        const receiver_expr_idx = try self.parse_ir.store.addExpr(.{ .ident = .{
+                            .token = receiver_token,
+                            .qualifiers = receiver_qualifiers,
+                            .region = .{
+                                .start = ident_expr.region.start,
+                                .end = receiver_token + 1,
+                            },
+                        } });
+                        const method_call_idx = try self.parse_ir.store.addExpr(.{ .method_call = .{
+                            .receiver = receiver_expr_idx,
+                            .method_token = ident_expr.token,
+                            .args = e.args,
+                            .region = e.region,
+                        } });
+                        return try self.canonicalizeExpr(method_call_idx);
+                    }
+                }
                 if (qualifier_tokens.len == 1) {
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |alias_name| {
@@ -5660,6 +5737,61 @@ pub fn canonicalizeExpr(
 
                             // If target_node_idx_opt is null, we need to handle the error case
                             if (target_node_idx_opt == null) {
+                                if (qualifier_tokens.len > 1) {
+                                    if (auto_imported_type_info) |info| {
+                                        const module_env = info.requireEnv();
+                                        const first_field_tok = @as(Token.Idx, @intCast(qualifier_tokens[1]));
+                                        if (self.parse_ir.tokens.resolveIdentifier(first_field_tok)) |first_field_ident| {
+                                            const first_field_text = self.env.getIdent(first_field_ident);
+                                            const first_target_node_idx = blk: {
+                                                if (module_env.common.findIdent(first_field_text)) |target_ident| {
+                                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                                        break :blk target_node_idx;
+                                                    }
+                                                }
+
+                                                const qualified_type_text = self.env.getIdent(info.qualified_type_ident);
+                                                const qualified_first_field_idx = try self.env.insertQualifiedIdent(qualified_type_text, first_field_text);
+                                                const qualified_first_field_text = self.env.getIdent(qualified_first_field_idx);
+                                                if (module_env.common.findIdent(qualified_first_field_text)) |target_ident| {
+                                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                                        break :blk target_node_idx;
+                                                    }
+                                                }
+                                                break :blk null;
+                                            };
+
+                                            if (first_target_node_idx) |target_node_idx| {
+                                                var receiver_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                                    .module_idx = import_idx,
+                                                    .target_node_idx = target_node_idx,
+                                                    .ident_idx = first_field_ident,
+                                                    .region = region,
+                                                } }, region);
+
+                                                for (qualifier_tokens[2..]) |nested_tok_raw| {
+                                                    const nested_tok = @as(Token.Idx, @intCast(nested_tok_raw));
+                                                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_tok) orelse continue;
+                                                    receiver_idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                                        .receiver = receiver_idx,
+                                                        .field_name = nested_ident,
+                                                        .field_name_region = region,
+                                                    } }, region);
+                                                }
+
+                                                return CanonicalizedExpr{
+                                                    .idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                                        .receiver = receiver_idx,
+                                                        .field_name = ident,
+                                                        .field_name_region = region,
+                                                    } }, region),
+                                                    .free_vars = DataSpan.empty(),
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
                                 // and we shouldn't report a redundant error here
                                 if (auto_imported_type_info == null) {
@@ -6282,10 +6414,13 @@ pub fn canonicalizeExpr(
                 // from outer declarations
                 const saved_defining_patterns_start = self.defining_patterns_start;
                 const saved_defining_pattern = self.defining_pattern;
+                const saved_loop_depth = self.loop_depth;
                 self.defining_patterns_start = null;
                 self.defining_pattern = null;
+                self.loop_depth = 0;
                 defer self.defining_patterns_start = saved_defining_patterns_start;
                 defer self.defining_pattern = saved_defining_pattern;
+                defer self.loop_depth = saved_loop_depth;
 
                 const can_body = try self.canonicalizeExpr(e.body) orelse {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
@@ -7436,8 +7571,12 @@ pub fn canonicalizeExpr(
         },
         .ellipsis => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const ellipsis_expr = try self.env.addExpr(Expr{ .e_ellipsis = .{} }, region);
-            return CanonicalizedExpr{ .idx = ellipsis_expr, .free_vars = DataSpan.empty() };
+            const feature = try self.env.insertString("ellipsis expression");
+            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .block => |e| {
             return try self.canonicalizeBlock(e);
@@ -8144,6 +8283,8 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
     // Step 2: Collect field names and canonicalize field values
     var field_names: [64]Ident.Idx = undefined;
     var field_values: [64]Expr.Idx = undefined;
+    const seen_fields_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_fields_top);
     if (field_count > 64) {
         const feature = try self.env.insertString("record builder with more than 64 fields");
         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -8163,6 +8304,23 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
             } });
             return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
         };
+
+        const field_name_region = self.parse_ir.tokens.resolve(field.name);
+        for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
+            if (field_name.eql(seen_field.ident)) {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .duplicate_record_field = .{
+                    .field_name = field_name,
+                    .duplicate_region = field_name_region,
+                    .original_region = seen_field.region,
+                } });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            }
+        }
+        try self.scratch_seen_record_fields.append(SeenRecordField{
+            .ident = field_name,
+            .region = field_name_region,
+        });
+
         field_names[i] = field_name;
 
         // Canonicalize field value
@@ -8320,7 +8478,7 @@ fn buildMap2Call(
         .e_call = .{
             .func = func_expr_idx,
             .args = args_span,
-            .called_via = CalledVia.apply,
+            .called_via = CalledVia.record_builder,
         },
     }, region);
 }
@@ -9575,6 +9733,56 @@ pub fn canonicalizePattern(
                 const type_tok_idx = qualifier_toks[0];
                 const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
                 const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
+
+                if (self.scopeLookupTypeBinding(type_tok_ident)) |binding_location| {
+                    switch (binding_location.binding.*) {
+                        .external_nominal => |external| {
+                            if (external.target_node_idx) |target_node_idx| {
+                                const import_idx = external.import_idx orelse {
+                                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .module_not_imported = .{
+                                        .module_name = external.module_ident,
+                                        .region = region,
+                                    } });
+                                };
+
+                                return try self.env.addPattern(CIR.Pattern{
+                                    .nominal_external = .{
+                                        .module_idx = import_idx,
+                                        .target_node_idx = target_node_idx,
+                                        .backing_pattern = tag_pattern_idx,
+                                        .backing_type = .tag,
+                                    },
+                                }, region);
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
+                if (self.lookupAvailableModuleEnv(type_tok_ident)) |auto_imported_type| {
+                    if (auto_imported_type.statement_idx) |stmt_idx| {
+                        const module_name_text = auto_imported_type.requireEnv().module_name;
+                        const import_idx = try self.getOrCreateAutoImport(module_name_text);
+
+                        const target_node_idx = auto_imported_type.requireEnv().getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                            const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .nested_type_not_found = .{
+                                .parent_name = module_ident,
+                                .nested_name = type_tok_ident,
+                                .region = region,
+                            } });
+                        };
+
+                        return try self.env.addPattern(CIR.Pattern{
+                            .nominal_external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                                .backing_pattern = tag_pattern_idx,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                }
 
                 // Lookup the type ident in scope
                 const nominal_type_decl_stmt_idx = self.scopeLookupTypeDecl(type_tok_ident) orelse
@@ -10873,6 +11081,9 @@ fn canonicalizeTypeAnnoRecord(
     const scratch_record_fields_top = self.scratch_record_fields.top();
     defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
 
+    const seen_fields_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_fields_top);
+
     for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
         const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
             error.MalformedNode => {
@@ -10906,6 +11117,28 @@ fn canonicalizeTypeAnnoRecord(
 
             continue;
         };
+
+        const field_region = self.parse_ir.tokens.resolve(ast_field.name);
+        var found_duplicate = false;
+        for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
+            if (field_name.eql(seen_field.ident)) {
+                try self.env.pushDiagnostic(Diagnostic{
+                    .duplicate_record_field = .{
+                        .field_name = field_name,
+                        .duplicate_region = field_region,
+                        .original_region = seen_field.region,
+                    },
+                });
+                found_duplicate = true;
+                break;
+            }
+        }
+        if (found_duplicate) continue;
+
+        try self.scratch_seen_record_fields.append(SeenRecordField{
+            .ident = field_name,
+            .region = field_region,
+        });
 
         // Canonicalize field type
         const canonicalized_ty = try self.canonicalizeTypeAnnoHelp(ast_field.ty, type_anno_ctx);
@@ -11004,7 +11237,47 @@ fn canonicalizeTypeAnnoTagUnion(
     const scratch_annos_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_annos_top);
 
+    const seen_tags_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_tags_top);
+
     for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+        const seen_tag: ?SeenRecordField = blk: {
+            const ast_tag = self.parse_ir.store.getTypeAnno(tag_idx);
+            const tag_ty = switch (ast_tag) {
+                .ty => |ty| ty,
+                .apply => |apply| tag_ty: {
+                    const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
+                    if (args_slice.len == 0) break :blk null;
+                    break :tag_ty switch (self.parse_ir.store.getTypeAnno(args_slice[0])) {
+                        .ty => |ty| ty,
+                        else => break :blk null,
+                    };
+                },
+                else => break :blk null,
+            };
+
+            const ident = self.parse_ir.tokens.resolveIdentifier(tag_ty.token) orelse
+                try self.env.insertIdent(base.Ident.for_text(self.parse_ir.resolve(tag_ty.token)));
+            break :blk .{
+                .ident = ident,
+                .region = self.parse_ir.tokenizedRegionToRegion(tag_ty.region),
+            };
+        };
+        if (seen_tag) |tag| {
+            var found_duplicate = false;
+            for (self.scratch_seen_record_fields.sliceFromStart(seen_tags_top)) |seen| {
+                if (tag.ident.eql(seen.ident)) {
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .malformed_type_annotation = .{ .region = tag.region },
+                    });
+                    found_duplicate = true;
+                    break;
+                }
+            }
+            if (found_duplicate) continue;
+            try self.scratch_seen_record_fields.append(tag);
+        }
+
         // Canonicalized the tag variant
         // This will always return a `ty` or an `apply`
         const canonicalized_tag_idx = try self.canonicalizeTypeAnnoTag(tag_idx, type_anno_ctx);
@@ -11150,6 +11423,9 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     const scratch_top = self.env.store.scratchTypeAnnoTop();
     defer self.env.store.clearScratchTypeAnnosFrom(scratch_top);
 
+    const seen_params_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_params_top);
+
     for (self.parse_ir.store.typeAnnoSlice(ast_header.args)) |arg_idx| {
         const ast_arg = self.parse_ir.store.getTypeAnno(arg_idx);
         // Type parameters should be treated as declarations, not lookups
@@ -11163,6 +11439,25 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                     try self.env.store.addScratchTypeAnno(malformed);
                     continue;
                 };
+
+                var found_duplicate = false;
+                for (self.scratch_seen_record_fields.sliceFromStart(seen_params_top)) |seen_param| {
+                    if (param_ident.eql(seen_param.ident)) {
+                        try self.env.pushDiagnostic(Diagnostic{ .type_parameter_conflict = .{
+                            .name = name_ident,
+                            .parameter_name = param_ident,
+                            .region = param_region,
+                            .original_region = seen_param.region,
+                        } });
+                        found_duplicate = true;
+                        break;
+                    }
+                }
+                if (found_duplicate) continue;
+                try self.scratch_seen_record_fields.append(.{
+                    .ident = param_ident,
+                    .region = param_region,
+                });
 
                 // Create type variable annotation for this parameter
                 // Check for underscore in type parameter
@@ -11190,6 +11485,25 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
                     try self.env.store.addScratchTypeAnno(malformed);
                     continue;
                 };
+
+                var found_duplicate = false;
+                for (self.scratch_seen_record_fields.sliceFromStart(seen_params_top)) |seen_param| {
+                    if (param_ident.eql(seen_param.ident)) {
+                        try self.env.pushDiagnostic(Diagnostic{ .type_parameter_conflict = .{
+                            .name = name_ident,
+                            .parameter_name = param_ident,
+                            .region = param_region,
+                            .original_region = seen_param.region,
+                        } });
+                        found_duplicate = true;
+                        break;
+                    }
+                }
+                if (found_duplicate) continue;
+                try self.scratch_seen_record_fields.append(.{
+                    .ident = param_ident,
+                    .region = param_region,
+                });
 
                 // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
                 if (type_kind == .alias) {
@@ -12315,13 +12629,12 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     .region = region,
                 } });
                 mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            } else {
+                const stmt_idx = try self.env.addStatement(Statement{
+                    .s_break = .{},
+                }, region);
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
             }
-
-            const stmt_idx = try self.env.addStatement(Statement{
-                .s_break = .{},
-            }, region);
-
-            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
         },
         .file_import => |fi| {
             try self.canonicalizeFileImport(fi);
@@ -13917,6 +14230,64 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     // If we didn't find a valid node index, report an error (don't fall back)
     const target_node_idx = target_node_idx_opt orelse {
+        switch (right_expr) {
+            .ident => |right_ident| {
+                const right_qualifier_tokens = self.parse_ir.store.tokenSlice(right_ident.qualifiers);
+                if (right_qualifier_tokens.len > 0) {
+                    if (self.lookupAvailableModuleEnv(module_name)) |target_info| {
+                        const module_env = target_info.requireEnv();
+                        const first_field_tok = @as(Token.Idx, @intCast(right_qualifier_tokens[0]));
+                        if (self.parse_ir.tokens.resolveIdentifier(first_field_tok)) |first_field_ident| {
+                            const first_field_text = self.env.getIdent(first_field_ident);
+                            const first_target_node_idx = blk: {
+                                if (module_env.common.findIdent(first_field_text)) |target_ident| {
+                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                        break :blk target_node_idx;
+                                    }
+                                }
+
+                                const qualified_type_text = self.env.getIdent(target_info.qualified_type_ident);
+                                const qualified_first_field_idx = try self.env.insertQualifiedIdent(qualified_type_text, first_field_text);
+                                const qualified_first_field_text = self.env.getIdent(qualified_first_field_idx);
+                                if (module_env.common.findIdent(qualified_first_field_text)) |target_ident| {
+                                    if (module_env.getExposedNodeIndexById(target_ident)) |target_node_idx| {
+                                        break :blk target_node_idx;
+                                    }
+                                }
+                                break :blk null;
+                            };
+
+                            if (first_target_node_idx) |target_node_idx| {
+                                var receiver_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                    .module_idx = import_idx,
+                                    .target_node_idx = target_node_idx,
+                                    .ident_idx = first_field_ident,
+                                    .region = region,
+                                } }, region);
+
+                                for (right_qualifier_tokens[1..]) |nested_tok_raw| {
+                                    const nested_tok = @as(Token.Idx, @intCast(nested_tok_raw));
+                                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_tok) orelse continue;
+                                    receiver_idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                        .receiver = receiver_idx,
+                                        .field_name = nested_ident,
+                                        .field_name_region = region,
+                                    } }, region);
+                                }
+
+                                return try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+                                    .receiver = receiver_idx,
+                                    .field_name = field_name,
+                                    .field_name_region = region,
+                                } }, region);
+                            }
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+
         return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = field_name,
             .region = region,

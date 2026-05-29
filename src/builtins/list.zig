@@ -1349,12 +1349,10 @@ pub fn listConcat(
         }
     }
 
-    // decrement list a and b.
-    // If they share the same allocation, only decref once to avoid double-free.
+    // Decrement both consumed lists. Even if both values share an allocation, they
+    // are separate owned references at this call boundary.
     list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-    if (!same_allocation) {
-        list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-    }
+    list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
     return output;
 }

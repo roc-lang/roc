@@ -125,6 +125,20 @@ test "non-exhaustive - integer literals need wildcard" {
     try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
 }
 
+test "non-exhaustive - unannotated integer literal match needs wildcard" {
+    const source =
+        \\f = |n| match n {
+        \\    30 => "thirty"
+        \\}
+        \\
+        \\result = f(31)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
 test "exhaustive - integer literals with wildcard" {
     const source =
         \\x : I64
@@ -140,6 +154,18 @@ test "exhaustive - integer literals with wildcard" {
     defer test_env.deinit();
 
     try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive - guarded-only match needs unguarded fallback" {
+    const source =
+        \\result = match 1.I64 {
+        \\    x if x == 2.I64 => x
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
 }
 
 // Redundancy Checking

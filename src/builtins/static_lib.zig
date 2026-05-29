@@ -98,6 +98,7 @@ comptime {
     @export(&dw.roc_builtins_i128_to_dec_try_unsafe, .{ .name = "roc_builtins_i128_to_dec_try_unsafe" });
     @export(&dw.roc_builtins_u128_to_dec_try_unsafe, .{ .name = "roc_builtins_u128_to_dec_try_unsafe" });
     // Dec arithmetic wrappers
+    @export(&dw.roc_builtins_dec_mul, .{ .name = "roc_builtins_dec_mul" });
     @export(&dw.roc_builtins_dec_mul_saturated, .{ .name = "roc_builtins_dec_mul_saturated" });
     @export(&dw.roc_builtins_dec_div, .{ .name = "roc_builtins_dec_div" });
     @export(&dw.roc_builtins_dec_div_trunc, .{ .name = "roc_builtins_dec_div_trunc" });

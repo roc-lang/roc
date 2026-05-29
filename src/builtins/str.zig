@@ -908,6 +908,10 @@ pub fn repeatC(
 ) callconv(.c) RocStr {
     const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
+    if (count == 0 or bytes_len == 0) {
+        return RocStr.empty();
+    }
+
     const bytes_ptr = string.asU8ptr();
 
     var ret_string = RocStr.allocate(count * bytes_len, roc_ops);
@@ -920,6 +924,16 @@ pub fn repeatC(
     }
 
     return ret_string;
+}
+
+test "repeatC: empty string short-circuits" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const repeated = repeatC(RocStr.empty(), std.math.maxInt(u64), test_env.getOps());
+    defer repeated.decref(test_env.getOps());
+
+    try std.testing.expect(repeated.eql(RocStr.empty()));
 }
 
 /// Str.endsWith
@@ -1157,6 +1171,7 @@ const Utf8Iterator = struct {
         const n = unicode.utf8ByteSequenceLength(rest[0]) catch {
             // invalid start byte
             it.i += 1;
+            it.skipAdjacentInvalidStartBytes();
             return UNICODE_REPLACEMENT;
         };
 
@@ -1166,8 +1181,8 @@ const Utf8Iterator = struct {
                 it.i += i;
                 return UNICODE_REPLACEMENT;
             }
-            if (rest[i] < 0x70) {
-                // expected continuation byte (>= 0x70)
+            if ((rest[i] & 0xC0) != 0x80) {
+                // expected continuation byte (0b10xx_xxxx)
                 it.i += i;
                 return UNICODE_REPLACEMENT;
             }
@@ -1177,6 +1192,18 @@ const Utf8Iterator = struct {
         return unicode.utf8Decode(rest[0..n]) catch {
             return UNICODE_REPLACEMENT;
         };
+    }
+
+    fn skipAdjacentInvalidStartBytes(it: *Utf8Iterator) void {
+        while (it.i < it.bytes.len) {
+            const byte = it.bytes[it.i];
+            if (byte < 0x80) return;
+            _ = unicode.utf8ByteSequenceLength(byte) catch {
+                it.i += 1;
+                continue;
+            };
+            return;
+        }
     }
 
     pub fn reset(it: *Utf8Iterator) void {
@@ -3021,6 +3048,20 @@ test "fromUtf8Lossy: invalid start byte" {
     defer test_env.deinit();
 
     const list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+
+    const res = fromUtf8Lossy(list, test_env.getOps());
+    defer res.decref(test_env.getOps());
+    const expected = RocStr.fromSlice("r�c", test_env.getOps());
+    defer expected.decref(test_env.getOps());
+    try std.testing.expect(expected.eql(res));
+}
+
+test "fromUtf8Lossy: adjacent invalid start bytes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const list = RocList.fromSlice(u8, "r\xFF\xFFc", false, test_env.getOps());
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());

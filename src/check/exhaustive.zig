@@ -1882,6 +1882,23 @@ pub const ColumnTypes = struct {
         return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
     }
 
+    /// Specialize a synthetic guard constructor.
+    ///
+    /// Guard wrappers are not real scrutinee constructors. They add one column
+    /// for the guard condition and one column for the original pattern.
+    pub fn specializeByGuard(self: ColumnTypes, allocator: std.mem.Allocator) error{OutOfMemory}!ColumnTypes {
+        std.debug.assert(self.types.len > 0);
+
+        const new_types = try allocator.alloc(Var, self.types.len + 1);
+        new_types[0] = self.types[0];
+        new_types[1] = self.types[0];
+        if (self.types.len > 1) {
+            @memcpy(new_types[2..], self.types[1..]);
+        }
+
+        return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
+    }
+
     /// Remove the first column type
     pub fn dropFirst(self: ColumnTypes) ColumnTypes {
         if (self.types.len == 0) {
@@ -2396,6 +2413,7 @@ fn recurseIntoAllCtors(
         // Use field-name-based lookup for records, positional for everything else
         const specialized_types = switch (union_info.render_as) {
             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+            .guard => try column_types.specializeByGuard(allocator),
             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
         };
         const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open);
@@ -2548,6 +2566,7 @@ pub fn checkExhaustiveSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            .guard => try column_types.specializeByGuard(allocator),
                             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open);
@@ -2780,6 +2799,7 @@ pub fn isUsefulSketched(
             // Use field-name-based lookup for records, positional for everything else
             const specialized_types = switch (merged_union_info.render_as) {
                 .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                .guard => try column_types.specializeByGuard(allocator),
                 else => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
             };
 
@@ -2898,6 +2918,7 @@ pub fn isUsefulSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            .guard => try column_types.specializeByGuard(allocator),
                             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
 
@@ -3206,14 +3227,6 @@ pub fn checkMatch(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
-
-    // The scrutinee type must be fully resolved for exhaustiveness checking.
-    // If it's still a flex/rigid var, we can't determine what constructors exist.
-    const resolved_scrutinee = type_store.resolveVar(scrutinee_type);
-    switch (resolved_scrutinee.desc.content) {
-        .flex, .rigid => return error.TypeError,
-        else => {},
-    }
 
     // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
     const sketched = try convertMatchBranches(

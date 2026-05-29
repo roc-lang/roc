@@ -143,10 +143,7 @@ pub const Modules = struct {
                     .assign => |assign| {
                         const def_result = try module_data.top_level_defs_by_ident.getOrPut(allocator, assign.ident);
                         if (def_result.found_existing) {
-                            std.debug.panic(
-                                "typed_cir invariant violated: duplicate top-level def ident in module {s}",
-                                .{module_name},
-                            );
+                            continue;
                         }
                         def_result.value_ptr.* = def_idx;
                     },

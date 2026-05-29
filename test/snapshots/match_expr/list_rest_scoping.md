@@ -15,6 +15,7 @@ match items {
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
+POLYMORPHIC VALUE - list_rest_scoping.md:1:1:5:2
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -48,6 +49,24 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 ```
         ^^^^^^
 
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**list_rest_scoping.md:1:1:5:2:**
+```roc
+match items {
+    [first, ..rest] => first + 1
+    [..rest, last] => last + 2
+    [x, ..rest, y] => x + y
+}
+```
+
+
+Its type is:
+```roc
+a where [a.plus : a, a -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
