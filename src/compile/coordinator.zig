@@ -3328,6 +3328,24 @@ pub const Coordinator = struct {
         defer task_allocs.result.free(task.imported_modules);
         defer ast.deinit();
 
+        // Build KnownModule entries for qualified imports (e.g. platform-exposed
+        // `pf.Stdout`) so they get placeholders during canonicalization and the
+        // members resolve via resolvePendingLookups. Without these, member access
+        // like `Stdout.line!` reports UNDEFINED VARIABLE on app+platform checks.
+        const qualified_imports = module_discovery.extractQualifiedImportsFromAST(ast, task_allocs.scratch) catch &[_][]const u8{};
+        defer {
+            for (qualified_imports) |qi| task_allocs.scratch.free(qi);
+            task_allocs.scratch.free(qualified_imports);
+        }
+        var known_modules = std.ArrayList(compile_package.PackageEnv.KnownModule).empty;
+        defer known_modules.deinit(task_allocs.scratch);
+        for (qualified_imports) |qi| {
+            known_modules.append(task_allocs.scratch, .{
+                .qualified_name = qi,
+                .import_name = qi,
+            }) catch {};
+        }
+
         try compile_package.PackageEnv.canonicalizeModuleWithSiblings(
             self.roc_ctx,
             env,
@@ -3337,7 +3355,7 @@ pub const Coordinator = struct {
             task.source_dir,
             task.package_name,
             null, // Coordinator handles import resolution separately
-            &.{},
+            known_modules.items,
             task.imported_modules,
         );
 

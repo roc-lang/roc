@@ -1874,8 +1874,11 @@ pub const PackageEnv = struct {
         const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
         defer self.gpa.free(available_artifacts);
 
-        // Resolve type lookups that were deferred during canonicalization
-        env.store.resolveDeferredTypeLookups(env, imported_envs.items);
+        // Resolve pending member lookups (e.g. `Stdout.line!` from platform-exposed
+        // modules canonicalized as placeholders) AND deferred type lookups. The
+        // coordinator (roc build/run) path calls resolvePendingLookups; the check
+        // path must too, or platform-module members stay unresolved ("undefined").
+        env.store.resolvePendingLookups(env, imported_envs.items);
 
         var check_timer = startStageTimer();
         var typecheck_output = try typeCheckModule(
