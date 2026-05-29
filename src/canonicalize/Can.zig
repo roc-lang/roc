@@ -2413,9 +2413,9 @@ pub fn canonicalizeFile(
     // to already exist.
     {
         const node_count_pre = self.env.store.nodes.len();
-        var tj: u64 = self.env.types.len();
-        while (tj < node_count_pre) : (tj += 1) {
-            _ = try self.env.types.fresh();
+        const types_len_pre = self.env.types.len();
+        if (types_len_pre < node_count_pre) {
+            _ = try self.env.types.freshN(@intCast(node_count_pre - types_len_pre));
         }
     }
 
@@ -2444,13 +2444,15 @@ pub fn canonicalizeFile(
     // Ensure env.types has a type-variable slot for every node — Check assumes
     // varFrom(node_idx) is in range for every IR node it touches, but addNode
     // (via addStatement / addTypeAnno / etc.) only grows the node store, not
-    // the type store. Fill the gap with fresh flex vars; lookups that the
-    // type checker resolves later replace these with concrete content.
+    // the type store. Fill any remaining gap (the diagnose step may have
+    // added more statements via scratch_local_type_decls / reordering) with
+    // a single bulk extension; lookups that the type checker resolves later
+    // replace these with concrete content.
     {
         const node_count = self.env.store.nodes.len();
-        var ti: u64 = self.env.types.len();
-        while (ti < node_count) : (ti += 1) {
-            _ = try self.env.types.fresh();
+        const types_len = self.env.types.len();
+        if (types_len < node_count) {
+            _ = try self.env.types.freshN(@intCast(node_count - types_len));
         }
     }
 
