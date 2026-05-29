@@ -78,6 +78,7 @@ const TypeCheckTask = messages.TypeCheckTask;
 const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
 const TypeCheckedResult = messages.TypeCheckedResult;
+const CompileFailure = messages.CompileFailure;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
 
@@ -85,6 +86,17 @@ const Channel = channel.Channel;
 const Io = @import("io").Io;
 
 const Mode = compile_package.Mode;
+
+/// Allocators available while executing one worker task.
+///
+/// `module` and `result` allocations may outlive the task and cross back to the
+/// coordinator. `scratch` allocations must not escape the task; worker threads
+/// reset this arena after each task completes.
+const WorkerTaskAllocators = struct {
+    module: Allocator,
+    result: Allocator,
+    scratch: Allocator,
+};
 
 /// Threading features aren't available when targeting WebAssembly
 const is_freestanding = threading.is_freestanding;
@@ -236,30 +248,23 @@ fn decodeCheckedModuleCacheEntry(
 /// This ensures thread-safe allocations without contention.
 ///
 /// Design rationale:
-/// - `gpa`: For long-lived data (ModuleEnv, source). In MT mode, this is
-///   smp_allocator (per-thread freelists backed by a shared global pool).
-///   Data allocated here is stored in ModuleEnv.gpa and freed during module
-///   cleanup.
-/// - `arena`: For temporary allocations within a task (reports, diagnostics).
-///   Reset between tasks to reduce allocation pressure.
+/// - `gpa`: For data that can outlive a task (ModuleEnv, source, ASTs, reports,
+///   worker result payloads). In MT mode, this is smp_allocator for thread
+///   safety. Data allocated here is freed during module/result cleanup.
+/// - `arena_impl`: For temporary allocations within a task. Reset between tasks
+///   to reduce allocation pressure.
 pub const WorkerAllocators = struct {
-    /// General purpose allocator for long-lived data (ModuleEnv, source).
+    /// General purpose allocator for long-lived data and worker results.
     /// In multi-threaded mode, this is smp_allocator for thread safety.
     gpa: Allocator,
-
-    /// Arena for temporary allocations within a task.
-    /// Reset between tasks to reduce allocation pressure.
-    arena: Allocator,
 
     /// Underlying arena implementation
     arena_impl: std.heap.ArenaAllocator,
 
     pub fn init(backing: Allocator) WorkerAllocators {
-        var arena_impl = std.heap.ArenaAllocator.init(backing);
         return .{
             .gpa = backing,
-            .arena_impl = arena_impl,
-            .arena = arena_impl.allocator(),
+            .arena_impl = std.heap.ArenaAllocator.init(backing),
         };
     }
 
@@ -270,6 +275,14 @@ pub const WorkerAllocators = struct {
     /// Reset arena between tasks (keeps capacity, frees memory)
     pub fn resetArena(self: *WorkerAllocators) void {
         _ = self.arena_impl.reset(.retain_capacity);
+    }
+
+    pub fn taskAllocators(self: *WorkerAllocators) WorkerTaskAllocators {
+        return .{
+            .module = self.gpa,
+            .result = self.gpa,
+            .scratch = self.arena_impl.allocator(),
+        };
     }
 };
 
@@ -504,7 +517,7 @@ pub const PackageState = struct {
     /// Package shorthands (alias -> target package name)
     shorthands: std.StringHashMap([]const u8),
 
-    pub fn init(name: []const u8, root_dir: []const u8) PackageState {
+    pub fn init(_: Allocator, name: []const u8, root_dir: []const u8) PackageState {
         return .{
             .name = name,
             .root_dir = root_dir,
@@ -876,7 +889,17 @@ pub const Coordinator = struct {
         }
 
         const pkg = try self.gpa.create(PackageState);
-        pkg.* = PackageState.init(try self.gpa.dupe(u8, name), try self.gpa.dupe(u8, root_dir));
+        errdefer self.gpa.destroy(pkg);
+
+        const owned_name = try self.gpa.dupe(u8, name);
+        const owned_root_dir = self.gpa.dupe(u8, root_dir) catch |err| {
+            self.gpa.free(owned_name);
+            return err;
+        };
+
+        pkg.* = PackageState.init(self.gpa, owned_name, owned_root_dir);
+        errdefer pkg.deinit(self.gpa);
+
         try self.packages.put(pkg.name, pkg);
         return pkg;
     }
@@ -1194,6 +1217,8 @@ pub const Coordinator = struct {
         };
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
+        if (app_root.mod.checkedArtifact() == null) return;
+
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
             .platform_requirement_context = requirement_context,
         });
@@ -1221,6 +1246,14 @@ pub const Coordinator = struct {
                     platform_declaration_artifact,
                     app_artifact,
                     mismatch,
+                );
+                return;
+            },
+            .missing_value => |missing| {
+                try self.appendPlatformRequirementMissingValueReport(
+                    app_root.mod,
+                    platform_declaration_artifact,
+                    missing,
                 );
                 return;
             },
@@ -1254,6 +1287,8 @@ pub const Coordinator = struct {
         };
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
+        if (app_root.mod.checkedArtifact() == null) return;
+
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
             .platform_requirement_context = requirement_context,
         });
@@ -1281,7 +1316,29 @@ pub const Coordinator = struct {
                 app_artifact,
                 mismatch,
             ),
+            .missing_value => |missing| try self.appendPlatformRequirementMissingValueReport(
+                app_root.mod,
+                platform_declaration_artifact,
+                missing,
+            ),
         }
+    }
+
+    fn appendPlatformRequirementMissingValueReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        missing: check.CheckedArtifact.PlatformRequirementMissingValue,
+    ) !void {
+        var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
+        try report.document.addText("The app does not provide ");
+        try report.document.addAnnotated(required_name, .inline_code);
+        try report.document.addText(", but the platform requires it.");
+
+        try app_mod.reports.append(self.gpa, report);
     }
 
     fn appendPlatformRequirementTypeMismatchReport(
@@ -1439,9 +1496,9 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
-        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod);
+        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, self.gpa);
         defer self.gpa.free(imported_envs);
-        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod);
+        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, self.gpa);
         defer self.gpa.free(imported_artifacts);
         const available_artifacts = try self.collectAvailableArtifactViews(self.gpa);
         defer self.gpa.free(available_artifacts);
@@ -1674,14 +1731,18 @@ pub const Coordinator = struct {
 
     /// Main coordinator loop - unified for single and multi-threaded modes
     pub fn coordinatorLoop(self: *Coordinator) !void {
-        var iterations_without_progress: usize = 0;
+        var inline_worker_allocs = WorkerAllocators.init(self.gpa);
+        defer inline_worker_allocs.deinit();
+        var iterations_without_progress: u32 = 0;
+
         while (!self.isComplete()) {
             var made_progress = false;
 
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
                 if (self.task_channel.tryRecv()) |task| {
-                    const result = self.executeTaskInline(task);
+                    const result = self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
+                    inline_worker_allocs.resetArena();
                     try self.handleResult(result);
                     made_progress = true;
                 }
@@ -1764,6 +1825,7 @@ pub const Coordinator = struct {
                                 }
                             }
                         }
+                        std.debug.print("\n", .{});
                     }
                     @panic("Coordinator stuck in infinite loop");
                 }
@@ -1803,27 +1865,77 @@ pub const Coordinator = struct {
         return self.total_remaining == 0 and self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty();
     }
 
-    /// Execute a task inline (for single-threaded mode)
-    fn executeTaskInline(self: *Coordinator, task: WorkerTask) WorkerResult {
+    /// Execute a task inline with explicit worker allocators.
+    fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) WorkerResult {
         return switch (task) {
-            .parse => |t| self.executeParse(t),
-            .canonicalize => |t| self.executeCanonicalize(t),
-            .type_check => |t| self.executeTypeCheck(t),
+            .parse => |t| self.executeParse(t, allocators),
+            .canonicalize => |t| self.executeCanonicalize(t, allocators),
+            .type_check => |t| self.executeTypeCheck(t, allocators),
         };
     }
 
     fn createOwnedSemanticResult(
-        self: *Coordinator,
+        allocator: Allocator,
         env: *ModuleEnv,
         checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact,
-    ) *messages.OwnedSemanticModuleData {
-        const allocator = self.getWorkerAllocator();
-        const semantic = allocator.create(messages.OwnedSemanticModuleData) catch @panic("out of memory allocating type-check result");
+    ) Allocator.Error!*messages.OwnedSemanticModuleData {
+        const semantic = try allocator.create(messages.OwnedSemanticModuleData);
         semantic.* = .{
             .module_env = env,
             .checked_artifact = checked_artifact,
         };
         return semantic;
+    }
+
+    fn appendReportOwned(allocator: Allocator, reports: *std.ArrayList(Report), report: Report) Allocator.Error!void {
+        var owned = report;
+        errdefer owned.deinit();
+        try reports.append(allocator, owned);
+    }
+
+    fn deinitReports(reports: *std.ArrayList(Report), allocator: Allocator) void {
+        for (reports.items) |*rep| rep.deinit();
+        reports.deinit(allocator);
+    }
+
+    fn destroyModuleEnvAndSource(env: *ModuleEnv) void {
+        const env_alloc = env.gpa;
+        const source = env.common.source;
+        env.deinit();
+        env_alloc.destroy(env);
+        if (source.len > 0) env_alloc.free(@constCast(source));
+    }
+
+    fn appendWorkerFailureReport(
+        self: *Coordinator,
+        allocator: Allocator,
+        reports: *std.ArrayList(Report),
+        title: []const u8,
+        path: []const u8,
+        err: anyerror,
+    ) void {
+        var rep = Report.init(allocator, title, .fatal);
+        const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
+        defer if (msg) |owned| allocator.free(owned);
+        rep.addErrorMessage(msg orelse @errorName(err)) catch |report_err| {
+            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(report_err) });
+        };
+        reports.append(allocator, rep) catch |append_err| {
+            rep.deinit();
+            self.bugReport("BUG: failed to append worker failure report for {s}: {s}\n", .{ path, @errorName(append_err) });
+        };
+    }
+
+    fn workerFailureReports(
+        self: *Coordinator,
+        allocator: Allocator,
+        title: []const u8,
+        path: []const u8,
+        err: anyerror,
+    ) std.ArrayList(Report) {
+        var reports = std.ArrayList(Report).empty;
+        self.appendWorkerFailureReport(allocator, &reports, title, path, err);
+        return reports;
     }
 
     fn serializeModuleEnvForCache(self: *Coordinator, env: *const ModuleEnv) Allocator.Error![]u8 {
@@ -2085,6 +2197,7 @@ pub const Coordinator = struct {
             .canonicalized => |*r| try self.handleCanonicalized(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .parse_failed => |*r| try self.handleParseFailed(r),
+            .compile_failed => |*r| try self.handleCompileFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
         }
     }
@@ -2260,19 +2373,20 @@ pub const Coordinator = struct {
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
         mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
 
-        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod);
-        errdefer self.gpa.free(imported_envs);
-        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod);
-        errdefer self.gpa.free(imported_artifacts);
-        const available_artifacts = try self.collectAvailableArtifactViews(self.gpa);
-        errdefer self.gpa.free(available_artifacts);
+        const task_payload_alloc = self.getWorkerAllocator();
+        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(imported_envs);
+        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(imported_artifacts);
+        const available_artifacts = try self.collectAvailableArtifactViews(task_payload_alloc);
+        errdefer task_payload_alloc.free(available_artifacts);
 
         if (mod.reports.items.len == 0 and
             self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, available_artifacts))
         {
-            self.gpa.free(imported_envs);
-            self.gpa.free(imported_artifacts);
-            self.gpa.free(available_artifacts);
+            task_payload_alloc.free(imported_envs);
+            task_payload_alloc.free(imported_artifacts);
+            task_payload_alloc.free(available_artifacts);
             try self.finishCachedModule(pkg, mod);
             return;
         }
@@ -2430,6 +2544,46 @@ pub const Coordinator = struct {
         try self.wakeCrossPackageDependents(result.package_name, result.module_id);
     }
 
+    /// Handle a non-parsing compilation failure.
+    fn handleCompileFailed(self: *Coordinator, result: *CompileFailure) !void {
+        if (comptime trace_build) {
+            std.debug.print("[COORD] COMPILE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
+        }
+        const pkg = self.packages.get(result.package_name) orelse {
+            self.bugReport("BUG: package '{s}' not found for compile_failed result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' for compile_failed result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
+        if (result.partial_env) |env| {
+            mod.replaceModuleEnv(env);
+        }
+        mod.cached_ast = null;
+
+        for (result.reports.items) |rep| {
+            try mod.reports.append(self.gpa, rep);
+        }
+        result.reports.clearRetainingCapacity();
+
+        mod.phase = .Done;
+
+        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
+        if (self.total_remaining > 0) self.total_remaining -= 1;
+
+        for (mod.dependents.items) |dep_id| {
+            try self.tryUnblock(pkg, dep_id);
+        }
+
+        try self.wakeCrossPackageDependents(result.package_name, result.module_id);
+    }
+
     /// Handle cycle detection
     fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) !void {
         const pkg = self.packages.get(result.package_name) orelse {
@@ -2498,9 +2652,10 @@ pub const Coordinator = struct {
         self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
+        allocator: Allocator,
     ) ![]const CanonicalizeImport {
         var imports = std.ArrayList(CanonicalizeImport).empty;
-        errdefer imports.deinit(self.gpa);
+        errdefer imports.deinit(allocator);
 
         for (mod.imports.items) |imp_id| {
             const imp = pkg.getModule(imp_id).?;
@@ -2510,32 +2665,33 @@ pub const Coordinator = struct {
             // src/canonicalize/can.zig where it checks `explicit_module_envs`.
             // Mirrors the `orelse continue` handling for external_imports below.
             const env = imp.moduleEnv() orelse continue;
-            try imports.append(self.gpa, .{
+            try imports.append(allocator, .{
                 .import_name = imp.name,
                 .module_env = env,
             });
         }
         for (mod.external_imports.items) |ext_name| {
             const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
-            try imports.append(self.gpa, .{
+            try imports.append(allocator, .{
                 .import_name = ext_name,
                 .module_env = ext_env,
             });
         }
 
-        return try imports.toOwnedSlice(self.gpa);
+        return try imports.toOwnedSlice(allocator);
     }
 
     fn buildTypecheckImportedEnvs(
         self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
+        allocator: Allocator,
     ) ![]const *ModuleEnv {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
-        var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, expected_capacity);
-        errdefer imported_envs.deinit(self.gpa);
+        var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
+        errdefer imported_envs.deinit(allocator);
 
-        try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+        try imported_envs.append(allocator, self.builtin_modules.builtin_module.env);
         mod.moduleEnv().?.imports.clearResolvedModules();
 
         const direct_imports = mod.moduleEnv().?.imports.imports.items.items;
@@ -2552,7 +2708,7 @@ pub const Coordinator = struct {
                 const imp = pkg.getModule(imp_id).?;
                 if (imp.moduleEnv()) |env| {
                     const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
-                    try imported_envs.append(self.gpa, env);
+                    try imported_envs.append(allocator, env);
                     mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
                 }
                 continue;
@@ -2560,7 +2716,7 @@ pub const Coordinator = struct {
 
             if (self.getExternalEnv(pkg.name, import_name)) |ext_env| {
                 const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
-                try imported_envs.append(self.gpa, ext_env);
+                try imported_envs.append(allocator, ext_env);
                 mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
             }
         }
@@ -2574,16 +2730,17 @@ pub const Coordinator = struct {
             }
         }
 
-        return try imported_envs.toOwnedSlice(self.gpa);
+        return try imported_envs.toOwnedSlice(allocator);
     }
 
     fn buildTypecheckImportedArtifacts(
         self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
+        allocator: Allocator,
     ) ![]const check.CheckedArtifact.PublishImportArtifact {
         var imports = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
-        errdefer imports.deinit(self.gpa);
+        errdefer imports.deinit(allocator);
 
         const module_env = mod.moduleEnv().?;
         const direct_imports = module_env.imports.imports.items.items;
@@ -2593,7 +2750,7 @@ pub const Coordinator = struct {
             const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
 
             if (std.mem.eql(u8, import_name, "Builtin")) {
-                try imports.append(self.gpa, .{
+                try imports.append(allocator, .{
                     .module_idx = resolved_module_idx,
                     .key = self.builtin_modules.checked_artifact.key,
                     .view = check.CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
@@ -2604,7 +2761,7 @@ pub const Coordinator = struct {
             if (pkg.module_names.get(import_name)) |imp_id| {
                 const imp = pkg.getModule(imp_id).?;
                 if (imp.checkedArtifact()) |artifact| {
-                    try imports.append(self.gpa, .{
+                    try imports.append(allocator, .{
                         .module_idx = resolved_module_idx,
                         .key = artifact.key,
                         .view = check.CheckedArtifact.importedView(artifact),
@@ -2614,7 +2771,7 @@ pub const Coordinator = struct {
             }
 
             if (self.getExternalArtifact(pkg.name, import_name)) |artifact| {
-                try imports.append(self.gpa, .{
+                try imports.append(allocator, .{
                     .module_idx = resolved_module_idx,
                     .key = artifact.key,
                     .view = check.CheckedArtifact.importedView(artifact),
@@ -2622,7 +2779,7 @@ pub const Coordinator = struct {
             }
         }
 
-        return try imports.toOwnedSlice(self.gpa);
+        return try imports.toOwnedSlice(allocator);
     }
 
     /// Try to unblock a module waiting on imports
@@ -2657,7 +2814,9 @@ pub const Coordinator = struct {
 
         mod.phase = .Canonicalize;
         mod.visit_color = .black;
-        const imported_modules = try self.buildCanonicalizeImports(pkg, mod);
+        const task_payload_alloc = self.getWorkerAllocator();
+        const imported_modules = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(imported_modules);
         try self.enqueueTask(.{
             .canonicalize = .{
                 .package_name = pkg.name,
@@ -2862,70 +3021,53 @@ pub const Coordinator = struct {
     }
 
     /// Execute a parse task (pure function)
-    fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
+    fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) WorkerResult {
+        return self.executeParseFallible(task, allocators) catch |err| {
+            const title = switch (err) {
+                error.FileNotFound => "FILE NOT FOUND",
+                else => "PARSING FAILED",
+            };
+            return .{
+                .parse_failed = .{
+                    .package_name = task.package_name,
+                    .module_id = task.module_id,
+                    .module_name = task.module_name,
+                    .path = task.path,
+                    .reports = self.workerFailureReports(allocators.result, title, task.path, err),
+                    .partial_env = null,
+                },
+            };
+        };
+    }
+
+    fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
         var parse_timer = startStageTimer();
 
-        // Read source
-        const src = self.readModuleSource(task.path) catch |err| {
-            // Use worker allocator (thread-safe in multi-threaded mode)
-            const worker_alloc = self.getWorkerAllocator();
-            // Pre-allocate to reduce allocation contention in multi-threaded mode
-            var reports = std.ArrayList(Report).initCapacity(worker_alloc, 1) catch std.ArrayList(Report).empty;
-            var rep = Report.init(worker_alloc, "FILE NOT FOUND", .fatal);
-            // Include the path in the error message for debugging
-            const path_msg = std.fmt.allocPrint(worker_alloc, "{s}: {s}", .{ task.path, @errorName(err) }) catch @errorName(err);
-            defer if (path_msg.ptr != @errorName(err).ptr) worker_alloc.free(path_msg);
-            rep.addErrorMessage(path_msg) catch {};
-            reports.append(worker_alloc, rep) catch {};
+        const src = try self.readModuleSource(task.path, task_allocs.module);
 
-            return .{
-                .parse_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = reports,
-                    .partial_env = null,
-                },
-            };
-        };
-
-        // Parse, canonicalize, type-check
-        // Checked-module disk cache lookup happens after canonicalization,
-        // when the coordinator has the exact module identity and import keys.
+        // Checked-module disk cache lookup happens after canonicalization, when
+        // the coordinator has the exact module identity and import keys.
 
         // Create ModuleEnv using the long-lived module allocator.
-        const module_alloc = self.getModuleAllocator();
-        const env = module_alloc.create(ModuleEnv) catch {
+        const module_alloc = task_allocs.module;
+        const env = module_alloc.create(ModuleEnv) catch |err| {
             module_alloc.free(src);
-            return .{
-                .parse_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = std.ArrayList(Report).empty,
-                    .partial_env = null,
-                },
-            };
+            return err;
         };
 
-        env.* = ModuleEnv.init(module_alloc, src) catch {
-            module_alloc.destroy(env);
-            module_alloc.free(src);
-            return .{
-                .parse_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = std.ArrayList(Report).empty,
-                    .partial_env = null,
-                },
-            };
-        };
+        var env_initialized = false;
+        errdefer {
+            if (env_initialized) {
+                destroyModuleEnvAndSource(env);
+            } else {
+                module_alloc.destroy(env);
+                module_alloc.free(src);
+            }
+        }
 
-        env.initCIRFields(task.module_name) catch {};
+        env.* = try ModuleEnv.init(module_alloc, src);
+        env_initialized = true;
+        try env.initCIRFields(task.module_name);
 
         // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
         // to ensure module identity is unique across packages. Without this, two modules with
@@ -2933,52 +3075,32 @@ pub const Coordinator = struct {
         // get the same identity, causing nominal type origin_module collisions.
         // display_module_name_idx stays as the bare name (for type module validation, error messages, etc.)
         {
-            var qualified_buf: [256]u8 = undefined;
-            if (std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ task.package_name, task.module_name })) |qname| {
-                env.qualified_module_ident = env.insertIdent(base.Ident.for_text(qname)) catch env.display_module_name_idx;
-            } else |_| {
-                env.qualified_module_ident = env.display_module_name_idx;
-            }
+            const qname = try std.fmt.allocPrint(task_allocs.scratch, "{s}.{s}", .{ task.package_name, task.module_name });
+            env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));
         }
-        env.common.calcLineStarts(module_alloc) catch {};
+        try env.common.calcLineStarts(module_alloc);
 
-        // Parse
-        // Use worker allocator (thread-safe in multi-threaded mode) for all worker allocations
-        const worker_alloc = self.getWorkerAllocator();
-        // Pre-allocate reports to reduce allocation contention in multi-threaded mode
-        var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
+        // The AST and result payloads outlive this task, so they use the result
+        // allocator. Only import-discovery intermediates use task scratch below.
+        const worker_alloc = task_allocs.result;
+        var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
+        errdefer deinitReports(&reports, worker_alloc);
+
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(worker_alloc);
-        // NOTE: allocators not freed here - cleanup happens in executeCanonicalize
-        const parse_ast = parse.parse(&allocators, &env.common) catch {
-            // Parse failed but we still have partial env
-            return .{
-                .parsed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .module_env = env,
-                    .cached_ast = undefined, // Will be handled in error case
-                    .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
-                    .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
-                    .reports = reports,
-                    .parse_ns = readStageTimer(&parse_timer),
-                },
-            };
-        };
+        defer allocators.deinit();
+
+        const parse_ast = try parse.parse(&allocators, &env.common);
+        errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
-        // parse_ast is already heap-allocated by parse.parse
-
-        // Collect parse diagnostics
         for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            const rep = parse_ast.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            const rep = try parse_ast.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, &reports, rep);
         }
         for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            const rep = parse_ast.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            const rep = try parse_ast.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, &reports, rep);
         }
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
@@ -2989,23 +3111,17 @@ pub const Coordinator = struct {
             }
             discovered_local_imports.deinit(worker_alloc);
         }
-        const local_import_names = module_discovery.extractImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
-        defer {
-            for (local_import_names) |name| worker_alloc.free(name);
-            worker_alloc.free(local_import_names);
-        }
+        const local_import_names = try module_discovery.extractImportsFromAST(parse_ast, task_allocs.scratch);
         const module_dir = std.fs.path.dirname(task.path) orelse "";
         for (local_import_names) |module_name| {
-            const path = self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc) catch continue;
-            discovered_local_imports.append(worker_alloc, .{
-                .module_name = worker_alloc.dupe(u8, module_name) catch {
-                    worker_alloc.free(path);
-                    continue;
-                },
+            const path = try self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc);
+            errdefer worker_alloc.free(path);
+            const owned_name = try worker_alloc.dupe(u8, module_name);
+            errdefer worker_alloc.free(owned_name);
+            try discovered_local_imports.append(worker_alloc, .{
+                .module_name = owned_name,
                 .path = path,
-            }) catch {
-                worker_alloc.free(path);
-            };
+            });
         }
 
         var discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty;
@@ -3013,15 +3129,13 @@ pub const Coordinator = struct {
             for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
             discovered_external_imports.deinit(worker_alloc);
         }
-        const qualified_import_names = module_discovery.extractQualifiedImportsFromAST(parse_ast, worker_alloc) catch &[_][]const u8{};
-        defer {
-            for (qualified_import_names) |name| worker_alloc.free(name);
-            worker_alloc.free(qualified_import_names);
-        }
+        const qualified_import_names = try module_discovery.extractQualifiedImportsFromAST(parse_ast, task_allocs.scratch);
         for (qualified_import_names) |import_name| {
-            discovered_external_imports.append(worker_alloc, .{
-                .import_name = worker_alloc.dupe(u8, import_name) catch continue,
-            }) catch {};
+            const owned_name = try worker_alloc.dupe(u8, import_name);
+            errdefer worker_alloc.free(owned_name);
+            try discovered_external_imports.append(worker_alloc, .{
+                .import_name = owned_name,
+            });
         }
 
         return .{
@@ -3041,16 +3155,35 @@ pub const Coordinator = struct {
     }
 
     /// Execute a canonicalize task (pure function)
-    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask) WorkerResult {
+    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) WorkerResult {
+        return self.executeCanonicalizeFallible(task, allocators) catch |err| {
+            return .{
+                .compile_failed = .{
+                    .package_name = task.package_name,
+                    .module_id = task.module_id,
+                    .module_name = task.module_name,
+                    .path = task.path,
+                    .reports = self.workerFailureReports(allocators.result, "CANONICALIZATION FAILED", task.path, err),
+                    .partial_env = task.module_env,
+                },
+            };
+        };
+    }
+
+    fn executeCanonicalizeFallible(self: *Coordinator, task: CanonicalizeTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
         var canonicalize_timer = startStageTimer();
 
         const env = task.module_env;
         const ast = task.cached_ast;
-        const canon_alloc = self.getWorkerAllocator();
+        defer task_allocs.result.free(task.imported_modules);
+        defer ast.deinit();
+
+        const canon_alloc = task_allocs.scratch;
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(canon_alloc);
         defer allocators.deinit();
-        compile_package.PackageEnv.canonicalizeModuleWithImports(
+
+        try compile_package.PackageEnv.canonicalizeModuleWithImports(
             &allocators,
             env,
             ast,
@@ -3058,28 +3191,22 @@ pub const Coordinator = struct {
             self.builtin_modules.builtin_indices,
             task.imported_modules,
             task.source_dir,
-        ) catch {};
-        self.gpa.free(task.imported_modules);
+        );
 
         const canonicalize_ns = readStageTimer(&canonicalize_timer);
 
-        // Collect diagnostics
         var diagnostics_timer = startStageTimer();
-        // Use worker allocator (thread-safe in multi-threaded mode) for result data
-        const worker_alloc = self.getWorkerAllocator();
-        // Pre-allocate to reduce allocation contention in multi-threaded mode
-        var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
-        const diags = env.getDiagnostics() catch &[_]CIR.Diagnostic{};
-        // Free with env.gpa since that's what getDiagnostics uses for allocation.
+        const worker_alloc = task_allocs.result;
+        var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
+        errdefer deinitReports(&reports, worker_alloc);
+
+        const diags = try env.getDiagnostics();
         defer env.gpa.free(diags);
         for (diags) |d| {
-            const rep = env.diagnosticToReport(d, worker_alloc, task.path) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, &reports, rep);
         }
         const diagnostics_ns = readStageTimer(&diagnostics_timer);
-
-        // Free AST - deinit now handles both internal cleanup and self-destruction
-        ast.deinit();
 
         return .{
             .canonicalized = .{
@@ -3098,15 +3225,37 @@ pub const Coordinator = struct {
     }
 
     /// Execute a type-check task (pure function)
-    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask) WorkerResult {
+    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
+        return self.executeTypeCheckFallible(task, allocators) catch |err| {
+            return .{
+                .compile_failed = .{
+                    .package_name = task.package_name,
+                    .module_id = task.module_id,
+                    .module_name = task.module_name,
+                    .path = task.path,
+                    .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, err),
+                    .partial_env = task.module_env,
+                },
+            };
+        };
+    }
+
+    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
         var check_timer = startStageTimer();
 
         const env = task.module_env;
+        defer task_allocs.result.free(task.imported_envs);
+        defer task_allocs.result.free(task.imported_artifacts);
+        defer task_allocs.result.free(task.available_artifacts);
 
-        // Type check - use worker allocator for thread safety
-        const check_alloc = self.getWorkerAllocator();
-        var typecheck_output = compile_package.PackageEnv.typeCheckModule(
+        const result_alloc = task_allocs.result;
+        // The checked artifact can retain memory owned by the checker output.
+        // Keep those allocations with the published result instead of the
+        // task-local scratch arena, which is reset after the worker task.
+        const check_alloc = result_alloc;
+        var typecheck_output = try compile_package.PackageEnv.typeCheckModule(
             check_alloc,
+            result_alloc,
             env,
             self.builtin_modules.builtin_module.env,
             task.imported_envs,
@@ -3114,35 +3263,17 @@ pub const Coordinator = struct {
             task.available_artifacts,
             self.target,
             self.io,
-        ) catch {
-            self.gpa.free(task.imported_envs);
-            self.gpa.free(task.imported_artifacts);
-            self.gpa.free(task.available_artifacts);
-            return .{
-                .type_checked = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .semantic = self.createOwnedSemanticResult(env, null),
-                    .reports = std.ArrayList(Report).empty,
-                    .type_check_ns = 0,
-                    .check_diagnostics_ns = 0,
-                },
-            };
-        };
+        );
         defer typecheck_output.deinit();
 
         const type_check_ns = readStageTimer(&check_timer);
 
-        // Collect diagnostics
         var diagnostics_timer = startStageTimer();
-        // Use worker allocator (thread-safe in multi-threaded mode) for result data
-        const worker_alloc = self.getWorkerAllocator();
-        // Pre-allocate to reduce allocation contention in multi-threaded mode
-        var reports = std.ArrayList(Report).initCapacity(worker_alloc, 8) catch std.ArrayList(Report).empty;
+        const worker_alloc = result_alloc;
+        var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
+        errdefer deinitReports(&reports, worker_alloc);
 
-        var rb = check.ReportBuilder.init(
+        var rb = try check.ReportBuilder.init(
             worker_alloc,
             env,
             env,
@@ -3152,37 +3283,22 @@ pub const Coordinator = struct {
             task.imported_envs,
             &typecheck_output.checker.import_mapping,
             &typecheck_output.checker.regions,
-        ) catch {
-            // On allocation failure, return result with empty reports
-            self.gpa.free(task.imported_envs);
-            self.gpa.free(task.imported_artifacts);
-            self.gpa.free(task.available_artifacts);
-            return .{
-                .type_checked = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .semantic = self.createOwnedSemanticResult(env, null),
-                    .reports = reports,
-                    .type_check_ns = 0,
-                    .check_diagnostics_ns = 0,
-                },
-            };
-        };
+        );
         defer rb.deinit();
 
         for (typecheck_output.checker.problems.problems.items) |prob| {
-            const rep = rb.build(prob) catch continue;
-            reports.append(worker_alloc, rep) catch {};
+            const rep = try rb.build(prob);
+            try appendReportOwned(worker_alloc, &reports, rep);
         }
 
         const diagnostics_ns = readStageTimer(&diagnostics_timer);
 
-        // Free imported_envs slice (owned by coordinator)
-        self.gpa.free(task.imported_envs);
-        self.gpa.free(task.imported_artifacts);
-        self.gpa.free(task.available_artifacts);
+        var checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact =
+            if (typecheck_output.checked_artifact != null) typecheck_output.takeCheckedArtifact() else null;
+        errdefer if (checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+
+        const semantic = try createOwnedSemanticResult(result_alloc, env, checked_artifact);
+        checked_artifact = null;
 
         return .{
             .type_checked = .{
@@ -3190,10 +3306,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .semantic = self.createOwnedSemanticResult(
-                    env,
-                    if (typecheck_output.checked_artifact != null) typecheck_output.takeCheckedArtifact() else null,
-                ),
+                .semantic = semantic,
                 .reports = reports,
                 .type_check_ns = type_check_ns,
                 .check_diagnostics_ns = diagnostics_ns,
@@ -3202,13 +3315,9 @@ pub const Coordinator = struct {
     }
 
     /// Read module source using the Io abstraction.
-    fn readModuleSource(self: *Coordinator, path: []const u8) ![]u8 {
-        const module_alloc = self.getModuleAllocator();
-        const data = self.io.readFile(path, module_alloc) catch |err| switch (err) {
-            error.FileNotFound => return error.FileNotFound,
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.FileNotFound,
-        };
+    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) ![]u8 {
+        const data = try self.io.readFile(path, module_alloc);
+        errdefer module_alloc.free(data);
 
         // Normalize line endings
         return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
@@ -3236,7 +3345,7 @@ pub const Coordinator = struct {
             const t = self.task_channel.recv() orelse break;
 
             // Execute task
-            const result = self.executeTaskInline(t);
+            const result = self.executeTaskInline(t, worker_allocs.taskAllocators());
 
             // Reset arena between tasks to reclaim temporary allocations
             worker_allocs.resetArena();

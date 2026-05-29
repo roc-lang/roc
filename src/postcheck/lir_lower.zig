@@ -1068,7 +1068,7 @@ const Lowerer = struct {
         const rest = try self.lowerExprInto(target, let_.rest, next);
         const value_expr = self.expr(let_.value);
         const value_local = try self.addTemp(value_expr.ty);
-        const bind = try self.bindPattern(let_.bind, value_local, rest);
+        const bind = try self.bindPatternOrCrash(let_.bind, value_local, rest);
         return try self.lowerExprInto(value_local, let_.value, bind);
     }
 
@@ -1132,6 +1132,9 @@ const Lowerer = struct {
             => return try self.lowerBoxBoundaryLowLevelInto(target, op, args, next),
             else => {},
         }
+        if (lowLevelNeedsIntegerZeroDenominatorCheck(op)) {
+            return try self.lowerIntegerZeroDenominatorCheckedLowLevelInto(target, op, args, next);
+        }
 
         const lowered = try self.lowerExprsToTemps(args);
         defer self.allocator.free(lowered.ids);
@@ -1141,6 +1144,101 @@ const Lowerer = struct {
             .rc_effect = op.rcEffect(),
             .args = try self.result.store.addLocalSpan(lowered.ids),
             .next = next,
+        } });
+        current = try self.prependExprs(lowered, current);
+        return current;
+    }
+
+    fn lowLevelNeedsIntegerZeroDenominatorCheck(op: LIR.LowLevel) bool {
+        return switch (op) {
+            .num_div_by,
+            .num_div_trunc_by,
+            .num_rem_by,
+            .num_mod_by,
+            => true,
+            else => false,
+        };
+    }
+
+    fn integerDivisionByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
+        return switch (layout_idx) {
+            .u8 => "U8 division by zero",
+            .i8 => "I8 division by zero",
+            .u16 => "U16 division by zero",
+            .i16 => "I16 division by zero",
+            .u32 => "U32 division by zero",
+            .i32 => "I32 division by zero",
+            .u64 => "U64 division by zero",
+            .i64 => "I64 division by zero",
+            .u128 => "U128 division by zero",
+            .i128 => "I128 division by zero",
+            else => null,
+        };
+    }
+
+    fn lowerIntegerZeroDenominatorCheckedLowLevelInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        op: LIR.LowLevel,
+        args: []const LambdaMono.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (args.len != 2) {
+            Common.invariant("integer division/remainder reached LIR lowering with the wrong arity");
+        }
+
+        const lowered = try self.lowerExprsToTemps(args);
+        defer self.allocator.free(lowered.ids);
+
+        const lhs = lowered.ids[0];
+        const rhs = lowered.ids[1];
+        const rhs_layout = self.result.store.getLocal(rhs).layout_idx;
+        const crash_message = integerDivisionByZeroMessage(rhs_layout) orelse {
+            var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = op,
+                .rc_effect = op.rcEffect(),
+                .args = try self.result.store.addLocalSpan(lowered.ids),
+                .next = next,
+            } });
+            current = try self.prependExprs(lowered, current);
+            return current;
+        };
+
+        const zero = try self.addLocalForLayout(rhs_layout);
+        const is_zero = try self.addLocalForLayout(.bool);
+
+        const div_args = [_]LIR.LocalId{ lhs, rhs };
+        const div_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = op.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&div_args),
+            .next = next,
+        } });
+
+        const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.result.store.insertString(crash_message),
+        } });
+
+        const switch_stmt = try self.boolSwitchNoContinuation(is_zero, crash_stmt, div_stmt);
+
+        const eq_args = [_]LIR.LocalId{ rhs, zero };
+        const eq_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = is_zero,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&eq_args),
+            .next = switch_stmt,
+        } });
+
+        var current = try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i128_literal = .{
+                .value = 0,
+                .layout_idx = rhs_layout,
+            } },
+            .next = eq_stmt,
         } });
         current = try self.prependExprs(lowered, current);
         return current;
@@ -1270,7 +1368,7 @@ const Lowerer = struct {
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| blk: {
                 const value = try self.addTemp(self.expr(let_.value).ty);
-                const bind = try self.bindPattern(let_.pat, value, next);
+                const bind = try self.bindPatternOrCrash(let_.pat, value, next);
                 break :blk try self.lowerExprInto(value, let_.value, bind);
             },
             .expr => |expr_id| blk: {
@@ -1648,6 +1746,20 @@ const Lowerer = struct {
             .nominal => |inner| try self.bindPattern(inner, source, next),
             .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => next,
         };
+    }
+
+    fn bindPatternOrCrash(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        if (!self.patternCanMiss(pat_id)) return try self.bindPattern(pat_id, source, next);
+
+        const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+        const crash = try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        const matched = try self.lowerPatternThen(pat_id, source, next, miss, next);
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = miss.join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = crash,
+            .remainder = matched,
+        } });
     }
 
     fn bindRecordPattern(self: *Lowerer, ty: Type.TypeId, span: LambdaMono.Span(LambdaMono.RecordDestruct), source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {

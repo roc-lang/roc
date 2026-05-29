@@ -28,6 +28,7 @@ fn finalize(
     imports: []const checked.PublishImportArtifact,
     available_modules: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
+    problem_store: ?*check.problem.Store,
 ) anyerror!void {
     const requests = module.root_requests.compile_time_requests;
 
@@ -61,6 +62,7 @@ fn finalize(
                 relation_modules,
                 ready.items,
                 &state,
+                problem_store,
             );
             pending -= ready.items.len;
         }
@@ -284,6 +286,7 @@ fn lowerEvalAndFinishRoots(
     relation_modules: []const checked.ImportedModuleView,
     requests: []const checked.RootRequest,
     state: *RootCompletionState,
+    problem_store: ?*check.problem.Store,
 ) anyerror!void {
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
@@ -314,20 +317,88 @@ fn lowerEvalAndFinishRoots(
     defer writer.deinit();
 
     for (lowered.lir_result.const_roots.items) |root| {
-        const payload = blk: {
-            const eval_result = try interpreter.eval(.{
-                .proc_id = root.proc,
-                .ret_layout = root.ret_layout,
-            });
+        const root_id = compileTimeRootForRequest(module, root.request);
+        const compile_time_root = module.compile_time_roots.root(root_id);
+        const payload: checked.CompileTimeRootPayload = blk: {
+            if (root.request.kind == .compile_time_constant and problem_store == null) {
+                const eval_result = interpreter.eval(.{
+                    .proc_id = root.proc,
+                    .ret_layout = root.ret_layout,
+                }) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.RuntimeError, error.DivisionByZero => {
+                        const message = interpreter.getRuntimeErrorMessage() orelse host.crash_message orelse "compile-time evaluation failed";
+                        break :blk .{ .const_node = try appendCrashConst(module, message) };
+                    },
+                    error.Crash => {
+                        const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
+                        break :blk .{ .const_node = try appendCrashConst(module, message) };
+                    },
+                };
+                defer interpreter.dropValue(eval_result.value, root.ret_layout);
+                break :blk try writer.storeRoot(root, eval_result.value);
+            }
+
+            const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, root.proc, root.ret_layout);
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
 
-        const root_id = compileTimeRootForRequest(module, root.request);
         module.compile_time_roots.fillPayload(root_id, payload);
-        finishConstRoot(module, module.compile_time_roots.root(root_id), payload);
+        finishConstRoot(module, compile_time_root, payload);
         state.markDone(root_id);
     }
+}
+
+fn appendCrashConst(
+    module: *checked.CheckedModuleArtifact,
+    message: []const u8,
+) Allocator.Error!checked.ConstNodeId {
+    const data = try module.const_store.addStrData(message);
+    return try module.const_store.append(.{ .crash = .{
+        .data = data,
+        .offset = 0,
+        .len = @intCast(message.len),
+    } });
+}
+
+fn evalCompileTimeRoot(
+    allocator: Allocator,
+    interpreter: *Interpreter,
+    problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    proc: lir.LIR.LirProcSpecId,
+    ret_layout: @import("layout").Idx,
+) anyerror!Interpreter.EvalResult {
+    return interpreter.eval(.{
+        .proc_id = proc,
+        .ret_layout = ret_layout,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
+        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
+        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
+    };
+}
+
+fn reportCompileTimeCrash(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    message: []const u8,
+) anyerror!Interpreter.EvalResult {
+    const problem_store = maybe_problem_store orelse {
+        finalizationInvariant("compile-time root crashed without a checking problem store");
+    };
+    const message_idx = try problem_store.putExtraString(message);
+    const region = module.checked_bodies.expr(root.expr).source_region;
+    _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
+        .message = message_idx,
+        .region = region,
+    } });
+    return error.CompileTimeProblem;
 }
 
 fn finalizationImports(

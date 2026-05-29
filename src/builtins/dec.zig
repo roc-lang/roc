@@ -167,10 +167,9 @@ pub const RocDec = extern struct {
         }
 
         const before_str = roc_str_slice[initial_index..before_str_length];
-        const before_val_not_adjusted = std.fmt.parseUnsigned(i128, before_str, 10) catch null;
-
         var before_val_i128: ?i128 = null;
-        if (before_val_not_adjusted) |before| {
+        if (before_str.len > 0) {
+            const before = std.fmt.parseUnsigned(i128, before_str, 10) catch return null;
             const signed_before: i128 = if (is_negative) -before else before;
             const mul_ans = @import("num.zig").mulWithOverflow(i128, signed_before, one_point_zero_i128);
             if (mul_ans.has_overflowed) {
@@ -894,7 +893,13 @@ fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
     // Since d is being shift left 69 times, all of those 69 bits (+1 for the sign bit)
     // must be zero. Otherwise, we have an overflow.
     const d_high_bits = i128h.shr(d, 58);
-    return .{ .value = @as(i128, @intCast(i128h.shr(c, 59) | i128h.shl(d, 69))), .has_overflowed = overflowed | d_high_bits != 0 };
+    const shifted = i128h.shr(c, 59) | i128h.shl(d, 69);
+    const exceeds_i128 = shifted > @as(u128, @intCast(std.math.maxInt(i128)));
+    const has_overflowed = overflowed != 0 or d_high_bits != 0 or exceeds_i128;
+    return .{
+        .value = if (has_overflowed) std.math.maxInt(i128) else @as(i128, @intCast(shifted)),
+        .has_overflowed = has_overflowed,
+    };
 }
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES

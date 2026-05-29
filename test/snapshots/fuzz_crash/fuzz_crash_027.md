@@ -203,6 +203,8 @@ UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
+NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
+NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
@@ -225,13 +227,12 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
-TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
 TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
-TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
 # PROBLEMS
 **LEADING ZERO**
@@ -656,6 +657,30 @@ Is there an `import` or `exposing` missing up-top?
 	       ^^^^
 
 
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**fuzz_crash_027.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**fuzz_crash_027.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -897,6 +922,54 @@ It is:
 But I need this to be a `Bool` value.
 
 **TYPE MISMATCH**
+The `lue` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
+**fuzz_crash_027.md:64:2:**
+```roc
+	match a {lue | Red => {
+			x x
+		}
+		Blue		=> 1
+		"foo" => # ent
+00
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+			=> ment
+
+
+		[1, 2 | 5, 3, .. as rest] => 123
+		[
+ist
+		] => 123
+		3.14 => 314
+		3.14 | 6.28 => 314
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ # Afrd open
+			foo #
+				: #ue
+					1, # Aftd field
+			bar: 2,
+			..} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
+		{
+			foo: 1,
+			} => 12
+		Ok(123) => 121000
+	}
+```
+                ^^^
+
+In the second pattern, `lue` is:
+
+    [Red, ..]
+
+But in the first pattern, `lue` is:
+
+    [Red, ..]
+
+A name shared across `|` patterns in the same `match` branch must have one compatible type.
+
+**TYPE MISMATCH**
 The third branch of this `match` does not match the previous ones:
 **fuzz_crash_027.md:64:2:**
 ```roc
@@ -943,21 +1016,6 @@ But the expression between the `match` parenthesis has the type:
     [Blue, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
-
-**TOO FEW ARGS**
-The `match_time` function expects 2 arguments, but it got 1 instead:
-**fuzz_crash_027.md:111:2:113:3:**
-```roc
-	match_time(
-		..., #
-	)
-```
-
-The `match_time` function has the type:
-
-    [Blue, Red, ..], _arg -> Error
-
-Are there any missing commas?
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -1028,71 +1086,6 @@ But the function's return type is:
     Try({}, _d)
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:100:9:148:2:**
-```roc
-main! = |_| { # Yeah Ie
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # Comd
-		tag
-
-	# Jusnt!
-
-	...
-	match_time(
-		..., #
-	)
-	some_func(
-		dbg # bug
-			42, # Aft expr
-	)
-	crash "Unreachtement
-	tag_with = Ok(number)
-	ited = "Hello, ${world}"
-	list = [
-		add_one(
-			dbg # Afin list
-e[, # afarg
-		),	456, # ee
-	]
-	for n in list {
-	line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-	m_tuple = (
-		123,
-		"World",
-		tag1,
-		Ok(world), # Thisnt
-		(nested, tuple),
-		[1, 2, 3],
-	)
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
-} # Commenl decl
-```
-
-It has the type:
-
-    List(Error) => Error
-
-But the annotation say it should be:
-
-    List(Error) -> Error
-
-**Hint:** This function is effectful, but a pure function is expected.
 
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.
@@ -2122,12 +2115,12 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-not-implemented))
+					(e-runtime-error (tag "not_implemented")))
 				(s-expr
-					(e-call (constraint-fn-var 2063)
+					(e-call
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-not-implemented)))
+						(e-runtime-error (tag "not_implemented"))))
 				(s-expr
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -2244,7 +2237,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2726)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2725)
 									(receiver
 										(e-match
 											(match
@@ -2269,7 +2262,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2721)
+										(e-dispatch-call (method "times") (constraint-fn-var 2720)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2284,18 +2277,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2834)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2833)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2799)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2798)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2934)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2933)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2899)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2898)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2310,11 +2303,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3044)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3043)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3039)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3038)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2329,12 +2322,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3110)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3109)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 3077)
+																		(e-dispatch-call (method "statod") (constraint-fn-var 3076)
 																			(receiver
 																				(e-match
 																					(match

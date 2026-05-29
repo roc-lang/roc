@@ -16,6 +16,7 @@ PARSE ERROR - fuzz_crash_024.md:2:1:2:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:2:8:2:9
 PARSE ERROR - fuzz_crash_024.md:5:1:5:4
 DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
+SHADOWING - fuzz_crash_024.md:5:5:5:6
 UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 # PROBLEMS
 **PARSE ERROR**
@@ -65,6 +66,18 @@ But `t` was already defined here:
 **fuzz_crash_024.md:2:5:2:6:**
 ```roc
 var t= ]
+```
+    ^
+
+
+**SHADOWING**
+The name `t` is already defined in this scope.
+
+Choose a different name for this identifier.
+
+**fuzz_crash_024.md:5:5:5:6:**
+```roc
+var t= 0
 ```
     ^
 

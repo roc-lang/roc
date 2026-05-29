@@ -376,6 +376,7 @@ fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) !Exact {
     const is_negative = text[0] == '-';
     const first: usize = @intFromBool(is_negative);
     if (first >= text.len) return error.InvalidNumeral;
+    const had_decimal_point = std.mem.indexOfScalar(u8, text[first..], '.') != null;
 
     const parts = try decimalParts(allocator, text[first..]);
     defer parts.deinit(allocator);
@@ -392,7 +393,7 @@ fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) !Exact {
         .after = after,
         .after_decimal_digit_count = after_decimal_digit_count,
         .is_negative = is_negative,
-        .had_decimal_point = true,
+        .had_decimal_point = had_decimal_point,
     };
 }
 

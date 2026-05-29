@@ -4818,14 +4818,47 @@ fn checkFileWithBuildEnvPreserved(
 
     // Build the file (works for both app and module files)
     build_env.build(filepath) catch |err| {
-        // Even on error, try to drain and print any reports that were collected
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
 
-        // Print any error reports to stderr before failing.
-        return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => error.Internal,
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+
+        var error_count: u32 = 0;
+        var warning_count: u32 = 0;
+        for (drained) |mod| {
+            for (mod.reports) |report| {
+                switch (report.severity) {
+                    .info => {},
+                    .runtime_error, .fatal => error_count += 1,
+                    .warning => warning_count += 1,
+                }
+            }
+        }
+
+        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
+        for (drained, 0..) |mod, i| {
+            reports[i] = .{
+                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
+                .reports = mod.reports,
+            };
+        }
+        build_env.freeDrainedReportsPathsOnly(drained);
+
+        const timing = if (builtin.target.cpu.arch == .wasm32)
+            CheckTimingInfo{}
+        else
+            build_env.getTimingInfo();
+
+        return CheckResultWithBuildEnv{
+            .check_result = .{
+                .reports = reports,
+                .timing = timing,
+                .error_count = error_count,
+                .warning_count = warning_count,
+            },
+            .build_env = build_env,
         };
     };
 

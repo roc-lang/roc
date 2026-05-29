@@ -85,6 +85,7 @@ pub const ConstValue = union(enum) {
     box: ConstNodeId,
     tuple: []const ConstNodeId,
     record: []const ConstNodeId,
+    crash: ConstStr,
     tag: struct {
         tag_name: []const u8,
         payloads: []const ConstNodeId,
@@ -218,6 +219,7 @@ pub const ConstStore = struct {
             .nominal,
             .fn_value,
             .str,
+            .crash,
             => {},
             .list => |items| self.allocator.free(items),
             .tuple => |items| self.allocator.free(items),
@@ -247,7 +249,7 @@ pub const ConstStore = struct {
         switch (self.values.items[index]) {
             .pending => constStoreInvariant("completed store contains a pending node"),
             .zst, .scalar => {},
-            .str => |str| {
+            .str, .crash => |str| {
                 _ = self.strBytes(str);
             },
             .fn_value => |fn_id| self.verifyFnAcyclic(fn_id, value_state, fn_state),

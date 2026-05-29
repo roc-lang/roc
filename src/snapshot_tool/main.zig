@@ -4452,6 +4452,10 @@ fn compileSnapshotReplInspectedModule(
     return eval_mod.test_helpers.compileInspectedProgram(allocator, .module, source, &.{});
 }
 
+fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) !eval_mod.test_helpers.CompiledProgram {
+    return eval_mod.test_helpers.compileInspectedProgram(allocator, .expr, source, &.{});
+}
+
 fn renderSnapshotReplTypeProblems(
     allocator: Allocator,
     source_kind: eval_mod.test_helpers.SourceKind,
@@ -4651,6 +4655,24 @@ fn snapshotReplDefinitionStep(
     return try std.fmt.allocPrint(allocator, "assigned `{s}`", .{identity.name});
 }
 
+fn compileAndEvaluateSnapshotReplExpr(
+    allocator: Allocator,
+    input: []const u8,
+    config: *const Config,
+) ![]const u8 {
+    var expr_compiled = compileSnapshotReplInspectedExpr(allocator, input) catch |expr_err| {
+        return switch (expr_err) {
+            error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
+            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(expr_err)}),
+        };
+    };
+    defer expr_compiled.deinit(allocator);
+
+    return eval_mod.test_helpers.lirInterpreterInspectedStr(allocator, &expr_compiled.lowered) catch |eval_err| {
+        return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(eval_err)});
+    };
+}
+
 fn snapshotReplExpressionStep(
     allocator: Allocator,
     session: *SnapshotReplSession,
@@ -4672,14 +4694,38 @@ fn snapshotReplExpressionStep(
     );
     defer allocator.free(source);
 
+    const use_expr_fallback = !statement_body and session.definitions.items.len == 0;
     var compiled = compileSnapshotReplInspectedModule(allocator, source, config) catch |err| {
-        return switch (err) {
-            error.TypeCheckError => if (statement_body or session.definitions.items.len > 0)
-                renderSnapshotReplTypeProblems(allocator, .module, source, config)
-            else
-                renderSnapshotReplTypeProblems(allocator, .expr, input, config),
-            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
-        };
+        switch (err) {
+            error.TypeCheckError => {
+                const module_problems = renderSnapshotReplTypeProblems(allocator, .module, source, config) catch |render_err| {
+                    if (use_expr_fallback) {
+                        switch (render_err) {
+                            error.TypeCheckError => return compileAndEvaluateSnapshotReplExpr(allocator, input, config),
+                            else => {},
+                        }
+                    }
+                    return render_err;
+                };
+                errdefer allocator.free(module_problems);
+
+                if (use_expr_fallback) {
+                    const is_top_level_wrapper_problem =
+                        std.mem.indexOf(u8, module_problems, "EFFECTFUL TOP-LEVEL VALUE") != null or
+                        std.mem.indexOf(u8, module_problems, "POLYMORPHIC VALUE") != null;
+                    if (is_top_level_wrapper_problem) {
+                        allocator.free(module_problems);
+                        return compileAndEvaluateSnapshotReplExpr(allocator, input, config);
+                    }
+
+                    allocator.free(module_problems);
+                    return renderSnapshotReplTypeProblems(allocator, .expr, input, config);
+                }
+
+                return module_problems;
+            },
+            else => return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+        }
     };
     defer compiled.deinit(allocator);
 

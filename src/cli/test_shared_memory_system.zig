@@ -163,7 +163,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
 test "integration - shared memory setup and parsing" {
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
-        "main = || 40 + 2",
+        "main : () -> I64\nmain = || 40 + 2",
         &.{},
     );
     defer compiled.deinit(testing.allocator);
@@ -175,7 +175,7 @@ test "integration - compilation pipeline for different platforms" {
     var native = try test_helpers.compileProgramForTarget(
         testing.allocator,
         .module,
-        "main = || [1, 2, 3]",
+        "main : () -> List(I64)\nmain = || [1, 2, 3]",
         &.{},
         .native,
     );
@@ -184,7 +184,7 @@ test "integration - compilation pipeline for different platforms" {
     var wasm32 = try test_helpers.compileProgramForTarget(
         testing.allocator,
         .module,
-        "main = || [1, 2, 3]",
+        "main : () -> List(I64)\nmain = || [1, 2, 3]",
         &.{},
         .u32,
     );
@@ -213,12 +213,12 @@ test "integration - error handling for non-existent file" {
 
 test "integration - automatic module dependency ordering" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "Leaf", .source = "module [value]\nvalue = 40\n" },
-        .{ .name = "Branch", .source = "module [value]\nimport Leaf\nvalue = Leaf.value + 2\n" },
+        .{ .name = "Leaf", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
+        .{ .name = "Branch", .source = "module [value]\nimport Leaf\nvalue : I64\nvalue = Leaf.value + 2\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
-        "import Branch\nmain = || Branch.value",
+        "import Branch\nmain : () -> I64\nmain = || Branch.value",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
@@ -229,12 +229,12 @@ test "integration - automatic module dependency ordering" {
 
 test "integration - transitive module imports (module A imports module B)" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "B", .source = "module [value]\nvalue = 40\n" },
-        .{ .name = "A", .source = "module [value]\nimport B\nvalue = B.value + 2\n" },
+        .{ .name = "B", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
+        .{ .name = "A", .source = "module [value]\nimport B\nvalue : I64\nvalue = B.value + 2\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
-        "import A\nmain = || A.value",
+        "import A\nmain : () -> I64\nmain = || A.value",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
@@ -252,7 +252,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
-        "import A\nmain = || A.value({})",
+        "import A\nmain : () -> I64\nmain = || A.value({})",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
@@ -263,12 +263,12 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
 
 test "integration - direct Core and Utils calls from app" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "Core", .source = "module [inc]\ninc = |x| x + 1\n" },
-        .{ .name = "Utils", .source = "module [double]\ndouble = |x| x * 2\n" },
+        .{ .name = "Core", .source = "module [inc]\ninc : I64 -> I64\ninc = |x| x + 1\n" },
+        .{ .name = "Utils", .source = "module [double]\ndouble : I64 -> I64\ndouble = |x| x * 2\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
-        "import Core\nimport Utils\nmain = || Utils.double(Core.inc(20))",
+        "import Core\nimport Utils\nmain : () -> I64\nmain = || Utils.double(Core.inc(20))",
         &imports,
     );
     defer compiled.deinit(testing.allocator);
