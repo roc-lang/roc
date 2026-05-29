@@ -19,17 +19,28 @@ const ReplSession = @This();
 allocator: Allocator,
 backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
+builtin_modules: eval.BuiltinModules,
 
-pub fn init(allocator: Allocator, backend_kind: eval.EvalBackend) ReplSession {
+pub fn init(allocator: Allocator, backend_kind: eval.EvalBackend) !ReplSession {
     return .{
         .allocator = allocator,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
+        .builtin_modules = try eval.BuiltinModules.init(allocator),
     };
 }
 
 pub fn deinit(self: *ReplSession) void {
     self.definitions.deinit(self.allocator);
+    self.builtin_modules.deinit();
+}
+
+fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin {
+    return .{
+        .env = self.builtin_modules.builtin_module.env,
+        .indices = self.builtin_modules.builtin_indices,
+        .artifact = &self.builtin_modules.checked_artifact,
+    };
 }
 
 /// Process one complete REPL statement or command and return the user-visible output.
@@ -195,7 +206,13 @@ fn validateDefinitions(self: *ReplSession) !DefinitionValidation {
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
     defer self.allocator.free(source);
 
-    if (eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(self.allocator, .module, source, &.{})) |parsed| {
+    if (eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        &.{},
+        self.prePublishedBuiltin(),
+    )) |parsed| {
         eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
         return .{ .valid = true, .error_message = null };
     } else |err| switch (err) {
@@ -221,7 +238,14 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
         .interpreter, .dev, .llvm => .native,
         .wasm => .u32,
     };
-    var compiled = eval.test_helpers.compileInspectedProgramForTarget(self.allocator, .module, source, &.{}, target_usize) catch |err| switch (err) {
+    var compiled = eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        &.{},
+        target_usize,
+        self.prePublishedBuiltin(),
+    ) catch |err| switch (err) {
         error.TypeCheckError => return eval.test_helpers.renderProblems(self.allocator, .module, source),
         else => return err,
     };
@@ -447,7 +471,7 @@ fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) !
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = ReplSession.init(testing.allocator, eval_backend);
+    var repl = try ReplSession.init(testing.allocator, eval_backend);
     defer repl.deinit();
 
     const result = try repl.step(expr);
@@ -463,7 +487,7 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
 }
 
 fn expectAllNative(expr: []const u8, expected: []const u8) !void {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
 
     const line = std.mem.trim(u8, expr, " \t\r\n");
@@ -476,7 +500,13 @@ fn expectAllNative(expr: []const u8, expected: []const u8) !void {
     const source = try std.fmt.allocPrint(testing.allocator, "{s}\nmain = {s}\n", .{ definitions, line });
     defer testing.allocator.free(source);
 
-    var compiled = try eval.test_helpers.compileInspectedProgram(testing.allocator, .module, source, &.{});
+    var compiled = try eval.test_helpers.compileInspectedProgramWithBuiltin(
+        testing.allocator,
+        .module,
+        source,
+        &.{},
+        repl.prePublishedBuiltin(),
+    );
     defer compiled.deinit(testing.allocator);
 
     try expectCompiledBackend(.interpreter, expr, expected, &compiled.lowered);
@@ -510,7 +540,7 @@ fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) !void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = ReplSession.init(testing.allocator, eval_backend);
+    var repl = try ReplSession.init(testing.allocator, eval_backend);
     defer repl.deinit();
 
     for (steps) |step_pair| {
@@ -527,7 +557,7 @@ fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: [
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = ReplSession.init(testing.allocator, eval_backend);
+    var repl = try ReplSession.init(testing.allocator, eval_backend);
     defer repl.deinit();
 
     for (steps, 0..) |step_input, i| {
@@ -544,13 +574,13 @@ fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: [
 }
 
 test "Repl - initialization and cleanup" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
     try testing.expect(repl.definitions.count() == 0);
 }
 
 test "Repl - special commands" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -863,7 +893,7 @@ test "Repl - for loop snapshots" {
 }
 
 test "Repl - build full source with block syntax" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 5", "x", .value);
@@ -883,7 +913,7 @@ test "Repl - build full source with block syntax" {
 }
 
 test "Repl - definition replacement" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 1", "x", .value);
@@ -915,7 +945,7 @@ test "Repl - 4-arg lambda call (dev)" {
 }
 
 fn expectSplit(input: []const u8, expected: []const []const u8) !void {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements(input);
@@ -965,7 +995,7 @@ test "splitInputIntoStatements - annotation and decl stay separate" {
 }
 
 test "Repl - paste of annotation + decl produces single assigned message" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z : U64\nz = 5");
@@ -982,7 +1012,7 @@ test "Repl - paste of annotation + decl produces single assigned message" {
 }
 
 test "Repl - paste of two assignments processes both" {
-    var repl = ReplSession.init(testing.allocator, .interpreter);
+    var repl = try ReplSession.init(testing.allocator, .interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z = 5\ny = 6");
