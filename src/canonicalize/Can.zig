@@ -372,6 +372,81 @@ fn lookupAvailableModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedTy
     return self.lookupExplicitModuleEnv(ident) orelse self.builtin_auto_imported_types.get(ident);
 }
 
+/// Register a method on a nominal type under every name the type can be
+/// looked up by — the qualified module/parent name, the relative parent name,
+/// the bare type name, and (for builtin numerics) the type-name alias —
+/// so static dispatch resolves regardless of which view the caller has.
+fn registerAssociatedMethodIdent(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
+    type_name: Ident.Idx,
+    method_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+) std.mem.Allocator.Error!void {
+    try self.env.registerMethodIdent(parent_name, method_ident, qualified_ident);
+
+    if (relative_parent_name) |relative_name| {
+        if (!relative_name.eql(parent_name)) {
+            try self.env.registerMethodIdent(relative_name, method_ident, qualified_ident);
+        }
+    }
+
+    if (!type_name.eql(parent_name) and
+        (relative_parent_name == null or !type_name.eql(relative_parent_name.?)))
+    {
+        try self.env.registerMethodIdent(type_name, method_ident, qualified_ident);
+    }
+
+    const builtin_numeric_alias = self.builtinNumericMethodAlias(type_name) orelse return;
+    if (!builtin_numeric_alias.eql(parent_name) and
+        (relative_parent_name == null or !builtin_numeric_alias.eql(relative_parent_name.?)) and
+        !builtin_numeric_alias.eql(type_name))
+    {
+        try self.env.registerMethodIdent(builtin_numeric_alias, method_ident, qualified_ident);
+    }
+}
+
+/// For builtin numeric types in the Builtin module, return the type name itself
+/// as an alias under which methods should also be registered so dispatch from
+/// other modules (using the bare type name) finds them.
+fn builtinNumericMethodAlias(self: *Self, type_name: Ident.Idx) ?Ident.Idx {
+    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) return null;
+
+    if (type_name.eql(self.env.idents.u8) or
+        type_name.eql(self.env.idents.i8) or
+        type_name.eql(self.env.idents.u16) or
+        type_name.eql(self.env.idents.i16) or
+        type_name.eql(self.env.idents.u32) or
+        type_name.eql(self.env.idents.i32) or
+        type_name.eql(self.env.idents.u64) or
+        type_name.eql(self.env.idents.i64) or
+        type_name.eql(self.env.idents.u128) or
+        type_name.eql(self.env.idents.i128) or
+        type_name.eql(self.env.idents.dec) or
+        type_name.eql(self.env.idents.f32) or
+        type_name.eql(self.env.idents.f64))
+    {
+        return type_name;
+    }
+
+    return null;
+}
+
+/// Register a user-facing identifier mapping for an associated item. This
+/// records the qualified name as an exposed item so external lookups can
+/// find it. Stubbed here — origin/main wired this through the published
+/// associated-name index.
+fn registerUserFacingName(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    _ = self;
+    _ = qualified_ident;
+    _ = pattern_idx;
+}
+
 fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
     return self.lookupAvailableModuleEnv(ident) != null;
 }
@@ -1424,7 +1499,7 @@ fn canonicalizeAssociatedItems(
                                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                                     // Register the method ident mapping for fast index-based lookup
-                                    try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
+                                    try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, decl_ident, qualified_idx);
 
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(def_idx);
@@ -1526,7 +1601,7 @@ fn canonicalizeAssociatedItems(
                         try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
                     try self.env.setExposedNodeIndexById(qualified_idx, @intFromEnum(def_idx));
-                    try self.env.registerMethodIdent(type_name, name_ident, qualified_idx);
+                    try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, name_ident, qualified_idx);
                     try self.env.store.addScratchDef(def_idx);
 
                     const def_cir_anno = self.env.store.getDef(def_idx);
@@ -1606,7 +1681,7 @@ fn canonicalizeAssociatedItems(
                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
 
                         // Register the method ident mapping for fast index-based lookup
-                        try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
+                        try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, decl_ident, qualified_idx);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names
