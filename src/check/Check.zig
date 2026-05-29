@@ -8207,9 +8207,9 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                 // generalized pattern var against the body's recursive-lookup
                 // var. Instantiate the generalized side so the rigid type
                 // parameters get fresh flex vars before unifying — without
-                // this, the lookup's return position never gets resolved.
-                // Other eql contexts (early-return, try-operator) compare
-                // body vars at the same rank and must NOT instantiate.
+                // this, the lookup's return position stays unbound. Other
+                // eql contexts (early-return, try-operator) compare body
+                // vars at the same rank and must NOT instantiate.
                 const expected_var = switch (eql.ctx) {
                     .recursive_def => blk: {
                         const expected_resolved = self.types.resolveVar(eql.expected);
