@@ -79,6 +79,7 @@ pub const RunArgs = struct {
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
     allow_errors: bool = false, // allow execution even if there are type errors
+    max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
 };
 
 /// Arguments for `roc check`
@@ -232,6 +233,7 @@ const main_help =
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Force a rebuild of the interpreted host (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
+    \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
     \\
 ;
 
@@ -963,6 +965,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var allow_errors: bool = false;
+    var max_threads: ?usize = null;
     var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     var past_double_dash = false;
 
@@ -1010,6 +1013,27 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             no_cache = true;
         } else if (mem.eql(u8, arg, "--allow-errors")) {
             allow_errors = true;
+        } else if (mem.startsWith(u8, arg, "--jobs")) {
+            if (getFlagValue(arg)) |value| {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    app_args.deinit();
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                app_args.deinit();
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "-j")) {
+            // Handle -jN format (e.g., -j4)
+            const value = arg[2..];
+            if (value.len == 0) {
+                app_args.deinit();
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
+            }
+            max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                app_args.deinit();
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
+            };
         } else {
             if (path != null) {
                 try app_args.append(arg);
@@ -1018,7 +1042,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .max_threads = max_threads } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {

@@ -2,7 +2,7 @@
 //!
 //! This combines the functionality of exposed_by_str and exposed_nodes into a single
 //! SortedArrayBuilder to save memory and simplify the API. It uses interned identifier
-//! indices (u32 matching Ident.Idx) as keys and u16 values (the node indices).
+//! indices (u32 matching Ident.Idx) as keys and u32 values (the node indices).
 //!
 //! A value of 0 means "exposed but not yet defined", while non-zero values
 //! are actual node indices.
@@ -23,13 +23,13 @@ const IdentIdx = u32;
 /// A collection that tracks exposed items by their names and associated CIR node indices
 pub const ExposedItems = struct {
     /// Maps item name (as interned ID) -> CIR node index (0 means exposed but not defined)
-    items: SortedArrayBuilder(IdentIdx, u16),
+    items: SortedArrayBuilder(IdentIdx, u32),
 
     const Self = @This();
 
     pub fn init() Self {
         return .{
-            .items = SortedArrayBuilder(IdentIdx, u16).init(),
+            .items = SortedArrayBuilder(IdentIdx, u32).init(),
         };
     }
 
@@ -60,20 +60,25 @@ pub const ExposedItems = struct {
     }
 
     /// Set the node index for an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
-    pub fn setNodeIndexById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, node_idx: u16) !void {
-        // First ensure the array is sorted so we can search
+    pub fn setNodeIndexById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, node_idx: u32) !void {
         self.items.ensureSorted(allocator);
 
-        // Find the existing entry and update its value
         const entries = self.items.entries.items;
-        for (entries) |*entry| {
-            if (entry.key == ident_idx) {
-                entry.value = node_idx;
+        var left: usize = 0;
+        var right: usize = entries.len;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const mid_key = entries[mid].key;
+            if (mid_key == ident_idx) {
+                entries[mid].value = node_idx;
                 return;
+            } else if (mid_key < ident_idx) {
+                left = mid + 1;
+            } else {
+                right = mid;
             }
         }
 
-        // If not found, add a new entry
         try self.items.put(allocator, ident_idx, node_idx);
     }
 
@@ -84,7 +89,7 @@ pub const ExposedItems = struct {
     }
 
     /// Get the node index for an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
-    pub fn getNodeIndexById(self: *const Self, allocator: Allocator, ident_idx: IdentIdx) ?u16 {
+    pub fn getNodeIndexById(self: *const Self, allocator: Allocator, ident_idx: IdentIdx) ?u32 {
         var mutable_self = @constCast(self);
         return mutable_self.items.get(allocator, ident_idx);
     }
@@ -114,7 +119,7 @@ pub const ExposedItems = struct {
     /// Serialized representation of ExposedItems
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
-        items: SortedArrayBuilder(IdentIdx, u16).Serialized,
+        items: SortedArrayBuilder(IdentIdx, u32).Serialized,
 
         /// Serialize an ExposedItems into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -175,10 +180,10 @@ pub const ExposedItems = struct {
 
     /// Iterator for all exposed items
     pub const Iterator = struct {
-        items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
+        items: []const SortedArrayBuilder(IdentIdx, u32).Entry,
         index: usize,
 
-        pub fn next(self: *Iterator) ?struct { ident_idx: IdentIdx, node_idx: u16 } {
+        pub fn next(self: *Iterator) ?struct { ident_idx: IdentIdx, node_idx: u32 } {
             if (self.index < self.items.len) {
                 const entry = self.items[self.index];
                 self.index += 1;
@@ -221,17 +226,17 @@ test "ExposedItems basic operations" {
     try testing.expect(!exposed.containsById(allocator, 999)); // missing
 
     // Test getNodeIndexById before setting (should be 0)
-    try testing.expectEqual(@as(?u16, 0), exposed.getNodeIndexById(allocator, foo_id));
+    try testing.expectEqual(@as(?u32, 0), exposed.getNodeIndexById(allocator, foo_id));
 
     // Set node indices
     try exposed.setNodeIndexById(allocator, foo_id, 42);
     try exposed.setNodeIndexById(allocator, bar_id, 84);
 
     // Test getNodeIndexById after setting
-    try testing.expectEqual(@as(?u16, 42), exposed.getNodeIndexById(allocator, foo_id));
-    try testing.expectEqual(@as(?u16, 84), exposed.getNodeIndexById(allocator, bar_id));
-    try testing.expectEqual(@as(?u16, 0), exposed.getNodeIndexById(allocator, my_type_id)); // Not set
-    try testing.expectEqual(@as(?u16, null), exposed.getNodeIndexById(allocator, 999)); // Not exposed
+    try testing.expectEqual(@as(?u32, 42), exposed.getNodeIndexById(allocator, foo_id));
+    try testing.expectEqual(@as(?u32, 84), exposed.getNodeIndexById(allocator, bar_id));
+    try testing.expectEqual(@as(?u32, 0), exposed.getNodeIndexById(allocator, my_type_id)); // Not set
+    try testing.expectEqual(@as(?u32, null), exposed.getNodeIndexById(allocator, 999)); // Not exposed
 }
 
 test "ExposedItems empty CompactWriter roundtrip" {
@@ -330,9 +335,9 @@ test "ExposedItems basic CompactWriter roundtrip" {
 
     // Verify the items are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.count());
-    try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, id1));
-    try testing.expectEqual(@as(?u16, 84), deserialized.getNodeIndexById(allocator, id2));
-    try testing.expectEqual(@as(?u16, 0), deserialized.getNodeIndexById(allocator, id3));
+    try testing.expectEqual(@as(?u32, 42), deserialized.getNodeIndexById(allocator, id1));
+    try testing.expectEqual(@as(?u32, 84), deserialized.getNodeIndexById(allocator, id2));
+    try testing.expectEqual(@as(?u32, 0), deserialized.getNodeIndexById(allocator, id3));
 }
 
 test "ExposedItems with duplicates CompactWriter roundtrip" {
@@ -387,8 +392,8 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
 
     // After deduplication, should have only 2 items
     try testing.expectEqual(@as(usize, 2), deserialized.count());
-    try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, id1));
-    try testing.expectEqual(@as(?u16, 84), deserialized.getNodeIndexById(allocator, id2));
+    try testing.expectEqual(@as(?u32, 42), deserialized.getNodeIndexById(allocator, id1));
+    try testing.expectEqual(@as(?u32, 84), deserialized.getNodeIndexById(allocator, id2));
 }
 
 test "ExposedItems comprehensive CompactWriter roundtrip" {
@@ -399,14 +404,14 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     defer original.deinit(allocator);
 
     // Test with many items including edge cases
-    const test_items = [_]struct { id: IdentIdx, node_idx: u16 }{
+    const test_items = [_]struct { id: IdentIdx, node_idx: u32 }{
         .{ .id = 0, .node_idx = 0 }, // minimum ID
         .{ .id = 1, .node_idx = 100 },
         .{ .id = 42, .node_idx = 200 },
         .{ .id = 100, .node_idx = 300 },
         .{ .id = 1000, .node_idx = 400 },
         .{ .id = 10000, .node_idx = 500 },
-        .{ .id = 65535, .node_idx = 600 }, // near max u16 node index
+        .{ .id = 65535, .node_idx = 600 },
         .{ .id = 100000, .node_idx = 0 }, // exposed but not defined
         .{ .id = std.math.maxInt(u32) - 1, .node_idx = 999 }, // near max ID
     };
@@ -455,7 +460,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, test_items.len), deserialized.count());
     for (test_items) |item| {
         const actual = deserialized.getNodeIndexById(allocator, item.id);
-        try testing.expectEqual(@as(?u16, item.node_idx), actual);
+        try testing.expectEqual(@as(?u32, item.node_idx), actual);
     }
 }
 
@@ -521,6 +526,6 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 1), deserialized.count());
-        try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, 100));
+        try testing.expectEqual(@as(?u32, 42), deserialized.getNodeIndexById(allocator, 100));
     }
 }

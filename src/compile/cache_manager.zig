@@ -266,8 +266,7 @@ pub const CacheManager = struct {
     pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8) void {
         if (!self.config.enabled) return;
 
-        self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
-            self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
+        self.ensureCacheSubdirIn(cache_key, entries_dir) catch {
             self.stats.recordStoreFailure();
             return;
         };

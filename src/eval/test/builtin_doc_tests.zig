@@ -36,14 +36,6 @@ const debug_dir = "test/echo";
 /// Path to the compiled roc binary used for reproducing failures.
 const roc_binary = "./zig-out/bin/roc";
 
-/// Current count of doc blocks known to fail this suite. Raising this number
-/// when a previously-passing block breaks is intentional gatekeeping: the
-/// test fails for `> expected_failure_count` failures so regressions are
-/// caught immediately. Lowering it is also enforced — fix a failing block,
-/// drop this number to match, and commit both. The mismatch in either
-/// direction returns a distinct error so it's clear which way to go.
-const expected_failure_count: usize = 49;
-
 const BlockKind = enum {
     /// All top-level statements are `expect` — runs via `roc test` logic.
     expects_only,
@@ -874,21 +866,11 @@ test "Builtin.roc doc code blocks check and evaluate" {
             );
             return error.PhantomFailuresDetected;
         }
-    }
-
-    if (failures.items.len > expected_failure_count) {
         std.debug.print(
-            "\n[builtin-doc-tests] FAIL: {d} blocks failed but expected_failure_count is {d}. A previously-passing block has regressed; fix it or, if intentional, raise expected_failure_count in src/eval/test/builtin_doc_tests.zig.\n",
-            .{ failures.items.len, expected_failure_count },
+            "\n[builtin-doc-tests] FAIL: {d} doc code block(s) failed. Builtin.roc docs are gating tests; fix the blocks or update the docs so they do not claim runnable behavior.\n",
+            .{failures.items.len},
         );
-        return error.TooManyDocBlockFailures;
-    }
-    if (failures.items.len < expected_failure_count) {
-        std.debug.print(
-            "\n[builtin-doc-tests] FAIL: only {d} blocks failed but expected_failure_count is {d}. A block was fixed — please lower `expected_failure_count` in src/eval/test/builtin_doc_tests.zig to {d} and commit.\n",
-            .{ failures.items.len, expected_failure_count, failures.items.len },
-        );
-        return error.UpdateExpectedDocBlockFailureCount;
+        return error.DocBlockFailures;
     }
 }
 

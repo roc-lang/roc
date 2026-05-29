@@ -1094,7 +1094,7 @@ pub const Store = struct {
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getScalar().getFrac().alignment().toByteUnits())),
                 },
                 .str => .{
-                    .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
+                    .size = @intCast(3 * target_usize.size()), // ptr, encoded capacity, byte length
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
             },

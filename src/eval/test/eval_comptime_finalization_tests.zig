@@ -1,8 +1,8 @@
 //! Compile-time finalization coverage ported from the deleted comptime evaluator tests.
 //!
 //! These cases intentionally run through the current eval harness, which
-//! publishes checked artifacts, finalizes compile-time roots, lowers through the
-//! MIR family to LIR, and then evaluates the ARC-inserted runtime image. They
+//! publishes checked modules, finalizes compile-time roots, lowers through the
+//! post-check IRs to LIR, and then evaluates the ARC-inserted LIR image. They
 //! keep the old test names so coverage audits can map the replacement suite
 //! back to the deleted `comptime_eval_test.zig` tests without restoring the old
 //! evaluator API.
@@ -102,6 +102,12 @@ const folded_helpers =
     \\square = |x| x * x
     \\sum_squares = |a, b| square(a) + square(b)
     \\main = sum_squares(5, 12)
+;
+
+const root_local_pointer_memoization =
+    \\left = Str.concat("alpha root payload ", "000")
+    \\right = Str.concat("omega root payload ", "111")
+    \\main = (left, right)
 ;
 
 const associated_dependency =
@@ -695,6 +701,7 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - constant folding with function calls", .source_kind = .module, .source = folded_function_call, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - constant folding with recursive function", .source_kind = .module, .source = folded_recursive_function, .expected = .{ .inspect_str = "21.0" } },
     .{ .name = "comptime eval - constant folding with helper functions", .source_kind = .module, .source = folded_helpers, .expected = .{ .inspect_str = "169.0" } },
+    .{ .name = "comptime eval - root-local pointer memoization keeps equal-layout strings distinct", .source_kind = .module, .source = root_local_pointer_memoization, .expected = .{ .inspect_str = "(\"alpha root payload 000\", \"omega root payload 111\")" } },
     .{ .name = "comptime eval - associated item dependency order", .source_kind = .module, .source = associated_dependency, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - multiple associated items with dependencies", .source_kind = .module, .source = associated_multiple, .expected = .{ .inspect_str = "7.0" } },
     .{ .name = "comptime eval - deeply nested associated items (5+ levels)", .source_kind = .module, .source = associated_deep, .expected = .{ .inspect_str = "123.0" } },

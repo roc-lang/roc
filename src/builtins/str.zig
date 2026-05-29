@@ -43,32 +43,60 @@ const InPlace = enum(u8) {
 };
 
 const MASK_ISIZE: isize = std.math.minInt(isize);
-const MASK: usize = @as(usize, @bitCast(MASK_ISIZE));
-const SEAMLESS_SLICE_BIT: usize = MASK;
+const SMALL_STR_BIT: usize = @as(usize, @bitCast(MASK_ISIZE));
+const SEAMLESS_SLICE_TAG: usize = 1;
 
 /// TODO
 pub const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
 
-/// TODO: Document RocStr struct.
+/// Runtime representation of Roc's Str value.
+///
+/// Small strings store their bytes inline across the full struct and mark the
+/// final byte with the high bit. Big strings keep `bytes` as a directly
+/// dereferenceable pointer. We deliberately do not tag `bytes`: string
+/// operations, hosts, glue, and object relocations all need the byte pointer to
+/// be usable as-is, and masking it on every read would put tag handling in the
+/// hottest path. Slice tagging lives in `capacity_or_alloc_ptr` instead, which is
+/// only inspected by capacity and reference-counting operations.
+///
+/// Big-string capacities are shifted left by one to keep the low bit available
+/// for slice tagging. That makes the maximum representable capacity the maximum
+/// signed pointer-sized integer: about 2 GiB on 32-bit targets and 8 EiB on
+/// 64-bit targets.
 pub const RocStr = extern struct {
     bytes: ?[*]u8,
-    length: usize,
-    // For big strs, contains the capacity.
-    // For seamless slices contains the pointer to the original allocation.
+    // For big strs, contains the capacity shifted left by one.
+    // For seamless slices contains the pointer to the original allocation, tagged with 1.
     // This pointer is to the first character of the original string.
-    // Note we storing an allocation pointer, the pointer must be right shifted by one.
     capacity_or_alloc_ptr: usize,
+    length: usize,
 
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
         return RocStr{
-            .length = 0,
             .bytes = null,
-            .capacity_or_alloc_ptr = MASK,
+            .capacity_or_alloc_ptr = 0,
+            .length = SMALL_STR_BIT,
         };
+    }
+
+    pub inline fn encodeCapacity(capacity: usize) usize {
+        return capacity << 1;
+    }
+
+    pub inline fn decodeCapacity(encoded: usize) usize {
+        return encoded >> 1;
+    }
+
+    pub inline fn encodeSliceAllocationPtr(ptr: [*]u8) usize {
+        return @intFromPtr(ptr) | SEAMLESS_SLICE_TAG;
+    }
+
+    pub inline fn decodeSliceAllocationPtr(encoded: usize) usize {
+        return encoded & ~SEAMLESS_SLICE_TAG;
     }
 
     // This clones the pointed-to bytes if they won't fit in a
@@ -89,30 +117,31 @@ pub const RocStr = extern struct {
     pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode, roc_ops: *RocOps) RocStr {
         const start_byte = @as([*]u8, @ptrCast(list.bytes)) + start;
         if (list.isSeamlessSlice()) {
+            const list_alloc_ptr = list.getAllocationDataPtr(roc_ops) orelse return RocStr.empty();
             return RocStr{
                 .bytes = start_byte,
-                .length = count | SEAMLESS_SLICE_BIT,
-                .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr & (~SEAMLESS_SLICE_BIT),
+                .capacity_or_alloc_ptr = encodeSliceAllocationPtr(list_alloc_ptr),
+                .length = count,
             };
         } else if (start == 0 and (update_mode == .InPlace or list.isUnique(roc_ops))) {
             // Rare case, we can take over the original list.
             return RocStr{
                 .bytes = start_byte,
+                .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr, // RocStr and RocList share owned capacity encoding.
                 .length = count,
-                .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr, // This is guaranteed to be a proper capacity.
             };
         } else {
             // Create seamless slice pointing to the list.
             return RocStr{
                 .bytes = start_byte,
-                .length = count | SEAMLESS_SLICE_BIT,
-                .capacity_or_alloc_ptr = @intFromPtr(list.bytes) >> 1,
+                .capacity_or_alloc_ptr = encodeSliceAllocationPtr(list.bytes orelse return RocStr.empty()),
+                .length = count,
             };
         }
     }
 
     pub fn isSeamlessSlice(self: RocStr) bool {
-        return !self.isSmallStr() and @as(isize, @bitCast(self.length)) < 0;
+        return !self.isSmallStr() and (self.capacity_or_alloc_ptr & SEAMLESS_SLICE_TAG) == SEAMLESS_SLICE_TAG;
     }
 
     pub fn fromSlice(
@@ -153,8 +182,8 @@ pub const RocStr = extern struct {
 
         return RocStr{
             .bytes = first_element,
+            .capacity_or_alloc_ptr = encodeCapacity(capacity),
             .length = length,
-            .capacity_or_alloc_ptr = capacity,
         };
     }
 
@@ -198,11 +227,11 @@ pub const RocStr = extern struct {
         }
     }
 
-    // This returns all ones if the list is a seamless slice.
+    // This returns all ones if the string is a seamless slice.
     // Otherwise, it returns all zeros.
     // This is done without branching for optimization purposes.
     pub fn seamlessSliceMask(self: RocStr) usize {
-        return @as(usize, @bitCast(@as(isize, @bitCast(self.length)) >> (@bitSizeOf(isize) - 1)));
+        return 0 -% (self.capacity_or_alloc_ptr & SEAMLESS_SLICE_TAG);
     }
 
     // returns a pointer to the original allocation.
@@ -213,7 +242,7 @@ pub const RocStr = extern struct {
     // This does not return a valid value if the input is a small string.
     pub fn getAllocationPtr(self: RocStr) ?[*]u8 {
         const str_alloc_ptr = @intFromPtr(self.bytes);
-        const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
+        const slice_alloc_ptr = decodeSliceAllocationPtr(self.capacity_or_alloc_ptr);
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
@@ -304,8 +333,6 @@ pub const RocStr = extern struct {
             // just return the bytes
             return str;
         } else {
-            // Use len() instead of .length to handle seamless slices correctly.
-            // For seamless slices, .length has the SEAMLESS_SLICE_BIT set.
             const length = str.len();
             const new_str = RocStr.allocateBig(length, length, roc_ops);
 
@@ -347,7 +374,7 @@ pub const RocStr = extern struct {
                 roc_ops,
             );
 
-            return RocStr{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
+            return RocStr{ .bytes = new_source, .capacity_or_alloc_ptr = encodeCapacity(new_capacity), .length = new_length };
         }
         return self.reallocateFresh(new_length, roc_ops);
     }
@@ -398,7 +425,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isSmallStr(self: RocStr) bool {
-        return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
+        return @as(isize, @bitCast(self.length)) < 0;
     }
 
     fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
@@ -416,7 +443,7 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             return self.asArray()[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
         } else {
-            return self.length & (~SEAMLESS_SLICE_BIT);
+            return self.length;
         }
     }
 
@@ -424,7 +451,7 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             self.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
         } else {
-            self.length = length | (SEAMLESS_SLICE_BIT & self.length);
+            self.length = length;
         }
     }
 
@@ -432,9 +459,9 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             return SMALL_STR_MAX_LENGTH;
         } else if (self.isSeamlessSlice()) {
-            return self.length & (~SEAMLESS_SLICE_BIT);
+            return self.length;
         } else {
-            return self.capacity_or_alloc_ptr;
+            return decodeCapacity(self.capacity_or_alloc_ptr);
         }
     }
 
@@ -771,16 +798,14 @@ pub fn substringUnsafe(
             output.setLen(length);
             return output;
         } else {
-            // Shifting right by 1 is required to avoid the highest bit of capacity being set.
-            // If it was set, the slice would get interpreted as a small string.
-            const str_alloc_ptr = (@intFromPtr(source_ptr) >> 1);
-            const slice_alloc_ptr = string.capacity_or_alloc_ptr;
-            const slice_mask = string.seamlessSliceMask();
-            const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+            const alloc_ptr = if (string.isSeamlessSlice())
+                string.capacity_or_alloc_ptr
+            else
+                RocStr.encodeSliceAllocationPtr(source_ptr);
             return RocStr{
                 .bytes = source_ptr + start,
-                .length = length | SEAMLESS_SLICE_BIT,
                 .capacity_or_alloc_ptr = alloc_ptr,
+                .length = length,
             };
         }
     }
@@ -883,6 +908,10 @@ pub fn repeatC(
 ) callconv(.c) RocStr {
     const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
+    if (count == 0 or bytes_len == 0) {
+        return RocStr.empty();
+    }
+
     const bytes_ptr = string.asU8ptr();
 
     var ret_string = RocStr.allocate(count * bytes_len, roc_ops);
@@ -895,6 +924,16 @@ pub fn repeatC(
     }
 
     return ret_string;
+}
+
+test "repeatC: empty string short-circuits" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const repeated = repeatC(RocStr.empty(), std.math.maxInt(u64), test_env.getOps());
+    defer repeated.decref(test_env.getOps());
+
+    try std.testing.expect(repeated.eql(RocStr.empty()));
 }
 
 /// Str.endsWith
@@ -1079,13 +1118,16 @@ inline fn strToBytes(
 
         @memcpy(ptr[0..length], arg.asU8ptr()[0..length]);
 
-        return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = length };
+        return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = RocList.encodeCapacity(length) };
     } else {
         // The returned list shares the same underlying allocation as the string.
         // We must incref the allocation since there's now an additional reference to it.
         arg.incref(1, roc_ops);
-        const is_seamless_slice = arg.length & SEAMLESS_SLICE_BIT;
-        return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = arg.capacity_or_alloc_ptr | is_seamless_slice };
+        const list_capacity_or_alloc_ptr = if (arg.isSeamlessSlice()) blk: {
+            const alloc_ptr = arg.getAllocationPtr() orelse return RocList.empty();
+            break :blk RocList.encodeSliceAllocationPtr(alloc_ptr);
+        } else arg.capacity_or_alloc_ptr;
+        return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = list_capacity_or_alloc_ptr };
     }
 }
 
@@ -1129,6 +1171,7 @@ const Utf8Iterator = struct {
         const n = unicode.utf8ByteSequenceLength(rest[0]) catch {
             // invalid start byte
             it.i += 1;
+            it.skipAdjacentInvalidStartBytes();
             return UNICODE_REPLACEMENT;
         };
 
@@ -1138,8 +1181,8 @@ const Utf8Iterator = struct {
                 it.i += i;
                 return UNICODE_REPLACEMENT;
             }
-            if (rest[i] < 0x70) {
-                // expected continuation byte (>= 0x70)
+            if ((rest[i] & 0xC0) != 0x80) {
+                // expected continuation byte (0b10xx_xxxx)
                 it.i += i;
                 return UNICODE_REPLACEMENT;
             }
@@ -1149,6 +1192,18 @@ const Utf8Iterator = struct {
         return unicode.utf8Decode(rest[0..n]) catch {
             return UNICODE_REPLACEMENT;
         };
+    }
+
+    fn skipAdjacentInvalidStartBytes(it: *Utf8Iterator) void {
+        while (it.i < it.bytes.len) {
+            const byte = it.bytes[it.i];
+            if (byte < 0x80) return;
+            _ = unicode.utf8ByteSequenceLength(byte) catch {
+                it.i += 1;
+                continue;
+            };
+            return;
+        }
     }
 
     pub fn reset(it: *Utf8Iterator) void {
@@ -1363,7 +1418,7 @@ pub fn validateUtf8Bytes(
     length: usize,
     roc_ops: *RocOps,
 ) FromUtf8Try {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable, roc_ops);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = RocList.encodeCapacity(length) }, .Immutable, roc_ops);
 }
 
 /// TODO
@@ -1469,15 +1524,15 @@ pub fn strTrim(
         // Already a seamless slice, just update the range.
         return RocStr{
             .bytes = bytes_ptr + leading_bytes,
-            .length = new_len | SEAMLESS_SLICE_BIT,
             .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
+            .length = new_len,
         };
     } else {
         // Not unique or removing leading bytes, just make a slice.
         return RocStr{
             .bytes = bytes_ptr + leading_bytes,
-            .length = new_len | SEAMLESS_SLICE_BIT,
-            .capacity_or_alloc_ptr = @intFromPtr(bytes_ptr) >> 1,
+            .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
+            .length = new_len,
         };
     }
 }
@@ -1531,15 +1586,15 @@ pub fn strTrimStart(
         // Already a seamless slice, just update the range.
         return RocStr{
             .bytes = bytes_ptr + leading_bytes,
-            .length = new_len | SEAMLESS_SLICE_BIT,
             .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
+            .length = new_len,
         };
     } else {
         // Not unique or removing leading bytes, just make a slice.
         return RocStr{
             .bytes = bytes_ptr + leading_bytes,
-            .length = new_len | SEAMLESS_SLICE_BIT,
-            .capacity_or_alloc_ptr = @intFromPtr(bytes_ptr) >> 1,
+            .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
+            .length = new_len,
         };
     }
 }
@@ -1593,15 +1648,15 @@ pub fn strTrimEnd(
         // Already a seamless slice, just update the range.
         return RocStr{
             .bytes = bytes_ptr,
-            .length = new_len | SEAMLESS_SLICE_BIT,
             .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
+            .length = new_len,
         };
     } else {
         // Not unique, just make a slice.
         return RocStr{
             .bytes = bytes_ptr,
-            .length = new_len | SEAMLESS_SLICE_BIT,
-            .capacity_or_alloc_ptr = @intFromPtr(bytes_ptr) >> 1,
+            .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
+            .length = new_len,
         };
     }
 }
@@ -2695,7 +2750,7 @@ test "RocStr.joinWith: result is big" {
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
     const list = RocListStr{
         .list_length = 3,
-        .list_capacity_or_alloc_ptr = 3,
+        .list_capacity_or_alloc_ptr = RocList.encodeCapacity(3),
         .list_elements = @as([*]RocStr, @ptrCast(&elements)),
     };
 
@@ -2993,6 +3048,20 @@ test "fromUtf8Lossy: invalid start byte" {
     defer test_env.deinit();
 
     const list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+
+    const res = fromUtf8Lossy(list, test_env.getOps());
+    defer res.decref(test_env.getOps());
+    const expected = RocStr.fromSlice("r�c", test_env.getOps());
+    defer expected.decref(test_env.getOps());
+    try std.testing.expect(expected.eql(res));
+}
+
+test "fromUtf8Lossy: adjacent invalid start bytes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const list = RocList.fromSlice(u8, "r\xFF\xFFc", false, test_env.getOps());
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
 
     const res = fromUtf8Lossy(list, test_env.getOps());

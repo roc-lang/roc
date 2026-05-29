@@ -53,9 +53,9 @@ match numbers {
 								(p-assign (ident "middle")))
 							(rest-at (index 0)))))
 				(value
-					(e-not-implemented))))))
+					(e-runtime-error (tag "not_implemented")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

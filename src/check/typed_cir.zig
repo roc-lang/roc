@@ -136,17 +136,14 @@ pub const Modules = struct {
             }
             module_result.value_ptr.* = @intCast(i);
 
-            for (module_.allDefs()) |def_idx| {
+            for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().global_value_defs)) |def_idx| {
                 const def = module_.def(def_idx);
                 if (def.data.kind != .let) continue;
                 switch (def.pattern.data) {
                     .assign => |assign| {
                         const def_result = try module_data.top_level_defs_by_ident.getOrPut(allocator, assign.ident);
                         if (def_result.found_existing) {
-                            std.debug.panic(
-                                "typed_cir invariant violated: duplicate top-level def ident in module {s}",
-                                .{module_name},
-                            );
+                            continue;
                         }
                         def_result.value_ptr.* = def_idx;
                     },

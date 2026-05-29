@@ -1,4 +1,17 @@
-app [main!, answer, flag, flags, table, names, tree, boxed_add_one] { pf: platform "./platform/main.roc" }
+app [
+    main!,
+    answer,
+    flag,
+    flags,
+    table,
+    names,
+    tree,
+    boxed_add_one,
+    literal_long,
+    assembled_strings,
+    intermediate_final,
+    static_slices,
+] { pf: platform "./platform/main.roc" }
 
 Branch : [BranchLeaf(I64), BranchPair(Box(I64), Box(I64))]
 Tree : [Leaf(I64), Node(Box(Branch), Box(Branch))]
@@ -57,3 +70,31 @@ tree =
 
 boxed_add_one : Box(I64ToI64)
 boxed_add_one = Box.box(|value| value + 1)
+
+literal_long : Str
+literal_long = "literal readonly string longer than thirty bytes"
+
+assembled_strings : (Str, Str, Str)
+assembled_strings = {
+    first = "assembled readonly first ".concat("string from comptime concat")
+    second = "assembled readonly second ".concat("string from comptime concat")
+    third = first.concat(" + ").concat(second)
+    (first, second, third)
+}
+
+intermediate_final : Str
+intermediate_final = {
+    intermediate = "INTERMEDIATE_ONLY_LEFT_SHOULD_NOT_BE_EMITTED".concat("_INTERMEDIATE_ONLY_RIGHT_SHOULD_NOT_BE_EMITTED")
+    if intermediate.count_utf8_bytes() > 0 {
+        "final readonly string after comptime branch"
+    } else {
+        "unreachable readonly string after comptime branch"
+    }
+}
+
+static_slices : (Str, Str)
+static_slices = {
+    source = "STATIC_SLICE_SOURCE:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    tail = source.drop_prefix("STATIC_SLICE_SOURCE:")
+    (source, tail)
+}

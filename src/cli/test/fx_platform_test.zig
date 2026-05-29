@@ -60,16 +60,16 @@ fn runDevBackendHostSelfTest(
     try env_map.put("ROC_CACHE_DIR", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
-    const build_result = try std.process.run(allocator, std.testing.io, .{
-        .argv = &[_][]const u8{
-            util.roc_binary_path,
-            "build",
-            "--opt=dev",
-            "--no-cache",
-            output_arg,
-            roc_file,
-        },
-        .environ_map = &env_map,
+    const build_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "build",
+        "--opt=dev",
+        "--no-cache",
+        output_arg,
+        roc_file,
+    }, .{
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(build_result.stdout);
     defer allocator.free(build_result.stderr);
@@ -91,11 +91,89 @@ fn runDevBackendHostSelfTest(
         },
     }
 
-    return try std.process.run(allocator, std.testing.io, .{
-        .argv = &[_][]const u8{
-            output_path,
-            self_test_flag,
+    return try util.runChildWithTimeout(allocator, &[_][]const u8{
+        output_path,
+        self_test_flag,
+    }, .{
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+}
+
+fn buildAndRunDevBackendApp(
+    allocator: std.mem.Allocator,
+    roc_file: []const u8,
+    output_basename: []const u8,
+    inspect_output: ?*const fn (std.mem.Allocator, []const u8) anyerror!void,
+) !std.process.RunResult {
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, output_basename });
+    defer allocator.free(output_path);
+
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
+
+    const zig_local_cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_path);
+    try tmp_dir.dir.createDirPath(std.testing.io, "zig-local-cache");
+
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+
+    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
+    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+    var env_map = try environ.createMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
+
+    const build_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "build",
+        "--opt=dev",
+        "--no-cache",
+        output_arg,
+        roc_file,
+    }, .{
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+
+    switch (build_result.term) {
+        .exited => |code| {
+            if (code != 0) {
+                std.debug.print("roc build --opt=dev failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{build_result.stderr});
+                return error.DevBackendBuildFailed;
+            }
         },
+        else => {
+            std.debug.print("roc build --opt=dev terminated abnormally: {}\n", .{build_result.term});
+            std.debug.print("STDOUT: {s}\n", .{build_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{build_result.stderr});
+            return error.DevBackendBuildFailed;
+        },
+    }
+
+    if (inspect_output) |inspect| {
+        try inspect(allocator, output_path);
+    }
+
+    return try util.runChildWithTimeout(allocator, &[_][]const u8{output_path}, .{
+        .max_output_bytes = 10 * 1024 * 1024,
     });
 }
 
@@ -175,7 +253,7 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
                 return error.UnexpectedExitCode;
             }
             try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
-            try testing.expect(std.mem.find(u8, run_result.stderr, "Division by zero") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "I64 division by zero") != null);
             try testing.expect(std.mem.find(u8, run_result.stderr, "overflowed its stack memory") == null);
         },
         else => {
@@ -189,28 +267,30 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
 fn expectDevRuntimeDivisionByZero() !void {
     const allocator = testing.allocator;
 
-    const run_result = try runDevBackendHostSelfTest(
+    const run_result = try buildAndRunDevBackendApp(
         allocator,
-        "test/fx/hello_world.roc",
-        "--host-test-division-by-zero",
+        "test/fx/division_by_zero.roc",
+        "fx_dev_division_by_zero",
+        null,
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
     switch (run_result.term) {
         .exited => |code| {
-            if (code != 136) {
+            if (code != 1) {
                 std.debug.print("Unexpected dev exit code: {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
-            try testing.expect(std.mem.find(u8, run_result.stderr, "This Roc application divided by zero and crashed.") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "I64 division by zero") != null);
             try testing.expect(std.mem.find(u8, run_result.stderr, "overflowed its stack memory") == null);
-            try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") == null);
             try testing.expect(std.mem.find(u8, run_result.stderr, "panic:") == null);
         },
         .signal => |sig| {
-            std.debug.print("Host self-test crashed with signal {}\n", .{sig});
+            std.debug.print("Dev runtime division by zero crashed with signal {}\n", .{sig});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.DivisionByZeroNotHandled;
         },
@@ -277,6 +357,81 @@ test "fx platform IO spec tests (interpreter)" {
 
 test "fx platform IO spec tests (dev backend)" {
     try runIoSpecTests("--opt=dev");
+}
+
+test "fx platform boxed erased callable host boundary (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "fx platform boxed erased callable host boundary (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "provided static data exports are host-linkable readonly constants" {
+    const allocator = testing.allocator;
+
+    const run_result = try buildAndRunDevBackendApp(
+        allocator,
+        "test/static-data-host/app.roc",
+        "static_data_host_test",
+        inspectStaticDataHostBinary,
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .exited => |code| {
+            if (code != 0) {
+                std.debug.print("static data host test exited with code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.StaticDataHostTestFailed;
+            }
+        },
+        else => {
+            std.debug.print("static data host test terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.StaticDataHostTestFailed;
+        },
+    }
+
+    try testing.expectEqualStrings("", run_result.stdout);
+    try testing.expectEqualStrings("static data host constants ok\n", run_result.stderr);
+}
+
+fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) !void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, allocator, .limited(256 * 1024 * 1024));
+    defer allocator.free(bytes);
+
+    const required = [_][]const u8{
+        "literal readonly string longer than thirty bytes",
+        "assembled readonly first string from comptime concat",
+        "assembled readonly second string from comptime concat",
+        "assembled readonly first string from comptime concat + assembled readonly second string from comptime concat",
+        "final readonly string after comptime branch",
+        "STATIC_SLICE_SOURCE:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    };
+
+    for (required) |needle| {
+        if (std.mem.find(u8, bytes, needle) == null) {
+            std.debug.print("compiled static-data-host binary is missing expected static string: {s}\n", .{needle});
+            return error.StaticDataHostBinaryMissingString;
+        }
+    }
+
+    const forbidden = [_][]const u8{
+        "INTERMEDIATE_ONLY_LEFT_SHOULD_NOT_BE_EMITTED",
+        "INTERMEDIATE_ONLY_RIGHT_SHOULD_NOT_BE_EMITTED",
+        "unreachable readonly string after comptime branch",
+    };
+
+    for (forbidden) |needle| {
+        if (std.mem.find(u8, bytes, needle) != null) {
+            std.debug.print("compiled static-data-host binary contains comptime-only string: {s}\n", .{needle});
+            return error.StaticDataHostBinaryContainsComptimeOnlyString;
+        }
+    }
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.
@@ -632,13 +787,13 @@ test "fx platform run from different cwd" {
     defer env_map.deinit();
 
     // Run roc from the test/fx directory with a relative path to app.roc
-    const run_result = try std.process.run(allocator, std.testing.io, .{
-        .argv = &[_][]const u8{
-            roc_abs_path,
-            "app.roc",
-        },
-        .cwd = .{ .path = "test/fx" },
-        .environ_map = &env_map,
+    const run_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
+        roc_abs_path,
+        "app.roc",
+    }, .{
+        .cwd = "test/fx",
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -695,6 +850,21 @@ test "drop_prefix match use-after-free regression" {
     {
         std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
         return error.UseAfterFree;
+    }
+}
+
+test "str seamless slice rc uses original allocation pointer" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/fx/str_seamless_slice_rc.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkSuccess(run_result);
+    try testing.expectEqualStrings("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n", run_result.stdout);
+    if (std.mem.indexOf(u8, run_result.stderr, "[Roc Memory Info]") != null) {
+        std.debug.print("Detected leaked allocation in seamless-slice RC regression:\n{s}\n", .{run_result.stderr});
+        return error.SeamlessSliceRcLeak;
     }
 }
 
@@ -896,7 +1066,7 @@ test "run aborts on parse errors by default" {
 
 test "run with --allow-errors attempts execution despite type errors" {
     // Tests that roc run --allow-errors attempts to execute even with type errors.
-    // TODO: remove Windows workaround once the shared LIR runtime-image path
+    // TODO: remove Windows workaround once the shared LIR image path
     // handles crash-on-type-error consistently on Windows.
     const opt_flag: []const u8 = if (@import("builtin").os.tag == .windows) "--opt=interpreter" else "--opt=dev";
     const allocator = testing.allocator;
@@ -1083,9 +1253,8 @@ test "fx platform runtime stack overflow" {
 }
 
 test "fx platform runtime division by zero" {
-    // Some architectures do not trap on integer divide by zero in generated code,
-    // so the dev-backend half uses the host self-test hook to exercise the host's
-    // arithmetic handler directly while still keeping the real interpreter sample.
+    // The divisor is mutable in the Roc app, so this covers runtime execution
+    // rather than compile-time finalization.
     try expectInterpreterRuntimeDivisionByZero();
     try expectDevRuntimeDivisionByZero();
 }
@@ -1138,8 +1307,8 @@ test "fx platform inline expect fails in dev backend binary" {
     try util.checkSuccess(build_result);
 
     // Run the built binary
-    const run_result = try std.process.run(allocator, std.testing.io, .{
-        .argv = &[_][]const u8{"./issue8517"},
+    const run_result = try util.runChildWithTimeout(allocator, &[_][]const u8{"./issue8517"}, .{
+        .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);

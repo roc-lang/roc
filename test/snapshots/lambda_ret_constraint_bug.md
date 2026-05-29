@@ -80,10 +80,12 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "n")))
-				(e-num (value "2"))))
+			(e-dispatch-call (method "times") (constraint-fn-var 77)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "n"))))
+				(args
+					(e-num (value "2")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -94,7 +96,7 @@ NO CHANGE
 			(args
 				(p-underscore)
 				(p-underscore))
-			(e-call (constraint-fn-var 139)
+			(e-call (constraint-fn-var 207)
 				(e-lookup-local
 					(p-assign (ident "helper")))
 				(e-num (value "5"))))

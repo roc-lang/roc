@@ -1,9 +1,11 @@
 //! Data-driven eval test definitions for the inspect-only parallel runner.
 
 const TestCase = @import("parallel_runner.zig").TestCase;
+const bughunt_repros = @import("eval_bughunt_repros.zig");
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
 const comptime_finalization_tests = @import("eval_comptime_finalization_tests.zig");
 const highest_lowest_tests = @import("eval_highest_lowest_tests.zig");
+const issue_89xx_tests = @import("eval_issue_89xx_tests.zig");
 const issue_93xx_tests = @import("eval_issue_93xx_tests.zig");
 const interpreter_style_tests = @import("eval_interpreter_style_tests.zig");
 const low_level_tests = @import("eval_low_level_tests.zig");
@@ -64,6 +66,44 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .problem = {} },
+    },
+
+    .{
+        .name = "allocation - Str.drop_prefix returns seamless slice without allocating copy",
+        .source =
+        \\{
+        \\    prefix = "WASM_SEAMLESS_SLICE_PREFIX:"
+        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
+        \\    source = Str.concat(prefix, payload)
+        \\
+        \\    Str.drop_prefix(source, prefix)
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 2,
+        } },
+    },
+
+    .{
+        .name = "allocation - List.sublist returns seamless slice without allocating copy",
+        .source =
+        \\{
+        \\    prefix = [76, 73, 83, 84, 95, 83, 69, 65, 77, 76, 69, 83, 83, 95, 83, 76, 73, 67, 69, 95, 80, 82, 69, 70, 73, 88, 58]
+        \\    payload = [97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90]
+        \\    source = List.concat(prefix, payload)
+        \\    slice = List.sublist(source, { start: List.len(prefix), len: List.len(payload) })
+        \\
+        \\    match Str.from_utf8(slice) {
+        \\        Ok(str) => str
+        \\        Err(_) => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 3,
+        } },
     },
 
     // Basic expressions and control flow
@@ -168,6 +208,156 @@ const core_tests = [_]TestCase{
         \\main = add_one(10) + (table.f)(20) + (table.nested.g)(9)
         ,
         .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: numeric default specialization remains replaceable until constrained",
+        .source_kind = .module,
+        .source =
+        \\add_one = |x| x + 1
+        \\
+        \\force_u8 : U8 -> U8
+        \\force_u8 = |n| n
+        \\
+        \\main = {
+        \\    defaulted = add_one(41)
+        \\    constrained = force_u8(add_one(41))
+        \\
+        \\    (defaulted, constrained)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(42.0, 42)" },
+    },
+    .{
+        .name = "inspect: annotated Dec specialization is final evidence",
+        .source_kind = .module,
+        .source =
+        \\add_one_dec : Dec -> Dec
+        \\add_one_dec = |x| x + 1
+        \\
+        \\main = add_one_dec(41)
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: custom from_numeral receives contextual integer digits",
+        .source_kind = .module,
+        .source =
+        \\Big := [
+        \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
+        \\].{
+        \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Value({
+        \\            is_negative: parts.is_negative,
+        \\            before: parts.digits_before_pt,
+        \\            after: parts.digits_after_pt,
+        \\            count: parts.digits_after_pt_count,
+        \\        }))
+        \\    }
+        \\}
+        \\
+        \\force : Big -> Big
+        \\force = |n| n
+        \\
+        \\main = {
+        \\    value = force(42)
+        \\
+        \\    match value {
+        \\        Value(parts) => (parts.is_negative, parts.before, parts.after, parts.count)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(False, [42], [], 0)" },
+    },
+    .{
+        .name = "inspect: custom from_numeral receives fractional digit count",
+        .source_kind = .module,
+        .source =
+        \\Big := [
+        \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
+        \\].{
+        \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Value({
+        \\            is_negative: parts.is_negative,
+        \\            before: parts.digits_before_pt,
+        \\            after: parts.digits_after_pt,
+        \\            count: parts.digits_after_pt_count,
+        \\        }))
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    value : Big
+        \\    value = 3.14
+        \\
+        \\    match value {
+        \\        Value(parts) => (parts.is_negative, parts.before, parts.after, parts.count)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(False, [3], [14], 2)" },
+    },
+    .{
+        .name = "inspect: custom from_numeral preserves exact huge fractional digits",
+        .source_kind = .module,
+        .source =
+        \\Big := [
+        \\    Value({ is_negative: Bool, before: List(U8), after: List(U8), count: U64 }),
+        \\].{
+        \\    from_numeral : Numeral -> Try(Big, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Value({
+        \\            is_negative: parts.is_negative,
+        \\            before: parts.digits_before_pt,
+        \\            after: parts.digits_after_pt,
+        \\            count: parts.digits_after_pt_count,
+        \\        }))
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    value = 340282366920938463463374607431768211456.00000000000000000001.Big
+        \\
+        \\    match value {
+        \\        Value(parts) => (parts.is_negative, parts.before, parts.after, parts.count)
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(False, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1], 20)" },
+    },
+    .{
+        .name = "inspect: unconstrained empty list specialization remains replaceable until constrained",
+        .source_kind = .module,
+        .source =
+        \\empty = || []
+        \\
+        \\force_strings : List(Str) -> List(Str)
+        \\force_strings = |xs| xs
+        \\
+        \\main = {
+        \\    unconstrained_len = empty().len()
+        \\    strings = force_strings(empty())
+        \\
+        \\    (unconstrained_len, strings)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, [])" },
+    },
+    .{
+        .name = "inspect: explicit empty and zero-sized types are final evidence",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    impossible_items : List([])
+        \\    impossible_items = []
+        \\
+        \\    markers = [{}, {}, {}]
+        \\
+        \\    (impossible_items.len(), markers.len())
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, 3)" },
     },
     .{
         .name = "inspect: Bool stored boxed tagged and passed as ordinary Roc value",
@@ -1420,6 +1610,22 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "10" },
     },
     .{
+        .name = "inspect: two-arg proc list iterator loop returns full length",
+        .source =
+        \\{
+        \\    count = |items, _ignored| {
+        \\        var $total = 0.U64
+        \\        for _item in items {
+        \\            $total = $total + 1
+        \\        }
+        \\        $total
+        \\    }
+        \\    count([10.I64, 20.I64, 30.I64, 40.I64, 50.I64], 123.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
         .name = "inspect: for loop early return",
         .source =
         \\{
@@ -2513,6 +2719,80 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "42" },
     },
     .{ .name = "inspect: List.fold builtin sum", .source = "List.fold([1, 2, 3], 0, |acc, item| acc + item)", .expected = .{ .inspect_str = "6.0" } },
+    .{
+        .name = "inspect: List.iter folds builtin iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter()
+        \\    Iter.fold(iter, 0.I64, |acc, item| acc + item)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "inspect: List.iter maps builtin iterator",
+        .source =
+        \\{
+        \\    iter = Iter.map([10.I64, 20].iter(), |item| item + 1)
+        \\    Iter.fold(iter, 0.I64, |acc, item| acc + item)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "32" },
+    },
+    .{
+        .name = "inspect: Iter.iter returns the same iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter().iter()
+        \\    Iter.fold(iter, 0.I64, |acc, item| acc + item)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "inspect: Iter.keep_if emits skip with rest iterator",
+        .source =
+        \\match Iter.next(Iter.keep_if([1.I64, 2].iter(), |item| item > 1)) {
+        \\    Skip({ count, rest }) => count == 1 and Iter.fold(rest, 0.I64, |acc, item| acc + item) == 2
+        \\    _ => Bool.False
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: Iter.keep_if fold continues after skips",
+        .source =
+        \\{
+        \\    iter = Iter.keep_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 0)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2, 4]" },
+    },
+    .{
+        .name = "inspect: Iter.drop_if fold continues after skips",
+        .source =
+        \\{
+        \\    iter = Iter.drop_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 0)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "for loop over filtered iterator continues after skips",
+        .source =
+        \\{
+        \\    iter = Iter.keep_if([1.I64, 2, 3, 4, 5].iter(), |item| I64.rem_by(item, 2) == 1)
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
@@ -2613,9 +2893,158 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
     },
-    .{ .name = "inspect: U32.to builds inclusive range", .source = "1.U32.to(5.U32)", .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" } },
-    .{ .name = "inspect: U32.until builds exclusive range", .source = "0.U32.until(3.U32)", .expected = .{ .inspect_str = "[0, 1, 2]" } },
-    .{ .name = "inspect: I64.until builds exclusive range", .source = "-2.I64.until(2.I64)", .expected = .{ .inspect_str = "[-2, -1, 0, 1]" } },
+    .{
+        .name = "inspect: U32.to builds inclusive range iterator",
+        .source = "Iter.fold(1.U32.to(5.U32), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
+    },
+    .{
+        .name = "inspect: U32.until builds exclusive range iterator",
+        .source = "Iter.fold(0.U32.until(3.U32), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[0, 1, 2]" },
+    },
+    .{
+        .name = "inspect: I64.until builds exclusive range iterator",
+        .source = "Iter.fold((-2.I64).until(2.I64), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[-2, -1, 0, 1]" },
+    },
+    .{
+        .name = "inspect: numeric to methods all return iterators",
+        .source =
+        \\{
+        \\    u8 = Iter.fold(1.U8.to(3.U8), 0.U8, |acc, item| acc + item)
+        \\    i8 = Iter.fold((-1.I8).to(1.I8), 0.I8, |acc, item| acc + item)
+        \\    u16 = Iter.fold(1.U16.to(3.U16), 0.U16, |acc, item| acc + item)
+        \\    i16 = Iter.fold((-1.I16).to(1.I16), 0.I16, |acc, item| acc + item)
+        \\    u32 = Iter.fold(1.U32.to(3.U32), 0.U32, |acc, item| acc + item)
+        \\    i32 = Iter.fold((-1.I32).to(1.I32), 0.I32, |acc, item| acc + item)
+        \\    u64 = Iter.fold(1.U64.to(3.U64), 0.U64, |acc, item| acc + item)
+        \\    i64 = Iter.fold((-1.I64).to(1.I64), 0.I64, |acc, item| acc + item)
+        \\    u128 = Iter.fold(1.U128.to(3.U128), 0.U128, |acc, item| acc + item)
+        \\    i128 = Iter.fold((-1.I128).to(1.I128), 0.I128, |acc, item| acc + item)
+        \\    dec = Iter.fold(Dec.to(1.0, 3.0), 0.0.Dec, |acc, item| acc + item)
+        \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6.0)" },
+    },
+    .{
+        .name = "inspect: numeric until methods all return iterators",
+        .source =
+        \\{
+        \\    u8 = Iter.fold(1.U8.until(3.U8), 0.U64, |acc, _| acc + 1)
+        \\    i8 = Iter.fold((-1.I8).until(1.I8), 0.U64, |acc, _| acc + 1)
+        \\    u16 = Iter.fold(1.U16.until(3.U16), 0.U64, |acc, _| acc + 1)
+        \\    i16 = Iter.fold((-1.I16).until(1.I16), 0.U64, |acc, _| acc + 1)
+        \\    u32 = Iter.fold(1.U32.until(3.U32), 0.U64, |acc, _| acc + 1)
+        \\    i32 = Iter.fold((-1.I32).until(1.I32), 0.U64, |acc, _| acc + 1)
+        \\    u64 = Iter.fold(1.U64.until(3.U64), 0.U64, |acc, _| acc + 1)
+        \\    i64 = Iter.fold((-1.I64).until(1.I64), 0.U64, |acc, _| acc + 1)
+        \\    u128 = Iter.fold(1.U128.until(3.U128), 0.U64, |acc, _| acc + 1)
+        \\    i128 = Iter.fold((-1.I128).until(1.I128), 0.U64, |acc, _| acc + 1)
+        \\    dec = Iter.fold(Dec.until(1.0, 3.0), 0.U64, |acc, _| acc + 1)
+        \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2)" },
+    },
+    .{
+        .name = "inspect: checked integer arithmetic reports boundary errors",
+        .source =
+        \\{
+        \\    (
+        \\        U8.add_checked(250, 5),
+        \\        U8.add_checked(250, 6),
+        \\        U8.sub_checked(0, 1),
+        \\        U8.mul_checked(16, 16),
+        \\        U8.div_checked(1, 0),
+        \\        I8.add_checked(126, 1),
+        \\        I8.add_checked(127, 1),
+        \\        I8.add_checked(I8.lowest, -1),
+        \\        I8.sub_checked(I8.lowest, 1),
+        \\        I8.mul_checked(63, 2),
+        \\        I8.mul_checked(64, 2),
+        \\        I8.mul_checked(I8.lowest, -1),
+        \\        I8.div_checked(I8.lowest, -1),
+        \\        I8.div_checked(1, 0),
+        \\        I8.div_checked(-7, 2),
+        \\        I64.add_checked(I64.highest, -1),
+        \\        I64.add_checked(I64.highest, 1),
+        \\        U128.mul_checked(U128.highest, 2),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Ok(255), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(127), Err(Overflow), Err(Overflow), Err(Overflow), Ok(126), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(-3), Ok(9223372036854775806), Err(Overflow), Err(Overflow))" },
+    },
+    .{
+        .name = "inspect: numeric inclusive ranges stop at highest",
+        .source =
+        \\{
+        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    (
+        \\        count(U8.to(U8.highest, U8.highest)),
+        \\        count(I8.to(I8.highest, I8.highest)),
+        \\        count(U16.to(U16.highest, U16.highest)),
+        \\        count(I16.to(I16.highest, I16.highest)),
+        \\        count(U32.to(U32.highest, U32.highest)),
+        \\        count(I32.to(I32.highest, I32.highest)),
+        \\        count(U64.to(U64.highest, U64.highest)),
+        \\        count(I64.to(I64.highest, I64.highest)),
+        \\        count(U128.to(U128.highest, U128.highest)),
+        \\        count(I128.to(I128.highest, I128.highest)),
+        \\        count(Dec.to(Dec.highest, Dec.highest)),
+        \\        count(Dec.to(Dec.highest - 0.5, Dec.highest)),
+        \\        count(Dec.to(Dec.highest - 1.0, Dec.highest)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2)" },
+    },
+    .{
+        .name = "inspect: numeric exclusive ranges stop at highest",
+        .source =
+        \\{
+        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    (
+        \\        count(U8.until(U8.highest, U8.highest)),
+        \\        count(I8.until(I8.highest, I8.highest)),
+        \\        count(U16.until(U16.highest, U16.highest)),
+        \\        count(I16.until(I16.highest, I16.highest)),
+        \\        count(U32.until(U32.highest, U32.highest)),
+        \\        count(I32.until(I32.highest, I32.highest)),
+        \\        count(U64.until(U64.highest, U64.highest)),
+        \\        count(I64.until(I64.highest, I64.highest)),
+        \\        count(U128.until(U128.highest, U128.highest)),
+        \\        count(I128.until(I128.highest, I128.highest)),
+        \\        count(Dec.until(Dec.highest, Dec.highest)),
+        \\        count(Dec.until(Dec.highest - 0.5, Dec.highest)),
+        \\        count(Dec.until(Dec.highest - 1.0, Dec.highest)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1)" },
+    },
+    .{
+        .name = "inspect: numeric exclusive ranges include predecessor of highest",
+        .source =
+        \\{
+        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    (
+        \\        count(U8.until(U8.highest - 1, U8.highest)),
+        \\        count(I8.until(I8.highest - 1, I8.highest)),
+        \\        count(U16.until(U16.highest - 1, U16.highest)),
+        \\        count(I16.until(I16.highest - 1, I16.highest)),
+        \\        count(U32.until(U32.highest - 1, U32.highest)),
+        \\        count(I32.until(I32.highest - 1, I32.highest)),
+        \\        count(U64.until(U64.highest - 1, U64.highest)),
+        \\        count(I64.until(I64.highest - 1, I64.highest)),
+        \\        count(U128.until(U128.highest - 1, U128.highest)),
+        \\        count(I128.until(I128.highest - 1, I128.highest)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+    },
     .{
         .name = "inspect: generic local attached method specialization on nominal",
         .source_kind = .module,
@@ -2635,9 +3064,9 @@ const core_tests = [_]TestCase{
         .name = "inspect: generic local attached method specialization picks different nominal targets",
         .source_kind = .module,
         .source =
-        \\Box := [Box(U64)].{
-        \\  get : Box -> U64
-        \\  get = |Box.Box(n)| n
+        \\Crate := [Crate(U64)].{
+        \\  get : Crate -> U64
+        \\  get = |Crate.Crate(n)| n
         \\}
         \\
         \\Count := [Count(U64)].{
@@ -2647,7 +3076,28 @@ const core_tests = [_]TestCase{
         \\
         \\read = |value| value.get()
         \\
-        \\main = (read(Box.Box(5)), read(Count.Count(8)))
+        \\main = (read(Crate.Crate(5)), read(Count.Count(8)))
+        ,
+        .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: explicit where method constraint keeps owner generic",
+        .source_kind = .module,
+        .source =
+        \\Crate := [Crate(U64)].{
+        \\  get : Crate -> U64
+        \\  get = |Crate.Crate(n)| n
+        \\}
+        \\
+        \\Count := [Count(U64)].{
+        \\  get : Count -> U64
+        \\  get = |Count.Count(n)| n + 100
+        \\}
+        \\
+        \\read : item -> U64 where [item.get : item -> U64]
+        \\read = |value| value.get()
+        \\
+        \\main = (read(Crate.Crate(5)), read(Count.Count(8)))
         ,
         .expected = .{ .inspect_str = "(5, 108)" },
     },
@@ -2722,19 +3172,19 @@ const core_tests = [_]TestCase{
         .name = "inspect: cross-module polymorphic attached method specialization from helper module",
         .source_kind = .module,
         .source =
-        \\import BoxMod
+        \\import CrateMod
         \\import CountMod
         \\import Helpers
         \\
-        \\main = (Helpers.read(BoxMod.Box(5)), Helpers.read(CountMod.Count(8)))
+        \\main = (Helpers.read(CrateMod.Crate(5)), Helpers.read(CountMod.Count(8)))
         ,
         .imports = &.{
             .{
-                .name = "BoxMod",
+                .name = "CrateMod",
                 .source =
-                \\Box := [Box(U64)].{
-                \\  get : Box -> U64
-                \\  get = |Box.Box(n)| n
+                \\Crate := [Crate(U64)].{
+                \\  get : Crate -> U64
+                \\  get = |Crate.Crate(n)| n
                 \\}
                 ,
             },
@@ -2757,6 +3207,48 @@ const core_tests = [_]TestCase{
             },
         },
         .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: imported where helper remains generic when another owner is visible",
+        .source_kind = .module,
+        .source =
+        \\import CountMod
+        \\import Helpers
+        \\
+        \\main = Helpers.read(CountMod.Count(8))
+        ,
+        .imports = &.{
+            .{
+                .name = "CrateMod",
+                .source =
+                \\Crate := [Crate(U64)].{
+                \\  get : Crate -> U64
+                \\  get = |Crate.Crate(n)| n
+                \\}
+                ,
+            },
+            .{
+                .name = "CountMod",
+                .source =
+                \\Count := [Count(U64)].{
+                \\  get : Count -> U64
+                \\  get = |Count.Count(n)| n + 100
+                \\}
+                ,
+            },
+            .{
+                .name = "Helpers",
+                .source =
+                \\module [read]
+                \\
+                \\import CrateMod
+                \\
+                \\read : item -> U64 where [item.get : item -> U64]
+                \\read = |value| value.get()
+                ,
+            },
+        },
+        .expected = .{ .inspect_str = "108" },
     },
     .{
         .name = "inspect: record field access remains separate from method calls",
@@ -2930,6 +3422,26 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
+    .{
+        .name = "inspect: chained ? with Str.from_utf8 and I32.from_str (issue 9456)",
+        .source_kind = .module,
+        .source =
+        \\parse = |s| {
+        \\    chars = s.to_utf8()
+        \\    match chars {
+        \\        [] => Err(ParsingError)
+        \\        [_first, .. as rest] => {
+        \\            num_str = Str.from_utf8(rest)?
+        \\            _num = I32.from_str(num_str)?
+        \\            Ok({})
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main = parse("L12")
+        ,
+        .expected = .{ .inspect_str = "Ok({})" },
+    },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_93xx_tests.tests ++ interpreter_style_tests.tests;
+pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_89xx_tests.tests ++ issue_93xx_tests.tests ++ interpreter_style_tests.tests ++ bughunt_repros.tests;

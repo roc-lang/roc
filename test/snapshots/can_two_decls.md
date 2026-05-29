@@ -56,10 +56,12 @@ NO CHANGE
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "b"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "a")))
-			(e-num (value "1")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 74)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "a"))))
+			(args
+				(e-num (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure

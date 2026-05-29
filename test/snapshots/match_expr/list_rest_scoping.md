@@ -15,6 +15,7 @@ match items {
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
+POLYMORPHIC VALUE - list_rest_scoping.md:1:1:5:2
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -48,6 +49,24 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 ```
         ^^^^^^
 
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**list_rest_scoping.md:1:1:5:2:**
+```roc
+match items {
+    [first, ..rest] => first + 1
+    [..rest, last] => last + 2
+    [x, ..rest, y] => x + y
+}
+```
+
+
+Its type is:
+```roc
+a where [a.plus : a, a -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -110,10 +129,12 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "first")))
-						(e-num (value "1")))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 69)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-num (value "1"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -123,10 +144,12 @@ match items {
 							(rest-at (index 0)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "last")))
-						(e-num (value "2")))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 103)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "last"))))
+						(args
+							(e-num (value "2"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -137,11 +160,13 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y")))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 107)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y"))))))))))
 ~~~
 # TYPES
 ~~~clojure

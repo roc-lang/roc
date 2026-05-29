@@ -35,6 +35,7 @@ pub const BuiltinIndices = struct {
     dict_type: Statement.Idx,
     set_type: Statement.Idx,
     str_type: Statement.Idx,
+    iter_type: Statement.Idx,
     list_type: Statement.Idx,
     box_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
@@ -59,6 +60,7 @@ pub const BuiltinIndices = struct {
     dict_ident: Ident.Idx,
     set_ident: Ident.Idx,
     str_ident: Ident.Idx,
+    iter_ident: Ident.Idx,
     list_ident: Ident.Idx,
     box_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
@@ -623,11 +625,13 @@ pub const NumKind = enum {
 /// - is_negative: Bool (whether there was a minus sign)
 /// - digits_before_pt: List(U8) (base-256 digits before decimal point)
 /// - digits_after_pt: List(U8) (base-256 digits after decimal point)
+/// - digits_after_pt_count: U64 (how many decimal digits appeared after the point)
 ///
-/// Example: "356.517" becomes:
+/// Example: "356.5170" becomes:
 /// - is_negative = false
 /// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
-/// - digits_after_pt = [2, 5] (because 517 = 2*256 + 5)
+/// - digits_after_pt = [20, 50] (because 5170 = 20*256 + 50)
+/// - digits_after_pt_count = 4
 pub const NumeralDigits = struct {
     /// Index into the shared digit byte array in ModuleEnv
     digits_start: u32,
@@ -635,6 +639,8 @@ pub const NumeralDigits = struct {
     before_pt_len: u16,
     /// Number of bytes for digits_after_pt
     after_pt_len: u16,
+    /// Number of decimal digits after the point before base-256 encoding
+    after_pt_digit_count: u32,
     /// Whether the literal had a minus sign
     is_negative: bool,
 
@@ -653,88 +659,7 @@ pub const NumeralDigits = struct {
         const after_start = self.digits_start + self.before_pt_len;
         return digit_bytes[after_start..][0..self.after_pt_len];
     }
-
-    /// Format the base-256 encoded numeral back to a human-readable decimal string.
-    /// Writes to the provided buffer and returns a slice of the written content.
-    /// Buffer should be at least 128 bytes to handle most numbers.
-    pub fn formatDecimal(self: NumeralDigits, digit_bytes: []const u8, buf: []u8) []const u8 {
-        return formatBase256ToDecimal(
-            self.is_negative,
-            self.getDigitsBeforePt(digit_bytes),
-            self.getDigitsAfterPt(digit_bytes),
-            buf,
-        );
-    }
 };
-
-/// Format base-256 encoded digits to a human-readable decimal string.
-/// This is useful for error messages where we need to show the user what number
-/// was invalid (e.g., "The number 999999999 is not a valid U8").
-///
-/// Parameters:
-/// - is_negative: whether the number had a minus sign
-/// - digits_before_pt: base-256 encoded integer part
-/// - digits_after_pt: base-256 encoded fractional part
-/// - buf: output buffer (should be at least 128 bytes)
-///
-/// Returns a slice of buf containing the formatted decimal string.
-pub fn formatBase256ToDecimal(
-    is_negative: bool,
-    digits_before_pt: []const u8,
-    digits_after_pt: []const u8,
-    buf: []u8,
-) []const u8 {
-    var pos: usize = 0;
-
-    const appendSlice = struct {
-        fn f(b: []u8, p: *usize, data: []const u8) void {
-            const end = @min(p.* + data.len, b.len);
-            const len = end - p.*;
-            @memcpy(b[p.*..end], data[0..len]);
-            p.* = end;
-        }
-    }.f;
-
-    // Write sign if negative
-    if (is_negative) appendSlice(buf, &pos, "-");
-
-    // Convert base-256 integer part to decimal
-    var value: u128 = 0;
-    for (digits_before_pt) |digit| {
-        value = value * 256 + digit;
-    }
-    var int_buf: [40]u8 = undefined;
-    appendSlice(buf, &pos, builtins.compiler_rt_128.u128_to_str(&int_buf, value).str);
-
-    // Format fractional part if present and non-zero
-    if (digits_after_pt.len > 0) {
-        var has_nonzero = false;
-        for (digits_after_pt) |d| {
-            if (d != 0) {
-                has_nonzero = true;
-                break;
-            }
-        }
-        if (has_nonzero) {
-            appendSlice(buf, &pos, ".");
-            // Convert base-256 fractional digits to decimal
-            var frac: f64 = 0;
-            var frac_mult: f64 = 1.0 / 256.0;
-            for (digits_after_pt) |digit| {
-                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
-                frac_mult /= 256.0;
-            }
-            // Print fractional part (removing leading "0.")
-            var frac_buf: [400]u8 = undefined;
-            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
-            if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                appendSlice(buf, &pos, frac_str[2..]);
-            }
-        }
-    }
-
-    return buf[0..pos];
-}
 
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
@@ -948,6 +873,18 @@ pub const Import = struct {
             available_modules: []const *const @import("ModuleEnv.zig"),
         ) void {
             const import_count: usize = @intCast(self.imports.len());
+            if (import_count == 0) return;
+
+            // Index modules by name once. First occurrence wins, matching the
+            // "first match in iteration order" semantics of the previous linear scan.
+            var name_to_idx = std.StringHashMap(u32).init(env.gpa);
+            defer name_to_idx.deinit();
+            name_to_idx.ensureTotalCapacity(@intCast(available_modules.len)) catch return;
+            for (available_modules, 0..) |module_env, module_idx| {
+                const gop = name_to_idx.getOrPutAssumeCapacity(module_env.module_name);
+                if (!gop.found_existing) gop.value_ptr.* = @intCast(module_idx);
+            }
+
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
                 const current = self.resolved_modules.items.items[i];
@@ -955,12 +892,8 @@ pub const Import = struct {
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                // Find matching module in available_modules by comparing module names
-                for (available_modules, 0..) |module_env, module_idx| {
-                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
-                        self.setResolvedModule(import_idx, @intCast(module_idx));
-                        break;
-                    }
+                if (name_to_idx.get(import_name)) |module_idx| {
+                    self.setResolvedModule(import_idx, module_idx);
                 }
             }
         }

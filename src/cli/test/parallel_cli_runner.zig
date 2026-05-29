@@ -289,7 +289,7 @@ fn cleanupOutputArtifacts(allocator: Allocator, output_name: []const u8) void {
     deleteOutputArtifacts(allocator, output_name) catch {};
 }
 
-fn runSingleTest(allocator: Allocator, spec: CliTestSpec) TestResult {
+fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
     const cache_dirs = util.createIsolatedTestCacheDirs(allocator) catch
@@ -492,6 +492,7 @@ const Pool = harness.ProcessPool(CliTestSpec, TestResult, .{
     .stabilizeResult = &stabilizeResult,
     .getName = &getTestName,
     .use_process_groups = true,
+    .windows_persistent_workers = false,
 });
 
 // Output
@@ -657,7 +658,7 @@ pub fn main(init: std.process.Init) !void {
         if (idx >= tests.len) std.process.exit(2);
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        const result = runSingleTest(arena.allocator(), tests[idx]);
+        const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
         serializeResult(std.Io.File.stdout().handle, result);
         return;
     }
@@ -689,7 +690,7 @@ pub fn main(init: std.process.Init) !void {
             if (idx >= tests.len) continue;
 
             _ = arena.reset(.retain_capacity);
-            const result = runSingleTest(arena.allocator(), tests[idx]);
+            const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
             serializeResultStreamed(stdout_handle, result);
         }
         return;

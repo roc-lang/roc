@@ -140,35 +140,43 @@ NO CHANGE
 							(if-branch
 								(e-method-eq (negated "false")
 									(lhs
-										(e-binop (op "rem")
-											(e-lookup-local
-												(p-assign (ident "n")))
-											(e-num (value "2"))))
+										(e-dispatch-call (method "rem_by") (constraint-fn-var 612)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "n"))))
+											(args
+												(e-num (value "2")))))
 									(rhs
 										(e-num (value "0"))))
 								(e-block
 									(s-reassign
 										(p-assign (ident "count_"))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "count_")))
-											(e-num (value "1"))))
+										(e-dispatch-call (method "plus") (constraint-fn-var 682)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "count_"))))
+											(args
+												(e-num (value "1")))))
 									(s-reassign
 										(p-assign (ident "sum_"))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "sum_")))
-											(e-lookup-local
-												(p-assign (ident "n")))))
+										(e-dispatch-call (method "plus") (constraint-fn-var 684)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "sum_"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "n"))))))
 									(e-empty_record))))
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "count_")))
-				(e-lookup-local
-					(p-assign (ident "sum_")))))
+			(e-dispatch-call (method "times") (constraint-fn-var 694)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "count_"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "sum_"))))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

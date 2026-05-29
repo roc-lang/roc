@@ -306,6 +306,15 @@ pub const Store = struct {
         try self.interned_layouts.put(owned_key, idx);
     }
 
+    fn publishExistingLayoutInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
+        try self.buildExistingLayoutInternKey(self.getLayout(idx));
+        if (self.interned_layouts.getPtr(self.scratch_intern_key.items)) |existing| {
+            existing.* = idx;
+            return;
+        }
+        try self.rememberScratchInternKey(idx);
+    }
+
     fn buildStructInternKeyFromFields(
         self: *Self,
         alignment: std.mem.Alignment,
@@ -985,6 +994,19 @@ pub const Store = struct {
                 };
             }
 
+            fn pointerTargetLayout(
+                self_resolver: *@This(),
+                child_ref: GraphRef,
+            ) Idx {
+                return switch (child_ref) {
+                    .canonical => |layout_idx| layout_idx,
+                    .local => |child_id| switch (self_resolver.graph.getNode(child_id)) {
+                        .nominal => |child| self_resolver.pointerTargetLayout(child),
+                        .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => self_resolver.raw_layouts[@intFromEnum(child_id)],
+                    },
+                };
+            }
+
             fn isValueReady(self_resolver: *@This(), ref: GraphRef) bool {
                 return switch (ref) {
                     .canonical => true,
@@ -1046,13 +1068,18 @@ pub const Store = struct {
                 };
             }
 
+            fn recursiveSlotTargetLayout(
+                self_resolver: *@This(),
+                child_ref: GraphRef,
+            ) Idx {
+                return self_resolver.pointerTargetLayout(child_ref);
+            }
+
             fn recursiveSlotLayout(
                 self_resolver: *@This(),
-                child_id: GraphNodeId,
+                child_ref: GraphRef,
             ) std.mem.Allocator.Error!Idx {
-                return try self_resolver.store.insertBox(
-                    self_resolver.raw_layouts[@intFromEnum(child_id)],
-                );
+                return try self_resolver.store.insertBox(self_resolver.recursiveSlotTargetLayout(child_ref));
             }
 
             fn tryResolveNode(self_resolver: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!bool {
@@ -1068,10 +1095,10 @@ pub const Store = struct {
                             self_resolver.raw_layouts[index],
                             self_resolver.store.getLayout(child_value_idx),
                         );
-                        self_resolver.value_layouts[index] = self_resolver.raw_layouts[index];
+                        self_resolver.value_layouts[index] = child_value_idx;
                     },
                     .box => |child| {
-                        const child_idx = self_resolver.valueIdx(child);
+                        const child_idx = self_resolver.pointerTargetLayout(child);
                         const child_is_zst = self_resolver.isKnownZeroSized(child);
                         self_resolver.store.updateLayout(
                             self_resolver.raw_layouts[index],
@@ -1079,7 +1106,7 @@ pub const Store = struct {
                         );
                     },
                     .list => |child| {
-                        const child_idx = self_resolver.valueIdx(child);
+                        const child_idx = self_resolver.pointerTargetLayout(child);
                         const child_is_zst = self_resolver.isKnownZeroSized(child);
                         self_resolver.store.updateLayout(
                             self_resolver.raw_layouts[index],
@@ -1089,7 +1116,7 @@ pub const Store = struct {
                     .closure => |child| {
                         self_resolver.store.updateLayout(
                             self_resolver.raw_layouts[index],
-                            Layout.closure(self_resolver.valueIdx(child)),
+                            Layout.closure(self_resolver.pointerTargetLayout(child)),
                         );
                     },
                     .erased_callable => {
@@ -1109,10 +1136,7 @@ pub const Store = struct {
 
                             for (graph_fields) |field| {
                                 const field_layout = if (self_resolver.shouldBoxRecursiveSlotEdge(node_id, field.child))
-                                    try self_resolver.recursiveSlotLayout(switch (field.child) {
-                                        .canonical => unreachable,
-                                        .local => |child_id| child_id,
-                                    })
+                                    try self_resolver.recursiveSlotLayout(field.child)
                                 else blk: {
                                     if (!self_resolver.isSlotReady(field.child)) return false;
                                     break :blk self_resolver.valueIdx(field.child);
@@ -1140,10 +1164,7 @@ pub const Store = struct {
 
                             for (graph_refs) |variant_ref| {
                                 const variant_layout = if (self_resolver.shouldBoxRecursiveSlotEdge(node_id, variant_ref))
-                                    try self_resolver.recursiveSlotLayout(switch (variant_ref) {
-                                        .canonical => unreachable,
-                                        .local => |child_id| child_id,
-                                    })
+                                    try self_resolver.recursiveSlotLayout(variant_ref)
                                 else blk: {
                                     if (!self_resolver.isSlotReady(variant_ref)) return false;
                                     break :blk self_resolver.valueIdx(variant_ref);
@@ -1201,6 +1222,9 @@ pub const Store = struct {
         const finalize_state = try self.allocator.alloc(FinalizeState, graph.nodes.items.len);
         defer self.allocator.free(finalize_state);
         @memset(finalize_state, .unseen);
+        const raw_used = try self.allocator.alloc(bool, graph.nodes.items.len);
+        defer self.allocator.free(raw_used);
+        @memset(raw_used, false);
 
         const Finalizer = struct {
             store: *Self,
@@ -1208,6 +1232,7 @@ pub const Store = struct {
             raw_layouts: []Idx,
             value_layouts: []Idx,
             finalize_state: []FinalizeState,
+            raw_used: []bool,
             recursive_nodes: []bool,
             component_ids: []u32,
 
@@ -1221,9 +1246,15 @@ pub const Store = struct {
             fn pointerChildLayout(self_finalizer: *@This(), ref: GraphRef) std.mem.Allocator.Error!Idx {
                 return switch (ref) {
                     .canonical => |layout_idx| layout_idx,
-                    .local => |node_id| switch (self_finalizer.finalize_state[@intFromEnum(node_id)]) {
-                        .active => self_finalizer.raw_layouts[@intFromEnum(node_id)],
-                        .unseen, .done => try self_finalizer.finalizeNode(node_id),
+                    .local => |node_id| switch (self_finalizer.graph.getNode(node_id)) {
+                        .nominal => |child| try self_finalizer.pointerChildLayout(child),
+                        .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => switch (self_finalizer.finalize_state[@intFromEnum(node_id)]) {
+                            .active => blk: {
+                                self_finalizer.raw_used[@intFromEnum(node_id)] = true;
+                                break :blk self_finalizer.raw_layouts[@intFromEnum(node_id)];
+                            },
+                            .unseen, .done => try self_finalizer.finalizeNode(node_id),
+                        },
                     },
                 };
             }
@@ -1257,23 +1288,37 @@ pub const Store = struct {
                 };
             }
 
+            fn recursiveSlotTargetLayout(
+                self_finalizer: *@This(),
+                child_ref: GraphRef,
+            ) Idx {
+                return switch (child_ref) {
+                    .canonical => |layout_idx| layout_idx,
+                    .local => |child_id| switch (self_finalizer.graph.getNode(child_id)) {
+                        .nominal => |child| self_finalizer.recursiveSlotTargetLayout(child),
+                        .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => blk: {
+                            self_finalizer.raw_used[@intFromEnum(child_id)] = true;
+                            break :blk self_finalizer.raw_layouts[@intFromEnum(child_id)];
+                        },
+                    },
+                };
+            }
+
             fn recursiveSlotLayout(
                 self_finalizer: *@This(),
-                child_id: GraphNodeId,
+                child_ref: GraphRef,
             ) std.mem.Allocator.Error!Idx {
-                return try self_finalizer.store.insertBox(
-                    self_finalizer.raw_layouts[@intFromEnum(child_id)],
-                );
+                return try self_finalizer.store.insertBox(self_finalizer.recursiveSlotTargetLayout(child_ref));
             }
 
             fn finalizeNode(self_finalizer: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!Idx {
                 const index = @intFromEnum(node_id);
                 return switch (self_finalizer.finalize_state[index]) {
                     .done => self_finalizer.value_layouts[index],
-                    // The earlier resolver already established a valid raw recursive graph.
-                    // Canonical finalization should reuse that placeholder edge rather than
-                    // trying to recurse indefinitely through the same logical node again.
-                    .active => self_finalizer.raw_layouts[index],
+                    .active => blk: {
+                        self_finalizer.raw_used[index] = true;
+                        break :blk self_finalizer.raw_layouts[index];
+                    },
                     .unseen => blk: {
                         self_finalizer.finalize_state[index] = .active;
                         const value_layout = switch (self_finalizer.graph.getNode(node_id)) {
@@ -1308,10 +1353,7 @@ pub const Store = struct {
 
                                 for (graph_fields) |field| {
                                     const field_layout = if (self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child))
-                                        try self_finalizer.recursiveSlotLayout(switch (field.child) {
-                                            .canonical => unreachable,
-                                            .local => |child_id| child_id,
-                                        })
+                                        try self_finalizer.recursiveSlotLayout(field.child)
                                     else
                                         try self_finalizer.finalValue(field.child);
                                     fields.appendAssumeCapacity(.{
@@ -1330,10 +1372,7 @@ pub const Store = struct {
 
                                 for (graph_refs) |variant_ref| {
                                     const variant_layout = if (self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref))
-                                        try self_finalizer.recursiveSlotLayout(switch (variant_ref) {
-                                            .canonical => unreachable,
-                                            .local => |child_id| child_id,
-                                        })
+                                        try self_finalizer.recursiveSlotLayout(variant_ref)
                                     else
                                         try self_finalizer.finalValue(variant_ref);
                                     variants.appendAssumeCapacity(variant_layout);
@@ -1343,9 +1382,17 @@ pub const Store = struct {
                             },
                         };
 
-                        self_finalizer.value_layouts[index] = value_layout;
+                        if (self_finalizer.raw_used[index]) {
+                            self_finalizer.store.updateLayout(
+                                self_finalizer.raw_layouts[index],
+                                self_finalizer.store.getLayout(value_layout),
+                            );
+                            self_finalizer.value_layouts[index] = self_finalizer.raw_layouts[index];
+                        } else {
+                            self_finalizer.value_layouts[index] = value_layout;
+                        }
                         self_finalizer.finalize_state[index] = .done;
-                        break :blk value_layout;
+                        break :blk self_finalizer.value_layouts[index];
                     },
                 };
             }
@@ -1357,6 +1404,7 @@ pub const Store = struct {
             .raw_layouts = raw_layouts,
             .value_layouts = value_layouts,
             .finalize_state = finalize_state,
+            .raw_used = raw_used,
             .recursive_nodes = recursive_nodes,
             .component_ids = component_ids,
         };
@@ -1375,6 +1423,12 @@ pub const Store = struct {
                 raw_layouts[i],
                 self.getLayout(value_layouts[i]),
             );
+        }
+
+        for (graph.nodes.items, 0..) |_, i| {
+            if (value_layouts[i] == raw_layouts[i]) {
+                try self.publishExistingLayoutInternKey(raw_layouts[i]);
+            }
         }
 
         const root_idx = switch (root) {
@@ -1452,6 +1506,10 @@ pub const Store = struct {
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
+    }
+
+    pub fn layoutCount(self: *const Self) usize {
+        return @intCast(self.layouts.len());
     }
 
     pub fn getStructData(self: *const Self, idx: StructIdx) *const StructData {
@@ -1781,7 +1839,7 @@ pub const Store = struct {
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.getScalar().getFrac().alignment().toByteUnits())),
                 },
                 .str => .{
-                    .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
+                    .size = @intCast(3 * target_usize.size()), // ptr, encoded capacity, byte length
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
                 .opaque_ptr => .{

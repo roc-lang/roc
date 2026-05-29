@@ -38,7 +38,7 @@ pub const ModuleKind = union(enum) {
     package,
     platform,
     hosted,
-    deprecated_module,
+    module,
     malformed,
 
     /// Extern-compatible tag for serialization
@@ -49,7 +49,7 @@ pub const ModuleKind = union(enum) {
         package,
         platform,
         hosted,
-        deprecated_module,
+        module,
         malformed,
     };
 
@@ -72,7 +72,7 @@ pub const ModuleKind = union(enum) {
                 .package => .{ .tag = .package, .payload = .{ .none = 0 } },
                 .platform => .{ .tag = .platform, .payload = .{ .none = 0 } },
                 .hosted => .{ .tag = .hosted, .payload = .{ .none = 0 } },
-                .deprecated_module => .{ .tag = .deprecated_module, .payload = .{ .none = 0 } },
+                .module => .{ .tag = .module, .payload = .{ .none = 0 } },
                 .malformed => .{ .tag = .malformed, .payload = .{ .none = 0 } },
             };
         }
@@ -85,7 +85,7 @@ pub const ModuleKind = union(enum) {
                 .package => .package,
                 .platform => .platform,
                 .hosted => .hosted,
-                .deprecated_module => .deprecated_module,
+                .module => .module,
                 .malformed => .malformed,
             };
         }
@@ -120,6 +120,7 @@ pub const CommonIdents = extern struct {
     main_bang: Ident.Idx,
     str: Ident.Idx,
     list: Ident.Idx,
+    iter: Ident.Idx,
     box: Ident.Idx,
 
     // Unqualified builtin type names (for checking if a type name shadows a builtin)
@@ -140,6 +141,7 @@ pub const CommonIdents = extern struct {
     dec: Ident.Idx,
 
     // Fully-qualified type identifiers for type checking and layout generation
+    builtin_iter: Ident.Idx,
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
@@ -168,6 +170,7 @@ pub const CommonIdents = extern struct {
     is_negative: Ident.Idx,
     digits_before_pt: Ident.Idx,
     digits_after_pt: Ident.Idx,
+    digits_after_pt_count: Ident.Idx,
     box_method: Ident.Idx,
     unbox_method: Ident.Idx,
     // Fully qualified Box intrinsic method names
@@ -177,6 +180,8 @@ pub const CommonIdents = extern struct {
     ok: Ident.Idx,
     err: Ident.Idx,
     from_numeral: Ident.Idx,
+    join_with: Ident.Idx,
+    join_list_with: Ident.Idx,
     true_tag: Ident.Idx,
     false_tag: Ident.Idx,
     // from_utf8 result fields
@@ -218,6 +223,7 @@ pub const CommonIdents = extern struct {
             .main_bang = try common.insertIdent(gpa, Ident.for_text("main!")),
             .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
+            .iter = try common.insertIdent(gpa, Ident.for_text("Iter")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
@@ -235,6 +241,7 @@ pub const CommonIdents = extern struct {
             .f32 = try common.insertIdent(gpa, Ident.for_text("F32")),
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
+            .builtin_iter = try common.insertIdent(gpa, Ident.for_text("Builtin.Iter")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
@@ -261,6 +268,7 @@ pub const CommonIdents = extern struct {
             .is_negative = try common.insertIdent(gpa, Ident.for_text("is_negative")),
             .digits_before_pt = try common.insertIdent(gpa, Ident.for_text("digits_before_pt")),
             .digits_after_pt = try common.insertIdent(gpa, Ident.for_text("digits_after_pt")),
+            .digits_after_pt_count = try common.insertIdent(gpa, Ident.for_text("digits_after_pt_count")),
             .box_method = try common.insertIdent(gpa, Ident.for_text("box")),
             .unbox_method = try common.insertIdent(gpa, Ident.for_text("unbox")),
             // Fully qualified Box intrinsic method names
@@ -270,6 +278,8 @@ pub const CommonIdents = extern struct {
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
+            .join_with = try common.insertIdent(gpa, Ident.for_text("join_with")),
+            .join_list_with = try common.insertIdent(gpa, Ident.for_text("join_list_with")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
             // from_utf8 result fields
@@ -314,6 +324,7 @@ pub const CommonIdents = extern struct {
             .main_bang = common.findIdent("main!") orelse unreachable,
             .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
+            .iter = common.findIdent("Iter") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
             // Unqualified builtin type names
             .num = common.findIdent("Num") orelse unreachable,
@@ -331,6 +342,7 @@ pub const CommonIdents = extern struct {
             .f32 = common.findIdent("F32") orelse unreachable,
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
+            .builtin_iter = common.findIdent("Builtin.Iter") orelse unreachable,
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
@@ -357,6 +369,7 @@ pub const CommonIdents = extern struct {
             .is_negative = common.findIdent("is_negative") orelse unreachable,
             .digits_before_pt = common.findIdent("digits_before_pt") orelse unreachable,
             .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
+            .digits_after_pt_count = common.findIdent("digits_after_pt_count") orelse unreachable,
             .box_method = common.findIdent("box") orelse unreachable,
             .unbox_method = common.findIdent("unbox") orelse unreachable,
             // Fully qualified Box intrinsic method names
@@ -366,6 +379,8 @@ pub const CommonIdents = extern struct {
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
+            .join_with = common.findIdent("join_with") orelse unreachable,
+            .join_list_with = common.findIdent("join_list_with") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
             .false_tag = common.findIdent("False") orelse unreachable,
             // from_utf8 result fields
@@ -398,6 +413,100 @@ pub const MethodKey = packed struct(u64) {
 /// This is populated during canonicalization when methods are defined in associated blocks.
 pub const MethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
 
+/// Checked dispatch metadata for one source `for` loop.
+///
+/// Checking writes this when it creates the loop's required `iter` and `next`
+/// static-dispatch constraints. Checked artifact publication consumes it to
+/// publish an explicit iterator-for plan for mono lowering.
+pub const ForLoopDispatchPlan = extern struct {
+    node_idx: u32,
+    pattern_idx: u32,
+    iterable_idx: u32,
+    iter_fn_var: u32,
+    next_fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Exact digit data for one numeric source node.
+///
+/// The parser converts numeric text to base-256 byte lists. Canonicalization
+/// copies those bytes here so later stages can construct `Num.Numeral` values
+/// for custom `from_numeral` calls without parsing source text.
+pub const NumeralLiteral = extern struct {
+    node_idx: u32,
+    digits_start: u32,
+    before_len: u32,
+    after_len: u32,
+    after_decimal_digit_count: u32,
+    flags: u32,
+
+    pub const negative_flag: u32 = 1;
+    pub const fractional_flag: u32 = 2;
+    pub const decimal_point_flag: u32 = 4;
+    pub const SafeList = collections.SafeList(@This());
+
+    pub fn isNegative(self: NumeralLiteral) bool {
+        return (self.flags & negative_flag) != 0;
+    }
+
+    pub fn isFractional(self: NumeralLiteral) bool {
+        return (self.flags & fractional_flag) != 0;
+    }
+
+    pub fn hadDecimalPoint(self: NumeralLiteral) bool {
+        return (self.flags & decimal_point_flag) != 0;
+    }
+};
+
+/// Checked dispatch metadata for a numeric literal that must call
+/// `from_numeral` at runtime.
+pub const NumeralDispatchPlan = extern struct {
+    node_idx: u32,
+    target_var: u32,
+    fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Resolved type target for an explicit numeric suffix such as `123.U64` or
+/// `123.Custom`. Canonicalization records this once from scope resolution;
+/// checking consumes it directly instead of looking up the suffix text again.
+pub const NumericSuffixType = extern struct {
+    node_idx: u32,
+    kind: u32,
+    data1: u32,
+    data2: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub const Kind = enum(u32) {
+        builtin,
+        local,
+        external,
+    };
+
+    pub const Target = union(enum) {
+        builtin: CIR.NumKind,
+        local: CIR.Statement.Idx,
+        external: struct {
+            import_idx: CIR.Import.Idx,
+            target_node_idx: u32,
+        },
+    };
+
+    pub fn target(self: NumericSuffixType) Target {
+        return switch (@as(Kind, @enumFromInt(self.kind))) {
+            .builtin => .{ .builtin = @enumFromInt(self.data1) },
+            .local => .{ .local = @enumFromInt(self.data1) },
+            .external => .{ .external = .{
+                .import_idx = @enumFromInt(self.data1),
+                .target_node_idx = self.data2,
+            } },
+        };
+    }
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -410,6 +519,9 @@ types: TypeStore,
 module_kind: ModuleKind,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
+/// Module-global value definitions: top-level values, associated items, and
+/// compiler-created hosted globals. Local block definitions are not included.
+global_value_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
@@ -463,6 +575,17 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Enables O(1) index-based method lookup during type checking and evaluation.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
+
+/// Dispatch plans attached by checking to source `for` loop nodes.
+for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
+/// Base-256 bytes referenced by `numeral_literals`.
+numeral_digit_bytes: collections.SafeList(u8),
+/// Exact numeric literals attached to source expression and pattern nodes.
+numeral_literals: NumeralLiteral.SafeList,
+/// `from_numeral` dispatch plans attached by checking to source expression nodes.
+numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
+/// Scope-resolved explicit numeric suffix targets attached by canonicalization.
+numeric_suffix_types: NumericSuffixType.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -520,6 +643,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.method_idents.relocate(offset);
+    self.for_loop_dispatch_plans.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -531,8 +655,9 @@ pub fn relocate(self: *Self, offset: isize) void {
 
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
-    self.module_kind = .deprecated_module; // Placeholder - set to actual kind during header canonicalization
+    self.module_kind = .module; // Placeholder - set to actual kind during header canonicalization
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
     self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
@@ -566,8 +691,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .gpa = gpa,
         .common = common,
         .types = try TypeStore.initFromSourceLen(gpa, source_len),
-        .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
+        .module_kind = .module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
@@ -585,6 +711,11 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
+        .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
+        .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
+        .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
+        .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
+        .numeric_suffix_types = try NumericSuffixType.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -599,6 +730,11 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
+    self.for_loop_dispatch_plans.deinit(self.gpa);
+    self.numeral_digit_bytes.deinit(self.gpa);
+    self.numeral_literals.deinit(self.gpa);
+    self.numeral_dispatch_plans.deinit(self.gpa);
+    self.numeric_suffix_types.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -634,6 +770,11 @@ pub fn deinitCachedModule(self: *Self) void {
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
     self.import_mapping.deinit();
+    self.for_loop_dispatch_plans.deinit(self.gpa);
+    self.numeral_digit_bytes.deinit(self.gpa);
+    self.numeral_literals.deinit(self.gpa);
+    self.numeral_dispatch_plans.deinit(self.gpa);
+    self.numeric_suffix_types.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -1851,6 +1992,33 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .too_many_exports => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const count_text = try std.fmt.allocPrint(allocator, "{d}", .{data.count});
+            defer allocator.free(count_text);
+
+            var report = Report.init(allocator, "TOO MANY EXPORTS", .runtime_error);
+            const owned_count = try report.addOwnedString(count_text);
+
+            try report.document.addReflowingText("This module exposes ");
+            try report.document.addInlineCode(owned_count);
+            try report.document.addReflowingText(" values, which exceeds the compiler limit.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("The export list starts here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2492,6 +2660,7 @@ pub const Serialized = extern struct {
     types: TypeStore.Serialized,
     module_kind: ModuleKind.Serialized,
     all_defs: CIR.Def.Span,
+    global_value_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
@@ -2510,6 +2679,11 @@ pub const Serialized = extern struct {
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
+    for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
+    numeral_digit_bytes: collections.SafeList(u8).Serialized,
+    numeral_literals: NumeralLiteral.SafeList.Serialized,
+    numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
+    numeric_suffix_types: NumericSuffixType.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -2527,6 +2701,7 @@ pub const Serialized = extern struct {
         // Copy simple values directly
         self.module_kind = ModuleKind.Serialized.encode(env.module_kind);
         self.all_defs = env.all_defs;
+        self.global_value_defs = env.global_value_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
         self.builtin_statements = env.builtin_statements;
@@ -2556,6 +2731,11 @@ pub const Serialized = extern struct {
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
+        try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
+        try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
+        try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
+        try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
+        try self.numeric_suffix_types.serialize(&env.numeric_suffix_types, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -2581,6 +2761,7 @@ pub const Serialized = extern struct {
             .types = self.types.deserializeInto(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
+            .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
@@ -2598,6 +2779,11 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
+            .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
+            .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
+            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
+            .numeric_suffix_types = self.numeric_suffix_types.deserializeInto(base_addr),
         };
 
         return env;
@@ -2625,6 +2811,7 @@ pub const Serialized = extern struct {
             .types = try self.types.deserializeWithCopy(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
+            .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
@@ -2643,6 +2830,11 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
+            .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
+            .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .numeric_suffix_types = try self.numeric_suffix_types.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -2659,31 +2851,204 @@ pub fn varFrom(idx: anytype) TypeVar {
     return @enumFromInt(@intFromEnum(idx));
 }
 
+/// Record the checked iterator dispatch functions for a semantic `for` loop.
+pub fn recordForLoopDispatchPlan(
+    self: *Self,
+    node_idx: Node.Idx,
+    pattern_idx: Node.Idx,
+    iterable_idx: Node.Idx,
+    iter_fn_var: TypeVar,
+    next_fn_var: TypeVar,
+) std.mem.Allocator.Error!void {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    const raw_pattern: u32 = @intFromEnum(pattern_idx);
+    const raw_iterable: u32 = @intFromEnum(iterable_idx);
+    for (self.for_loop_dispatch_plans.items.items) |*plan| {
+        if (plan.node_idx != raw_node) continue;
+        plan.* = .{
+            .node_idx = raw_node,
+            .pattern_idx = raw_pattern,
+            .iterable_idx = raw_iterable,
+            .iter_fn_var = @intFromEnum(iter_fn_var),
+            .next_fn_var = @intFromEnum(next_fn_var),
+        };
+        return;
+    }
+    _ = try self.for_loop_dispatch_plans.append(self.gpa, .{
+        .node_idx = raw_node,
+        .pattern_idx = raw_pattern,
+        .iterable_idx = raw_iterable,
+        .iter_fn_var = @intFromEnum(iter_fn_var),
+        .next_fn_var = @intFromEnum(next_fn_var),
+    });
+}
+
+/// Return the checked iterator dispatch functions for a semantic `for` loop node.
+pub fn forLoopDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?ForLoopDispatchPlan {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.for_loop_dispatch_plans.items.items) |plan| {
+        if (plan.node_idx == raw_node) return plan;
+    }
+    return null;
+}
+
+/// Record exact base-256 digits for a numeric source node.
+pub fn recordNumeralLiteral(
+    self: *Self,
+    node_idx: Node.Idx,
+    before: []const u8,
+    after: []const u8,
+    after_decimal_digit_count: u32,
+    is_negative: bool,
+    is_fractional: bool,
+    had_decimal_point: bool,
+) std.mem.Allocator.Error!void {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    const digits_start: u32 = @intCast(self.numeral_digit_bytes.len());
+    _ = try self.numeral_digit_bytes.appendSlice(self.gpa, before);
+    _ = try self.numeral_digit_bytes.appendSlice(self.gpa, after);
+
+    const literal = NumeralLiteral{
+        .node_idx = raw_node,
+        .digits_start = digits_start,
+        .before_len = @intCast(before.len),
+        .after_len = @intCast(after.len),
+        .after_decimal_digit_count = after_decimal_digit_count,
+        .flags = (if (is_negative) NumeralLiteral.negative_flag else 0) |
+            (if (is_fractional) NumeralLiteral.fractional_flag else 0) |
+            (if (had_decimal_point) NumeralLiteral.decimal_point_flag else 0),
+    };
+    for (self.numeral_literals.items.items) |*existing| {
+        if (existing.node_idx == raw_node) {
+            existing.* = literal;
+            return;
+        }
+    }
+    _ = try self.numeral_literals.append(self.gpa, literal);
+}
+
+/// Return exact base-256 digits for a numeric source node.
+pub fn numeralLiteralForNode(self: *const Self, node_idx: Node.Idx) ?NumeralLiteral {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.numeral_literals.items.items) |literal| {
+        if (literal.node_idx == raw_node) return literal;
+    }
+    return null;
+}
+
+/// Return the digits before the decimal point for a recorded numeral.
+pub fn numeralDigitsBefore(self: *const Self, literal: NumeralLiteral) []const u8 {
+    return self.numeral_digit_bytes.items.items[literal.digits_start..][0..literal.before_len];
+}
+
+/// Return the digits after the decimal point for a recorded numeral.
+pub fn numeralDigitsAfter(self: *const Self, literal: NumeralLiteral) []const u8 {
+    const start = literal.digits_start + literal.before_len;
+    return self.numeral_digit_bytes.items.items[start..][0..literal.after_len];
+}
+
+/// Record the checked `from_numeral` function for a numeric expression.
+pub fn recordNumeralDispatchPlan(
+    self: *Self,
+    node_idx: Node.Idx,
+    target_var: TypeVar,
+    fn_var: TypeVar,
+) std.mem.Allocator.Error!void {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.numeral_dispatch_plans.items.items) |*plan| {
+        if (plan.node_idx != raw_node) continue;
+        plan.* = .{
+            .node_idx = raw_node,
+            .target_var = @intFromEnum(target_var),
+            .fn_var = @intFromEnum(fn_var),
+        };
+        return;
+    }
+    _ = try self.numeral_dispatch_plans.append(self.gpa, .{
+        .node_idx = raw_node,
+        .target_var = @intFromEnum(target_var),
+        .fn_var = @intFromEnum(fn_var),
+    });
+}
+
+/// Return the checked `from_numeral` function for a numeric expression.
+pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.numeral_dispatch_plans.items.items) |plan| {
+        if (plan.node_idx == raw_node) return plan;
+    }
+    return null;
+}
+
+/// Record the scope-resolved type target for an explicit numeric suffix.
+pub fn recordNumericSuffixType(
+    self: *Self,
+    node_idx: Node.Idx,
+    target: NumericSuffixType.Target,
+) std.mem.Allocator.Error!void {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    const suffix_type = switch (target) {
+        .builtin => |num_kind| NumericSuffixType{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixType.Kind.builtin),
+            .data1 = @intFromEnum(num_kind),
+            .data2 = 0,
+        },
+        .local => |stmt_idx| NumericSuffixType{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixType.Kind.local),
+            .data1 = @intFromEnum(stmt_idx),
+            .data2 = 0,
+        },
+        .external => |external| NumericSuffixType{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixType.Kind.external),
+            .data1 = @intFromEnum(external.import_idx),
+            .data2 = external.target_node_idx,
+        },
+    };
+
+    for (self.numeric_suffix_types.items.items) |*existing| {
+        if (existing.node_idx != raw_node) continue;
+        existing.* = suffix_type;
+        return;
+    }
+    _ = try self.numeric_suffix_types.append(self.gpa, suffix_type);
+}
+
+/// Return the scope-resolved type target for an explicit numeric suffix.
+pub fn numericSuffixTypeForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixType {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.numeric_suffix_types.items.items) |suffix_type| {
+        if (suffix_type.node_idx == raw_node) return suffix_type;
+    }
+    return null;
+}
+
 /// Adds an identifier to the list of exposed items by its identifier index.
 pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
     return try self.common.exposed_items.addExposedById(self.gpa, @bitCast(ident_idx));
 }
 
 /// Associates a node index with an exposed identifier.
-pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16) !void {
+pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) !void {
     return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
 }
 
 /// Retrieves the node index associated with an exposed identifier, if any.
-pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
+pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
     return self.common.getNodeIndexById(self.gpa, ident_idx);
 }
 
 /// Get the exposed node index for a type given its statement index.
 /// This is used for auto-imported builtin types where we have the statement index pre-computed.
 /// For auto-imported types, the statement index IS the node/var index directly.
-pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
+pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement.Idx) ?u32 {
 
     // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables
     // indexed by their statement index, not by their position in arrays.
-    const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));
-    return node_idx;
+    return @intFromEnum(stmt_idx);
 }
 
 /// Ensures that the exposed items are sorted by identifier index.

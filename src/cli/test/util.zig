@@ -12,6 +12,9 @@ const io: std.Io = if (builtin.is_test) std.testing.io else std.Options.debug_io
 
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+/// Default timeout for CLI test child processes that would otherwise run unbounded.
+pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
+
 /// Absolute cache directory paths reserved for a single CLI test subprocess.
 pub const IsolatedCacheDirs = struct {
     roc_cache_dir: []u8,
@@ -25,6 +28,37 @@ pub const IsolatedCacheDirs = struct {
 
 pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
+fn reserveTestCacheRoot(allocator: std.mem.Allocator) ![]u8 {
+    const cache_parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache" });
+    defer allocator.free(cache_parent_rel);
+
+    try std.fs.cwd().makePath(cache_parent_rel);
+
+    while (true) {
+        const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
+        const random = std.crypto.random.int(u64);
+        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x}-{d}", .{
+            @as(u64, @intCast(std.time.nanoTimestamp())),
+            random,
+            cache_dir_id,
+        });
+        defer allocator.free(cache_leaf);
+
+        const cache_root_rel = try std.fs.path.join(allocator, &.{ cache_parent_rel, cache_leaf });
+        errdefer allocator.free(cache_root_rel);
+
+        std.fs.cwd().makeDir(cache_root_rel) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(cache_root_rel);
+                continue;
+            },
+            else => return err,
+        };
+
+        return cache_root_rel;
+    }
+}
+
 /// Result of executing a Roc command during testing.
 /// Contains the captured output streams and process termination status.
 pub const RocResult = struct {
@@ -33,44 +67,162 @@ pub const RocResult = struct {
     term: std.process.Child.Term,
 };
 
+/// Options for running a child process from CLI integration tests.
+pub const ChildRunOptions = struct {
+    cwd: ?[]const u8 = null,
+    env_map: ?*const std.process.Environ.Map = null,
+    max_output_bytes: usize = 10 * 1024 * 1024,
+    stdin: ?[]const u8 = null,
+    timeout_ms: u64 = default_child_timeout_ms,
+};
+
+fn terminateChildGroup(child_id: std.process.Child.Id) void {
+    switch (builtin.os.tag) {
+        .windows => std.os.windows.TerminateProcess(child_id, 1) catch {},
+        .wasi => {},
+        else => {
+            const pid: std.posix.pid_t = child_id;
+            std.posix.kill(-pid, std.posix.SIG.KILL) catch {
+                std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+            };
+        },
+    }
+}
+
+fn appendTimeoutMessage(
+    allocator: std.mem.Allocator,
+    stderr: *std.ArrayList(u8),
+    argv: []const []const u8,
+    timeout_ms: u64,
+) !void {
+    var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, stderr);
+    defer stderr.* = aw.toArrayList();
+    try aw.writer.print(
+        "\nstuck: child command timed out after {d}ms:",
+        .{timeout_ms},
+    );
+    for (argv) |arg| {
+        try aw.writer.print(" {s}", .{arg});
+    }
+    try aw.writer.writeAll("\n");
+}
+
+/// Run a child process with captured output and a watchdog timeout.
+///
+/// Uses the module-level `io` (the threaded IO usable for spawning child
+/// processes in tests). Preserves the process-group kill semantics from the
+/// original implementation so timed-out children take their descendants with
+/// them.
+pub fn runChildWithTimeout(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    options: ChildRunOptions,
+) !std.process.RunResult {
+    const Watch = struct {
+        child_id: std.process.Child.Id,
+        timeout_ms: u64,
+        timed_out: std.atomic.Value(bool),
+        done: std.atomic.Value(bool),
+
+        fn run(self: *@This()) void {
+            if (self.timeout_ms == 0) return;
+            const start_ms = std.time.milliTimestamp();
+            while (!self.done.load(.acquire)) {
+                std.Thread.sleep(100 * std.time.ns_per_ms);
+                if (self.done.load(.acquire)) return;
+
+                const elapsed_ms: u64 = @intCast(@max(0, std.time.milliTimestamp() - start_ms));
+                if (elapsed_ms >= self.timeout_ms) {
+                    self.timed_out.store(true, .release);
+                    terminateChildGroup(self.child_id);
+                    return;
+                }
+            }
+        }
+    };
+
+    var child = try std.process.spawn(io, .{
+        .argv = argv,
+        .stdin = if (options.stdin == null) .ignore else .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .cwd = if (options.cwd) |path| .{ .path = path } else .inherit,
+        .environ_map = options.env_map,
+        // Put the child in its own process group so the watchdog can signal
+        // the whole group (child + any grandchildren) on timeout.
+        .pgid = switch (builtin.os.tag) {
+            .windows, .wasi => null,
+            else => 0,
+        },
+    });
+    errdefer child.kill(io);
+
+    // The watchdog signals the child's process group; it needs the child id.
+    const child_pid: ?std.process.Child.Id = child.id;
+
+    var watch = Watch{
+        .child_id = child_pid orelse undefined,
+        .timeout_ms = if (child_pid == null) 0 else options.timeout_ms,
+        .timed_out = std.atomic.Value(bool).init(false),
+        .done = std.atomic.Value(bool).init(false),
+    };
+    const watch_thread = if (watch.timeout_ms == 0)
+        null
+    else
+        try std.Thread.spawn(.{}, Watch.run, .{&watch});
+    defer {
+        watch.done.store(true, .release);
+        if (watch_thread) |thread| thread.join();
+    }
+
+    if (options.stdin) |stdin_input| {
+        child.stdin.?.writeStreamingAll(io, stdin_input) catch {};
+        child.stdin.?.close(io);
+        child.stdin = null;
+    }
+
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(allocator, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+
+    const stdout_reader = multi_reader.reader(0);
+    const stderr_reader = multi_reader.reader(1);
+
+    while (multi_reader.fill(64, .none)) |_| {
+        if (stdout_reader.buffered().len > options.max_output_bytes) return error.StreamTooLong;
+        if (stderr_reader.buffered().len > options.max_output_bytes) return error.StreamTooLong;
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+    try multi_reader.checkAnyError();
+
+    const term = try child.wait(io);
+
+    var stdout: std.ArrayList(u8) = .fromOwnedSlice(try multi_reader.toOwnedSlice(0));
+    errdefer stdout.deinit(allocator);
+    var stderr: std.ArrayList(u8) = .fromOwnedSlice(try multi_reader.toOwnedSlice(1));
+    errdefer stderr.deinit(allocator);
+
+    if (watch.timed_out.load(.acquire)) {
+        try appendTimeoutMessage(allocator, &stderr, argv, options.timeout_ms);
+    }
+
+    return .{
+        .stdout = try stdout.toOwnedSlice(allocator),
+        .stderr = try stderr.toOwnedSlice(allocator),
+        .term = term,
+    };
+}
+
 /// Create unique Roc and Zig local cache directories for one CLI test subprocess.
 pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheDirs {
-    const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-    // Get a nanosecond-ish timestamp for uniqueness across runs. std.c.clock_gettime
-    // doesn't compile on Windows-libc in Zig 0.16 (clockid_t is `void` there), so we
-    // use the platform monotonic clock directly.
-    const nano_ts: u64 = if (builtin.os.tag == .windows) blk: {
-        const k32 = struct {
-            extern "kernel32" fn QueryPerformanceCounter(*i64) callconv(.winapi) std.os.windows.BOOL;
-            extern "kernel32" fn QueryPerformanceFrequency(*i64) callconv(.winapi) std.os.windows.BOOL;
-        };
-        var counter: i64 = undefined;
-        var freq: i64 = undefined;
-        _ = k32.QueryPerformanceCounter(&counter);
-        _ = k32.QueryPerformanceFrequency(&freq);
-        // i128 intermediate avoids overflow once uptime * freq exceeds i64.
-        break :blk @intCast(@divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, freq)));
-    } else blk: {
-        var ts: std.c.timespec = undefined;
-        _ = std.c.clock_gettime(.MONOTONIC, &ts);
-        break :blk @intCast(ts.sec * std.time.ns_per_s + ts.nsec);
-    };
-    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        nano_ts,
-        cache_dir_id,
-    });
-    defer allocator.free(cache_leaf);
-
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
 
-    const cache_root_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
+    const cache_root_rel = try reserveTestCacheRoot(allocator);
     defer allocator.free(cache_root_rel);
-
-    std.Io.Dir.cwd().createDirPath(io, cache_root_rel) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
 
     const roc_cache_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "roc-cache" });
     defer allocator.free(roc_cache_rel);
@@ -136,10 +288,10 @@ fn runChild(
     var env_map = try buildIsolatedTestEnvMap(allocator, extra_env);
     defer env_map.deinit();
 
-    const result = try std.process.run(allocator, io, .{
-        .argv = argv,
-        .cwd = .{ .path = cwd_path },
-        .environ_map = &env_map,
+    const result = try runChildWithTimeout(allocator, argv, .{
+        .cwd = cwd_path,
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024, // 10MB
     });
 
     return RocResult{
@@ -325,47 +477,18 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     });
     defer allocator.free(argv);
 
-    // Run roc with stdin pipe
     var env_map = try buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
-
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .stdin = .pipe,
-        .stdout = .pipe,
-        .stderr = .pipe,
-        .cwd = .{ .path = cwd_path },
-        .environ_map = &env_map,
+    const result = try runChildWithTimeout(allocator, argv, .{
+        .cwd = cwd_path,
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+        .stdin = stdin_input,
     });
-    defer child.kill(io);
-
-    // Write input to stdin and close it
-    child.stdin.?.writeStreamingAll(io, stdin_input) catch {};
-    child.stdin.?.close(io);
-    child.stdin = null;
-
-    // Collect output using MultiReader
-    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
-    var multi_reader: std.Io.File.MultiReader = undefined;
-    multi_reader.init(allocator, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
-    defer multi_reader.deinit();
-
-    while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
-        error.EndOfStream => {},
-        else => |e| return e,
-    }
-    try multi_reader.checkAnyError();
-
-    const term = try child.wait(io);
-
-    const stdout = try multi_reader.toOwnedSlice(0);
-    errdefer allocator.free(stdout);
-    const stderr = try multi_reader.toOwnedSlice(1);
-    errdefer allocator.free(stderr);
 
     return RocResult{
-        .stdout = stdout,
-        .stderr = stderr,
-        .term = term,
+        .stdout = result.stdout,
+        .stderr = result.stderr,
+        .term = result.term,
     };
 }

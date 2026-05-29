@@ -10,9 +10,20 @@ process : a, b -> c
 process = ...
 ~~~
 # EXPECTED
-NIL
+NOT IMPLEMENTED - where_clauses_multiline.md:1:1:1:1
 # PROBLEMS
-NIL
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**where_clauses_multiline.md:1:1:1:1:**
+```roc
+process : a, b -> c
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpArrow,LowerIdent,
@@ -52,7 +63,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "process"))
-		(e-not-implemented)
+		(e-runtime-error (tag "not_implemented"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

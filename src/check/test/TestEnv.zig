@@ -79,6 +79,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .types = serialized_ptr.types.deserializeInto(base_ptr, gpa), // Pass gpa to types deserialize
         .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
+        .global_value_defs = serialized_ptr.global_value_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
         .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
@@ -96,6 +97,11 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .idents = ModuleEnv.CommonIdents.find(&common),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+        .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
+        .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
+        .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
+        .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
+        .numeric_suffix_types = serialized_ptr.numeric_suffix_types.deserializeInto(base_ptr),
     };
 
     return LoadedModule{
@@ -260,6 +266,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         &module_env.store.regions,
         module_builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
 
     try checker.checkFile();
@@ -369,6 +376,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         &module_env.store.regions,
         module_builtin_ctx,
     );
+    checker.fixupTypeWriter();
     errdefer checker.deinit();
 
     try checker.checkFile();

@@ -305,7 +305,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 50;
+pub const MODULEENV_EXPR_NODE_COUNT = 51;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -714,6 +714,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_num_from_numeral => {
+            return CIR.Expr{ .e_num_from_numeral = .{} };
+        },
         .expr_typed_int => {
             const p = payload.expr_typed_int;
             const value = store.int128_values.items.items[p.int128_idx];
@@ -739,6 +742,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .type_name = @bitCast(p.type_name),
                 },
             };
+        },
+        .expr_typed_num_from_numeral => {
+            const p = payload.expr_typed_num_from_numeral;
+            return CIR.Expr{ .e_typed_num_from_numeral = .{
+                .type_name = @bitCast(p.type_name),
+            } };
         },
         .expr_string_segment => {
             const p = payload.expr_string_segment;
@@ -1217,6 +1226,7 @@ pub fn replaceExprWithTypeDispatchCall(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with an if expression in-place.
 /// Replaces an existing expression with an e_tag expression in-place.
 /// This is used for constant folding tag unions with payloads during compile-time evaluation.
 /// The arg_indices slice contains the indices of the tag argument expressions.
@@ -2082,6 +2092,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .has_suffix = e.has_suffix,
             } });
         },
+        .e_num_from_numeral => |_| {
+            node.tag = .expr_num_from_numeral;
+            node.setPayload(.{ .expr_num_from_numeral = .{} });
+        },
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
             const int128_idx: u32 = @intCast(store.int128_values.len());
@@ -2100,6 +2114,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
                 .int128_idx = int128_idx,
+            } });
+        },
+        .e_typed_num_from_numeral => |e| {
+            node.tag = .expr_typed_num_from_numeral;
+            node.setPayload(.{ .expr_typed_num_from_numeral = .{
+                .type_name = @bitCast(e.type_name),
             } });
         },
         .e_str_segment => |e| {
@@ -3086,7 +3106,7 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
 
 /// Check if a raw node index refers to a definition node.
 /// This is useful when exposed items might be either definitions or type declarations.
-pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
+pub fn isDefNode(store: *const NodeStore, node_idx: u32) bool {
     const nid: Node.Idx = @enumFromInt(node_idx);
     const node = store.nodes.get(nid);
     return node.tag == .def;
@@ -3137,6 +3157,15 @@ pub fn scratchExprTop(store: *NodeStore) u32 {
 /// Adds a scratch expression to temporary storage.
 pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) Allocator.Error!void {
     try store.addScratch("exprs", idx);
+}
+
+/// Appends a persistent expression span directly to index storage.
+pub fn appendExprSpan(store: *NodeStore, exprs: []const CIR.Expr.Idx) Allocator.Error!CIR.Expr.Span {
+    const index_start = store.index_data.len();
+    for (exprs) |expr| {
+        _ = try store.index_data.append(store.gpa, @intFromEnum(expr));
+    }
+    return .{ .span = .{ .start = @intCast(index_start), .len = @intCast(exprs.len) } };
 }
 
 /// Adds a capture index to the scratch captures list for building spans.
@@ -3321,9 +3350,20 @@ pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataS
     return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
 }
 
+/// Retrieve one item from a span without borrowing the backing index storage.
+pub fn getFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan, offset: usize) T {
+    std.debug.assert(offset < span.len);
+    return @as(T, @enumFromInt(store.index_data.items.items[span.start + offset]));
+}
+
 /// Returns a slice of definitions from the store.
 pub fn sliceDefs(store: *const NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
     return store.sliceFromSpan(CIR.Def.Idx, span.span);
+}
+
+/// Returns a single definition index from a span.
+pub fn defAt(store: *const NodeStore, span: CIR.Def.Span, offset: usize) CIR.Def.Idx {
+    return store.getFromSpan(CIR.Def.Idx, span.span, offset);
 }
 
 /// Returns a slice of expressions from the store.
@@ -3331,9 +3371,19 @@ pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
 }
 
+/// Returns a single expression index from a span.
+pub fn exprAt(store: *const NodeStore, span: CIR.Expr.Span, offset: usize) CIR.Expr.Idx {
+    return store.getFromSpan(CIR.Expr.Idx, span.span, offset);
+}
+
 /// Returns a slice of `CanIR.Pattern.Idx`
 pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
     return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
+}
+
+/// Returns a single pattern index from a span.
+pub fn patternAt(store: *const NodeStore, span: CIR.Pattern.Span, offset: usize) CIR.Pattern.Idx {
+    return store.getFromSpan(CIR.Pattern.Idx, span.span, offset);
 }
 
 /// Returns a slice of `CIR.Expr.Capture.Idx`
@@ -3344,6 +3394,11 @@ pub fn sliceCaptures(store: *const NodeStore, span: CIR.Expr.Capture.Span) []CIR
 /// Returns a slice of statements from the store.
 pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
     return store.sliceFromSpan(CIR.Statement.Idx, span.span);
+}
+
+/// Returns a single statement index from a span.
+pub fn statementAt(store: *const NodeStore, span: CIR.Statement.Span, offset: usize) CIR.Statement.Idx {
+    return store.getFromSpan(CIR.Statement.Idx, span.span, offset);
 }
 
 /// Returns a slice of record fields from the store.

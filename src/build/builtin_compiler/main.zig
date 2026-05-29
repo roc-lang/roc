@@ -1342,6 +1342,7 @@ pub fn main(process_init: std.process.Init) !void {
     const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
     const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
+    const iter_type_idx = try findTypeDeclaration(builtin_env, "Iter");
     const list_type_idx = try findTypeDeclaration(builtin_env, "List");
     const box_type_idx = try findTypeDeclaration(builtin_env, "Box");
 
@@ -1373,6 +1374,7 @@ pub fn main(process_init: std.process.Init) !void {
     const dict_ident = builtin_env.common.findIdent("Builtin.Dict") orelse unreachable;
     const set_ident = builtin_env.common.findIdent("Builtin.Set") orelse unreachable;
     const str_ident = builtin_env.common.findIdent("Builtin.Str") orelse unreachable;
+    const iter_ident = builtin_env.common.findIdent("Builtin.Iter") orelse unreachable;
     const list_ident = builtin_env.common.findIdent("Builtin.List") orelse unreachable;
     const box_ident = builtin_env.common.findIdent("Builtin.Box") orelse unreachable;
     const utf8_problem_ident = builtin_env.common.findIdent("Builtin.Str.Utf8Problem") orelse unreachable;
@@ -1401,6 +1403,7 @@ pub fn main(process_init: std.process.Init) !void {
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, iter_ident, @intCast(@intFromEnum(iter_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
 
     try builtin_env.common.setNodeIndexById(gpa, u8_ident, @intCast(@intFromEnum(u8_type_idx)));
@@ -1437,6 +1440,7 @@ pub fn main(process_init: std.process.Init) !void {
         .dict_type = dict_type_idx,
         .set_type = set_type_idx,
         .str_type = str_type_idx,
+        .iter_type = iter_type_idx,
         .list_type = list_type_idx,
         .box_type = box_type_idx,
         .utf8_problem_type = utf8_problem_type_idx,
@@ -1459,6 +1463,7 @@ pub fn main(process_init: std.process.Init) !void {
         .dict_ident = dict_ident,
         .set_ident = set_ident,
         .str_ident = str_ident,
+        .iter_ident = iter_ident,
         .list_ident = list_ident,
         .box_ident = box_ident,
         .utf8_problem_ident = utf8_problem_ident,
@@ -1660,30 +1665,7 @@ fn compileModule(
     // 5.5. Transform low-level operations (must happen before type checking)
     // For the Builtin module, transform annotation-only defs into low-level operations
     if (std.mem.eql(u8, module_name, "Builtin")) {
-        // Transform annotation-only defs and get the list of new def indices
-        var new_def_indices = try replaceProvidedByCompilerLowLevels(module_env);
-        defer new_def_indices.deinit(gpa);
-
-        if (new_def_indices.items.len > 0) {
-            // Rebuild the dependency graph and evaluation order to include the updated defs
-            const DependencyGraph = @import("can").DependencyGraph;
-            var graph = try DependencyGraph.buildDependencyGraph(
-                module_env,
-                module_env.all_defs,
-                gpa,
-            );
-            defer graph.deinit();
-
-            const eval_order = try DependencyGraph.computeSCCs(&graph, gpa);
-            // Free the old evaluation order if it exists
-            if (module_env.evaluation_order) |old_order| {
-                old_order.deinit();
-                gpa.destroy(old_order);
-            }
-            const eval_order_ptr = try gpa.create(DependencyGraph.EvaluationOrder);
-            eval_order_ptr.* = eval_order;
-            module_env.evaluation_order = eval_order_ptr;
-        }
+        try can.BuiltinLowLevel.apply(module_env);
 
         // Find Bool, Try, and Str statements before type checking
         // When compiling Builtin, bool_stmt, try_stmt, and str_stmt are initially undefined,
@@ -1743,6 +1725,7 @@ fn compileModule(
         &module_env.store.regions,
         builtin_ctx,
     );
+    checker.fixupTypeWriter();
     defer checker.deinit();
 
     try checker.checkFile();

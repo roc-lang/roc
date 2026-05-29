@@ -7,14 +7,14 @@
 //! The CLI supports two modes for passing compiled Roc programs to the interpreter:
 //!
 //! ### IPC Mode (`roc path/to/app.roc`)
-//! - Compiles Roc source through ARC-inserted LIR and publishes a viewable LIR runtime image in shared memory
+//! - Compiles Roc source through ARC-inserted LIR and publishes a viewable LIR image in shared memory
 //! - Spawns interpreter host as child process that maps the shared memory
 //! - Fast startup, same-architecture only
-//! - See: `buildLirRuntimeImageWithCoordinator`, `rocRun`
+//! - See: `buildLirImageWithCoordinator`, `rocRun`
 //!
 //! ### Embedded Interpreter Mode (`roc build --opt=interpreter path/to/app.roc`)
 //! - Compiles Roc source through the same checked-artifact to LIR path as IPC mode
-//! - Embeds the viewable LIR runtime image directly in the output binary
+//! - Embeds the viewable LIR image directly in the output binary
 //! - The interpreter shim receives only the LIR image pointer and length
 //!
 //! For detailed documentation, see `src/interpreter_shim/README.md`.
@@ -116,7 +116,7 @@ const RocTarget = @import("target.zig").RocTarget;
 
 /// Embedded interpreter shim library for the native host target.
 /// Used by `roc run` after the parent process has lowered checked artifacts to
-/// an ARC-inserted LIR runtime image in shared memory.
+/// an ARC-inserted LIR image in shared memory.
 const ShimLibraries = struct {
     const native = if (builtin.is_test)
         &[_]u8{}
@@ -129,6 +129,28 @@ const ShimLibraries = struct {
         return native;
     }
 };
+
+fn interpreterShimBytes(target: ?RocTarget) []const u8 {
+    return if (target) |t| ShimLibraries.forTarget(t) else ShimLibraries.native;
+}
+
+fn interpreterShimDigest(target: ?RocTarget) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc-interpreter-shim-cache-v1");
+    hasher.update(interpreterShimBytes(target));
+    var out: [32]u8 = undefined;
+    hasher.final(&out);
+    return out;
+}
+
+fn interpreterShimCacheFilename(ctx: *CliCtx, target: RocTarget) ![]const u8 {
+    const digest = interpreterShimDigest(target);
+    const digest_hex = std.fmt.bytesToHex(digest, .lower);
+    return if (target.isWindows())
+        std.fmt.allocPrint(ctx.arena, "roc_interpreter_shim_{s}_{s}.lib", .{ @tagName(target), digest_hex[0..] })
+    else
+        std.fmt.allocPrint(ctx.arena, "libroc_interpreter_shim_{s}_{s}.a", .{ @tagName(target), digest_hex[0..] });
+}
 
 /// Embedded pre-compiled builtins object files for each target.
 /// These contain the wrapper functions needed by the dev backend for string/list operations.
@@ -362,6 +384,11 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// Test builds may provide an explicit size with `-Dshared-memory-size`.
 /// This keeps production Linux at 2TB while allowing Valgrind CI to use a
 /// smaller arena that Memcheck can map.
+///
+/// If the OS rejects the preferred reservation (e.g. aarch64 Linux kernels
+/// built with CONFIG_ARM64_VA_BITS=39 cap user VA at ~256 GiB and refuse a
+/// 2 TiB mmap with ENOMEM), `createSharedMemory` halves the request down to
+/// `SHARED_MEMORY_MIN_SIZE` before giving up. See `createWithMinSize`.
 const SHARED_MEMORY_SIZE: usize = if (build_options.has_shared_memory_size)
     configuredSharedMemorySize()
 else if (@sizeOf(usize) < 8)
@@ -372,6 +399,18 @@ else if (builtin.os.tag == .windows)
     8 * 1024 * 1024 * 1024 // 8GB for Windows (MapViewOfFile commit accounting)
 else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
+
+/// Floor for the retry loop in `createSharedMemory`. Set to the
+/// macOS/Windows reservation — documented as "ample headroom for real
+/// programs" — so a smaller reservation still produces a usable arena. On
+/// 32-bit targets the preferred size is already smaller than 8 GiB and an
+/// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
+/// itself (single attempt, no retry); `-Dshared-memory-size` builds are
+/// likewise handled by the allocator clamping `min_size` to the preferred.
+const SHARED_MEMORY_MIN_SIZE: usize = if (@sizeOf(usize) < 8)
+    SHARED_MEMORY_SIZE
+else
+    8 * 1024 * 1024 * 1024;
 
 fn configuredSharedMemorySize() usize {
     if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
@@ -621,7 +660,7 @@ pub fn main(init: std.process.Init) !void {
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
-    const stack_overflow_installed = base.stack_overflow.install();
+    const stack_overflow_installed = base.stack_overflow.installForCurrentThread();
     if (comptime builtin.mode == .Debug) {
         std.debug.assert(stack_overflow_installed);
     } else if (!stack_overflow_installed) {
@@ -816,7 +855,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
 
 /// Generate platform host shim object file using LLVM.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-/// If `runtime_image` is present, embed the already-lowered LIR runtime image
+/// If `lir_image` is present, embed the already-lowered LIR image
 /// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
 fn generatePlatformHostShim(
@@ -824,7 +863,7 @@ fn generatePlatformHostShim(
     cache_dir: []const u8,
     entrypoint_names: []const []const u8,
     target: RocTarget,
-    runtime_image: ?[]const u8,
+    lir_image: ?[]const u8,
     debug: bool,
 ) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
@@ -866,7 +905,7 @@ fn generatePlatformHostShim(
 
     // Create the complete platform shim.
     // Note: Symbol names include platform-specific prefixes (underscore for macOS).
-    if (runtime_image) |image| {
+    if (lir_image) |image| {
         platform_host_shim.createEmbeddedInterpreterShim(&llvm_builder, entrypoints.items, target, image) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
@@ -878,7 +917,7 @@ fn generatePlatformHostShim(
 
     // Generate paths for temporary files
     var hash = std.hash.Crc32.init();
-    if (runtime_image) |image| hash.update(image);
+    if (lir_image) |image| hash.update(image);
     for (entrypoint_names) |name| {
         hash.update(name);
         hash.update(&[_]u8{0});
@@ -966,6 +1005,8 @@ fn interpreterExeCacheName(
     var hash = std.hash.Crc32.init();
     hash.update("roc-run-lir-shared-memory-v1");
     hash.update(build_options.compiler_version);
+    const shim_digest = interpreterShimDigest(target);
+    hash.update(&shim_digest);
     hash.update(app_path);
     hash.update(@tagName(target));
     for (entrypoint_names) |name| {
@@ -1116,11 +1157,11 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
         return error.PlatformNotSupported;
     };
 
-    // Build the viewable LIR runtime image in shared memory before linking the
+    // Build the viewable LIR image in shared memory before linking the
     // host executable. The same lowered root metadata supplies the platform
     // entrypoint names used by the shim, so `roc run` does not rediscover roots
     // from platform source syntax after checking.
-    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, args.path, null);
+    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads);
     const shm_handle = shm_result.handle;
     defer closeSharedMemoryHandle(shm_handle);
 
@@ -1394,9 +1435,8 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) ?[]const u8 {
 /// State for the CLI echo platform's virtual I/O context.
 /// Intercepts reads for the synthetic app source and embedded platform files.
 /// Run a default_app (headerless file with main! and echo platform).
-/// This compiles the app through the BuildEnv pipeline and executes the result
-/// with the echo platform host function, using a virtual vtable to intercept
-/// reads for the synthetic app source and embedded platform files.
+/// This compiles the app through checked artifacts and executes the resulting
+/// LIR image with the echo platform host function.
 fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) !void {
     defer ctx.gpa.free(original_source);
 
@@ -1442,7 +1482,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    const shm_result = try buildLirRuntimeImageWithCoordinator(ctx, app_path, original_source_dir);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads);
     defer closeSharedMemoryHandle(shm_result.handle);
 
     if (shm_result.error_count > 0) {
@@ -1450,54 +1490,22 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         return error.TypeCheckingFailed;
     }
 
-    const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(shm_result.handle.ptr));
-    const header_offset = @sizeOf(SharedMemoryAllocator.Header);
-    const runtime_header: *const lir.RuntimeImage.Header = @ptrCast(@alignCast(base_ptr + header_offset));
-    const view = try lir.RuntimeImage.viewMappedImage(runtime_header, base_ptr, shm_result.handle.mapped_size);
-
-    if (view.platform_entrypoints.len == 0) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("roc run default app invariant violated: no platform entrypoints", .{});
-        }
-        return error.NoEntrypoint;
-    }
-    const entrypoint = view.platform_entrypoints[0];
+    const view = try viewLirImageFromHandle(shm_result.handle);
 
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
     var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
 
-    const proc = view.store.getProcSpec(entrypoint.root_proc);
-    const arg_layouts = try argLayoutsForProc(ctx.gpa, &view.store, entrypoint.root_proc);
-    defer ctx.gpa.free(arg_layouts);
-
-    var interpreter = try eval.LirInterpreter.init(
-        ctx.gpa,
-        &view.store,
-        &view.layouts,
-        &roc_ops,
-    );
-    defer interpreter.deinit();
-
     var result_buf: [16]u8 align(16) = undefined;
-    _ = interpreter.eval(.{
-        .proc_id = entrypoint.root_proc,
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
-        .arg_ptr = @ptrCast(&cli_args_list),
-        .ret_ptr = @ptrCast(&result_buf),
-    }) catch |err| {
-        switch (err) {
-            error.Crash => return,
-            error.OutOfMemory => return error.OutOfMemory,
-            error.RuntimeError, error.DivisionByZero => {
-                const message = interpreter.getRuntimeErrorMessage() orelse @errorName(err);
-                ctx.io.stderr().print("error: {s}\n", .{message}) catch {};
-                return error.RuntimeError;
-            },
-        }
-    };
+    try evaluateLirImageEntrypoint(
+        ctx.gpa,
+        &view,
+        0,
+        &roc_ops,
+        @ptrCast(&result_buf),
+        @ptrCast(&cli_args_list),
+    );
 
     const exit_code = result_buf[0];
     if (exit_code != 0) std.process.exit(exit_code);
@@ -1914,6 +1922,12 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
+fn viewLirImageFromHandle(handle: SharedMemoryHandle) lir.LirImage.ImageError!lir.LirImage.ProgramView {
+    const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
+    const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    return lir.LirImage.viewMappedImage(header, base_ptr, handle.size);
+}
+
 fn argLayoutsForProc(
     allocator: Allocator,
     store: *const lir.LirStore,
@@ -1931,16 +1945,52 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-/// Build shared memory containing a viewable ARC-inserted LIR runtime image.
+fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) void {
+    const message = switch (err) {
+        error.OutOfMemory => "Roc interpreter ran out of memory",
+        error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
+        error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
+        error.Crash => return,
+    };
+    ops.crash(message);
+}
+
+fn evaluateLirImageEntrypoint(
+    allocator: Allocator,
+    view: *const lir.LirImage.ProgramView,
+    ordinal: u32,
+    ops: *echo_platform.host_abi.RocOps,
+    ret_ptr: ?*anyopaque,
+    arg_ptr: ?*anyopaque,
+) !void {
+    var interpreter = try eval.LirInterpreter.init(allocator, &view.store, &view.layouts, ops);
+    defer interpreter.deinit();
+
+    _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
+        error.EntrypointNotFound => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
+            }
+            unreachable;
+        },
+        else => |e| {
+            reportCliInterpreterError(ops, &interpreter, e);
+            return;
+        },
+    };
+}
+
+/// Build shared memory containing a viewable ARC-inserted LIR image.
 ///
-/// The parent process owns parse, canonicalize, checking, checked-artifact
-/// publication, MIR lowering, IR lowering, LIR lowering, and ARC insertion.
-/// The child process maps only the LIR runtime image and never
-/// sees `ModuleEnv`, CIR, checked artifacts, MIR, or IR.
-pub fn buildLirRuntimeImageWithCoordinator(
+/// The parent process owns parse, canonicalization, checking, checked module
+/// publication, post-check lowering, LIR lowering, and ARC insertion. The child
+/// process maps only the LIR image and never sees `ModuleEnv`, CIR, checked
+/// modules, or post-check IRs.
+pub fn buildLirImageWithCoordinator(
     ctx: *CliCtx,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
+    max_threads: ?usize,
 ) !SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
@@ -1949,7 +1999,7 @@ pub fn buildLirRuntimeImageWithCoordinator(
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
-    const runtime_header = try shm_allocator.create(lir.RuntimeImage.Header);
+    const image_header = try shm_allocator.create(lir.LirImage.Header);
 
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
     defer builtin_modules.deinit();
@@ -1991,10 +2041,13 @@ pub fn buildLirRuntimeImageWithCoordinator(
     else
         null;
 
+    const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
     var coord = try Coordinator.init(
         ctx.gpa,
-        .single_threaded,
-        1,
+        mode,
+        thread_count,
         RocTarget.detectNative(),
         &builtin_modules,
         build_options.compiler_version,
@@ -2069,13 +2122,13 @@ pub fn buildLirRuntimeImageWithCoordinator(
     const relation_artifacts = try coord.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         shm_allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
-        .{ .requests = root_artifact.root_requests.requests },
+        .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = base.target.TargetUsize.native,
         },
@@ -2084,8 +2137,8 @@ pub fn buildLirRuntimeImageWithCoordinator(
     const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
 
-    try lir.RuntimeImage.fillHeaderInSharedMemory(
-        runtime_header,
+    try lir.LirImage.fillHeaderInSharedMemory(
+        image_header,
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
@@ -2097,10 +2150,10 @@ pub fn buildLirRuntimeImageWithCoordinator(
     return sharedMemoryResult(&shm, finalized_counts, entrypoint_names);
 }
 
-/// Wrapper around buildLirRuntimeImageWithCoordinator for callers that pass allow_errors.
+/// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) !SharedMemoryResult {
-    return buildLirRuntimeImageWithCoordinator(ctx, roc_file_path, null);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null);
 }
 
 /// Platform resolution result containing the platform source path
@@ -2402,7 +2455,7 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
 }
 
 /// Extract the embedded roc_shim library to the specified path for the given target.
-/// This library contains the shim code that runs in child processes to read the LIR runtime image.
+/// This library contains the shim code that runs in child processes to read the LIR image.
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
 pub fn extractReadRocFilePathShimLibrary(ctx: *CliCtx, output_path: []const u8, target: ?RocTarget) !void {
@@ -2413,17 +2466,11 @@ pub fn extractReadRocFilePathShimLibrary(ctx: *CliCtx, output_path: []const u8, 
         return;
     }
 
-    // Get the appropriate shim for the target (or native if not specified)
-    const shim_data = if (target) |t|
-        ShimLibraries.forTarget(t)
-    else
-        ShimLibraries.native;
-
     // Write the embedded shim library to the output path
     const shim_file = try std.Io.Dir.cwd().createFile(ctx.io.std_io, output_path, .{});
     defer shim_file.close(ctx.io.std_io);
 
-    try shim_file.writeStreamingAll(ctx.io.std_io, shim_data);
+    try shim_file.writeStreamingAll(ctx.io.std_io, interpreterShimBytes(target));
 }
 
 /// Format a bundle path validation reason into a user-friendly error message
@@ -3015,7 +3062,7 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         },
         .interpreter, .wasm => {
             // Use embedded interpreter build approach
-            // This compiles the Roc app and embeds a viewable LIR runtime image in the binary.
+            // This compiles the Roc app and embeds a viewable LIR image in the binary.
             try rocBuildEmbedded(ctx, args);
         },
     }
@@ -3281,13 +3328,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         },
     };
 
-    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
-        .{ .requests = root_artifact.root_requests.requests },
+        .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
         },
@@ -3430,10 +3477,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     if (!args.suppress_build_status) {
         const stdout = ctx.io.stdout();
-        try stdout.print("Successfully built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
-            try stdout.print(" with {}% cache hit", .{cache_percent});
-        }
+        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
         try stdout.writeAll(" (checked-artifact native backend)\n");
 
         if (args.verbose) {
@@ -3460,7 +3504,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 }
 
-/// Build a standalone binary with the interpreter and an embedded LIR runtime image.
+/// Build a standalone binary with the interpreter and an embedded LIR image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
 fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const target_mod = @import("target.zig");
@@ -3631,23 +3675,23 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     defer shm.deinit(ctx.gpa);
 
     const shm_allocator = shm.allocator();
-    const runtime_header = try shm_allocator.create(lir.RuntimeImage.Header);
+    const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    const lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         shm_allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
-        .{ .requests = root_artifact.root_requests.requests },
+        .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = base.target.TargetUsize.native,
         },
     );
 
     const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
-    try lir.RuntimeImage.fillHeaderInSharedMemory(
-        runtime_header,
+    try lir.LirImage.fillHeaderInSharedMemory(
+        image_header,
         shm.base_ptr,
         shm.getUsedSize(),
         &lowered.lir_result,
@@ -3656,7 +3700,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     );
     shm.updateHeader();
 
-    const runtime_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);
+    const lir_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .Debug) {
@@ -3705,7 +3749,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         }
     }
 
-    const shim_filename = try std.fmt.allocPrint(ctx.arena, "libroc_shim_{s}.a", .{target_name});
+    const shim_filename = try interpreterShimCacheFilename(ctx, target);
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
     std.Io.Dir.cwd().access(ctx.io.std_io, shim_path, .{}) catch {
         extractReadRocFilePathShimLibrary(ctx, shim_path, target) catch |err| {
@@ -3719,7 +3763,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         build_cache_dir,
         entrypoint_names,
         target,
-        runtime_image,
+        lir_image,
         enable_debug,
     );
 
@@ -3774,10 +3818,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     if (!args.suppress_build_status) {
         const stdout = ctx.io.stdout();
-        try stdout.print("Successfully built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
-        if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
-            try stdout.print(" with {}% cache hit", .{cache_percent});
-        }
+        try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
         try stdout.writeAll(" (checked-artifact embedded interpreter)\n");
         if (args.verbose) {
             try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
@@ -4262,7 +4303,7 @@ fn runCheckedArtifactTests(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relation_artifacts),
@@ -4757,7 +4798,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
     var reader = ReplLine.init(ctx.gpa);
     defer reader.deinit();
 
-    var session = ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
+    var session = try ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
     defer session.deinit();
 
     var should_exit = false;
@@ -5023,14 +5064,47 @@ fn checkFileWithBuildEnvPreserved(
 
     // Build the file (works for both app and module files)
     build_env.build(filepath) catch |err| {
-        // Even on error, try to drain and print any reports that were collected
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReports(drained);
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
 
-        // Print any error reports to stderr before failing.
-        return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => error.Internal,
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+
+        var error_count: u32 = 0;
+        var warning_count: u32 = 0;
+        for (drained) |mod| {
+            for (mod.reports) |report| {
+                switch (report.severity) {
+                    .info => {},
+                    .runtime_error, .fatal => error_count += 1,
+                    .warning => warning_count += 1,
+                }
+            }
+        }
+
+        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
+        for (drained, 0..) |mod, i| {
+            reports[i] = .{
+                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
+                .reports = mod.reports,
+            };
+        }
+        build_env.freeDrainedReportsPathsOnly(drained);
+
+        const timing = if (builtin.target.cpu.arch == .wasm32)
+            CheckTimingInfo{}
+        else
+            build_env.getTimingInfo();
+
+        return CheckResultWithBuildEnv{
+            .check_result = .{
+                .reports = reports,
+                .timing = timing,
+                .error_count = error_count,
+                .warning_count = warning_count,
+            },
+            .build_env = build_env,
         };
     };
 
@@ -5293,9 +5367,6 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) !void {
     // Flush stderr to ensure all error output is visible
     ctx.io.flush();
 
-    // Compute cache hit percentage
-    const cache_percent = cacheHitPercent(check_result.cache_hits, check_result.cache_misses);
-
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
         stderr.writeAll("\n") catch {};
         stderr.print("Found {} error(s) and {} warning(s) in ", .{
@@ -5303,10 +5374,6 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) !void {
             check_result.warning_count,
         }) catch {};
         formatElapsedTimeMs(stderr, elapsed) catch {};
-        // Include inline cache stats summary
-        if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
-            stderr.print(" with {}% cache hit", .{cache_percent}) catch {};
-        }
         stderr.print(" for {s}.\n", .{args.path}) catch {};
 
         // Print verbose stats if requested
@@ -5326,10 +5393,6 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) !void {
     } else {
         stdout.print("No errors found in ", .{}) catch {};
         formatElapsedTimeMs(stdout, elapsed) catch {};
-        // Include inline cache stats summary
-        if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
-            stdout.print(" with {}% cache hit", .{cache_percent}) catch {};
-        }
         stdout.print(" for {s}\n", .{args.path}) catch {};
 
         // Print verbose stats if requested

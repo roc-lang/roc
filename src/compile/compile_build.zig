@@ -155,11 +155,11 @@ pub const BuildEnv = struct {
     /// Controls which checked-artifact publication work runs after ordinary
     /// checking has completed.
     ///
-    /// Executable builds need the full platform/app executable relation because
-    /// later MIR/LIR stages consume it as lowering input. `roc check` needs the
-    /// type-level platform/app validation, but must not republish executable
-    /// platform roots; diagnostic-only checking must not force MIR/LIR lowering
-    /// of declarations that are not part of a valid executable program.
+    /// Executable builds need the full platform/app relation because post-check
+    /// lowering consumes it as input. `roc check` needs the type-level
+    /// platform/app validation, but must not republish runnable platform roots;
+    /// diagnostic-only checking must not force post-check lowering of
+    /// declarations that are not part of a valid executable program.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
@@ -664,13 +664,17 @@ pub const BuildEnv = struct {
                     }
 
                     const env = coord_semantic.module_env;
-                    const checked_artifact = coord_semantic.checked_artifact;
+                    const checked_artifact_ptr = coord_semantic.checked_artifact;
                     sched_mod.semantic = .{
-                        .module_env = if (checked_artifact == null) env else null,
-                        .checked_artifact = checked_artifact,
+                        .module_env = if (checked_artifact_ptr == null) env else null,
+                        .checked_artifact = if (checked_artifact_ptr) |artifact| artifact.* else null,
                     };
 
-                    coord_semantic.checked_artifact = null;
+                    if (checked_artifact_ptr) |artifact| {
+                        const artifact_allocator = artifact.canonical_names.allocator;
+                        artifact_allocator.destroy(artifact);
+                        coord_semantic.checked_artifact = null;
+                    }
 
                     // Clear coordinator ownership to prevent double-free during deinit.
                     coord_mod.semantic = null;

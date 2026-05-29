@@ -1,9 +1,9 @@
 //! Layout to LLVM Type Conversion
 //!
 //! This module provides conversion from Roc's Layout system to LLVM types.
-//! It bridges the Roc compiler's layout representation with the LLVM IR builder.
+//! It converts the Roc compiler's layout representation to LLVM IR builder types.
 //!
-//! Key conversions:
+//! Main conversions:
 //! - Scalars → i8/i16/i32/i64/i128/float/double
 //! - Records/Tuples → LLVM struct types
 //! - Tag Unions → { payload_bytes, discriminant }
@@ -47,7 +47,7 @@ pub fn layoutToLlvmType(
 fn scalarToLlvmType(builder: *Builder, layout_val: Layout) Error!Builder.Type {
     return switch (layout_val.getScalar().tag) {
         .opaque_ptr => .ptr,
-        .str => strLlvmType(builder), // RocStr: { ptr, len }
+        .str => strLlvmType(builder), // RocStr: { ptr, encoded capacity, len }
         .int => intPrecisionToLlvmType(layout_val.getScalar().getInt()),
         .frac => fracPrecisionToLlvmType(layout_val.getScalar().getFrac()),
     };
@@ -80,11 +80,11 @@ fn listLlvmType(builder: *Builder) Error!Builder.Type {
     return builder.structType(.normal, &fields) catch return error.OutOfMemory;
 }
 
-/// Get the LLVM type for a Roc Str (2-element struct: ptr, len)
+/// Get the LLVM type for a Roc Str (3-element struct: ptr, encoded capacity, len)
 /// Note: Str also has seamless small string optimization, but the LLVM type
 /// is the same (the SSO is handled at runtime)
 pub fn strLlvmType(builder: *Builder) Error!Builder.Type {
-    const fields = [_]Builder.Type{ .ptr, .i64 };
+    const fields = [_]Builder.Type{ .ptr, .i64, .i64 };
     return builder.structType(.normal, &fields) catch return error.OutOfMemory;
 }
 
@@ -287,7 +287,7 @@ fn getScalarSize(layout_val: Layout) u32 {
 pub fn getScalarSizeWithPtrSize(layout_val: Layout, ptr_size: u32) u32 {
     return switch (layout_val.getScalar().tag) {
         .opaque_ptr => ptr_size,
-        .str => ptr_size * 2, // { ptr, len }
+        .str => ptr_size * 3, // { ptr, encoded capacity, len }
         .int => switch (layout_val.getScalar().getInt()) {
             .u8, .i8 => 1,
             .u16, .i16 => 2,

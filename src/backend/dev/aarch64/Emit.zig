@@ -737,6 +737,11 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        pub fn adrp(self: *Self, rd: GeneralReg) !void {
+            const inst: u32 = 0x90000000 | @as(u32, rd.enc());
+            try self.emit32(inst);
+        }
+
         /// BLR Xn (branch with link to register - call to address in register)
         pub fn blrReg(self: *Self, reg: GeneralReg) !void {
             // BLR <Xn>

@@ -38,6 +38,7 @@ pub const TestStats = struct {
 };
 
 fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
+    _ = std_io;
     // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB at use)
     // and PosixBlock on POSIX (must point at std.c.environ).
     const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
@@ -57,11 +58,9 @@ fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []cons
     try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 
-    return std.process.run(allocator, std_io, .{
-        .argv = argv,
-        .environ_map = &env_map,
-        .stdout_limit = std.Io.Limit.limited(max_output_bytes),
-        .stderr_limit = std.Io.Limit.limited(max_output_bytes),
+    return util.runChildWithTimeout(allocator, argv, .{
+        .env_map = &env_map,
+        .max_output_bytes = max_output_bytes,
     });
 }
 
@@ -164,8 +163,9 @@ pub fn runNative(
     std_io: std.Io,
     exe_path: []const u8,
 ) !TestResult {
-    const result = std.process.run(allocator, std_io, .{
-        .argv = &[_][]const u8{exe_path},
+    _ = std_io;
+    const result = util.runChildWithTimeout(allocator, &[_][]const u8{exe_path}, .{
+        .max_output_bytes = 50 * 1024,
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         return .failed;
@@ -199,10 +199,12 @@ pub fn runNative(
         },
         .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
+            printStderrIfAny(result);
             return .failed;
         },
         else => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
+            printStderrIfAny(result);
             return .failed;
         },
     }
@@ -261,10 +263,12 @@ pub fn runWithIoSpec(
         },
         .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
+            printStderrIfAny(result);
             return .failed;
         },
         else => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
+            printStderrIfAny(result);
             return .failed;
         },
     }
@@ -295,12 +299,12 @@ fn runWithIoSpecBuildAndExec(
     const exe_path = try std.fmt.allocPrint(allocator, "./{s}", .{output_name});
     defer allocator.free(exe_path);
 
-    const result = std.process.run(allocator, std_io, .{
-        .argv = &[_][]const u8{
-            exe_path,
-            "--test",
-            io_spec,
-        },
+    const result = util.runChildWithTimeout(allocator, &[_][]const u8{
+        exe_path,
+        "--test",
+        io_spec,
+    }, .{
+        .max_output_bytes = 50 * 1024,
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
         cleanup(std_io, output_name);
@@ -334,10 +338,12 @@ fn runWithIoSpecBuildAndExec(
         },
         .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
+            printStderrIfAny(result);
             return .failed;
         },
         else => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
+            printStderrIfAny(result);
             return .failed;
         },
     }
@@ -395,10 +401,12 @@ pub fn runWithValgrind(
         },
         .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
+            printStderrIfAny(result);
             return .failed;
         },
         else => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
+            printStderrIfAny(result);
             return .failed;
         },
     }
@@ -515,10 +523,12 @@ fn handleProcessResult(std_io: std.Io, result: std.process.RunResult, output_nam
         },
         .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
+            printStderrIfAny(result);
             return .failed;
         },
         else => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
+            printStderrIfAny(result);
             return .failed;
         },
     }
@@ -554,12 +564,20 @@ fn handleProcessResultNoCleanup(std_io: std.Io, result: std.process.RunResult, o
         },
         .signal => |sig| {
             std.debug.print("FAIL (signal {d})\n", .{sig});
+            printStderrIfAny(result);
             return .failed;
         },
         else => {
             std.debug.print("FAIL (abnormal termination)\n", .{});
+            printStderrIfAny(result);
             return .failed;
         },
+    }
+}
+
+fn printStderrIfAny(result: std.process.Child.RunResult) void {
+    if (result.stderr.len > 0) {
+        printTruncatedOutput(result.stderr, 5, "       ");
     }
 }
 

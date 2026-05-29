@@ -58,9 +58,9 @@ fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Inde
 
 /// Adds the extern declaration for `roc_entrypoint_from_image`.
 ///
-/// Embedded interpreter builds pass an already-lowered LIR runtime image as a
+/// Embedded interpreter builds pass an already-lowered LIR image as a
 /// pointer/length pair. The interpreter shim views that image directly; it does
-/// not rebuild compiler data or perform any semantic lowering.
+/// not rebuild compiler data or perform compiler lowering.
 fn addEmbeddedRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Index {
     const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
     const usize_type: Builder.Type = if (target.ptrBitWidth() == 32) .i32 else .i64;
@@ -82,10 +82,10 @@ fn addEmbeddedRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Funct
     return entrypoint_fn;
 }
 
-fn addRuntimeImageGlobal(builder: *Builder, runtime_image: []const u8) !Builder.Variable.Index {
-    const image_string = try builder.string(runtime_image);
+fn addLirImageGlobal(builder: *Builder, lir_image: []const u8) !Builder.Variable.Index {
+    const image_string = try builder.string(lir_image);
     const image_const = try builder.stringConst(image_string);
-    const image_name = try builder.strtabString("roc_lir_runtime_image");
+    const image_name = try builder.strtabString("roc_lir_image");
     const image_var = try builder.addVariable(image_name, image_const.typeOf(builder), .default);
     image_var.ptr(builder).global.setLinkage(.internal, builder);
     image_var.setMutability(.global, builder);
@@ -173,8 +173,8 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
 fn addEmbeddedRocExportedFunction(
     builder: *Builder,
     entrypoint_fn: Builder.Function.Index,
-    runtime_image: Builder.Variable.Index,
-    runtime_image_len: usize,
+    lir_image: Builder.Variable.Index,
+    lir_image_len: usize,
     name: []const u8,
     entry_idx: u32,
     target: RocTarget,
@@ -211,14 +211,14 @@ fn addEmbeddedRocExportedFunction(
     const arg_ptr = wip.arg(2);
 
     const idx_const = try builder.intConst(.i32, entry_idx);
-    const image_len_const = try builder.intConst(usize_type, runtime_image_len);
+    const image_len_const = try builder.intConst(usize_type, lir_image_len);
 
     const call_args = [_]Builder.Value{
         idx_const.toValue(),
         ops_ptr,
         ret_ptr,
         arg_ptr,
-        runtime_image.toValue(builder),
+        lir_image.toValue(builder),
         image_len_const.toValue(),
     };
     _ = try wip.call(.normal, .ccc, .none, entrypoint_fn.typeOf(builder), entrypoint_fn.toValue(builder), &call_args, "");
@@ -270,17 +270,17 @@ pub fn createEmbeddedInterpreterShim(
     builder: *Builder,
     entrypoints: []const EntryPoint,
     target: RocTarget,
-    runtime_image: []const u8,
+    lir_image: []const u8,
 ) !void {
-    const runtime_image_global = try addRuntimeImageGlobal(builder, runtime_image);
+    const lir_image_global = try addLirImageGlobal(builder, lir_image);
     const entrypoint_fn = try addEmbeddedRocEntrypoint(builder, target);
 
     for (entrypoints) |entry| {
         _ = try addEmbeddedRocExportedFunction(
             builder,
             entrypoint_fn,
-            runtime_image_global,
-            runtime_image.len,
+            lir_image_global,
+            lir_image.len,
             entry.name,
             entry.idx,
             target,

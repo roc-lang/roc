@@ -885,13 +885,15 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "rounded"))
-					(e-binop (op "div")
-						(e-dispatch-call (method "to_frac") (constraint-fn-var 556)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "a"))))
-							(args))
-						(e-dec-small (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
+					(e-dispatch-call (method "div_by") (constraint-fn-var 619)
+						(receiver
+							(e-dispatch-call (method "to_frac") (constraint-fn-var 586)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "a"))))
+								(args)))
+						(args
+							(e-dec-small (numerator "255") (denominator-power-of-ten "0") (value "255")))))
 				(e-nominal (nominal "Color")
 					(e-tag (name "RGBA")
 						(args
@@ -918,7 +920,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "bytes"))
-					(e-dispatch-call (method "to_utf8") (constraint-fn-var 691)
+					(e-dispatch-call (method "to_utf8") (constraint-fn-var 741)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "str"))))
@@ -928,35 +930,77 @@ is_named_color = |str| {
 					(e-lambda
 						(args
 							(p-assign (ident "b")))
-						(e-binop (op "or")
-							(e-binop (op "and")
-								(e-binop (op "ge")
-									(e-lookup-local
-										(p-assign (ident "b")))
-									(e-num (value "48")))
-								(e-binop (op "le")
-									(e-lookup-local
-										(p-assign (ident "b")))
-									(e-num (value "57"))))
-							(e-binop (op "or")
-								(e-binop (op "and")
-									(e-binop (op "ge")
-										(e-lookup-local
-											(p-assign (ident "b")))
-										(e-num (value "97")))
-									(e-binop (op "le")
-										(e-lookup-local
-											(p-assign (ident "b")))
-										(e-num (value "102"))))
-								(e-binop (op "and")
-									(e-binop (op "ge")
-										(e-lookup-local
-											(p-assign (ident "b")))
-										(e-num (value "65")))
-									(e-binop (op "le")
-										(e-lookup-local
-											(p-assign (ident "b")))
-										(e-num (value "70"))))))))
+						(e-if
+							(if-branches
+								(if-branch
+									(e-if
+										(if-branches
+											(if-branch
+												(e-dispatch-call (method "is_gte") (constraint-fn-var 796)
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "b"))))
+													(args
+														(e-num (value "48"))))
+												(e-dispatch-call (method "is_lte") (constraint-fn-var 834)
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "b"))))
+													(args
+														(e-num (value "57"))))))
+										(if-else
+											(e-nominal-external
+												(builtin)
+												(e-tag (name "False")))))
+									(e-nominal-external
+										(builtin)
+										(e-tag (name "True")))))
+							(if-else
+								(e-if
+									(if-branches
+										(if-branch
+											(e-if
+												(if-branches
+													(if-branch
+														(e-dispatch-call (method "is_gte") (constraint-fn-var 885)
+															(receiver
+																(e-lookup-local
+																	(p-assign (ident "b"))))
+															(args
+																(e-num (value "97"))))
+														(e-dispatch-call (method "is_lte") (constraint-fn-var 923)
+															(receiver
+																(e-lookup-local
+																	(p-assign (ident "b"))))
+															(args
+																(e-num (value "102"))))))
+												(if-else
+													(e-nominal-external
+														(builtin)
+														(e-tag (name "False")))))
+											(e-nominal-external
+												(builtin)
+												(e-tag (name "True")))))
+									(if-else
+										(e-if
+											(if-branches
+												(if-branch
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 971)
+														(receiver
+															(e-lookup-local
+																(p-assign (ident "b"))))
+														(args
+															(e-num (value "65"))))
+													(e-dispatch-call (method "is_lte") (constraint-fn-var 1009)
+														(receiver
+															(e-lookup-local
+																(p-assign (ident "b"))))
+														(args
+															(e-num (value "70"))))))
+											(if-else
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "False")))))))))))
 				(e-match
 					(match
 						(cond
@@ -979,41 +1023,71 @@ is_named_color = |str| {
 									(e-block
 										(s-let
 											(p-assign (ident "is_valid"))
-											(e-binop (op "and")
-												(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 860)
-													(receiver
-														(e-lookup-local
-															(p-assign (ident "a"))))
-													(args))
-												(e-binop (op "and")
-													(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 863)
-														(receiver
-															(e-lookup-local
-																(p-assign (ident "b"))))
-														(args))
-													(e-binop (op "and")
-														(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 866)
+											(e-if
+												(if-branches
+													(if-branch
+														(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1118)
 															(receiver
 																(e-lookup-local
-																	(p-assign (ident "c"))))
+																	(p-assign (ident "a"))))
 															(args))
-														(e-binop (op "and")
-															(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 869)
-																(receiver
-																	(e-lookup-local
-																		(p-assign (ident "d"))))
-																(args))
-															(e-binop (op "and")
-																(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 872)
-																	(receiver
-																		(e-lookup-local
-																			(p-assign (ident "e"))))
-																	(args))
-																(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 875)
-																	(receiver
-																		(e-lookup-local
-																			(p-assign (ident "f"))))
-																	(args))))))))
+														(e-if
+															(if-branches
+																(if-branch
+																	(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1124)
+																		(receiver
+																			(e-lookup-local
+																				(p-assign (ident "b"))))
+																		(args))
+																	(e-if
+																		(if-branches
+																			(if-branch
+																				(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1130)
+																					(receiver
+																						(e-lookup-local
+																							(p-assign (ident "c"))))
+																					(args))
+																				(e-if
+																					(if-branches
+																						(if-branch
+																							(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1136)
+																								(receiver
+																									(e-lookup-local
+																										(p-assign (ident "d"))))
+																								(args))
+																							(e-if
+																								(if-branches
+																									(if-branch
+																										(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1142)
+																											(receiver
+																												(e-lookup-local
+																													(p-assign (ident "e"))))
+																											(args))
+																										(e-dispatch-call (method "is_char_in_hex_range") (constraint-fn-var 1148)
+																											(receiver
+																												(e-lookup-local
+																													(p-assign (ident "f"))))
+																											(args))))
+																								(if-else
+																									(e-nominal-external
+																										(builtin)
+																										(e-tag (name "False")))))))
+																					(if-else
+																						(e-nominal-external
+																							(builtin)
+																							(e-tag (name "False")))))))
+																		(if-else
+																			(e-nominal-external
+																				(builtin)
+																				(e-tag (name "False")))))))
+															(if-else
+																(e-nominal-external
+																	(builtin)
+																	(e-tag (name "False")))))))
+												(if-else
+													(e-nominal-external
+														(builtin)
+														(e-tag (name "False"))))))
 										(e-if
 											(if-branches
 												(if-branch
@@ -1148,7 +1222,7 @@ is_named_color = |str| {
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_named_color") (constraint-fn-var 1287)
+						(e-dispatch-call (method "is_named_color") (constraint-fn-var 1570)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "str"))))
@@ -1186,7 +1260,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "colors"))
-					(e-call (constraint-fn-var 1392)
+					(e-call (constraint-fn-var 1675)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -1197,7 +1271,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dispatch-call (method "contains") (constraint-fn-var 1413)
+				(e-dispatch-call (method "contains") (constraint-fn-var 1696)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1221,38 +1295,42 @@ is_named_color = |str| {
 			(ty-tag-name (name "Hex")
 				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-dispatch-call (method "to_str") (constraint-fn-var 1586)
-				(receiver
-					(e-call (constraint-fn-var 1495)
-						(e-lookup-local
-							(p-assign (ident "rgb")))
-						(e-num (value "124"))
-						(e-num (value "56"))
-						(e-num (value "245"))))
-				(args))
-			(e-string
-				(e-literal (string "rgb(124, 56, 245)")))))
-	(s-expect
-		(e-binop (op "eq")
-			(e-dispatch-call (method "to_str") (constraint-fn-var 1764)
-				(receiver
-					(e-call (constraint-fn-var 1643)
-						(e-lookup-local
-							(p-assign (ident "rgba")))
-						(e-num (value "124"))
-						(e-num (value "56"))
-						(e-num (value "245"))
-						(e-num (value "255"))))
-				(args))
-			(e-string
-				(e-literal (string "rgba(124, 56, 245, 1.0)")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-dispatch-call (method "to_str") (constraint-fn-var 2049)
+					(receiver
+						(e-call (constraint-fn-var 1838)
+							(e-lookup-local
+								(p-assign (ident "rgb")))
+							(e-num (value "124"))
+							(e-num (value "56"))
+							(e-num (value "245"))))
+					(args)))
+			(rhs
+				(e-string
+					(e-literal (string "rgb(124, 56, 245)"))))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 1788)
+				(e-dispatch-call (method "to_str") (constraint-fn-var 2467)
 					(receiver
-						(e-call (constraint-fn-var 1787)
+						(e-call (constraint-fn-var 2186)
+							(e-lookup-local
+								(p-assign (ident "rgba")))
+							(e-num (value "124"))
+							(e-num (value "56"))
+							(e-num (value "245"))
+							(e-num (value "255"))))
+					(args)))
+			(rhs
+				(e-string
+					(e-literal (string "rgba(124, 56, 245, 1.0)"))))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 2491)
+					(receiver
+						(e-call (constraint-fn-var 2490)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

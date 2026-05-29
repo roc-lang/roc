@@ -143,29 +143,35 @@ main2 = p1 != p2
 			(args
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
-			(e-binop (op "and")
-				(e-method-eq (negated "false")
-					(lhs
-						(e-field-access (field "x")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "a"))))))
-					(rhs
-						(e-field-access (field "x")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "b")))))))
-				(e-method-eq (negated "false")
-					(lhs
-						(e-field-access (field "y")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "a"))))))
-					(rhs
-						(e-field-access (field "y")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "b")))))))))
+			(e-if
+				(if-branches
+					(if-branch
+						(e-method-eq (negated "false")
+							(lhs
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(rhs
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b")))))))
+						(e-method-eq (negated "false")
+							(lhs
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(rhs
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b")))))))))
+				(if-else
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "False"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Point") (local))

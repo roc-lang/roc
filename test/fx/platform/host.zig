@@ -28,6 +28,7 @@
 const std = @import("std");
 const shim_io = @import("shim_io");
 const builtin = @import("builtin");
+const base = @import("base");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
@@ -109,7 +110,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         const msg2 = "\n\n";
@@ -125,7 +126,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         std.debug.print("{s}", .{msg});
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
         std.debug.print("{s}", .{addr_str});
         std.debug.print("{s}", .{"\n\n"});
         std.process.exit(139);
@@ -167,7 +168,11 @@ const HostSelfTest = enum {
 };
 
 fn installRuntimeSignalHandlers() void {
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = base.signal_handler.installForCurrentThread(.{
+        .stack_overflow = handleRocStackOverflow,
+        .access_violation = handleRocAccessViolation,
+        .arithmetic_error = handleRocArithmeticError,
+    });
 }
 
 fn triggerSelfTest(mode: HostSelfTest) noreturn {

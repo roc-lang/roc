@@ -159,6 +159,8 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
+NOT IMPLEMENTED - fuzz_crash_020.md:1:1:1:1
+NOT IMPLEMENTED - fuzz_crash_020.md:1:1:1:1
 CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
 UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:92:11:92:15
@@ -554,6 +556,30 @@ Is there an `import` or `exposing` missing up-top?
 		tag
 ```
 		^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**fuzz_crash_020.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**fuzz_crash_020.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **CRASH EXPECTS STRING**
@@ -1873,12 +1899,12 @@ expect {
 				(s-return
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-expr
-					(e-not-implemented))
+					(e-runtime-error (tag "not_implemented")))
 				(s-expr
-					(e-call (constraint-fn-var 790)
+					(e-call
 						(e-lookup-local
 							(p-assign (ident "me")))
-						(e-not-implemented)))
+						(e-runtime-error (tag "not_implemented"))))
 				(s-runtime-error (tag "crash_expects_string"))
 				(s-expr
 					(e-string
@@ -1915,10 +1941,12 @@ expect {
 									(e-lookup-local
 										(p-assign (ident "er")))
 									(e-literal (string "")))))
-						(e-binop (op "add")
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-lookup-local
-								(p-assign (ident "n"))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 1540)
+							(receiver
+								(e-runtime-error (tag "ident_not_in_scope")))
+							(args
+								(e-lookup-local
+									(p-assign (ident "n")))))))
 				(s-let
 					(p-assign (ident "rd"))
 					(e-record
@@ -1974,44 +2002,74 @@ expect {
 									(e-num (value "2"))
 									(e-num (value "3")))))))
 				(s-expr
-					(e-binop (op "or")
-						(e-binop (op "gt")
-							(e-match
-								(match
-									(cond
-										(e-runtime-error (tag "ident_not_in_scope")))
-									(branches
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-lookup-local
-													(p-assign (ident "#ok")))))
-										(branch
-											(patterns
-												(pattern (degenerate false)
-													(p-nominal-external (builtin)
-														(p-applied-tag))))
-											(value
-												(e-num (value "12")))))))
-							(e-num (value "5")))
-						(e-binop (op "or")
-							(e-binop (op "and")
-								(e-binop (op "lt")
-									(e-binop (op "add")
-										(e-num (value "13"))
-										(e-num (value "2")))
-									(e-num (value "5")))
-								(e-binop (op "ge")
-									(e-binop (op "sub")
-										(e-num (value "10"))
-										(e-num (value "1")))
-									(e-num (value "16"))))
-							(e-binop (op "le")
-								(e-num (value "12"))
-								(e-num (value "3"))))))
+					(e-if
+						(if-branches
+							(if-branch
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1923)
+									(receiver
+										(e-match
+											(match
+												(cond
+													(e-runtime-error (tag "ident_not_in_scope")))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-lookup-local
+																(p-assign (ident "#ok")))))
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
+														(value
+															(e-num (value "12"))))))))
+									(args
+										(e-num (value "5"))))
+								(e-nominal-external
+									(builtin)
+									(e-tag (name "True")))))
+						(if-else
+							(e-if
+								(if-branches
+									(if-branch
+										(e-if
+											(if-branches
+												(if-branch
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2031)
+														(receiver
+															(e-dispatch-call (method "plus") (constraint-fn-var 1996)
+																(receiver
+																	(e-num (value "13")))
+																(args
+																	(e-num (value "2")))))
+														(args
+															(e-num (value "5"))))
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2131)
+														(receiver
+															(e-dispatch-call (method "minus") (constraint-fn-var 2096)
+																(receiver
+																	(e-num (value "10")))
+																(args
+																	(e-num (value "1")))))
+														(args
+															(e-num (value "16"))))))
+											(if-else
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "False")))))
+										(e-nominal-external
+											(builtin)
+											(e-tag (name "True")))))
+								(if-else
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2209)
+										(receiver
+											(e-num (value "12")))
+										(args
+											(e-num (value "3")))))))))
 				(s-expr
 					(e-match
 						(match
@@ -2021,12 +2079,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1192)
+													(e-dispatch-call (method "ned") (constraint-fn-var 2276)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1159)
+																		(e-dispatch-call (method "od") (constraint-fn-var 2243)
 																			(receiver
 																				(e-match
 																					(match
@@ -2207,12 +2265,16 @@ expect {
 	(s-expect
 		(e-block
 			(s-expr
-				(e-binop (op "eq")
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "1"))))
-			(e-binop (op "eq")
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+				(e-method-eq (negated "false")
+					(lhs
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(rhs
+						(e-num (value "1")))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(rhs
+					(e-runtime-error (tag "ident_not_in_scope")))))))
 ~~~
 # TYPES
 ~~~clojure

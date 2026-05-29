@@ -17,6 +17,8 @@ pub const Scope = @import("Scope.zig");
 pub const DependencyGraph = @import("DependencyGraph.zig");
 /// Hosted function compiler - replaces annotation-only with hosted lambdas
 pub const HostedCompiler = @import("HostedCompiler.zig");
+/// Builtin.roc low-level operation transform
+pub const BuiltinLowLevel = @import("BuiltinLowLevel.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)

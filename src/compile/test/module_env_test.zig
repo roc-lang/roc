@@ -76,7 +76,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("world", env.getIdent(world_idx));
 
     try std.testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
-    try std.testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try std.testing.expectEqual(original.common.line_starts.len(), env.common.line_starts.len());
     for (original.common.line_starts.items.items, env.common.line_starts.items.items) |expected, actual| {

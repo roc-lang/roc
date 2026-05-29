@@ -88,11 +88,13 @@ foo = {
 				(e-block
 					(s-reassign
 						(p-assign (ident "result"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "result")))
-							(e-lookup-local
-								(p-assign (ident "x")))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 312)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "result"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "x"))))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "result"))))

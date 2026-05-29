@@ -36,7 +36,7 @@ fn logFn(comptime level: std.log.Level, comptime scope: @TypeOf(.enum_literal), 
 // Fixed-size heap in WASM linear memory (128 MiB — matches the runtime arena
 // size recommended in src/compile/README.md "Runtime arena"; smaller sizes
 // OOM during BuildEnv.init / lowering for non-trivial programs). align(16)
-// so the runtime image's base_ptr satisfies the alignment constraints
+// so the LIR image's base_ptr satisfies the alignment constraints
 // documented in the same section.
 var wasm_heap_memory: [128 * 1024 * 1024]u8 align(16) = undefined;
 var fba: std.heap.FixedBufferAllocator = undefined;

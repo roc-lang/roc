@@ -89,7 +89,7 @@ pub fn reset(self: *Self) void {
 /// Emit an expression as Roc source code
 pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) !void {
     const expr = self.module_env.store.getExpr(expr_idx);
-    try self.emitExprValue(expr);
+    try self.emitExprValue(expr_idx, expr);
 }
 
 /// Emit a pattern as Roc source code
@@ -106,13 +106,13 @@ fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !v
         // Only add parens if inner op has lower precedence than outer op
         if (binopPrecedence(inner_op) < binopPrecedence(outer_op)) {
             try self.write("(");
-            try self.emitExprValue(expr);
+            try self.emitExprValue(expr_idx, expr);
             try self.write(")");
         } else {
-            try self.emitExprValue(expr);
+            try self.emitExpr(expr_idx);
         }
     } else {
-        try self.emitExprValue(expr);
+        try self.emitExpr(expr_idx);
     }
 }
 
@@ -130,7 +130,79 @@ fn binopPrecedence(op: Expr.Binop.Op) u8 {
 
 const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
 
-fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
+fn emitRecordedNumeral(self: *Self, expr_idx: Expr.Idx, maybe_type_name: ?base.Ident.Idx) EmitError!void {
+    const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+        std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(expr_idx)});
+    };
+
+    if (literal.isNegative()) {
+        try self.write("-");
+    }
+
+    const before = self.module_env.numeralDigitsBefore(literal);
+    const before_digits = try self.base256ToDecimalDigits(before);
+    defer self.allocator.free(before_digits);
+    try self.write(before_digits);
+
+    if (literal.isFractional()) {
+        try self.write(".");
+        const after = self.module_env.numeralDigitsAfter(literal);
+        const after_digits = try self.base256ToDecimalDigits(after);
+        defer self.allocator.free(after_digits);
+
+        const after_count: usize = @intCast(literal.after_decimal_digit_count);
+        if (after_count <= after_digits.len) {
+            try self.write(after_digits);
+        } else {
+            var pad = after_count - after_digits.len;
+            while (pad > 0) : (pad -= 1) {
+                try self.write("0");
+            }
+            try self.write(after_digits);
+        }
+    }
+
+    if (maybe_type_name) |type_name| {
+        try self.writer().print(".{s}", .{self.module_env.getIdent(type_name)});
+    }
+}
+
+fn base256ToDecimalDigits(self: *Self, bytes_be: []const u8) std.mem.Allocator.Error![]u8 {
+    var start: usize = 0;
+    while (start < bytes_be.len and bytes_be[start] == 0) : (start += 1) {}
+    if (start == bytes_be.len) {
+        return try self.allocator.dupe(u8, "0");
+    }
+
+    const value = try self.allocator.dupe(u8, bytes_be[start..]);
+    defer self.allocator.free(value);
+
+    var digits = std.ArrayList(u8).empty;
+    defer digits.deinit(self.allocator);
+
+    var active = value;
+    while (active.len > 0) {
+        var remainder: u16 = 0;
+        for (active) |*byte| {
+            const next = remainder * 256 + byte.*;
+            byte.* = @intCast(next / 10);
+            remainder = next % 10;
+        }
+        try digits.append(self.allocator, @as(u8, @intCast(remainder)) + '0');
+
+        var trim: usize = 0;
+        while (trim < active.len and active[trim] == 0) : (trim += 1) {}
+        active = active[trim..];
+    }
+
+    const out = try self.allocator.alloc(u8, digits.items.len);
+    for (out, 0..) |*digit, i| {
+        digit.* = digits.items[digits.items.len - 1 - i];
+    }
+    return out;
+}
+
+fn emitExprValue(self: *Self, expr_idx: Expr.Idx, expr: Expr) EmitError!void {
     switch (expr) {
         .e_num => |num| {
             try self.emitIntValue(num.value);
@@ -181,6 +253,9 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
             }
         },
+        .e_num_from_numeral => {
+            try self.emitRecordedNumeral(expr_idx, null);
+        },
         .e_typed_int => |typed| {
             try self.emitIntValue(typed.value);
             const type_name = self.module_env.getIdent(typed.type_name);
@@ -199,6 +274,9 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             }
             const type_name = self.module_env.getIdent(typed.type_name);
             try self.output.print(self.allocator, ".{s}", .{type_name});
+        },
+        .e_typed_num_from_numeral => |typed| {
+            try self.emitRecordedNumeral(expr_idx, typed.type_name);
         },
         .e_str_segment => |seg| {
             const text = self.module_env.common.getString(seg.literal);
@@ -366,7 +444,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // need to inline them as parameters.
             const lambda = self.module_env.store.getExpr(closure.lambda_idx);
             std.debug.assert(lambda == .e_lambda);
-            try self.emitExprValue(lambda);
+            try self.emitExpr(closure.lambda_idx);
         },
         .e_lambda => |lambda| {
             try self.write("|");

@@ -344,6 +344,11 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
 
     _ = wasm_interface.module_instance.invoke(wasm_interface.processAndRespond_handle, &params_process, &returns_process, .{}) catch |err| {
         logDebug("[ERROR] Error invoking WASM processAndRespond: {}\n", .{err});
+        var backtrace = wasm_interface.module_instance.formatBacktrace(2, allocator) catch null;
+        if (backtrace) |*bt| {
+            defer bt.deinit();
+            logDebug("[ERROR] WASM backtrace:\n{s}\n", .{bt.items});
+        }
         logDebug("Printing WASM internal debug log after invocation error:\n", .{});
         printWasmDebugLog(wasm_interface);
         // Important: Try to free the message buffer even if processing failed.

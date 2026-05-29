@@ -22,6 +22,9 @@ pub const Node = @import("Node.zig");
 /// **AST.NodeStore**
 pub const NodeStore = @import("NodeStore.zig");
 
+/// Parser-owned numeric literal facts.
+pub const NumericLiteral = @import("NumericLiteral.zig");
+
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("AST.zig");
 
@@ -119,6 +122,7 @@ test "parser tests" {
     std.testing.refAllDecls(@import("AST.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
+    std.testing.refAllDecls(@import("NumericLiteral.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
@@ -175,4 +179,31 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
         var report = try ast.parseDiagnosticToReport(&env, diag, gpa, "test");
         defer report.deinit();
     }
+}
+
+test "bughunt B212: parameterized type arguments accept bare function types" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\module []
+        \\
+        \\BoxedFn : Box(Str -> Str)
+        \\BoxedParenFn : Box((Str -> Str))
+        \\ResultFn : Result(Str -> Str, Str -> Str)
+        \\
+        \\main : {}
+        \\main = {}
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parse(&allocators, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }

@@ -21,19 +21,35 @@ pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
 const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 
-/// A bit mask were the only set bit is the bit indicating if the List is a seamless slice.
-pub const SEAMLESS_SLICE_BIT: usize =
-    @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
+/// The low bit tags whether a List is a seamless slice.
+pub const SEAMLESS_SLICE_TAG: usize = 1;
+/// Deprecated compatibility alias for the seamless-slice tag bit.
+pub const SEAMLESS_SLICE_BIT: usize = SEAMLESS_SLICE_TAG;
 
 /// Runtime representation of Roc's List type with reference counting and seamless slice optimization.
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
-    // For normal lists, contains the capacity.
-    // For seamless slices contains the pointer to the original allocation.
+    // For normal lists, contains the capacity shifted left by one.
+    // For seamless slices contains the pointer to the original allocation with the low bit set.
     // This pointer is to the first element of the original list.
-    // Note we storing an allocation pointer, the pointer must be right shifted by one.
     capacity_or_alloc_ptr: usize,
+
+    pub inline fn encodeCapacity(capacity: usize) usize {
+        return capacity << 1;
+    }
+
+    pub inline fn decodeCapacity(encoded_capacity: usize) usize {
+        return encoded_capacity >> 1;
+    }
+
+    pub inline fn encodeSliceAllocationPtr(alloc_ptr: [*]u8) usize {
+        return @intFromPtr(alloc_ptr) | SEAMLESS_SLICE_TAG;
+    }
+
+    pub inline fn decodeSliceAllocationPtr(encoded_alloc_ptr: usize) usize {
+        return encoded_alloc_ptr & ~SEAMLESS_SLICE_TAG;
+    }
 
     /// Returns the number of elements in the list.
     pub inline fn len(self: RocList) usize {
@@ -42,7 +58,7 @@ pub const RocList = extern struct {
 
     /// Returns the total capacity of the list.
     pub fn getCapacity(self: RocList) usize {
-        const list_capacity = self.capacity_or_alloc_ptr;
+        const list_capacity = decodeCapacity(self.capacity_or_alloc_ptr);
         const slice_capacity = self.length;
         const slice_mask = self.seamlessSliceMask();
         const capacity = (list_capacity & ~slice_mask) | (slice_capacity & slice_mask);
@@ -51,14 +67,14 @@ pub const RocList = extern struct {
 
     /// Returns true if this list is a seamless slice.
     pub fn isSeamlessSlice(self: RocList) bool {
-        return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
+        return (self.capacity_or_alloc_ptr & SEAMLESS_SLICE_TAG) == SEAMLESS_SLICE_TAG;
     }
 
     // This returns all ones if the list is a seamless slice.
     // Otherwise, it returns all zeros.
     // This is done without branching for optimization purposes.
     pub fn seamlessSliceMask(self: RocList) usize {
-        return @as(usize, @bitCast(@as(isize, @bitCast(self.capacity_or_alloc_ptr)) >> (@bitSizeOf(isize) - 1)));
+        return 0 -% (self.capacity_or_alloc_ptr & SEAMLESS_SLICE_TAG);
     }
 
     pub fn isEmpty(self: RocList) bool {
@@ -99,7 +115,7 @@ pub const RocList = extern struct {
     // For seamless slices, it returns the pointer stored in capacity_or_alloc_ptr.
     pub fn getAllocationDataPtr(self: RocList, roc_ops: *RocOps) ?[*]u8 {
         const list_alloc_ptr = @intFromPtr(self.bytes);
-        const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
+        const slice_alloc_ptr = decodeSliceAllocationPtr(self.capacity_or_alloc_ptr);
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
@@ -288,7 +304,7 @@ pub const RocList = extern struct {
                 roc_ops,
             ),
             .length = length,
-            .capacity_or_alloc_ptr = capacity,
+            .capacity_or_alloc_ptr = encodeCapacity(capacity),
         };
     }
 
@@ -312,7 +328,7 @@ pub const RocList = extern struct {
                 roc_ops,
             ),
             .length = length,
-            .capacity_or_alloc_ptr = length,
+            .capacity_or_alloc_ptr = encodeCapacity(length),
         };
     }
 
@@ -328,14 +344,14 @@ pub const RocList = extern struct {
     ) RocList {
         if (self.bytes) |source_ptr| {
             if (self.isUnique(roc_ops) and !self.isSeamlessSlice()) {
-                const capacity = self.capacity_or_alloc_ptr;
+                const capacity = decodeCapacity(self.capacity_or_alloc_ptr);
                 if (capacity >= new_length) {
-                    const result = RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
+                    const result = RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = self.capacity_or_alloc_ptr };
                     return result;
                 } else {
                     const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
                     const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted, roc_ops);
-                    const result = RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
+                    const result = RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = encodeCapacity(new_capacity) };
                     return result;
                 }
             }
@@ -528,7 +544,7 @@ pub fn listReleaseExcessCapacity(
     const old_length = list.len();
 
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
-    if ((update_mode == .InPlace or list.isUnique(roc_ops)) and list.capacity_or_alloc_ptr == old_length) {
+    if ((update_mode == .InPlace or list.isUnique(roc_ops)) and list.capacity_or_alloc_ptr == RocList.encodeCapacity(old_length)) {
         return list;
     } else if (old_length == 0) {
         list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
@@ -758,7 +774,7 @@ pub fn shallowClone(
             roc_ops,
         ),
         .length = len,
-        .capacity_or_alloc_ptr = capacity,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(capacity),
     };
 
     // Only copy bytes over if the original list was nonempty.
@@ -963,19 +979,19 @@ pub fn listSublist(
                 // starting from the original allocation pointer, not just the slice elements.
                 list.setAllocationElementCount(elements_refcounted, roc_ops);
             }
-            const list_alloc_ptr = (@intFromPtr(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
+            const list_alloc_ptr = RocList.encodeSliceAllocationPtr(source_ptr);
             const slice_alloc_ptr = list.capacity_or_alloc_ptr;
             const slice_mask = list.seamlessSliceMask();
             const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
             // Verify the encoded pointer will decode correctly
             if (comptime builtin.mode == .Debug) {
-                const test_decode = alloc_ptr << 1;
+                const test_decode = RocList.decodeSliceAllocationPtr(alloc_ptr);
                 const original_ptr = if (list.isSeamlessSlice())
-                    slice_alloc_ptr << 1
+                    RocList.decodeSliceAllocationPtr(slice_alloc_ptr)
                 else
                     @intFromPtr(source_ptr);
-                if (test_decode != (original_ptr & ~@as(usize, 1))) {
+                if (test_decode != original_ptr) {
                     var buf: [128]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "listSublist: encoding error (test_decode=0x{x}, original_ptr=0x{x})", .{ test_decode, original_ptr }) catch "listSublist: encoding error";
                     roc_ops.crash(msg);
@@ -1333,12 +1349,10 @@ pub fn listConcat(
         }
     }
 
-    // decrement list a and b.
-    // If they share the same allocation, only decref once to avoid double-free.
+    // Decrement both consumed lists. Even if both values share an allocation, they
+    // are separate owned references at this call boundary.
     list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-    if (!same_allocation) {
-        list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-    }
+    list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
     return output;
 }
@@ -2619,12 +2633,36 @@ test "seamless slice: seamlessSliceMask functionality" {
     try std.testing.expectEqual(@as(usize, 0), empty_list.seamlessSliceMask());
 }
 
+test "seamless slice: low-bit encoding matches RocStr convention" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const alloc_ptr: [*]u8 = @ptrFromInt(0x1000);
+
+    const owned_list = RocList{
+        .bytes = alloc_ptr,
+        .length = 4,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(8),
+    };
+    try std.testing.expect(!owned_list.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 8), owned_list.getCapacity());
+
+    const slice_list = RocList{
+        .bytes = alloc_ptr + 2,
+        .length = 2,
+        .capacity_or_alloc_ptr = RocList.encodeSliceAllocationPtr(alloc_ptr),
+    };
+    try std.testing.expect(slice_list.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 2), slice_list.getCapacity());
+    try std.testing.expectEqual(@intFromPtr(alloc_ptr), @intFromPtr(slice_list.getAllocationDataPtr(test_env.getOps()).?));
+}
+
 test "seamless slice: manual creation and detection" {
-    // Test creating a seamless slice manually by setting the high bit
+    // Test creating a seamless slice manually by setting the low bit
     var seamless_list = RocList{
         .bytes = null,
         .length = 0,
-        .capacity_or_alloc_ptr = SEAMLESS_SLICE_BIT,
+        .capacity_or_alloc_ptr = SEAMLESS_SLICE_TAG,
     };
 
     try std.testing.expect(seamless_list.isSeamlessSlice());
@@ -2643,11 +2681,13 @@ test "seamless slice: getCapacity behavior" {
     const regular_capacity = regular_list.getCapacity();
     try std.testing.expect(regular_capacity >= 3);
 
-    // Seamless slice with high bit set should mask out the bit when getting capacity
+    const alloc_ptr: [*]u8 = @ptrFromInt(0x1000);
+
+    // Seamless slice with low bit set should use length as its capacity
     var seamless_list = RocList{
-        .bytes = null,
+        .bytes = alloc_ptr + 2,
         .length = 5,
-        .capacity_or_alloc_ptr = SEAMLESS_SLICE_BIT | 10, // High bit set, capacity of 10
+        .capacity_or_alloc_ptr = RocList.encodeSliceAllocationPtr(alloc_ptr),
     };
 
     try std.testing.expect(seamless_list.isSeamlessSlice());

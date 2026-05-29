@@ -298,7 +298,7 @@ fn collectExprDependencies(
         },
 
         // Literals and hosted lambdas have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
 
         .e_run_low_level => |run_ll| {
             for (cir.store.sliceExpr(run_ll.args)) |arg_idx| {

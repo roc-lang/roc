@@ -882,6 +882,7 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_f64_to_f32_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_f32_try_unsafe) },
         .{ .name = "roc_builtins_i128_to_dec_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_i128_to_dec_try_unsafe) },
         .{ .name = "roc_builtins_u128_to_dec_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_u128_to_dec_try_unsafe) },
+        .{ .name = "roc_builtins_dec_mul", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul) },
         .{ .name = "roc_builtins_dec_mul_saturated", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul_saturated) },
         .{ .name = "roc_builtins_dec_div", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div) },
         .{ .name = "roc_builtins_dec_div_trunc", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div_trunc) },

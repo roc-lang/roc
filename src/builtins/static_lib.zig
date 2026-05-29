@@ -5,7 +5,10 @@
 //! - Numeric overflow functions (for compiler-rt)
 //! - Dev backend wrapper functions (for roc build --opt=dev)
 
+const std = @import("std");
 const shim_io = @import("shim_io");
+
+pub const panic = std.debug.no_panic;
 
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 /// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
@@ -63,6 +66,9 @@ comptime {
     @export(&dw.roc_builtins_str_from_utf8_parts, .{ .name = "roc_builtins_str_from_utf8_parts" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_dbg_str, .{ .name = "roc_builtins_dbg_str" });
+    @export(&dw.roc_builtins_roc_expect_failed, .{ .name = "roc_builtins_roc_expect_failed" });
+    @export(&dw.roc_builtins_roc_crashed, .{ .name = "roc_builtins_roc_crashed" });
+    @export(&dw.roc_builtins_str_from_literal, .{ .name = "roc_builtins_str_from_literal" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
     @export(&dw.roc_builtins_list_append_unsafe, .{ .name = "roc_builtins_list_append_unsafe" });
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
@@ -109,6 +115,7 @@ comptime {
     @export(&dw.roc_builtins_i128_to_dec_try_unsafe, .{ .name = "roc_builtins_i128_to_dec_try_unsafe" });
     @export(&dw.roc_builtins_u128_to_dec_try_unsafe, .{ .name = "roc_builtins_u128_to_dec_try_unsafe" });
     // Dec arithmetic wrappers
+    @export(&dw.roc_builtins_dec_mul, .{ .name = "roc_builtins_dec_mul" });
     @export(&dw.roc_builtins_dec_mul_saturated, .{ .name = "roc_builtins_dec_mul_saturated" });
     @export(&dw.roc_builtins_dec_div, .{ .name = "roc_builtins_dec_div" });
     @export(&dw.roc_builtins_dec_div_trunc, .{ .name = "roc_builtins_dec_div_trunc" });

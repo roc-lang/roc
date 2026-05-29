@@ -16,6 +16,7 @@ const base = @import("base");
 const reporting = @import("reporting");
 
 const NodeStore = @import("NodeStore.zig");
+const NumericLiteral = @import("NumericLiteral.zig");
 pub const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const SExprTree = base.SExprTree;
@@ -275,6 +276,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
+        .deprecated_number_suffix => "DEPRECATED NUMBER SUFFIX",
         else => "PARSE ERROR",
     };
 
@@ -565,6 +567,41 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
         },
+        .deprecated_number_suffix => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const split = NumericLiteral.deprecatedSuffixFromSource(token_text);
+            const type_name = split.deprecated_suffix.newTypeName() orelse "";
+            const suggested = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ split.number_text, type_name });
+            defer allocator.free(suggested);
+
+            const owned_suffix = try report.addOwnedString(split.deprecated_suffix_text);
+            const owned_suggested = try report.addOwnedString(suggested);
+
+            try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                base.RegionInfo.position(self.env.source, env.line_starts.items.items, region.start.offset, region.end.offset) catch {
+                    return report;
+                },
+                .error_highlight,
+                try report.addOwnedString(filename),
+                self.env.source,
+                env.line_starts.items.items,
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The ");
+            try report.document.addInlineCode(owned_suffix);
+            try report.document.addReflowingText(" suffix is deprecated. Use ");
+            try report.document.addInlineCode(owned_suggested);
+            try report.document.addReflowingText(" instead.");
+            return report;
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -699,6 +736,7 @@ pub const Diagnostic = struct {
         file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
+        deprecated_number_suffix,
 
         // Targets section parse errors
         expected_targets_colon,
@@ -1321,10 +1359,24 @@ pub const Pattern = union(enum) {
     },
     int: struct {
         number_tok: Token.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     frac: struct {
         number_tok: Token.Idx,
+        literal: NumericLiteral.Idx,
+        region: TokenizedRegion,
+    },
+    typed_int: struct {
+        number_tok: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
+        region: TokenizedRegion,
+    },
+    typed_frac: struct {
+        number_tok: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     string: struct {
@@ -1380,6 +1432,8 @@ pub const Pattern = union(enum) {
             .tag => |p| p.region,
             .int => |p| p.region,
             .frac => |p| p.region,
+            .typed_int => |p| p.region,
+            .typed_frac => |p| p.region,
             .string => |p| p.region,
             .single_quote => |p| p.region,
             .record => |p| p.region,
@@ -1453,6 +1507,24 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_int => |num| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-typed-int");
+                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
+                try tree.pushStringPair("type", env.getIdent(num.type_ident));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_frac => |num| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-typed-frac");
+                try ast.appendRegionInfoToSexprTree(env, tree, num.region);
+                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
+                try tree.pushStringPair("type", env.getIdent(num.type_ident));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2558,24 +2630,28 @@ pub const WhereClause = union(enum) {
 pub const Expr = union(enum) {
     int: struct {
         token: Token.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     frac: struct {
         token: Token.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     /// An integer with an explicit type annotation: `123.U64`
-    /// The type_token contains the `.U64` part (NoSpaceDotUpperIdent)
+    /// Deprecated suffix syntax such as `123u64` is desugared to this form during parsing.
     typed_int: struct {
         token: Token.Idx,
-        type_token: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     /// A fractional number with an explicit type annotation: `3.14.Dec`
-    /// The type_token contains the `.Dec` part (NoSpaceDotUpperIdent)
+    /// Deprecated suffix syntax such as `3.14dec` is desugared to this form during parsing.
     typed_frac: struct {
         token: Token.Idx,
-        type_token: Token.Idx,
+        type_ident: base.Ident.Idx,
+        literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     single_quote: struct {
@@ -2765,7 +2841,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-typed-int");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                try tree.pushStringPair("type", ast.resolve(a.type_token));
+                try tree.pushStringPair("type", env.getIdent(a.type_ident));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2774,7 +2850,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-typed-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                try tree.pushStringPair("type", ast.resolve(a.type_token));
+                try tree.pushStringPair("type", env.getIdent(a.type_ident));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
