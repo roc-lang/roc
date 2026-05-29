@@ -14,7 +14,7 @@ match sequence {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_mixed_literals.md:1:7:1:15
+NON-EXHAUSTIVE MATCH - list_mixed_literals.md:1:1:7:2
 # PROBLEMS
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:

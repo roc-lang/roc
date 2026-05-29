@@ -12,6 +12,7 @@ platform "pf"
 	provides { pr1: "not implemented", pr2: "not implemented", }
 ~~~
 # EXPECTED
+UNDECLARED TYPE - platform.md:2:14:2:21
 EXPOSED BUT NOT DEFINED - platform.md:5:13:5:35
 EXPOSED BUT NOT DEFINED - platform.md:5:37:5:59
 EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13

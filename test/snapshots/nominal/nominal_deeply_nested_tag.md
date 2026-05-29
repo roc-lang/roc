@@ -15,7 +15,8 @@ x : Foo.Bar.Baz
 x = Foo.Bar.Baz.X
 ~~~
 # EXPECTED
-NIL
+MISSING NESTED TYPE - nominal_deeply_nested_tag.md:7:5:7:16
+UNDECLARED TYPE - nominal_deeply_nested_tag.md:8:12:8:16
 # PROBLEMS
 **MISSING NESTED TYPE**
 `Foo.Bar` is in scope, but it doesn't have a nested type named `Baz`.

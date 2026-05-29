@@ -11,8 +11,8 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_as_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_as_nested.md:2:7:2:11
+REDUNDANT PATTERN - pattern_as_nested.md:1:1:4:2
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `name` is not used anywhere in your code.

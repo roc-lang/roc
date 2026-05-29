@@ -27,11 +27,11 @@ PARSE ERROR - multi_qualified_import.md:12:30:12:31
 PARSE ERROR - multi_qualified_import.md:12:31:12:36
 PARSE ERROR - multi_qualified_import.md:12:36:12:37
 PARSE ERROR - multi_qualified_import.md:12:37:12:38
-UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
+UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
 **PARSE ERROR**

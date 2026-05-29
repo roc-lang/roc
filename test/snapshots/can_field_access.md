@@ -8,8 +8,7 @@ type=expr
 list.map(fn)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_dot_access.md:1:1:1:5
-UNDEFINED VARIABLE - can_dot_access.md:1:10:1:12
+NIL
 # PROBLEMS
 NIL
 # TOKENS

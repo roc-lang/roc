@@ -11,7 +11,6 @@ match numbers {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_list_rest_types.md:1:7:1:14
 UNUSED VARIABLE - can_list_rest_types.md:2:6:2:11
 # PROBLEMS
 **UNUSED VARIABLE**

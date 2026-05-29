@@ -32,16 +32,16 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
 DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 # PROBLEMS
 **MODULE NOT IMPORTED**
 There is no module with the name `Http.Server` imported into this Roc file.

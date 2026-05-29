@@ -27,9 +27,9 @@ open_record_with_comma : {
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_annotations.md:3:7:3:12
 UNDECLARED TYPE - type_annotations.md:9:14:9:20
 UNDECLARED TYPE - type_annotations.md:11:13:11:18
+UNDECLARED TYPE - type_annotations.md:3:7:3:12
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _String_ is not declared in this scope.

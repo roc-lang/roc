@@ -44,17 +44,17 @@ combineTrys = |result1, result2|
     }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
-UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
-UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
-UNDEFINED VARIABLE - can_import_type_annotations.md:9:21:9:31
-UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
-UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
-UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:61:24:78
+UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
+UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
+UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
+UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
+UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
+UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
+UNDEFINED VARIABLE - can_import_type_annotations.md:9:21:9:31
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.

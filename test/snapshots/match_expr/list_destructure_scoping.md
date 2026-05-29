@@ -11,7 +11,7 @@ match list {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_destructure_scoping.md:1:7:1:11
+NON-EXHAUSTIVE MATCH - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:

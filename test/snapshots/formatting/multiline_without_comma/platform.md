@@ -23,6 +23,7 @@ platform "pf"
 	}
 ~~~
 # EXPECTED
+UNDECLARED TYPE - platform.md:3:4:3:11
 EXPOSED BUT NOT DEFINED - platform.md:14:3:14:25
 EXPOSED BUT NOT DEFINED - platform.md:15:3:15:25
 EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5

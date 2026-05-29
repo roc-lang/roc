@@ -8,7 +8,7 @@ type=expr
 person.age + 5
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_access_in_expression.md:1:1:1:7
+NIL
 # PROBLEMS
 NIL
 # TOKENS

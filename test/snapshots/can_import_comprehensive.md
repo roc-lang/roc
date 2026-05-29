@@ -41,14 +41,12 @@ main = {
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_comprehensive.md:3:1:3:27
-UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
-UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
-UNDEFINED VARIABLE - can_import_comprehensive.md:8:14:8:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:11:15:11:25
 UNDEFINED VARIABLE - can_import_comprehensive.md:14:15:14:24
-UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
-UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
+UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
+UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
+UNDEFINED VARIABLE - can_import_comprehensive.md:8:14:8:22
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `Str` is being redeclared in this scope.

@@ -15,8 +15,8 @@ var t= 0
 PARSE ERROR - fuzz_crash_024.md:2:1:2:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:2:8:2:9
 PARSE ERROR - fuzz_crash_024.md:5:1:5:4
-DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
+DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`

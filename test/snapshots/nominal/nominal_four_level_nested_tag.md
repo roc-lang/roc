@@ -17,7 +17,8 @@ value : Foo.Bar.Baz.Qux
 value = Foo.Bar.Baz.Qux.Y
 ~~~
 # EXPECTED
-NIL
+MODULE NOT IMPORTED - nominal_four_level_nested_tag.md:9:9:9:24
+UNDECLARED TYPE - nominal_four_level_nested_tag.md:10:20:10:24
 # PROBLEMS
 **MODULE NOT IMPORTED**
 There is no module with the name `Foo.Bar.Baz` imported into this Roc file.

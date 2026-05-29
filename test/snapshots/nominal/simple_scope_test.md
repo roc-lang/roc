@@ -15,7 +15,6 @@ Outer := [A].{
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - simple_scope_test.md:6:17:6:26
-UNUSED VARIABLE - simple_scope_test.md:6:17:6:26
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `inner_val` in this scope.

@@ -13,7 +13,7 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `absent` in this scope.

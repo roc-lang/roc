@@ -17,7 +17,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_vs_function_calls.md:7:13:7:19
+NIL
 # PROBLEMS
 NIL
 # TOKENS

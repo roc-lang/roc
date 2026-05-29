@@ -15,10 +15,11 @@ match list {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_destructure_variations.md:1:7:1:11
 UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
 UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
 UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
+MISSING METHOD - list_destructure_variations.md:4:24:4:38
+MISSING METHOD - list_destructure_variations.md:2:11:2:12
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `tail` is not used anywhere in your code.

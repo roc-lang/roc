@@ -8,8 +8,6 @@ type=expr
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
-UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:15
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72

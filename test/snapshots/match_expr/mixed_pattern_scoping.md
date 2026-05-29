@@ -13,7 +13,8 @@ match data {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
+NON-EXHAUSTIVE MATCH - mixed_pattern_scoping.md:1:1:6:2
+REDUNDANT PATTERN - mixed_pattern_scoping.md:1:1:6:2
 # PROBLEMS
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:

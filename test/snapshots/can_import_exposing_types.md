@@ -59,34 +59,25 @@ combineTrys = |jsonTry, httpStatus|
     }
 ~~~
 # EXPECTED
+DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
 UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
 UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
-UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
-UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
-UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
-UNDECLARED TYPE - can_import_exposing_types.md:10:17:10:24
 UNDECLARED TYPE - can_import_exposing_types.md:10:28:10:36
-UNDEFINED VARIABLE - can_import_exposing_types.md:12:14:12:25
-UNDEFINED VARIABLE - can_import_exposing_types.md:14:22:14:29
-UNDEFINED VARIABLE - can_import_exposing_types.md:15:23:15:38
+UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
+UNDECLARED TYPE - can_import_exposing_types.md:10:17:10:24
 UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
-UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
-UNDECLARED TYPE - can_import_exposing_types.md:20:47:20:52
-UNDECLARED TYPE - can_import_exposing_types.md:20:55:20:60
-DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
-UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
-UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
-UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
-UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
-UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
-DOES NOT EXIST - can_import_exposing_types.md:43:23:43:37
-UNDECLARED TYPE - can_import_exposing_types.md:47:19:47:24
-UNDECLARED TYPE - can_import_exposing_types.md:47:26:47:31
+UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
 UNDECLARED TYPE - can_import_exposing_types.md:47:34:47:40
-UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
-UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
+UNDEFINED VARIABLE - can_import_exposing_types.md:14:22:14:29
+UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
+UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
+UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
+UNDEFINED VARIABLE - can_import_exposing_types.md:12:14:12:25
+UNDEFINED VARIABLE - can_import_exposing_types.md:15:23:15:38
+UNDEFINED VARIABLE - can_import_exposing_types.md:43:23:43:37
+UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 # PROBLEMS
 **DOES NOT EXIST**
 `List.mapTry` does not exist.

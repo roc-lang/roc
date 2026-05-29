@@ -27,12 +27,11 @@ ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
+UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
 UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
-UNDECLARED TYPE - type_app_complex_nested.md:4:27:4:32
 UNDECLARED TYPE - type_app_complex_nested.md:4:48:4:53
-UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
-UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+UNDECLARED TYPE - type_app_complex_nested.md:4:27:4:32
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `maybeList` is not used anywhere in your code.

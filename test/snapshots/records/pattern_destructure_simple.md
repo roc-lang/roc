@@ -10,7 +10,6 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 # PROBLEMS
 **UNUSED VARIABLE**

@@ -22,7 +22,7 @@ deepType : Foo.Level1.Level2.Level3
 deepType = C
 ~~~
 # EXPECTED
-NIL
+MODULE NOT IMPORTED - nominal_associated_deep_nesting.md:14:12:14:36
 # PROBLEMS
 **MODULE NOT IMPORTED**
 There is no module with the name `Foo.Level1.Level2` imported into this Roc file.

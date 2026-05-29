@@ -13,8 +13,6 @@ match numbers {
 ~~~
 # EXPECTED
 BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
-UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
-UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS

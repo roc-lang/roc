@@ -15,8 +15,8 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
+UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `p` is not used anywhere in your code.

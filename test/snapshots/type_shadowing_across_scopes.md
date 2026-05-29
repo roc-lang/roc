@@ -22,8 +22,8 @@ PARSE ERROR - type_shadowing_across_scopes.md:9:21:9:28
 PARSE ERROR - type_shadowing_across_scopes.md:9:28:9:29
 PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
 TYPE REDECLARED - type_shadowing_across_scopes.md:1:1:1:28
-MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
+MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`

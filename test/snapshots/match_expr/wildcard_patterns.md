@@ -12,7 +12,6 @@ match value {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - wildcard_patterns.md:1:7:1:12
 UNUSED VARIABLE - wildcard_patterns.md:4:5:4:10
 # PROBLEMS
 **UNUSED VARIABLE**

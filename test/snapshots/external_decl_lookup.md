@@ -17,8 +17,8 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
 UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
+UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.

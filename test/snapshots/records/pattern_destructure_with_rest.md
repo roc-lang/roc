@@ -10,7 +10,6 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS

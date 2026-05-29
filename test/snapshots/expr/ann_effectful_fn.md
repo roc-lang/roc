@@ -13,7 +13,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - ann_effectful_fn.md:3:5:3:19
+DUPLICATE DEFINITION - ann_effectful_fn.md:2:5:2:31
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS

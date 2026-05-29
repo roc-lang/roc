@@ -33,13 +33,13 @@ validateAuth = |creds| HttpAuth.validate(creds)
 # EXPECTED
 MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
-UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_modules.md:16:5:16:37
-UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
+UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
+UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 # PROBLEMS
 **MODULE NOT IMPORTED**
 There is no module with the name `Config` imported into this Roc file.

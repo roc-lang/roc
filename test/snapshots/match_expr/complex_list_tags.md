@@ -15,7 +15,6 @@ match events {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
 DOES NOT EXIST - complex_list_tags.md:3:42:3:51
 DOES NOT EXIST - complex_list_tags.md:3:59:3:68
 DOES NOT EXIST - complex_list_tags.md:4:59:4:68

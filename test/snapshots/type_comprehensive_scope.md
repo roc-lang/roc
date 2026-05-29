@@ -43,11 +43,11 @@ Complex : {
 }
 ~~~
 # EXPECTED
-MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:34
-UNDECLARED TYPE - type_comprehensive_scope.md:16:38:16:42
+UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
+MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Try_ is being redeclared.

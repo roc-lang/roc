@@ -11,8 +11,6 @@ some_fn(arg1)? # Comment 1
 	.record_field?
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_access_multiline_formatting_4.md:1:1:1:8
-UNDEFINED VARIABLE - record_access_multiline_formatting_4.md:1:9:1:13
 TRY OPERATOR OUTSIDE FUNCTION - record_access_multiline_formatting_4.md:1:1:1:15
 TRY OPERATOR OUTSIDE FUNCTION - record_access_multiline_formatting_4.md:1:1:2:28
 TRY OPERATOR OUTSIDE FUNCTION - record_access_multiline_formatting_4.md:1:1:3:33

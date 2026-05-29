@@ -13,8 +13,8 @@ match coord {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tuple_patterns.md:1:7:1:12
 UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
+TYPE MISMATCH - tuple_patterns.md:3:18:3:19
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `y` is not used anywhere in your code.

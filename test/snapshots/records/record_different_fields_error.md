@@ -45,15 +45,12 @@ UNRECOGNIZED SYNTAX - record_different_fields_error.md:3:33:3:34
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:3:34:3:35
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:4:15:4:16
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:4:25:4:26
-UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
-UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:15:5:16
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:24:5:25
 MALFORMED TYPE - record_different_fields_error.md:6:20:6:21
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:21:6:27
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:27:6:28
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:28:6:29
-UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
@@ -61,6 +58,7 @@ UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
 UNUSED VARIABLE - record_different_fields_error.md:6:5:6:21
 TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
 TYPE MISMATCH - record_different_fields_error.md:4:17:4:25
+MISSING METHOD - record_different_fields_error.md:5:10:5:15
 TYPE MISMATCH - record_different_fields_error.md:5:17:5:24
 TYPE MISMATCH - record_different_fields_error.md:7:19:7:30
 # PROBLEMS

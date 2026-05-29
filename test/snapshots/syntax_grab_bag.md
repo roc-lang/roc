@@ -214,6 +214,9 @@ expect {
 }
 ~~~
 # EXPECTED
+NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
+MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
+MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
 UNDECLARED TYPE - syntax_grab_bag.md:36:13:36:16
 UNDECLARED TYPE - syntax_grab_bag.md:39:2:39:5
@@ -224,10 +227,6 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
-MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
-UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
 UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - syntax_grab_bag.md:108:7:108:12
@@ -235,27 +234,12 @@ UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - syntax_grab_bag.md:111:4:111:9
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - syntax_grab_bag.md:120:7:120:12
-UNDEFINED VARIABLE - syntax_grab_bag.md:121:37:121:40
 UNUSED VARIABLE - syntax_grab_bag.md:121:21:121:27
 UNUSED VARIABLE - syntax_grab_bag.md:127:4:128:9
 NOT IMPLEMENTED - syntax_grab_bag.md:130:18:130:23
 NOT IMPLEMENTED - syntax_grab_bag.md:133:9:133:14
 UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
-UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
-UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
-UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
-UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
-UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
-UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
-UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
 INVALID ASSIGNMENT TO ITSELF - syntax_grab_bag.md:179:50:179:55
-UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
-UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
-UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
-UNDEFINED VARIABLE - syntax_grab_bag.md:189:26:189:33
-UNDEFINED VARIABLE - syntax_grab_bag.md:189:34:189:38
-UNDEFINED VARIABLE - syntax_grab_bag.md:190:2:190:14
-UNDEFINED VARIABLE - syntax_grab_bag.md:191:2:191:14
 DOES NOT EXIST - syntax_grab_bag.md:193:4:193:13
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
 UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
@@ -263,9 +247,21 @@ UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
 UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
+UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
+UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
+UNDEFINED VARIABLE - syntax_grab_bag.md:206:2:206:6
+UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:26:189:33
+UNDEFINED VARIABLE - syntax_grab_bag.md:206:10:206:13
+UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:34:189:38
+UNDEFINED VARIABLE - syntax_grab_bag.md:121:37:121:40
+UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
+UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
 TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
+TOO MANY ARGS - syntax_grab_bag.md:158:2:161:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
 MISSING METHOD - syntax_grab_bag.md:176:12:176:22

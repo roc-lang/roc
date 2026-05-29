@@ -8,7 +8,6 @@ type=expr
 |x| |y| x + z
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - lambda_invalid_references.md:1:13:1:14
 UNUSED VARIABLE - lambda_invalid_references.md:1:6:1:7
 # PROBLEMS
 **UNUSED VARIABLE**

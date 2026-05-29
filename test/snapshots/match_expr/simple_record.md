@@ -11,7 +11,7 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_record.md:1:7:1:13
+REDUNDANT PATTERN - simple_record.md:1:1:4:2
 # PROBLEMS
 **REDUNDANT PATTERN**
 The second branch of this `match` is redundant:

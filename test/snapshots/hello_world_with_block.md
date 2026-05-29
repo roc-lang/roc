@@ -19,8 +19,8 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
+UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `world` is not used anywhere in your code.

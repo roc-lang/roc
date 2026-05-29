@@ -8,7 +8,7 @@ type=expr
 if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_expression.md:1:4:1:5
+NIL
 # PROBLEMS
 NIL
 # TOKENS

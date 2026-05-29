@@ -8,7 +8,7 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -17,11 +17,13 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:2:6:2:13
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:4:6:4:13
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
-UNDEFINED VARIABLE - list_rest_scoping_variables.md:1:7:1:11
 UNUSED VARIABLE - list_rest_scoping_variables.md:2:8:2:8
 UNUSED VARIABLE - list_rest_scoping_variables.md:3:15:3:15
 UNUSED VARIABLE - list_rest_scoping_variables.md:4:8:4:8
 UNUSED VARIABLE - list_rest_scoping_variables.md:5:15:5:15
+REDUNDANT PATTERN - list_rest_scoping_variables.md:1:1:6:2
+REDUNDANT PATTERN - list_rest_scoping_variables.md:1:1:6:2
+REDUNDANT PATTERN - list_rest_scoping_variables.md:1:1:6:2
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.

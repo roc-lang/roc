@@ -23,7 +23,10 @@ Wrapper(a) : Inner(a)
 Inner(a) : List(a)
 ~~~
 # EXPECTED
-NIL
+UNDECLARED TYPE - type_forward_reference.md:2:5:2:6
+UNDECLARED TYPE - type_forward_reference.md:7:9:7:15
+UNDECLARED TYPE - type_forward_reference.md:9:10:9:15
+UNDECLARED TYPE - type_forward_reference.md:14:14:14:19
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _B_ is not declared in this scope.

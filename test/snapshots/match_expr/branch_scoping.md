@@ -13,7 +13,8 @@ match result {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - branch_scoping.md:1:7:1:13
+REDUNDANT PATTERN - branch_scoping.md:1:1:6:2
+REDUNDANT PATTERN - branch_scoping.md:1:1:6:2
 # PROBLEMS
 **REDUNDANT PATTERN**
 The third branch of this `match` is redundant:

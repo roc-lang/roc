@@ -479,10 +479,12 @@ anno1 = Annotated.typed                         # 888
 anno2 = Annotated.L2.alsoTyped                  # 889
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
-UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
+UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:246:21:246:42
+UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:306:12:306:31
+UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:106:16:106:47
+UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:83:16:83:48
+UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:398:12:398:34
+UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:131:12:131:41
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `D3_Siblings.val2b` in this scope.

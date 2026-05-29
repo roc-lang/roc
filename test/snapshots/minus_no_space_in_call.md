@@ -8,8 +8,7 @@ type=expr
 foo(x-1)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - minus_no_space_in_call.md:1:1:1:4
-UNDEFINED VARIABLE - minus_no_space_in_call.md:1:5:1:6
+NIL
 # PROBLEMS
 NIL
 # TOKENS

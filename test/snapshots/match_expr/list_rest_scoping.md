@@ -15,10 +15,12 @@ match items {
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
-UNDEFINED VARIABLE - list_rest_scoping.md:1:7:1:12
 UNUSED VARIABLE - list_rest_scoping.md:2:15:2:15
 UNUSED VARIABLE - list_rest_scoping.md:3:8:3:8
 UNUSED VARIABLE - list_rest_scoping.md:4:11:4:11
+NON-EXHAUSTIVE MATCH - list_rest_scoping.md:1:1:5:2
+REDUNDANT PATTERN - list_rest_scoping.md:1:1:5:2
+REDUNDANT PATTERN - list_rest_scoping.md:1:1:5:2
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.

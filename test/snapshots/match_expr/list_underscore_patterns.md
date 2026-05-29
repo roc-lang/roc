@@ -15,7 +15,9 @@ match items {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_underscore_patterns.md:1:7:1:12
+REDUNDANT PATTERN - list_underscore_patterns.md:1:1:8:2
+REDUNDANT PATTERN - list_underscore_patterns.md:1:1:8:2
+REDUNDANT PATTERN - list_underscore_patterns.md:1:1:8:2
 # PROBLEMS
 **REDUNDANT PATTERN**
 The third branch of this `match` is redundant:

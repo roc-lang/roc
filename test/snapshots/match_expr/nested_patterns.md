@@ -13,7 +13,7 @@ match data {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
+NON-EXHAUSTIVE MATCH - nested_patterns.md:1:1:6:2
 # PROBLEMS
 **NON-EXHAUSTIVE MATCH**
 This `match` expression doesn't cover all possible cases:

@@ -13,8 +13,8 @@ match items {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - middle_rest.md:1:7:1:12
 UNUSED VARIABLE - middle_rest.md:1:1:1:1
+REDUNDANT PATTERN - middle_rest.md:1:1:6:2
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `middle` is not used anywhere in your code.

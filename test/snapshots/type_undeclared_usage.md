@@ -16,9 +16,9 @@ AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:1:10:1:21
+UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
-UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _UnknownType_ is not declared in this scope.

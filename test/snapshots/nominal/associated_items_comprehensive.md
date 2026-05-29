@@ -438,21 +438,17 @@ errTryLeaf = leaf1Val        # ERROR: not in scope
 errTryGrand = grandchildVal  # ERROR: not in scope
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_comprehensive.md:361:17:361:26
-UNUSED VARIABLE - associated_items_comprehensive.md:361:17:361:26
-UNDEFINED VARIABLE - associated_items_comprehensive.md:372:28:372:35
-UNUSED VARIABLE - associated_items_comprehensive.md:372:28:372:35
 UNDEFINED VARIABLE - associated_items_comprehensive.md:387:31:387:39
-UNUSED VARIABLE - associated_items_comprehensive.md:387:31:387:39
-UNDEFINED VARIABLE - associated_items_comprehensive.md:401:27:401:40
-UNUSED VARIABLE - associated_items_comprehensive.md:401:27:401:40
-UNDEFINED VARIABLE - associated_items_comprehensive.md:423:25:423:33
-UNUSED VARIABLE - associated_items_comprehensive.md:423:25:423:33
-UNDEFINED VARIABLE - associated_items_comprehensive.md:350:24:350:29
 UNDEFINED VARIABLE - associated_items_comprehensive.md:428:15:428:24
-UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
-UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
-UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
+UNDEFINED VARIABLE - associated_items_comprehensive.md:423:25:423:33
+UNDEFINED VARIABLE - associated_items_comprehensive.md:361:17:361:26
+UNDEFINED VARIABLE - associated_items_comprehensive.md:401:27:401:40
+UNDEFINED VARIABLE - associated_items_comprehensive.md:63:13:63:33
+UNDEFINED VARIABLE - associated_items_comprehensive.md:321:33:321:59
+UNDEFINED VARIABLE - associated_items_comprehensive.md:350:24:350:29
+UNDEFINED VARIABLE - associated_items_comprehensive.md:372:28:372:35
+UNDEFINED VARIABLE - associated_items_comprehensive.md:126:22:126:47
+UNDEFINED VARIABLE - associated_items_comprehensive.md:164:18:164:43
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `leaf1Val` in this scope.

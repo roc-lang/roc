@@ -21,7 +21,7 @@ main : { init : Model, update : Model, I64 -> Model, render : Model -> I64 }
 main = { crash "todo" }
 ~~~
 # EXPECTED
-NIL
+UNDECLARED TYPE - platform_type_vars.md:3:5:3:18
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Model_ is not declared in this scope.

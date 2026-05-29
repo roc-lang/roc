@@ -14,6 +14,7 @@ match nestedList {
 # EXPECTED
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
  - :0:0:0:0
+NON-EXHAUSTIVE MATCH - nested_list_scoping.md:1:1:5:2
 # PROBLEMS
 **MISSING METHOD**
 The value before this ***** operator has a type that doesn't have a **times** method:
