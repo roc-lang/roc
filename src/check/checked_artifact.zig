@@ -4047,10 +4047,15 @@ fn copyCheckedTypePayload(
 ) Allocator.Error!CheckedTypePayload {
     return switch (content) {
         // An erroneous root means Check already reported a type error for this
-        // declaration. Encode it as `pending` so callers that walk the
-        // artifact still see a payload and don't crash; downstream lowering
-        // skips defs whose root is the type-error stub.
-        .err => .pending,
+        // declaration. Encode it as a free flex var so downstream consumers
+        // see a unifiable payload they can lower against, instead of a
+        // .pending stub that the runtime then trips on.
+        .err => .{ .flex = .{
+            .name = null,
+            .constraints = &.{},
+            .numeric_default_phase = null,
+            .row_default = null,
+        } },
         .flex => |flex| .{ .flex = .{
             .name = try copyOptionalIdentText(allocator, module, flex.name),
             .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, imports, roots, payloads, active, flex.constraints),
