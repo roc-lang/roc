@@ -2438,9 +2438,17 @@ fn mergeFromNumeralLiteralInfo(
     const b_info = b orelse return a;
 
     var merged = if (!numeralInfoFitsDec(a_info)) a_info else b_info;
+    merged.is_negative = a_info.is_negative or b_info.is_negative;
     merged.is_fractional = a_info.is_fractional or b_info.is_fractional;
+    merged.fits_dec = mergeFitsDec(a_info.fits_dec, b_info.fits_dec);
     merged.frac_requirements = mergeFracRequirements(a_info, b_info);
     return merged;
+}
+
+fn mergeFitsDec(a: ?bool, b: ?bool) ?bool {
+    if (a == false or b == false) return false;
+    if (a == true or b == true) return true;
+    return null;
 }
 
 fn mergeFracRequirements(
@@ -2457,6 +2465,7 @@ fn mergeFracRequirements(
 
 fn numeralInfoFitsDec(info: types_mod.NumeralInfo) bool {
     if (!info.is_fractional) return true;
+    if (info.fits_dec) |fits| return fits;
     const requirements = info.frac_requirements orelse return false;
     return requirements.fits_in_dec;
 }

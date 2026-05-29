@@ -3323,6 +3323,7 @@ fn parseTypeIdent(self: *Parser) Error!AST.TypeAnno.Idx {
 const TyFnArgs = enum {
     not_looking_for_args,
     looking_for_args,
+    looking_for_type_arg,
 };
 
 /// Parse a type annotation, e.g. `Foo(a) : (a,Str,I64)`
@@ -3572,10 +3573,14 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         // - CloseCurly (end of record)
         // - DoubleDot (record extension like { field: Type, ..ext })
         // - CloseSquare (where clause)
-        if (looking_for_args == .not_looking_for_args and
-            (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot and next_tok != .CloseSquare)))
-        {
+        const can_parse_arrow = looking_for_args != .looking_for_args and curr_is_arrow;
+        const can_parse_comma_args = looking_for_args == .not_looking_for_args and
+            curr == .Comma and
+            (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and
+            next_tok != .CloseCurly and
+            next_tok != .DoubleDot and
+            next_tok != .CloseSquare;
+        if (can_parse_arrow or can_parse_comma_args) {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);
             while (self.peek() == .Comma) {
@@ -3608,7 +3613,7 @@ pub fn parseTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.parseTypeAnno(.looking_for_args);
+    return try self.parseTypeAnno(.looking_for_type_arg);
 }
 
 /// todo

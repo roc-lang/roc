@@ -496,9 +496,9 @@ Builtin :: [].{
 
 		## Put two lists together.
 		## ```roc
-		## [1, 2, 3].concat([4, 5])
+		## [1.I64, 2, 3].concat([4, 5])
 		##
-		## [0, 1, 2].concat([3, 4])
+		## [0.I64, 1, 2].concat([3, 4])
 		## ```
 		concat : List(item), List(item) -> List(item)
 
@@ -586,9 +586,9 @@ Builtin :: [].{
 
 		## Add a single element to the end of a list.
 		## ```roc
-		## [1, 2, 3].append(4)
+		## [1.I64, 2, 3].append(4)
 		##
-		## [0, 1, 2].append(3)
+		## [0.I64, 1, 2].append(3)
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| {
@@ -659,7 +659,7 @@ Builtin :: [].{
 		## Run the given function on each element of a list, and return all the
 		## elements for which the function returned `Bool.True`.
 		## ```roc
-		## [1, 2, 3, 4].keep_if(|num| num > 2)
+		## [1.I64, 2, 3, 4].keep_if(|num| num > 2)
 		## ```
 		## ## Performance Details
 		##
@@ -693,7 +693,7 @@ Builtin :: [].{
 		## Run the given function on each element of a list, and return all the
 		## elements for which the function returned `Bool.False`.
 		## ```roc
-		## [1, 2, 3, 4].drop_if(|num| num > 2)
+		## [1.I64, 2, 3, 4].drop_if(|num| num > 2)
 		## ```
 		## ## Performance Details
 		##
@@ -960,6 +960,26 @@ Builtin :: [].{
 		join_with = |list, joiner| {
 			Item : item
 			Item.join_with(list, joiner)
+		}
+
+		join_list_with : List(List(item)), List(item) -> List(item)
+		join_list_with = |list, joiner| {
+			len = List.len(list)
+
+			if len == 0 {
+				[]
+			} else {
+				var $index = 1
+				var $result = list_get_unsafe(list, 0)
+
+				while $index < len {
+					$result = List.concat($result, joiner)
+					$result = List.concat($result, list_get_unsafe(list, $index))
+					$index = $index + 1
+				}
+
+				$result
+			}
 		}
 
 		## Build a list by repeating the given value `n` times.
@@ -1634,7 +1654,7 @@ Builtin :: [].{
 
 		## Creates a new `Set` with a single value.
 		## ```roc
-		## Set.single(42)
+		## Set.single(42.I64)
 		## ```
 		single : item -> Set(item)
 		single = |elem| Items([elem])

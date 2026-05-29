@@ -8,9 +8,23 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-NIL
+POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 # PROBLEMS
-NIL
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**unary_negation_access.md:1:1:1:12:**
+```roc
+-rec1.field
+```
+^^^^^^^^^^^
+
+
+Its type is:
+```roc
+a where [a.negate : a -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 OpUnaryMinus,LowerIdent,NoSpaceDotLowerIdent,

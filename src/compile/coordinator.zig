@@ -1217,6 +1217,8 @@ pub const Coordinator = struct {
         };
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
+        if (app_root.mod.checkedArtifact() == null) return;
+
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
             .platform_requirement_context = requirement_context,
         });
@@ -1244,6 +1246,14 @@ pub const Coordinator = struct {
                     platform_declaration_artifact,
                     app_artifact,
                     mismatch,
+                );
+                return;
+            },
+            .missing_value => |missing| {
+                try self.appendPlatformRequirementMissingValueReport(
+                    app_root.mod,
+                    platform_declaration_artifact,
+                    missing,
                 );
                 return;
             },
@@ -1277,6 +1287,8 @@ pub const Coordinator = struct {
         };
         const requirement_context = check.CheckedArtifact.platformRequirementContextKey(platform_declaration_artifact);
 
+        if (app_root.mod.checkedArtifact() == null) return;
+
         try self.republishCheckedArtifact(app_root.pkg, app_root.mod, .{
             .platform_requirement_context = requirement_context,
         });
@@ -1304,7 +1316,29 @@ pub const Coordinator = struct {
                 app_artifact,
                 mismatch,
             ),
+            .missing_value => |missing| try self.appendPlatformRequirementMissingValueReport(
+                app_root.mod,
+                platform_declaration_artifact,
+                missing,
+            ),
         }
+    }
+
+    fn appendPlatformRequirementMissingValueReport(
+        self: *Coordinator,
+        app_mod: *ModuleState,
+        platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        missing: check.CheckedArtifact.PlatformRequirementMissingValue,
+    ) !void {
+        var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        const required_name = platform_artifact.canonical_names.exportNameText(missing.declaration.platform_name);
+        try report.document.addText("The app does not provide ");
+        try report.document.addAnnotated(required_name, .inline_code);
+        try report.document.addText(", but the platform requires it.");
+
+        try app_mod.reports.append(self.gpa, report);
     }
 
     fn appendPlatformRequirementTypeMismatchReport(

@@ -17,6 +17,7 @@ main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - effectful_with_effectful_annotation.md:7:20:7:32
+EFFECTFUL TOP-LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
@@ -28,6 +29,17 @@ print_msg! = |msg| Stdout.line!(msg)
 ```
                    ^^^^^^^^^^^^
 
+
+**EFFECTFUL TOP-LEVEL VALUE**
+This top-level definition performs an effect while initializing.
+**effectful_with_effectful_annotation.md:9:9:9:36:**
+```roc
+main! = print_msg!("Hello, world!")
+```
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+Move the effect into a function body so it runs when the function is called.
 
 # TOKENS
 ~~~zig
@@ -107,9 +119,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str => {}"))
-		(patt (type "{}")))
+		(patt (type "Str => Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Str => {}"))
-		(expr (type "{}"))))
+		(expr (type "Str => Error"))
+		(expr (type "Error"))))
 ~~~

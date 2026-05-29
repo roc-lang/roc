@@ -60,8 +60,7 @@ main = |_| {
 ~~~
 # EXPECTED
 TYPE MISMATCH - let_polymorphism_records.md:34:47:34:49
-MISSING METHOD - let_polymorphism_records.md:48:2:48:17
-MISSING METHOD - let_polymorphism_records.md:48:2:48:3
+TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -75,29 +74,19 @@ Other code expects this to have the type:
 
     Str
 
-**MISSING METHOD**
-This **plus** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:48:2:48:17:**
+**TYPE MISMATCH**
+I'm having trouble with this bool operation:
+**let_polymorphism_records.md:48:6:48:17:**
 ```roc
 	1 + update_data
 ```
-	^^^^^^^^^^^^^^^
+	    ^^^^^^^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+Both sides of `and` must be `Bool` values, but the right side is:
 
-    {}
+    { data: a, ..b }, a -> { data: a, ..b }
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:48:2:48:3:**
-```roc
-	1 + update_data
-```
-	^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Error
+__Note:__ Roc does not have "truthiness". You must convert values to bools yourself.
 
 # TOKENS
 ~~~zig
@@ -398,13 +387,8 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-expr
-					(e-dispatch-call (method "plus") (constraint-fn-var 502)
-						(receiver
-							(e-num (value "1")))
-						(args
-							(e-lookup-local
-								(p-assign (ident "update_data"))))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 515)
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-dispatch-call (method "plus") (constraint-fn-var 514)
 					(receiver
 						(e-field-access (field "count")
 							(receiver

@@ -244,6 +244,8 @@ UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
 UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
+NOT IMPLEMENTED - syntax_grab_bag.md:1:1:1:1
+NOT IMPLEMENTED - syntax_grab_bag.md:1:1:1:1
 UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
 UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
 UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
@@ -265,13 +267,11 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
-TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
 MISSING METHOD - syntax_grab_bag.md:176:12:176:22
 + - :0:0:0:0
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
-TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -624,6 +624,30 @@ Is there an `import` or `exposing` missing up-top?
 	       ^^^^
 
 
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**syntax_grab_bag.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**syntax_grab_bag.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -924,21 +948,6 @@ But the expression between the `match` parenthesis has the type:
 
 These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGS**
-The `match_time` function expects 2 arguments, but it got 1 instead:
-**syntax_grab_bag.md:155:2:157:3:**
-```roc
-	match_time(
-		..., # Single args with comment
-	)
-```
-
-The `match_time` function has the type:
-
-    [Blue, Green, Red, ..], _arg -> Error
-
-Are there any missing commas?
-
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
 **syntax_grab_bag.md:167:3:**
@@ -1007,75 +1016,6 @@ But the function's return type is:
     Try({}, _d)
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:144:9:196:2:**
-```roc
-main! = |_| { # Yeah I can leave a comment here
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # Comment after return keyword
-		tag # Comment after return statement
-
-	# Just a random comment!
-
-	...
-	match_time(
-		..., # Single args with comment
-	)
-	some_func(
-		dbg # After debug
-			42, # After debug expr
-	)
-	crash # Comment after crash keyword
-		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok(number)
-	interpolated = "Hello, ${world}"
-	list = [
-		add_one(
-			dbg # After dbg in list
-				number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-		789, # Comment three
-	]
-	for n in list {
-		Stdout.line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-	multiline_tuple = (
-		123,
-		"World",
-		tag1,
-		Ok(world), # This one has a comment
-		(nested, tuple),
-		[1, 2, 3],
-	)
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-	Stdout.line!(interpolated)?
-	Stdout.line!(
-		"How about ${ # Comment after string interpolation open
-			Num.toStr(number) # Comment after string interpolation expr
-		} as a string?",
-	)
-} # Comment after top-level decl
-```
-
-It has the type:
-
-    List(Error) => Error
-
-But the annotation say it should be:
-
-    List(Error) -> Error
-
-**Hint:** This function is effectful, but a pure function is expected.
 
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.
@@ -1829,8 +1769,7 @@ import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*
 import BadName as GoodName
 import
 	BadNameMultiline
-		as
-		GoodNameMultiline
+		as GoodNameMultiline
 
 Map(a, b) : List(a), (a -> b) -> List(b)
 
@@ -2304,12 +2243,12 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-not-implemented))
+					(e-runtime-error (tag "not_implemented")))
 				(s-expr
-					(e-call (constraint-fn-var 2355)
+					(e-call
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-not-implemented)))
+						(e-runtime-error (tag "not_implemented"))))
 				(s-expr
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -2433,7 +2372,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3044)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3043)
 									(receiver
 										(e-match
 											(match
@@ -2458,7 +2397,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3039)
+										(e-dispatch-call (method "times") (constraint-fn-var 3038)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2473,18 +2412,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3152)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3151)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3117)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3116)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3252)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3251)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3217)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3216)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2499,11 +2438,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3362)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3361)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3357)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3356)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2518,12 +2457,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3428)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3427)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3395)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3394)
 																			(receiver
 																				(e-match
 																					(match

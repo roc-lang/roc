@@ -8,17 +8,17 @@ type=snippet
 { name, age, email } = person
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - statement_record_destructure.md:1:24:1:30
+INVALID STATEMENT - statement_record_destructure.md:1:1:1:21
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**INVALID STATEMENT**
+The statement `destructuring declaration` is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
-**statement_record_destructure.md:1:24:1:30:**
+**statement_record_destructure.md:1:1:1:21:**
 ```roc
 { name, age, email } = person
 ```
-                       ^^^^^^
+^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -44,25 +44,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-record-destructure
-			(destructs
-				(record-destruct (label "name") (ident "name")
-					(required
-						(p-assign (ident "name"))))
-				(record-destruct (label "age") (ident "age")
-					(required
-						(p-assign (ident "age"))))
-				(record-destruct (label "email") (ident "email")
-					(required
-						(p-assign (ident "email"))))))
-		(e-runtime-error (tag "ident_not_in_scope"))))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
-	(expressions
-		(expr (type "Error"))))
+	(expressions))
 ~~~

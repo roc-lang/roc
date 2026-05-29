@@ -1278,8 +1278,9 @@ test "roc check treats integral scientific notation as integer syntax sugar" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Found 0 error(s)") != null);
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "No errors found") != null or
+        std.mem.indexOf(u8, result.stderr, "No errors found") != null);
     try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
 }
 

@@ -66,12 +66,16 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
-const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
+const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
+const EffectfulExpect = problem_mod.EffectfulExpect;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
+
+// Number errors
+const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
@@ -785,6 +789,15 @@ pub const ReportBuilder = struct {
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
             },
+            .polymorphic_value => |data| {
+                return self.buildPolymorphicValueReport(data);
+            },
+            .effectful_top_level => |data| {
+                return self.buildEffectfulTopLevelReport(data);
+            },
+            .effectful_expect => |data| {
+                return self.buildEffectfulExpectReport(data);
+            },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
             },
@@ -800,10 +813,10 @@ pub const ReportBuilder = struct {
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
+            .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
-            .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
         }
     }
 
@@ -2995,6 +3008,36 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildPolymorphicValueReport(self: *Self, data: VarWithSnapshot) !Report {
+        var report = Report.init(self.gpa, "POLYMORPHIC VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addReflowingText("This top-level value still has an unresolved polymorphic type:");
+        try report.document.addLineBreak();
+
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        const type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Its type is:");
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(type_str, .code_block);
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Add an annotation or use this value in a way that fixes its concrete type.");
+
+        return report;
+    }
+
     fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) !Report {
         var report = Report.init(self.gpa, "MISSING PLATFORM REQUIRED TYPE", .runtime_error);
         errdefer report.deinit();
@@ -3096,6 +3139,42 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) !Report {
+        var report = Report.init(self.gpa, "EFFECTFUL TOP-LEVEL VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This top-level definition performs an effect while initializing."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Move the effect into a function body so it runs when the function is called."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulExpectReport(self: *Self, data: EffectfulExpect) !Report {
+        var report = Report.init(self.gpa, "EFFECTFUL EXPECT", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This expect performs an effect while evaluating its condition."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Keep expect conditions pure, and test effectful behavior from a function body instead."),
         }, self, &report);
         return report;
     }

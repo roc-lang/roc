@@ -338,6 +338,48 @@ fn checkerHasArtifactBlockingProblems(checker: *const Check) bool {
     return false;
 }
 
+fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool {
+    const diagnostics = env.store.sliceDiagnostics(env.diagnostics);
+    for (diagnostics) |diagnostic_idx| {
+        const diagnostic = env.store.getDiagnostic(diagnostic_idx);
+        switch (diagnostic) {
+            .shadowing_warning,
+            .unused_variable,
+            .used_underscore_variable,
+            .type_shadowed_warning,
+            .unused_type_var_name,
+            .type_var_marked_unused,
+            .underscore_in_type_declaration,
+            .module_header_deprecated,
+            .deprecated_number_suffix,
+            => {},
+            else => return true,
+        }
+    }
+    return false;
+}
+
+fn moduleHasDuplicateTopLevelValueDefs(gpa: Allocator, env: *const ModuleEnv) Allocator.Error!bool {
+    var seen = std.AutoHashMapUnmanaged(base.Ident.Idx, void){};
+    defer seen.deinit(gpa);
+
+    for (env.store.sliceDefs(env.global_value_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        const ident = switch (pattern) {
+            .assign => |assign| assign.ident,
+            .as => |as_pattern| as_pattern.ident,
+            else => continue,
+        };
+
+        const entry = try seen.getOrPut(gpa, ident);
+        if (entry.found_existing) return true;
+        entry.value_ptr.* = {};
+    }
+
+    return false;
+}
+
 fn importedArtifactsCoverImportedEnvs(
     imported_envs: []const *ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
@@ -1438,7 +1480,9 @@ pub const PackageEnv = struct {
 
         module_envs_map.deinit();
 
-        if (checkerHasArtifactBlockingProblems(&checker) or
+        if (moduleHasArtifactBlockingCanonicalizeDiagnostics(env) or
+            try moduleHasDuplicateTopLevelValueDefs(check_alloc, env) or
+            checkerHasArtifactBlockingProblems(&checker) or
             env.types.containsErrContent() or
             !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
         {

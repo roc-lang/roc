@@ -1315,15 +1315,7 @@ fn sourceVarIsFunction(store: *const types.Store, var_: Var) bool {
                 else => false,
             },
             .err => return false,
-            .flex, .rigid => {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: top-level source type {d} was not fully resolved before publication",
-                        .{@intFromEnum(var_)},
-                    );
-                }
-                unreachable;
-            },
+            .flex, .rigid => return false,
         }
     }
 }
@@ -1341,14 +1333,14 @@ fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?Intr
         .e_anno_only => |anno| anno.ident,
         else => return null,
     };
-    const common = module.commonIdents();
-    if (expr_ident.eql(common.builtin_str_inspect)) return .str_inspect;
-    if (Ident.textEndsWith(module.getIdent(expr_ident), ".is_eq")) return .structural_eq;
-
-    if (def.patternName()) |pattern_ident| {
-        if (pattern_ident.eql(common.builtin_str_inspect)) return .str_inspect;
-        if (Ident.textEndsWith(module.getIdent(pattern_ident), ".is_eq")) return .structural_eq;
+    const env = module.moduleEnvConst();
+    if (!can.BuiltinLowLevel.isBuiltinModule(env) or
+        !can.BuiltinLowLevel.isIntrinsicAnnotation(env, expr_ident))
+    {
+        return null;
     }
+    if (expr_ident.eql(module.commonIdents().builtin_str_inspect)) return .str_inspect;
+    if (Ident.textEndsWith(module.getIdent(expr_ident), ".is_eq")) return .structural_eq;
 
     return null;
 }
@@ -5633,10 +5625,10 @@ const CheckedBodyPayloadCopier = struct {
             .e_frac_f64 => |frac| self.copyFracLiteral(expr_idx, .{ .f64 = frac.value }, frac.has_suffix),
             .e_dec => |dec| self.copyFracLiteral(expr_idx, .{ .dec = dec.value }, dec.has_suffix),
             .e_dec_small => |dec| self.copyFracLiteral(expr_idx, .{ .small = dec.value }, dec.has_suffix),
-            .e_num_from_numeral => .{ .num_from_numeral = null },
+            .e_num_from_numeral => try self.copyNumFromNumeralLiteral(expr_idx, false),
             .e_typed_int => |typed| try self.copyTypedIntLiteral(expr_idx, typed.value, typed.type_name),
             .e_typed_frac => |typed| try self.copyTypedFracLiteral(expr_idx, typed.value, typed.type_name),
-            .e_typed_num_from_numeral => .{ .typed_num_from_numeral = null },
+            .e_typed_num_from_numeral => try self.copyTypedNumFromNumeralLiteral(expr_idx),
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
@@ -5761,6 +5753,83 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    fn copyNumFromNumeralLiteral(
+        self: *@This(),
+        expr_idx: CIR.Expr.Idx,
+        has_suffix: bool,
+    ) Allocator.Error!CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .num_from_numeral = null };
+        const text = try self.exactNumeralDecimalText(expr_idx);
+        defer self.allocator.free(text);
+        return exactNumeralForBuiltin(text, builtin_nominal, has_suffix) orelse .{ .num_from_numeral = null };
+    }
+
+    fn copyTypedNumFromNumeralLiteral(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
+        const builtin_nominal = self.checkedBuiltinForExpr(expr_idx) orelse return .{ .typed_num_from_numeral = null };
+        const text = try self.exactNumeralDecimalText(expr_idx);
+        defer self.allocator.free(text);
+        return exactNumeralForBuiltin(text, builtin_nominal, true) orelse .{ .typed_num_from_numeral = null };
+    }
+
+    fn exactNumeralDecimalText(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const u8 {
+        const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+            checkedArtifactInvariant("checked exact numeral literal had no parser-owned numeral facts", .{});
+        };
+        return numeralLiteralDecimalText(self.allocator, self.module.moduleEnvConst(), literal);
+    }
+
+    fn exactNumeralForBuiltin(
+        text: []const u8,
+        builtin_nominal: CheckedBuiltinNominal,
+        has_suffix: bool,
+    ) ?CheckedExprData {
+        return switch (builtin_nominal) {
+            .u8 => exactUnsignedIntLiteral(u8, text, .u8),
+            .u16 => exactUnsignedIntLiteral(u16, text, .u16),
+            .u32 => exactUnsignedIntLiteral(u32, text, .u32),
+            .u64 => exactUnsignedIntLiteral(u64, text, .u64),
+            .u128 => exactUnsignedIntLiteral(u128, text, .u128),
+            .i8 => exactSignedIntLiteral(i8, text, .i8),
+            .i16 => exactSignedIntLiteral(i16, text, .i16),
+            .i32 => exactSignedIntLiteral(i32, text, .i32),
+            .i64 => exactSignedIntLiteral(i64, text, .i64),
+            .i128 => exactSignedIntLiteral(i128, text, .i128),
+            .f32 => if (std.fmt.parseFloat(f32, text)) |value|
+                .{ .frac_f32 = .{ .value = value, .has_suffix = has_suffix } }
+            else |_|
+                null,
+            .f64 => if (std.fmt.parseFloat(f64, text)) |value|
+                .{ .frac_f64 = .{ .value = value, .has_suffix = has_suffix } }
+            else |_|
+                null,
+            .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |value|
+                .{ .dec = .{ .value = value, .has_suffix = has_suffix } }
+            else if (!has_suffix)
+                .{ .dec = .{ .value = if (text.len > 0 and text[0] == '-') builtins.dec.RocDec.min else builtins.dec.RocDec.max, .has_suffix = has_suffix } }
+            else
+                null,
+            else => null,
+        };
+    }
+
+    fn exactUnsignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
+        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+        const value = CIR.IntValue{
+            .bytes = @bitCast(@as(u128, @intCast(parsed))),
+            .kind = .u128,
+        };
+        return .{ .num = .{ .value = value, .kind = kind } };
+    }
+
+    fn exactSignedIntLiteral(comptime T: type, text: []const u8, kind: CIR.NumKind) ?CheckedExprData {
+        const parsed = std.fmt.parseInt(T, text, 10) catch return null;
+        const value = CIR.IntValue{
+            .bytes = @bitCast(@as(i128, @intCast(parsed))),
+            .kind = .i128,
+        };
+        return .{ .num = .{ .value = value, .kind = kind } };
     }
 
     fn copyTypedIntLiteral(
@@ -9114,15 +9183,22 @@ pub const PlatformRequirementTypeMismatch = struct {
     actual: CheckedTypeId,
 };
 
+/// Public `PlatformRequirementMissingValue` declaration.
+pub const PlatformRequirementMissingValue = struct {
+    declaration: PlatformRequiredDeclaration,
+};
+
 /// Public `PlatformAppRelationBuildResult` declaration.
 pub const PlatformAppRelationBuildResult = union(enum) {
     relation: PlatformAppRelation,
     type_mismatch: PlatformRequirementTypeMismatch,
+    missing_value: PlatformRequirementMissingValue,
 
     pub fn deinit(self: *PlatformAppRelationBuildResult, allocator: Allocator) void {
         switch (self.*) {
             .relation => |*relation| relation.deinit(allocator),
             .type_mismatch => {},
+            .missing_value => {},
         }
         self.* = undefined;
     }
@@ -9701,13 +9777,13 @@ pub fn buildPlatformAppRelation(
     for (declarations, 0..) |declaration, i| {
         const required_name = platform_declaration_artifact.canonical_names.exportNameText(declaration.platform_name);
         const app_value = appTopLevelValueByName(app_artifact, required_name) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "checked artifact invariant violated: app artifact does not publish a top-level value for platform requirement {s}",
-                    .{required_name},
-                );
-            }
-            unreachable;
+            allocator.free(relations);
+            for (bindings[0..initialized_bindings]) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
+            allocator.free(bindings);
+            initialized_bindings = 0;
+            return .{ .missing_value = .{
+                .declaration = declaration,
+            } };
         };
 
         const requested_source_ty = try canonical_type_keys.fromVar(
@@ -11120,15 +11196,10 @@ fn topLevelDefSourceName(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     def: TypedCIR.Def,
-) Allocator.Error!canonical.ExportNameId {
+) Allocator.Error!?canonical.ExportNameId {
     switch (def.pattern.data) {
         .assign => |assign| return try names.internExportIdent(module.identStoreConst(), assign.ident),
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: top-level value has non-assign pattern", .{});
-            }
-            unreachable;
-        },
+        else => return null,
     }
 }
 
@@ -11872,10 +11943,16 @@ pub const TopLevelValueTable = struct {
         errdefer allocator.free(by_def);
         @memset(by_def, null);
 
+        var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
+        defer seen_source_names.deinit(allocator);
+
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
-            const source_name = try topLevelDefSourceName(module, names, def);
+            const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
+            const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
+            if (seen_source_name.found_existing) continue;
+            seen_source_name.value_ptr.* = {};
             const source_ty = module.defType(def_idx);
             const source_scheme = try canonical_type_keys.schemeFromVar(
                 allocator,

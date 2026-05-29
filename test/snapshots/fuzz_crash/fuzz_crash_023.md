@@ -249,6 +249,8 @@ UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
+NOT IMPLEMENTED - fuzz_crash_023.md:1:1:1:1
+NOT IMPLEMENTED - fuzz_crash_023.md:1:1:1:1
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
 UNDEFINED VARIABLE - fuzz_crash_023.md:175:3:175:15
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:38:178:40
@@ -275,14 +277,12 @@ UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:70:5:70:8
 TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
-TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
 TYPE MISMATCH - fuzz_crash_023.md:146:15:146:18
 MISSING METHOD - fuzz_crash_023.md:176:12:176:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_023.md:178:42:178:45
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
-TYPE MISMATCH - fuzz_crash_023.md:144:9:196:2
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:201:1:201:25
 # PROBLEMS
 **PARSE ERROR**
@@ -690,6 +690,30 @@ Is there an `import` or `exposing` missing up-top?
 	       ^^^^
 
 
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**fuzz_crash_023.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**fuzz_crash_023.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -1045,21 +1069,6 @@ This declaration has a type annotation but no implementation.
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
-**TOO FEW ARGS**
-The `match_time` function expects 2 arguments, but it got 1 instead:
-**fuzz_crash_023.md:155:2:157:3:**
-```roc
-	match_time(
-		..., # Single args with comment
-	)
-```
-
-The `match_time` function has the type:
-
-    [Blue, Green, Red, ..], _arg -> Error
-
-Are there any missing commas?
-
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
 **fuzz_crash_023.md:167:3:**
@@ -1136,75 +1145,6 @@ This declaration has a type annotation but no implementation.
 
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_023.md:144:9:196:2:**
-```roc
-main! = |_| { # Yeah I can leave a comment here
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # Comment after return keyword
-		tag # Comment after return statement
-
-	# Just a random comment!
-
-	...
-	match_time(
-		..., # Single args with comment
-	)
-	some_func(
-		dbg # After debug
-			42, # After debug expr
-	)
-	crash # Comment after crash keyword
-		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok(number)
-	interpolated = "Hello, ${world}"
-	list = [
-		add_one(
-			dbg # After dbg in list
-				number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-		789, # Comment three
-	]
-	for n in list {
-		Stdout.line!("Adding ${n} to ${number}")
-		number = number + n
-	}
-	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-	multiline_tuple = (
-		123,
-		"World",
-		tag1,
-		Ok(world), # This one has a comment
-		(nested, tuple),
-		[1, 2, 3],
-	)
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-	Stdout.line!(interpolated)?
-	Stdout.line!(
-		"How about ${ # Comment after string interpolation open
-			Num.toStr(number) # Comment after string interpolation expr
-		} as a string?",
-	)
-} # Comment after top-level decl
-```
-
-It has the type:
-
-    List(Error) => Error
-
-But the annotation say it should be:
-
-    List(Error) -> Error
-
-**Hint:** This function is effectful, but a pure function is expected.
 
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.
@@ -1951,8 +1891,7 @@ import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*
 import BadName as GoodName
 import
 	BadNameMultiline
-		as
-		GoodNameMultiline
+		as GoodNameMultiline
 
 Map(a, b) : List(a), (a -> b) -> List(b)
 
@@ -2433,12 +2372,12 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-not-implemented))
+					(e-runtime-error (tag "not_implemented")))
 				(s-expr
-					(e-call (constraint-fn-var 2361)
+					(e-call
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-not-implemented)))
+						(e-runtime-error (tag "not_implemented"))))
 				(s-expr
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -2556,7 +2495,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3019)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3018)
 									(receiver
 										(e-match
 											(match
@@ -2581,7 +2520,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3014)
+										(e-dispatch-call (method "times") (constraint-fn-var 3013)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2596,18 +2535,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3127)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3126)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3092)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3091)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3227)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3226)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3192)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3191)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2622,11 +2561,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3337)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3336)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3332)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3331)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2641,12 +2580,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3403)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3402)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3370)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3369)
 																			(receiver
 																				(e-match
 																					(match

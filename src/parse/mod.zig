@@ -193,3 +193,30 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
         defer report.deinit();
     }
 }
+
+test "bughunt B212: parameterized type arguments accept bare function types" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\module []
+        \\
+        \\BoxedFn : Box(Str -> Str)
+        \\BoxedParenFn : Box((Str -> Str))
+        \\ResultFn : Result(Str -> Str, Str -> Str)
+        \\
+        \\main : {}
+        \\main = {}
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parse(&allocators, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+}

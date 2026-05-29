@@ -236,6 +236,7 @@ pub fn runWasmStrWithStats(
             else => return error.WasmExecFailed,
         }
     };
+    if (wasm_crash_state == .crashed) return error.Crash;
 
     const str_ptr: u32 = @bitCast(returns[0].I32);
     const mem_slice = module_instance.memoryAll();
@@ -290,6 +291,10 @@ fn hostDecMul(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     const lhs_dec = RocDec{ .num = lhs_i128 };
     const rhs_dec = RocDec{ .num = rhs_i128 };
     const result = lhs_dec.mulWithOverflow(rhs_dec);
+    if (result.has_overflowed) {
+        wasm_crash_state = .crashed;
+        return;
+    }
     const result_u128: u128 = @bitCast(result.value.num);
     writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
     writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));

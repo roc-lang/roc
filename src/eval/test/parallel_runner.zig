@@ -92,6 +92,9 @@ pub const TestCase = struct {
     imports: []const helpers.ModuleSource = &.{},
     expected: Expected,
     skip: Skip = .{},
+    /// Known compiler-bug repros are opt-in so ordinary `zig build test-eval`
+    /// stays green while still letting bug hunts use the eval pipeline directly.
+    known_bug: bool = false,
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
@@ -1577,7 +1580,8 @@ fn collectTests() []const TestCase {
 //
 
 // CLI parsing uses harness.parseStandardArgs for consistent flag handling.
-// The eval runner accepts the standard flags: --filter, --threads, --timeout, --verbose, --help.
+// The eval runner accepts the standard flags: --filter, --threads, --timeout, --verbose, --help,
+// plus the positional marker `known-bugs` to include opt-in compiler-bug repros.
 
 fn printHelp() void {
     const help =
@@ -1602,6 +1606,7 @@ fn printHelp() void {
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
         \\                        Default: 30000, 120000 on musl.
         \\                        LLVM uses a separate 420000ms backend budget.
+        \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
         \\  Use `zig build coverage-eval` to build with coverage instrumentation.
@@ -1851,6 +1856,13 @@ fn effectiveHangTimeoutMs(cli: harness.StandardArgs, max_children: usize) u64 {
     return if (max_children <= 1) 10_000 else 30_000;
 }
 
+fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, target)) return true;
+    }
+    return false;
+}
+
 /// Entry point for the parallel eval test runner.
 pub fn main() !void {
     var trace_worker = WorkerTrace.init();
@@ -1875,6 +1887,7 @@ pub fn main() !void {
 
     const all_tests = collectTests();
     trace_worker.stamp("collectTests");
+    const include_known_bugs = hasPositionalArg(cli.positional, "known-bugs");
 
     // Apply filters (support multiple --filter values)
     var filtered_buf: std.ArrayListUnmanaged(TestCase) = .empty;
@@ -1882,6 +1895,7 @@ pub fn main() !void {
 
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
+            if (tc.known_bug and !include_known_bugs) continue;
             for (cli.filters) |pattern| {
                 if (std.mem.indexOf(u8, tc.name, pattern) != null or
                     std.mem.indexOf(u8, tc.source, pattern) != null)
@@ -1892,7 +1906,10 @@ pub fn main() !void {
             }
         }
     } else {
-        try filtered_buf.appendSlice(gpa, all_tests);
+        for (all_tests) |tc| {
+            if (tc.known_bug and !include_known_bugs) continue;
+            try filtered_buf.append(gpa, tc);
+        }
     }
     trace_worker.stamp("filter pass");
 

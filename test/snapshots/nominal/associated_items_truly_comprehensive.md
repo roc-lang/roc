@@ -486,6 +486,12 @@ UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
+POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:382:13:382:17
+POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:385:9:385:13
+POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:388:5:388:9
+POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:392:1:392:5
+POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:393:1:393:5
+POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:394:1:394:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -568,6 +574,96 @@ Only functions can be recursive. Non-function top-level values must be fully com
 ```
     ^^^^
 
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**associated_items_truly_comprehensive.md:382:13:382:17:**
+```roc
+            val3 = val4 + 1                                 # Unqualified
+```
+            ^^^^
+
+
+Its type is:
+```roc
+e where [e.plus : e, Dec -> e]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**associated_items_truly_comprehensive.md:385:9:385:13:**
+```roc
+        val2 = D5_Pattern2.L2.L3.val3 + 1                  # Qualified
+```
+        ^^^^
+
+
+Its type is:
+```roc
+e where [e.plus : e, Dec -> e]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**associated_items_truly_comprehensive.md:388:5:388:9:**
+```roc
+    val1 = val2 + 1                                         # Unqualified
+```
+    ^^^^
+
+
+Its type is:
+```roc
+e where [e.plus : e, Dec -> e]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**associated_items_truly_comprehensive.md:392:1:392:5:**
+```roc
+d5_4 = D5_Pattern2.L2.L3.val3                   # 1001
+```
+^^^^
+
+
+Its type is:
+```roc
+e where [e.plus : e, Dec -> e]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**associated_items_truly_comprehensive.md:393:1:393:5:**
+```roc
+d5_5 = D5_Pattern2.L2.val2                      # 1002
+```
+^^^^
+
+
+Its type is:
+```roc
+e where [e.plus : e, Dec -> e]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
+
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**associated_items_truly_comprehensive.md:394:1:394:5:**
+```roc
+d5_6 = D5_Pattern2.val1                         # 1003
+```
+^^^^
+
+
+Its type is:
+```roc
+e where [e.plus : e, Dec -> e]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
