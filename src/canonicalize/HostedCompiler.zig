@@ -58,7 +58,14 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 full_name[dot_idx + 1 ..]
             else
                 full_name;
-            const ident = env.common.findIdent(local_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(local_name));
+            const ident = if (env.common.findIdent(local_name)) |existing| existing else blk: {
+                // `local_name` aliases the ident interner's own bytes buffer.
+                // insertIdent may reallocate that buffer mid-copy, leaving the
+                // source pointer dangling. Dupe to a separate buffer first.
+                const owned = try gpa.dupe(u8, local_name);
+                defer gpa.free(owned);
+                break :blk try env.common.insertIdent(gpa, base.Ident.for_text(owned));
+            };
 
             // Extract the number of arguments from the annotation
             const annotation = env.store.getAnnotation(def.annotation.?);
