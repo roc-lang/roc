@@ -17,6 +17,11 @@ BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:2:6:2:13
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:4:6:4:13
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
+UNDEFINED VARIABLE - list_rest_scoping_variables.md:1:7:1:11
+UNUSED VARIABLE - list_rest_scoping_variables.md:2:8:2:8
+UNUSED VARIABLE - list_rest_scoping_variables.md:3:15:3:15
+UNUSED VARIABLE - list_rest_scoping_variables.md:4:8:4:8
+UNUSED VARIABLE - list_rest_scoping_variables.md:5:15:5:15
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -61,6 +66,96 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 ```
             ^^^^^^^
 
+
+**UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:2:8:2:8:**
+```roc
+    [..items] => 1
+```
+       ^
+
+
+**UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:3:15:3:15:**
+```roc
+    [first, ..items] => first
+```
+              ^
+
+
+**UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:4:8:4:8:**
+```roc
+    [..items, last] => last
+```
+       ^
+
+
+**UNUSED VARIABLE**
+Variable `items` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:5:15:5:15:**
+```roc
+    [first, ..items, last] => first + last
+```
+              ^
+
+
+**REDUNDANT PATTERN**
+The second branch of this `match` is redundant:
+**list_rest_scoping_variables.md:1:1:6:2:**
+```roc
+match data {
+    [..items] => 1
+    [first, ..items] => first
+    [..items, last] => last
+    [first, ..items, last] => first + last
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
+**REDUNDANT PATTERN**
+The third branch of this `match` is redundant:
+**list_rest_scoping_variables.md:1:1:6:2:**
+```roc
+match data {
+    [..items] => 1
+    [first, ..items] => first
+    [..items, last] => last
+    [first, ..items, last] => first + last
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
+**REDUNDANT PATTERN**
+The fourth branch of this `match` is redundant:
+**list_rest_scoping_variables.md:1:1:6:2:**
+```roc
+match data {
+    [..items] => 1
+    [first, ..items] => first
+    [..items, last] => last
+    [first, ..items, last] => first + last
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
 
 # TOKENS
 ~~~zig
@@ -114,7 +209,8 @@ match data {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "data"))))
 		(branches
 			(branch
 				(patterns
@@ -157,13 +253,11 @@ match data {
 							(rest-at (index 1)
 								(p-assign (ident "items"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 78)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "first"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "last"))))))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "first")))
+						(e-lookup-local
+							(p-assign (ident "last")))))))))
 ~~~
 # TYPES
 ~~~clojure

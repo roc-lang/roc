@@ -12,6 +12,17 @@ B : A
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 UNDECLARED TYPE - canon_revamp_mutual_type_aliases.md:2:5:2:6
 # PROBLEMS
+**UNDECLARED TYPE**
+The type _B_ is not declared in this scope.
+
+This type is referenced here:
+**canon_revamp_mutual_type_aliases.md:1:5:1:6:**
+```roc
+A : B
+```
+    ^
+
+
 **MUTUALLY RECURSIVE TYPE ALIASES**
 The type alias _B_ and _A_ form a recursive cycle.
 
@@ -30,17 +41,6 @@ And it references _A_ declared here:
 A : B
 ```
 ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _A_ is not declared in this scope.
-
-This type is referenced here:
-**canon_revamp_mutual_type_aliases.md:2:5:2:6:**
-```roc
-B : A
-```
-    ^
 
 
 # TOKENS
@@ -73,20 +73,20 @@ B : A
 ~~~clojure
 (can-ir
 	(s-alias-decl
-		(ty-header (name "B"))
+		(ty-header (name "A"))
 		(ty-malformed))
 	(s-alias-decl
-		(ty-header (name "A"))
-		(ty-lookup (name "B") (local))))
+		(ty-header (name "B"))
+		(ty-lookup (name "A") (local))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "B")
-			(ty-header (name "B")))
 		(alias (type "A")
-			(ty-header (name "A"))))
+			(ty-header (name "A")))
+		(alias (type "B")
+			(ty-header (name "B"))))
 	(expressions))
 ~~~

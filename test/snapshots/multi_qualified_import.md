@@ -122,17 +122,6 @@ data = json.Core.Utf8.encode("hello")
                                     ^
 
 
-**UNDECLARED TYPE**
-The type _Encoder_ is not declared in this scope.
-
-This type is referenced here:
-**multi_qualified_import.md:3:16:3:23:**
-```roc
-json_encoder : Encoder
-```
-               ^^^^^^^
-
-
 **DOES NOT EXIST**
 `Json.Core.Utf8.defaultEncoder` does not exist.
 
@@ -175,6 +164,17 @@ You're attempting to use this module here:
 data : json.Core.Utf8.EncodedData
 ```
        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Encoder_ is not declared in this scope.
+
+This type is referenced here:
+**multi_qualified_import.md:3:16:3:23:**
+```roc
+json_encoder : Encoder
+```
+               ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -259,7 +259,7 @@ data = json
 		(p-assign (ident "json_encoder"))
 		(e-runtime-error (tag "qualified_ident_does_not_exist"))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "Encoder") (local))))
 	(d-let
 		(p-assign (ident "process"))
 		(e-lambda
@@ -273,7 +273,8 @@ data = json
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "data"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-lookup-local
+			(p-assign (ident "json")))
 		(annotation
 			(ty-malformed)))
 	(s-import (module "json.Core")

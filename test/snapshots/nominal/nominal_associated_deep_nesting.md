@@ -24,7 +24,28 @@ deepType = C
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**MODULE NOT IMPORTED**
+There is no module with the name `Foo.Level1.Level2` imported into this Roc file.
+
+You're attempting to use this module here:
+**nominal_associated_deep_nesting.md:14:12:14:36:**
+```roc
+deepType : Foo.Level1.Level2.Level3
+```
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Foo.value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_associated_deep_nesting.md:12:13:12:43:**
+```roc
+deepValue = Foo.Level1.Level2.Level3.value
+```
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -116,14 +137,14 @@ deepType = C
 	(d-let
 		(p-assign (ident "deepValue"))
 		(e-lookup-local
-			(p-assign (ident "Foo.Level1.Level2.Level3.value")))
+			(p-assign (ident "Foo.value")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "deepType"))
 		(e-tag (name "C"))
 		(annotation
-			(ty-lookup (name "Foo.Level1.Level2.Level3") (local))))
+			(ty-malformed)))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -145,9 +166,9 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Dec"))
 		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "Foo.Level1.Level2.Level3")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -158,7 +179,7 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
+		(expr (type "Dec"))
 		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "Foo.Level1.Level2.Level3"))))
+		(expr (type "Error"))))
 ~~~

@@ -8,7 +8,7 @@ type=expr
 if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - if_expression.md:1:4:1:5
 # PROBLEMS
 NIL
 # TOKENS
@@ -36,11 +36,10 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 49)
-				(receiver
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(args
-					(e-num (value "5"))))
+			(e-binop (op "gt")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-num (value "5")))
 			(e-string
 				(e-literal (string "big")))))
 	(if-else

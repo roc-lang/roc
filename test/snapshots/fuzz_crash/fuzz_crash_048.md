@@ -18,12 +18,6 @@ ASCII CONTROL CHARACTER - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_048.md:2:7:2:12
 UNDECLARED TYPE - fuzz_crash_048.md:6:14:6:20
 UNDECLARED TYPE - fuzz_crash_048.md:7:13:7:18
-DECLARATION HAS NO VALUE - fuzz_crash_048.md:1:1:1:10
-DECLARATION HAS NO VALUE - fuzz_crash_048.md:2:1:2:21
-DECLARATION HAS NO VALUE - fuzz_crash_048.md:3:1:3:16
-DECLARATION HAS NO VALUE - fuzz_crash_048.md:4:1:5:16
-DECLARATION HAS NO VALUE - fuzz_crash_048.md:6:1:6:35
-DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -42,17 +36,6 @@ bar : Thing(a, b, _)
 
 
 **UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_048.md:6:14:6:20:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-             ^^^^^^
-
-
-**UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
@@ -63,71 +46,16 @@ tag_tuple : Value((a, b, c))
             ^^^^^
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:1:1:1:10:**
-```roc
-foo : U64
-```
-^^^^^^^^^
+**UNDECLARED TYPE**
+The type _String_ is not declared in this scope.
 
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:2:1:2:21:**
-```roc
-bar : Thing(a, b, _)
-```
-^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:3:1:3:16:**
-```roc
-biz : (a, b, c)
-```
-^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:4:1:5:16:**
-```roc
-add_one : (
-U8, U16 -> U32)
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:6:1:6:35:**
+This type is referenced here:
+**fuzz_crash_048.md:6:14:6:20:**
 ```roc
 main! : List(String) -> Try({}, _)
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             ^^^^^^
 
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_048.md:7:1:7:29:**
-```roc
-tag_tuple : Value((a, b, c))
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -207,7 +135,10 @@ tag_tuple : Value((a, b, c))
 		(p-assign (ident "bar"))
 		(e-anno-only)
 		(annotation
-			(ty-malformed)))
+			(ty-apply (name "Thing") (local)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
+				(ty-underscore))))
 	(d-let
 		(p-assign (ident "biz"))
 		(e-anno-only)
@@ -231,7 +162,7 @@ tag_tuple : Value((a, b, c))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-malformed))
+					(ty-lookup (name "String") (local)))
 				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
@@ -239,7 +170,11 @@ tag_tuple : Value((a, b, c))
 		(p-assign (ident "tag_tuple"))
 		(e-anno-only)
 		(annotation
-			(ty-malformed))))
+			(ty-apply (name "Value") (local)
+				(ty-tuple
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "b"))
+					(ty-rigid-var (name "c")))))))
 ~~~
 # TYPES
 ~~~clojure

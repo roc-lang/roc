@@ -62,7 +62,8 @@ NO CHANGE
 		(e-if
 			(if-branches
 				(if-branch
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local
+						(p-assign (ident "tru")))
 					(e-num (value "0"))))
 			(if-else
 				(e-empty_record)))))

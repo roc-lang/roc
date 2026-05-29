@@ -34,7 +34,8 @@ NO CHANGE
 	(receiver
 		(e-field-access (field "address")
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+				(e-lookup-local
+					(p-assign (ident "person")))))))
 ~~~
 # TYPES
 ~~~clojure

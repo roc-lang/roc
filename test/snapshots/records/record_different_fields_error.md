@@ -35,12 +35,33 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:17
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
-DECLARATION HAS NO VALUE - record_different_fields_error.md:2:5:2:21
-DECLARATION HAS NO VALUE - record_different_fields_error.md:3:5:3:14
+MALFORMED TYPE - record_different_fields_error.md:2:20:2:21
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:2:21:2:39
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:2:39:2:40
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:2:40:2:41
+MALFORMED TYPE - record_different_fields_error.md:3:13:3:14
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:3:14:3:33
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:3:33:3:34
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:3:34:3:35
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:4:15:4:16
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:4:25:4:26
+UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
+UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:15:5:16
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:24:5:25
+MALFORMED TYPE - record_different_fields_error.md:6:20:6:21
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:21:6:27
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:27:6:28
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:28:6:29
+UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
+UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
+UNUSED VARIABLE - record_different_fields_error.md:6:5:6:21
 TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
 TYPE MISMATCH - record_different_fields_error.md:4:17:4:25
 TYPE MISMATCH - record_different_fields_error.md:5:17:5:24
-DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
 TYPE MISMATCH - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
 **STRAY DOLLAR SIGN**
@@ -262,19 +283,217 @@ Expressions can be identifiers, literals, function calls, or operators.
                              ^
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_different_fields_error.md:2:5:2:21:**
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**record_different_fields_error.md:2:20:2:21:**
 ```roc
     _privateField: "leading underscore",
 ```
-    ^^^^^^^^^^^^^^^^
+                   ^
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
+**record_different_fields_error.md:2:21:2:39:**
+```roc
+    _privateField: "leading underscore",
+```
+                    ^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:2:39:2:40:**
+```roc
+    _privateField: "leading underscore",
+```
+                                      ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:2:40:2:41:**
+```roc
+    _privateField: "leading underscore",
+```
+                                       ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**record_different_fields_error.md:3:13:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+            ^
+
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:3:14:3:33:**
+```roc
+    field_: "trailing underscore",
+```
+             ^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:3:33:3:34:**
+```roc
+    field_: "trailing underscore",
+```
+                                ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:3:34:3:35:**
+```roc
+    field_: "trailing underscore",
+```
+                                 ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:4:15:4:16:**
+```roc
+    PascalCase: "pascal",
+```
+              ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:4:25:4:26:**
+```roc
+    PascalCase: "pascal",
+```
+                        ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:5:15:5:16:**
+```roc
+    kebab-case: "kebab",
+```
+              ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:5:24:5:25:**
+```roc
+    kebab-case: "kebab",
+```
+                       ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**record_different_fields_error.md:6:20:6:21:**
+```roc
+    field$special: "dollar",
+```
+                   ^
+
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:6:21:6:27:**
+```roc
+    field$special: "dollar",
+```
+                    ^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:6:27:6:28:**
+```roc
+    field$special: "dollar",
+```
+                          ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:6:28:6:29:**
+```roc
+    field$special: "dollar",
+```
+                           ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:7:10:7:17:**
+```roc
+    field@symbol: "at symbol",
+```
+         ^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:7:17:7:18:**
+```roc
+    field@symbol: "at symbol",
+```
+                ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:7:30:7:31:**
+```roc
+    field@symbol: "at symbol",
+```
+                             ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNUSED VARIABLE**
+Variable `field_` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_field_` to suppress this warning.
+The unused variable is declared here:
 **record_different_fields_error.md:3:5:3:14:**
 ```roc
     field_: "trailing underscore",
@@ -282,7 +501,17 @@ This declaration has a type annotation but no implementation.
     ^^^^^^^^^
 
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+**UNUSED VARIABLE**
+Variable `field$special` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_field$special` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:6:5:6:21:**
+```roc
+    field$special: "dollar",
+```
+    ^^^^^^^^^^^^^^^^
+
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
@@ -314,6 +543,18 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
+**MISSING METHOD**
+This **negate** method is being called on a value whose type doesn't have that method:
+**record_different_fields_error.md:5:10:5:15:**
+```roc
+    kebab-case: "kebab",
+```
+         ^^^^^
+
+The value's type, which does not have a method named **negate**, is:
+
+    {}
+
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:5:17:5:24:**
@@ -328,17 +569,6 @@ It has the type:
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**record_different_fields_error.md:6:5:6:21:**
-```roc
-    field$special: "dollar",
-```
-    ^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
@@ -457,12 +687,12 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-lookup-local
+			(p-assign (ident "kebab"))))
 	(s-expr
-		(e-dispatch-call (method "negate") (constraint-fn-var 120)
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(args)))
+		(e-unary-minus
+			(e-lookup-local
+				(p-assign (ident "case")))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -480,7 +710,8 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-lookup-local
+			(p-assign (ident "field"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

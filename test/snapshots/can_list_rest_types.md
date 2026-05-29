@@ -11,9 +11,21 @@ match numbers {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - can_list_rest_types.md:1:7:1:14
+UNUSED VARIABLE - can_list_rest_types.md:2:6:2:11
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `first` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
+**can_list_rest_types.md:2:6:2:11:**
+```roc
+    [first, .. as restNums] => restNums
+```
+     ^^^^^
+
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -48,7 +60,8 @@ match numbers {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "numbers"))))
 		(branches
 			(branch
 				(patterns
@@ -71,5 +84,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "List(_a)"))
 ~~~

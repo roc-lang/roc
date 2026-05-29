@@ -15,9 +15,71 @@ match list {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_destructure_variations.md:1:7:1:11
+UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
+UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
+UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `tail` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:1:1:1:1:**
+```roc
+match list {
+```
+^
+
+
+**UNUSED VARIABLE**
+Variable `rest` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:1:1:1:1:**
+```roc
+match list {
+```
+^
+
+
+**UNUSED VARIABLE**
+Variable `more` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:1:1:1:1:**
+```roc
+match list {
+```
+^
+
+
+**MISSING METHOD**
+This **plus** method is being called on a value whose type doesn't have that method:
+**list_destructure_variations.md:4:24:4:38:**
+```roc
+    [first, second] => first + second
+```
+                       ^^^^^^^^^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    [One, Two, ..]
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**list_destructure_variations.md:2:11:2:12:**
+```roc
+    [] => 0
+```
+          ^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Error
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -88,7 +150,8 @@ match list {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "list"))))
 		(branches
 			(branch
 				(patterns
@@ -114,13 +177,11 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 91)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "first"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "second")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "first")))
+						(e-lookup-local
+							(p-assign (ident "second"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -154,20 +215,16 @@ match list {
 							(rest-at (index 3)
 								(p-assign (ident "more"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 136)
-						(receiver
-							(e-dispatch-call (method "plus") (constraint-fn-var 134)
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(args
-									(e-lookup-local
-										(p-assign (ident "y"))))))
-						(args
+					(e-binop (op "add")
+						(e-binop (op "add")
 							(e-lookup-local
-								(p-assign (ident "z"))))))))))
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))
+						(e-lookup-local
+							(p-assign (ident "z")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Error"))
 ~~~

@@ -29,9 +29,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-tuple-access (index "0")
-	(e-runtime-error (tag "ident_not_in_scope")))
+	(e-lookup-local
+		(p-assign (ident "t"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_a"))
 ~~~

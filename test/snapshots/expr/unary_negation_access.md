@@ -8,23 +8,9 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
+UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
 # PROBLEMS
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**unary_negation_access.md:1:1:1:12:**
-```roc
--rec1.field
-```
-^^^^^^^^^^^
-
-
-Its type is:
-```roc
-a where [a.negate : a -> a]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
+NIL
 # TOKENS
 ~~~zig
 OpUnaryMinus,LowerIdent,NoSpaceDotLowerIdent,
@@ -43,12 +29,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "negate") (constraint-fn-var 13)
-	(receiver
-		(e-field-access (field "field")
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
-	(args))
+(e-unary-minus
+	(e-dot-access (field "field")
+		(receiver
+			(e-lookup-local
+				(p-assign (ident "rec1"))))))
 ~~~
 # TYPES
 ~~~clojure

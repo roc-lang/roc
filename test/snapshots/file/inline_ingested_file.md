@@ -72,7 +72,8 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "foo"))
 		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-lookup-local
+				(p-assign (ident "parse")))
 			(e-lookup-local
 				(p-assign (ident "data")))))
 	(s-import (module "Json")

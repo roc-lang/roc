@@ -11,9 +11,20 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - simple_record.md:1:7:1:13
 # PROBLEMS
-NIL
+**REDUNDANT PATTERN**
+The second branch of this `match` is redundant:
+**simple_record.md:1:1:4:2:**
+```roc
+match person {
+    { name } => name
+    { age } => age
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -48,7 +59,8 @@ match person {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "person"))))
 		(branches
 			(branch
 				(patterns

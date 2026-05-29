@@ -45,7 +45,8 @@ NO CHANGE
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "isReady"))))
 		(branches
 			(branch
 				(patterns

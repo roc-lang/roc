@@ -30,9 +30,10 @@ when
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(e-lookup-local
+	(p-assign (ident "when")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_a"))
 ~~~

@@ -46,17 +46,16 @@ add2 = x + 2
 (can-ir
 	(d-let
 		(p-assign (ident "add2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 42)
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(args
-				(e-num (value "2"))))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "x")))
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "a where [a.plus : a, Dec -> a]")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "a where [a.plus : a, Dec -> a]"))))
 ~~~

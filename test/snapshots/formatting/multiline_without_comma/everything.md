@@ -1174,17 +1174,6 @@ g : e -> e where module(e).A, module(e).B
                                        ^^
 
 
-**MALFORMED WHERE CLAUSE**
-This where clause could not be parsed correctly.
-
-**everything.md:56:12:56:17:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-           ^^^^^
-
-Check the syntax of your where clause.
-
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
@@ -1206,6 +1195,17 @@ This type is referenced here:
 ```
     ^
 
+
+**MALFORMED WHERE CLAUSE**
+This where clause could not be parsed correctly.
+
+**everything.md:56:12:56:17:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+           ^^^^^
+
+Check the syntax of your where clause.
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.

@@ -13,9 +13,32 @@ match data {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
 # PROBLEMS
-NIL
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
+**nested_patterns.md:1:1:6:2:**
+```roc
+match data {
+    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
+    Container({ items: [] }) => 0
+    Wrapper([Tag(value), Other(y)]) => value + y
+    Simple(x) => x
+}
+```
+
+The value being matched on has type:
+        _[Container({ items: List([First(a)]), .. }), Simple(a), Wrapper(List([Other(U64), Tag(a), ..]))]
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    a.plus : a, U64 -> a,
+  ]_
+
+Missing patterns:
+        Wrapper []
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -79,23 +102,22 @@ match data {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "data"))))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 67)
-						(receiver
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-call
+							(e-lookup-external
+								(builtin))
 							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-call (constraint-fn-var 66)
-								(e-lookup-external
-									(builtin))
-								(e-lookup-local
-									(p-assign (ident "rest"))))))))
+								(p-assign (ident "rest")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -107,13 +129,11 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 189)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "value"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "y")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "value")))
+						(e-lookup-local
+							(p-assign (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

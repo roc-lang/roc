@@ -59,7 +59,8 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "sumResult"))
 		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-lookup-local
+				(p-assign (ident "fold")))
 			(e-list
 				(elems
 					(e-num (value "1"))
@@ -83,7 +84,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "_a")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "_a"))))
 ~~~

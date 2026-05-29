@@ -8,7 +8,8 @@ type=expr
 foo(x-1)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - minus_no_space_in_call.md:1:1:1:4
+UNDEFINED VARIABLE - minus_no_space_in_call.md:1:5:1:6
 # PROBLEMS
 NIL
 # TOKENS
@@ -31,14 +32,14 @@ foo(x - 1)
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-dispatch-call (method "minus") (constraint-fn-var 43)
-		(receiver
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(args
-			(e-num (value "1")))))
+	(e-lookup-local
+		(p-assign (ident "foo")))
+	(e-binop (op "sub")
+		(e-lookup-local
+			(p-assign (ident "x")))
+		(e-num (value "1"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_a"))
 ~~~

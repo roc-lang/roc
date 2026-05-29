@@ -14,9 +14,29 @@ match sequence {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_mixed_literals.md:1:7:1:15
 # PROBLEMS
-NIL
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
+**list_mixed_literals.md:1:1:7:2:**
+```roc
+match sequence {
+    [0, count] => count
+    [1, x, 3] => x
+    [42, value] => value
+    [first, 99] => first
+    [] => 0
+}
+```
+
+The value being matched on has type:
+        _List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+Missing patterns:
+        [_]
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -73,7 +93,8 @@ match sequence {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "sequence"))))
 		(branches
 			(branch
 				(patterns

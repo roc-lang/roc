@@ -34,7 +34,8 @@ NO CHANGE
 ~~~clojure
 (e-record
 	(ext
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-lookup-local
+			(p-assign (ident "person"))))
 	(fields
 		(field (name "age")
 			(e-num (value "31")))
@@ -43,5 +44,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "{ active: [True, ..], age: Dec, .. }"))
 ~~~

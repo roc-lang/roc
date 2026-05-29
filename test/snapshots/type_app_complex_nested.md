@@ -34,6 +34,18 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:48:4:53
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 # PROBLEMS
+**UNUSED VARIABLE**
+Variable `maybeList` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_maybeList` to suppress this warning.
+The unused variable is declared here:
+**type_app_complex_nested.md:7:12:7:21:**
+```roc
+        Ok(maybeList) => []
+```
+           ^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
 
@@ -57,17 +69,6 @@ ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 
 
 **UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:4:27:4:32:**
-```roc
-processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                          ^^^^^
-
-
-**UNDECLARED TYPE**
 The type _Error_ is not declared in this scope.
 
 This type is referenced here:
@@ -78,27 +79,15 @@ processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
                                                ^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `maybeList` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_maybeList` to suppress this warning.
-The unused variable is declared here:
-**type_app_complex_nested.md:7:12:7:21:**
-```roc
-        Ok(maybeList) => []
-```
-           ^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
 
 This type is referenced here:
-**type_app_complex_nested.md:12:14:12:19:**
+**type_app_complex_nested.md:4:27:4:32:**
 ```roc
-deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 ```
-             ^^^^^
+                          ^^^^^
 
 
 # TOKENS
@@ -277,10 +266,12 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
 					(ty-apply (name "List") (builtin)
-						(ty-malformed))
+						(ty-apply (name "Maybe") (local)
+							(ty-rigid-var (name "a"))))
 					(ty-apply (name "Dict") (builtin)
 						(ty-lookup (name "Str") (builtin))
-						(ty-malformed)))
+						(ty-apply (name "Error") (local)
+							(ty-rigid-var (name "_b")))))
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
@@ -292,7 +283,13 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(e-crash (msg "not implemented"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-malformed)
+				(ty-apply (name "Maybe") (local)
+					(ty-apply (name "Try") (builtin)
+						(ty-apply (name "List") (builtin)
+							(ty-apply (name "Dict") (builtin)
+								(ty-lookup (name "Str") (builtin))
+								(ty-rigid-var (name "a"))))
+						(ty-rigid-var (name "_b"))))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "main!"))
@@ -326,9 +323,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Try(List(Error), Dict(Str, Error)) -> List(_c)"))
-		(patt (type "Error -> _ret"))
-		(patt (type "_arg -> List(_c)")))
+		(patt (type "Try(List(Error), Dict(Str, Error)) -> List(a)"))
+		(patt (type "Error -> a"))
+		(patt (type "_arg -> List(a)")))
 	(type_decls
 		(alias (type "ComplexType(a, b)")
 			(ty-header (name "ComplexType")
@@ -336,7 +333,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Try(List(Error), Dict(Str, Error)) -> List(_c)"))
-		(expr (type "Error -> _ret"))
-		(expr (type "_arg -> List(_c)"))))
+		(expr (type "Try(List(Error), Dict(Str, Error)) -> List(a)"))
+		(expr (type "Error -> a"))
+		(expr (type "_arg -> List(a)"))))
 ~~~

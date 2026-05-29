@@ -107,7 +107,7 @@ main! = |_| processNested([])
 				(ty-apply (name "List") (builtin)
 					(ty-apply (name "Try") (builtin)
 						(ty-lookup (name "Str") (builtin))
-						(ty-malformed)))
+						(ty-lookup (name "Err") (local))))
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let

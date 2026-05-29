@@ -8,7 +8,7 @@ type=expr
 -foo
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
 # PROBLEMS
 NIL
 # TOKENS
@@ -27,12 +27,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "negate") (constraint-fn-var 9)
-	(receiver
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(args))
+(e-unary-minus
+	(e-lookup-local
+		(p-assign (ident "foo"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "a where [a.negate : a -> a]"))
 ~~~

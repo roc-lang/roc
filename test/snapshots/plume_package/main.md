@@ -10,7 +10,7 @@ package [
 ] {}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - main.md:2:5:2:10
+NIL
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `Color` was not found in this Roc project.

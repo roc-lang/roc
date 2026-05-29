@@ -113,12 +113,13 @@ main! = |_| {}
 			(e-block
 				(s-expr
 					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-field-access (field "name")
+						(e-lookup-local
+							(p-assign (ident "line!")))
+						(e-dot-access (field "name")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "person")))))))
-				(e-field-access (field "name")
+				(e-dot-access (field "name")
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "person")))))))

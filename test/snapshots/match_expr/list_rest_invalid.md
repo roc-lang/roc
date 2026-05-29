@@ -58,17 +58,6 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
         ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_rest_invalid.md:1:7:1:12:**
-```roc
-match items {
-```
-      ^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
 
@@ -153,6 +142,51 @@ The unused variable is declared here:
                 ^
 
 
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
+**list_rest_invalid.md:1:1:5:2:**
+```roc
+match items {
+    [first, ..rest] => 0 # invalid rest pattern should error
+    [..rest, last] => 1 # invalid rest pattern should error
+    [x, ..rest, y] => 2 # invalid rest pattern should error
+}
+```
+
+The value being matched on has type:
+        _List(_a)_
+
+Missing patterns:
+        []
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
+
+**REDUNDANT PATTERN**
+The second branch of this `match` is redundant:
+**list_rest_invalid.md:1:1:5:2:**
+```roc
+match items {
+    [first, ..rest] => 0 # invalid rest pattern should error
+    [..rest, last] => 1 # invalid rest pattern should error
+    [x, ..rest, y] => 2 # invalid rest pattern should error
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
+**REDUNDANT PATTERN**
+The third branch of this `match` is redundant:
+**list_rest_invalid.md:1:1:5:2:**
+```roc
+match items {
+    [first, ..rest] => 0 # invalid rest pattern should error
+    [..rest, last] => 1 # invalid rest pattern should error
+    [x, ..rest, y] => 2 # invalid rest pattern should error
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -197,7 +231,8 @@ match items {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "items"))))
 		(branches
 			(branch
 				(patterns

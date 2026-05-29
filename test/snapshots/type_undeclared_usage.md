@@ -31,6 +31,18 @@ MyType : UnknownType
          ^^^^^^^^^^^
 
 
+**UNUSED VARIABLE**
+Variable `value` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
+**type_undeclared_usage.md:4:17:4:22:**
+```roc
+processValue = |value| {
+```
+                ^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `SomeModule` imported into this Roc file.
 
@@ -51,18 +63,6 @@ This type is referenced here:
 processValue : UndeclaredResult -> Str
 ```
                ^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `value` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-**type_undeclared_usage.md:4:17:4:22:**
-```roc
-processValue = |value| {
-```
-                ^^^^^
 
 
 # TOKENS
@@ -126,7 +126,7 @@ AnotherType : SomeModule.MissingType
 					(e-literal (string "processed")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-malformed)
+				(ty-lookup (name "UndeclaredResult") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(s-alias-decl
 		(ty-header (name "MyType"))

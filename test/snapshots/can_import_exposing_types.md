@@ -77,7 +77,6 @@ UNDECLARED TYPE - can_import_exposing_types.md:20:55:20:60
 DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
-MODULE NOT FOUND - can_import_exposing_types.md:35:30:35:37
 UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
@@ -89,6 +88,19 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
+**DOES NOT EXIST**
+`List.mapTry` does not exist.
+
+`List` is in scope, but it has no associated `mapTry`.
+
+It's referenced here:
+**can_import_exposing_types.md:22:5:22:16:**
+```roc
+    List.mapTry(
+```
+    ^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
 
@@ -123,14 +135,14 @@ This type is referenced here:
 
 
 **UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
+The type _Response_ is not declared in this scope.
 
 This type is referenced here:
-**can_import_exposing_types.md:6:24:6:29:**
+**can_import_exposing_types.md:10:28:10:36:**
 ```roc
-parseJson : Str -> Try(Value, Error)
+handleRequest : Request -> Response
 ```
-                       ^^^^^
+                           ^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -144,17 +156,6 @@ parseJson : Str -> Try(Value, Error)
                               ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `parse` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_exposing_types.md:7:21:7:31:**
-```roc
-parseJson = |input| Json.parse(input)
-```
-                    ^^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Request_ is not declared in this scope.
 
@@ -164,50 +165,6 @@ This type is referenced here:
 handleRequest : Request -> Response
 ```
                 ^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:10:28:10:36:**
-```roc
-handleRequest : Request -> Response
-```
-                           ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `decode` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_exposing_types.md:12:14:12:25:**
-```roc
-    result = Json.decode(req.body)
-```
-             ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `ok` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_exposing_types.md:14:22:14:29:**
-```roc
-        Ok(value) => Http.ok(value)
-```
-                     ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `badRequest` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_exposing_types.md:15:23:15:38:**
-```roc
-        Err(error) => Http.badRequest(error)
-```
-                      ^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -225,144 +182,11 @@ processData : Config, List(Value) -> Try(List(Value), Error)
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
-**can_import_exposing_types.md:20:28:20:33:**
+**can_import_exposing_types.md:6:24:6:29:**
 ```roc
-processData : Config, List(Value) -> Try(List(Value), Error)
+parseJson : Str -> Try(Value, Error)
 ```
-                           ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:20:47:20:52:**
-```roc
-processData : Config, List(Value) -> Try(List(Value), Error)
-```
-                                              ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:20:55:20:60:**
-```roc
-processData : Config, List(Value) -> Try(List(Value), Error)
-```
-                                                      ^^^^^
-
-
-**DOES NOT EXIST**
-`List.mapTry` does not exist.
-
-`List` is in scope, but it has no associated `mapTry`.
-
-It's referenced here:
-**can_import_exposing_types.md:22:5:22:16:**
-```roc
-    List.mapTry(
-```
-    ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `validateWith` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_exposing_types.md:24:13:24:30:**
-```roc
-        |v| Json.validateWith(config, v),
-```
-            ^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Config_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:35:16:35:22:**
-```roc
-createClient : Config -> Http.Client
-```
-               ^^^^^^
-
-
-**MODULE NOT FOUND**
-The type `Client` is qualified by the module `http.Client`, but that module was not found in this Roc project.
-
-You're attempting to use this type here:
-**can_import_exposing_types.md:35:30:35:37:**
-```roc
-createClient : Config -> Http.Client
-```
-                             ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `clientWith` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_exposing_types.md:36:25:36:40:**
-```roc
-createClient = |config| Http.clientWith(config)
-```
-                        ^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:39:18:39:26:**
-```roc
-handleResponse : Response -> Str
-```
-                 ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `statusToString` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_exposing_types.md:42:23:42:42:**
-```roc
-        Ok(status) => Http.statusToString(status)
-```
-                      ^^^^^^^^^^^^^^^^^^^
-
-
-**DOES NOT EXIST**
-`Error.toString` does not exist.
-
-**can_import_exposing_types.md:43:23:43:37:**
-```roc
-        Err(error) => Error.toString(error)
-```
-                      ^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:47:19:47:24:**
-```roc
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-```
-                  ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:47:26:47:31:**
-```roc
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-```
-                         ^^^^^
+                       ^^^^^
 
 
 **UNDECLARED TYPE**
@@ -376,28 +200,6 @@ combineTrys : Try(Value, Error), Status -> Try(Response, Error)
                                  ^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:47:48:47:56:**
-```roc
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-```
-                                               ^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:47:58:47:63:**
-```roc
-combineTrys : Try(Value, Error), Status -> Try(Response, Error)
-```
-                                                         ^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `encode` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -407,6 +209,94 @@ Is there an `import` or `exposing` missing up-top?
         Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
 ```
                                 ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `ok` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:14:22:14:29:**
+```roc
+        Ok(value) => Http.ok(value)
+```
+                     ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `statusToString` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:42:23:42:42:**
+```roc
+        Ok(status) => Http.statusToString(status)
+```
+                      ^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `clientWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:36:25:36:40:**
+```roc
+createClient = |config| Http.clientWith(config)
+```
+                        ^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:7:21:7:31:**
+```roc
+parseJson = |input| Json.parse(input)
+```
+                    ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:12:14:12:25:**
+```roc
+    result = Json.decode(req.body)
+```
+             ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `badRequest` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:15:23:15:38:**
+```roc
+        Err(error) => Http.badRequest(error)
+```
+                      ^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Error.toString` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:43:23:43:37:**
+```roc
+        Err(error) => Error.toString(error)
+```
+                      ^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `validateWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:24:13:24:30:**
+```roc
+        |v| Json.validateWith(config, v),
+```
+            ^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -696,15 +586,16 @@ combineTrys = |jsonTry, httpStatus|
 			(args
 				(p-assign (ident "input")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local
+					(p-assign (ident "parse")))
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed)))))
+					(ty-lookup (name "Value") (local))
+					(ty-lookup (name "Error") (local))))))
 	(d-let
 		(p-assign (ident "handleRequest"))
 		(e-lambda
@@ -714,8 +605,9 @@ combineTrys = |jsonTry, httpStatus|
 				(s-let
 					(p-assign (ident "result"))
 					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-field-access (field "body")
+						(e-lookup-local
+							(p-assign (ident "decode")))
+						(e-dot-access (field "body")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "req")))))))
@@ -731,7 +623,8 @@ combineTrys = |jsonTry, httpStatus|
 										(p-applied-tag)))
 								(value
 									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local
+											(p-assign (ident "ok")))
 										(e-lookup-local
 											(p-assign (ident "value"))))))
 							(branch
@@ -740,13 +633,14 @@ combineTrys = |jsonTry, httpStatus|
 										(p-applied-tag)))
 								(value
 									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local
+											(p-assign (ident "badRequest")))
 										(e-lookup-local
 											(p-assign (ident "error")))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-malformed)
-				(ty-malformed))))
+				(ty-lookup (name "Request") (local))
+				(ty-lookup (name "Response") (local)))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -764,33 +658,35 @@ combineTrys = |jsonTry, httpStatus|
 						(args
 							(p-assign (ident "v")))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local
+								(p-assign (ident "validateWith")))
 							(e-lookup-local
 								(p-assign (ident "config")))
 							(e-lookup-local
 								(p-assign (ident "v"))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-malformed)
+				(ty-lookup (name "Config") (local))
 				(ty-apply (name "List") (builtin)
-					(ty-malformed))
+					(ty-lookup (name "Value") (local)))
 				(ty-apply (name "Try") (builtin)
 					(ty-apply (name "List") (builtin)
-						(ty-malformed))
-					(ty-malformed)))))
+						(ty-lookup (name "Value") (local)))
+					(ty-lookup (name "Error") (local))))))
 	(d-let
 		(p-assign (ident "createClient"))
 		(e-lambda
 			(args
 				(p-assign (ident "config")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local
+					(p-assign (ident "clientWith")))
 				(e-lookup-local
 					(p-assign (ident "config")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-malformed)
-				(ty-malformed))))
+				(ty-lookup (name "Config") (local))
+				(ty-lookup (name "Client") (external-module "http.Client")))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-lambda
@@ -799,7 +695,7 @@ combineTrys = |jsonTry, httpStatus|
 			(e-match
 				(match
 					(cond
-						(e-field-access (field "status")
+						(e-dot-access (field "status")
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "response"))))))
@@ -810,7 +706,8 @@ combineTrys = |jsonTry, httpStatus|
 									(p-applied-tag)))
 							(value
 								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-lookup-local
+										(p-assign (ident "statusToString")))
 									(e-lookup-local
 										(p-assign (ident "status"))))))
 						(branch
@@ -819,12 +716,13 @@ combineTrys = |jsonTry, httpStatus|
 									(p-applied-tag)))
 							(value
 								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
+									(e-lookup-local
+										(p-assign (ident "Error.toString")))
 									(e-lookup-local
 										(p-assign (ident "error"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-malformed)
+				(ty-lookup (name "Response") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "combineTrys"))
@@ -849,7 +747,8 @@ combineTrys = |jsonTry, httpStatus|
 											(fields
 												(field (name "body")
 													(e-call
-														(e-runtime-error (tag "ident_not_in_scope"))
+														(e-lookup-local
+															(p-assign (ident "encode")))
 														(e-lookup-local
 															(p-assign (ident "value")))))
 												(field (name "status")
@@ -867,21 +766,12 @@ combineTrys = |jsonTry, httpStatus|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed))
-				(ty-malformed)
+					(ty-lookup (name "Value") (local))
+					(ty-lookup (name "Error") (local)))
+				(ty-lookup (name "Status") (local))
 				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed)))))
-	(s-alias-decl
-		(ty-header (name "ServerConfig"))
-		(ty-record
-			(field (field "jsonConfig")
-				(ty-malformed))
-			(field (field "httpStatus")
-				(ty-malformed))
-			(field (field "defaultResponse")
-				(ty-malformed))))
+					(ty-lookup (name "Response") (local))
+					(ty-lookup (name "Error") (local))))))
 	(s-import (module "json.Json")
 		(exposes
 			(exposed (name "Value") (wildcard false))
@@ -894,7 +784,16 @@ combineTrys = |jsonTry, httpStatus|
 			(exposed (name "Status") (wildcard false))))
 	(s-import (module "utils.Try")
 		(exposes
-			(exposed (name "Try") (wildcard false)))))
+			(exposed (name "Try") (wildcard false))))
+	(s-alias-decl
+		(ty-header (name "ServerConfig"))
+		(ty-record
+			(field (field "jsonConfig")
+				(ty-malformed))
+			(field (field "httpStatus")
+				(ty-malformed))
+			(field (field "defaultResponse")
+				(ty-malformed)))))
 ~~~
 # TYPES
 ~~~clojure

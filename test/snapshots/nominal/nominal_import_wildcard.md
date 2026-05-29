@@ -44,28 +44,6 @@ red : Color
       ^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:6:8:6:13:**
-```roc
-blue : Color
-```
-       ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Color_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:9:9:9:14:**
-```roc
-green : Color
-```
-        ^^^^^
-
-
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,DotStar,
@@ -121,17 +99,17 @@ green = Green
 		(p-assign (ident "red"))
 		(e-tag (name "Red"))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "Color") (local))))
 	(d-let
 		(p-assign (ident "blue"))
 		(e-tag (name "Blue"))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "Color") (local))))
 	(d-let
 		(p-assign (ident "green"))
 		(e-tag (name "Green"))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "Color") (local))))
 	(s-import (module "Color")
 		(exposes)))
 ~~~

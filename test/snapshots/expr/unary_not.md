@@ -8,7 +8,7 @@ type=expr
 !blah
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - unary_not.md:1:2:1:6
 # PROBLEMS
 NIL
 # TOKENS
@@ -27,12 +27,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "not") (constraint-fn-var 9)
-	(receiver
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(args))
+(e-unary-not
+	(e-lookup-local
+		(p-assign (ident "blah"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "a where [a.not : a -> a]"))
 ~~~

@@ -34,7 +34,8 @@ NO CHANGE
 (e-call (constraint-fn-var 46)
 	(e-field-access (field "transform")
 		(receiver
-			(e-runtime-error (tag "ident_not_in_scope"))))
+			(e-lookup-local
+				(p-assign (ident "person")))))
 	(e-num (value "42")))
 ~~~
 # TYPES

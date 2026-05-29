@@ -69,7 +69,7 @@ NO CHANGE
 		(p-assign (ident "red"))
 		(e-runtime-error (tag "not_implemented"))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "CE") (local))))
 	(s-import (module "design.Styles")
 		(exposes
 			(exposed (name "Encoder") (alias "CE") (wildcard false)))))

@@ -16,7 +16,6 @@ PARSE ERROR - fuzz_crash_024.md:2:1:2:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:2:8:2:9
 PARSE ERROR - fuzz_crash_024.md:5:1:5:4
 DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
-SHADOWING - fuzz_crash_024.md:5:5:5:6
 UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 # PROBLEMS
 **PARSE ERROR**
@@ -52,6 +51,17 @@ var t= 0
 ^^^
 
 
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_024.md:2:8:2:9:**
+```roc
+var t= ]
+```
+       ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
 **DUPLICATE DEFINITION**
 The name `t` is being redeclared in this scope.
 
@@ -69,29 +79,6 @@ var t= ]
 ```
     ^
 
-
-**SHADOWING**
-The name `t` is already defined in this scope.
-
-Choose a different name for this identifier.
-
-**fuzz_crash_024.md:5:5:5:6:**
-```roc
-var t= 0
-```
-    ^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**fuzz_crash_024.md:2:8:2:9:**
-```roc
-var t= ]
-```
-       ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -136,8 +123,8 @@ t = 0
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "_a")))
+		(patt (type "Dec")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "_a"))))
+		(expr (type "Dec"))))
 ~~~

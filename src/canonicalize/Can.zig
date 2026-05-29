@@ -1724,6 +1724,15 @@ fn diagnosePostWalkTypeDecls(
                 .name = entry.key_ptr.*,
                 .region = region,
             } });
+            // Pin the type variable at this statement to `.err` so any
+            // TypeAnno.lookup pointing at it resolves through Check without
+            // tripping the alias/nominal/err assertion. The types store may
+            // not yet have grown a slot for this stmt_idx if no canon code
+            // touched its type var; only set when the slot exists.
+            const stmt_var_int: u32 = @intFromEnum(stmt_idx);
+            if (stmt_var_int < self.env.types.len()) {
+                try self.env.types.setVarContent(@enumFromInt(stmt_var_int), .err);
+            }
         }
     }
 
@@ -2398,6 +2407,18 @@ pub fn canonicalizeFile(
         }
     }
 
+    // Ensure env.types has a slot for every node before the post-walk
+    // diagnostic pass — that pass pins still-unfilled placeholder vars to
+    // `.err` so Check can consume them, and `setVarContent` needs the slot
+    // to already exist.
+    {
+        const node_count_pre = self.env.store.nodes.len();
+        var tj: u64 = self.env.types.len();
+        while (tj < node_count_pre) : (tj += 1) {
+            _ = try self.env.types.fresh();
+        }
+    }
+
     // Now that every top-level type declaration has been canonicalized in
     // source order, walk the dependency graph between them to surface
     // mutually-recursive alias diagnostics. Any type that still has an
@@ -2419,6 +2440,19 @@ pub fn canonicalizeFile(
     // later in source order resolves to an unset type var when Check first
     // touches it and trips an assertion.
     try self.reorderTypeDeclsTopologically(scratch_statements_start);
+
+    // Ensure env.types has a type-variable slot for every node — Check assumes
+    // varFrom(node_idx) is in range for every IR node it touches, but addNode
+    // (via addStatement / addTypeAnno / etc.) only grows the node store, not
+    // the type store. Fill the gap with fresh flex vars; lookups that the
+    // type checker resolves later replace these with concrete content.
+    {
+        const node_count = self.env.store.nodes.len();
+        var ti: u64 = self.env.types.len();
+        while (ti < node_count) : (ti += 1) {
+            _ = try self.env.types.fresh();
+        }
+    }
 
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);

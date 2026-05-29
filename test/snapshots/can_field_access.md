@@ -2,38 +2,16 @@
 ~~~ini
 description=Dot access expression
 type=expr
-canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
 list.map(fn)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_field_access.md:1:1:1:5
-UNDEFINED VARIABLE - can_field_access.md:1:10:1:12
+UNDEFINED VARIABLE - can_dot_access.md:1:1:1:5
+UNDEFINED VARIABLE - can_dot_access.md:1:10:1:12
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_field_access.md:1:1:1:5:**
-```roc
-list.map(fn)
-```
-^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_field_access.md:1:10:1:12:**
-```roc
-list.map(fn)
-```
-         ^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
@@ -41,10 +19,10 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-method-call (method ".map")
-	(receiver
-		(e-ident (raw "list")))
-	(args
+(e-field-access
+	(e-ident (raw "list"))
+	(e-apply
+		(e-ident (raw "map"))
 		(e-ident (raw "fn"))))
 ~~~
 # FORMATTED
@@ -53,13 +31,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-method-call (method "map")
+(e-dot-access (field "map")
 	(receiver
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-lookup-local
+			(p-assign (ident "list"))))
 	(args
-		(e-runtime-error (tag "ident_not_in_scope"))))
+		(e-lookup-local
+			(p-assign (ident "fn")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_a"))
 ~~~

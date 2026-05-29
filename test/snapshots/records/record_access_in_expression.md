@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Record field access used in expressions (field-access)
+description=Record field access used in expressions (dot-access)
 type=expr
 ~~~
 # SOURCE
@@ -8,23 +8,9 @@ type=expr
 person.age + 5
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
+UNDEFINED VARIABLE - record_access_in_expression.md:1:1:1:7
 # PROBLEMS
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**record_access_in_expression.md:1:1:1:15:**
-```roc
-person.age + 5
-```
-^^^^^^^^^^^^^^
-
-
-Its type is:
-```roc
-a where [a.plus : a, Dec -> a]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,OpPlus,Int,
@@ -44,13 +30,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "plus") (constraint-fn-var 44)
-	(receiver
-		(e-field-access (field "age")
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
-	(args
-		(e-num (value "5"))))
+(e-binop (op "add")
+	(e-dot-access (field "age")
+		(receiver
+			(e-lookup-local
+				(p-assign (ident "person")))))
+	(e-num (value "5")))
 ~~~
 # TYPES
 ~~~clojure

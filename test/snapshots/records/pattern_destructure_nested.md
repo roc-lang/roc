@@ -10,9 +10,21 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_destructure_nested.md:1:7:1:13
+UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `zipCode` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_zipCode` to suppress this warning.
+The unused variable is declared here:
+**pattern_destructure_nested.md:2:38:2:45:**
+```roc
+    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
+```
+                                     ^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -53,7 +65,8 @@ match person {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "person"))))
 		(branches
 			(branch
 				(patterns

@@ -16,7 +16,17 @@ Foo := [Whatever].{
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `Foo.b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**canon_revamp_type_qualified_forward_ref.md:3:9:3:14:**
+```roc
+    a = Foo.b
+```
+        ^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

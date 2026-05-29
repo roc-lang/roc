@@ -69,39 +69,6 @@ import json.Json
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `get` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_comprehensive.md:6:14:6:22:**
-```roc
-    client = Http.get
-```
-             ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_comprehensive.md:7:14:7:23:**
-```roc
-    parser = Json.utf8
-```
-             ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `trim` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_comprehensive.md:8:14:8:22:**
-```roc
-    helper = Str.trim
-```
-             ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named `parse` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -127,22 +94,11 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `get` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_import_comprehensive.md:17:15:17:18:**
+**can_import_comprehensive.md:6:14:6:22:**
 ```roc
-    result3 = get
+    client = Http.get
 ```
-              ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `post` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_comprehensive.md:18:15:18:19:**
-```roc
-    result4 = post
-```
-              ^^^^
+             ^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -154,6 +110,28 @@ Is there an `import` or `exposing` missing up-top?
     combined = Str.concat
 ```
                ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `utf8` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:7:14:7:23:**
+```roc
+    parser = Json.utf8
+```
+             ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `trim` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:8:14:8:22:**
+```roc
+    helper = Str.trim
+```
+             ^^^^^^^^
 
 
 # TOKENS
@@ -278,28 +256,36 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "client"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "get"))))
 			(s-let
 				(p-assign (ident "parser"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "utf8"))))
 			(s-let
 				(p-assign (ident "helper"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "trim"))))
 			(s-let
 				(p-assign (ident "result1"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "parse"))))
 			(s-let
 				(p-assign (ident "result2"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "post"))))
 			(s-let
 				(p-assign (ident "result3"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "get"))))
 			(s-let
 				(p-assign (ident "result4"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "post"))))
 			(s-let
 				(p-assign (ident "combined"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local
+					(p-assign (ident "concat"))))
 			(e-tuple
 				(elems
 					(e-lookup-local
@@ -331,7 +317,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
+		(patt (type "(a, _field, _field2, _field3, b, a, b, _field4)")))
 	(expressions
-		(expr (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
+		(expr (type "(a, _field, _field2, _field3, b, a, b, _field4)"))))
 ~~~

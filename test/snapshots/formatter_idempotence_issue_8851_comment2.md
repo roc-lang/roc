@@ -63,7 +63,8 @@ a = ()->b()()()
 		(e-call
 			(e-call
 				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))))
+					(e-lookup-local
+						(p-assign (ident "b")))))
 			(e-runtime-error (tag "empty_tuple")))))
 ~~~
 # TYPES

@@ -20,7 +20,17 @@ myNum = Foo.Bar.baz
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `Foo.baz` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_associated_lookup_nested.md:11:9:11:20:**
+```roc
+myNum = Foo.Bar.baz
+```
+        ^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -95,7 +105,7 @@ myNum = Foo.Bar.baz
 	(d-let
 		(p-assign (ident "myNum"))
 		(e-lookup-local
-			(p-assign (ident "Foo.Bar.baz")))
+			(p-assign (ident "Foo.baz")))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-nominal-decl
@@ -111,7 +121,7 @@ myNum = Foo.Bar.baz
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U64"))
+		(patt (type "Dec"))
 		(patt (type "Foo.Bar"))
 		(patt (type "U64")))
 	(type_decls
@@ -120,7 +130,7 @@ myNum = Foo.Bar.baz
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "U64"))
+		(expr (type "Dec"))
 		(expr (type "Foo.Bar"))
 		(expr (type "U64"))))
 ~~~

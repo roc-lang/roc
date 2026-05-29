@@ -44,39 +44,38 @@ Complex : {
 ~~~
 # EXPECTED
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
+TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:34
 UNDECLARED TYPE - type_comprehensive_scope.md:16:38:16:42
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
-**MUTUALLY RECURSIVE TYPE ALIASES**
-The type alias _Node_ and _Tree_ form a recursive cycle.
+**TYPE REDECLARED**
+The type _Try_ is being redeclared.
 
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
-
-This type is declared here:
-**type_comprehensive_scope.md:16:1:16:48:**
+The redeclaration is here:
+**type_comprehensive_scope.md:10:1:10:34:**
 ```roc
-Node(a) : { value: a, children: List(Tree(a)) }
+Try(ok, err) : [Ok(ok), Err(err)]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-And it references _Tree_ declared here:
-**type_comprehensive_scope.md:13:1:13:37:**
+But _Try_ was already declared here:
+**type_comprehensive_scope.md:1:1:1:1:**
 ```roc
-Tree(a) : [Branch(Node(a)), Leaf(a)]
+# Built-in types should work
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^
 
 
 **UNDECLARED TYPE**
-The type _Tree_ is not declared in this scope.
+The type _Node_ is not declared in this scope.
 
 This type is referenced here:
-**type_comprehensive_scope.md:16:38:16:42:**
+**type_comprehensive_scope.md:13:19:13:23:**
 ```roc
-Node(a) : { value: a, children: List(Tree(a)) }
+Tree(a) : [Branch(Node(a)), Leaf(a)]
 ```
-                                     ^^^^
+                  ^^^^
 
 
 **TYPE REDECLARED**
@@ -106,6 +105,26 @@ This type is referenced here:
 BadType : SomeUndeclaredType
 ```
           ^^^^^^^^^^^^^^^^^^
+
+
+**MUTUALLY RECURSIVE TYPE ALIASES**
+The type alias _Node_ and _Tree_ form a recursive cycle.
+
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
+
+This type is declared here:
+**type_comprehensive_scope.md:16:1:16:48:**
+```roc
+Node(a) : { value: a, children: List(Tree(a)) }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+And it references _Tree_ declared here:
+**type_comprehensive_scope.md:13:1:13:37:**
+```roc
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -310,6 +329,15 @@ Complex : {
 			(ty-tag-name (name "Err")
 				(ty-rigid-var-lookup (ty-rigid-var (name "err"))))))
 	(s-alias-decl
+		(ty-header (name "Tree")
+			(ty-args
+				(ty-rigid-var (name "a"))))
+		(ty-tag-union
+			(ty-tag-name (name "Branch")
+				(ty-malformed))
+			(ty-tag-name (name "Leaf")
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
+	(s-alias-decl
 		(ty-header (name "Node")
 			(ty-args
 				(ty-rigid-var (name "a"))))
@@ -318,17 +346,8 @@ Complex : {
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(field (field "children")
 				(ty-apply (name "List") (builtin)
-					(ty-malformed)))))
-	(s-alias-decl
-		(ty-header (name "Tree")
-			(ty-args
-				(ty-rigid-var (name "a"))))
-		(ty-tag-union
-			(ty-tag-name (name "Branch")
-				(ty-apply (name "Node") (local)
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
-			(ty-tag-name (name "Leaf")
-				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
+					(ty-apply (name "Tree") (local)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyTry"))
 		(ty-apply (name "Try") (local)
@@ -380,12 +399,12 @@ Complex : {
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))))
-		(alias (type "Node(a)")
-			(ty-header (name "Node")
-				(ty-args
-					(ty-rigid-var (name "a")))))
 		(alias (type "Tree(a)")
 			(ty-header (name "Tree")
+				(ty-args
+					(ty-rigid-var (name "a")))))
+		(alias (type "Node(a)")
+			(ty-header (name "Node")
 				(ty-args
 					(ty-rigid-var (name "a")))))
 		(alias (type "MyTry")

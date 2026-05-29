@@ -13,10 +13,10 @@ match data {
 }
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - mixed_pattern_scoping.md:1:1:6:2
+UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
 # PROBLEMS
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
+**NON-EXHAUSTIVE MATCH**
+This `match` expression doesn't cover all possible cases:
 **mixed_pattern_scoping.md:1:1:6:2:**
 ```roc
 match data {
@@ -27,18 +27,36 @@ match data {
 }
 ```
 
-
-Its type is:
-```roc
-a
+The value being matched on has type:
+        _[Err(a), Ok(List(a))]
   where [
-    a.div_by : a, Dec -> a,
-    a.minus : a, Dec -> a,
+    a.div_by : a, b -> a,
+    a.minus : a, c -> a,
     a.plus : a, a -> a,
-    a.times : a, Dec -> a,
-  ]
+    a.times : a, d -> a,
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+  ]_
+
+Missing patterns:
+        Ok []
+
+Hint: Add branches to handle these cases, or use `_` to match anything.
+
+**REDUNDANT PATTERN**
+The fourth branch of this `match` is redundant:
+**mixed_pattern_scoping.md:1:1:6:2:**
+```roc
+match data {
+    Ok([x, y]) => x + y
+    Err(x) => x - 1
+    Ok([x]) => x * 2
+    Err(y) => y / 2
+}
 ```
-Add an annotation or use this value in a way that fixes its concrete type.
+
+This pattern can never match because earlier patterns already cover all the values it would match.
 
 # TOKENS
 ~~~zig
@@ -97,53 +115,46 @@ match data {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "data"))))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 43)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "y")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 76)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-num (value "1"))))))
+					(e-binop (op "sub")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-num (value "1")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 111)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-num (value "2"))))))
+					(e-binop (op "mul")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-num (value "2")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "div_by") (constraint-fn-var 144)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "y"))))
-						(args
-							(e-num (value "2")))))))))
+					(e-binop (op "div")
+						(e-lookup-local
+							(p-assign (ident "y")))
+						(e-num (value "2"))))))))
 ~~~
 # TYPES
 ~~~clojure

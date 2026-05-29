@@ -28,6 +28,17 @@ EXPOSED BUT NOT DEFINED - platform.md:15:3:15:25
 EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
 # PROBLEMS
+**UNDECLARED TYPE**
+The type _R1_ is not declared in this scope.
+
+This type is referenced here:
+**platform.md:3:4:3:11:**
+```roc
+		[R1 : r1, R2 : r2] for main : R1 -> R2
+```
+		 ^^^^^^^
+
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
 

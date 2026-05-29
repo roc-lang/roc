@@ -10,9 +10,36 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
+DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
+DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
-NIL
+**DOES NOT EXIST**
+`Str.len` does not exist.
+
+`Str` is in scope, but it has no associated `len`.
+
+It's referenced here:
+**pattern_destructure_with_rest.md:2:33:2:40:**
+```roc
+    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+```
+                                ^^^^^^^
+
+
+**DOES NOT EXIST**
+`Str.len` does not exist.
+
+`Str` is in scope, but it has no associated `len`.
+
+It's referenced here:
+**pattern_destructure_with_rest.md:2:55:2:62:**
+```roc
+    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+```
+                                                      ^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -50,7 +77,8 @@ match person {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "person"))))
 		(branches
 			(branch
 				(patterns
@@ -64,19 +92,17 @@ match person {
 									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 32)
-						(receiver
-							(e-call
-								(e-runtime-error (tag "nested_value_not_found"))
-								(e-lookup-local
-									(p-assign (ident "first_name")))))
-						(args
-							(e-call
-								(e-runtime-error (tag "nested_value_not_found"))
-								(e-field-access (field "last_name")
-									(receiver
-										(e-lookup-local
-											(p-assign (ident "others")))))))))))))
+					(e-binop (op "gt")
+						(e-call
+							(e-runtime-error (tag "nested_value_not_found"))
+							(e-lookup-local
+								(p-assign (ident "first_name"))))
+						(e-call
+							(e-runtime-error (tag "nested_value_not_found"))
+							(e-dot-access (field "last_name")
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "others"))))))))))))
 ~~~
 # TYPES
 ~~~clojure

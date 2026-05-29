@@ -28,18 +28,6 @@ Is there an `import` or `exposing` missing up-top?
                  ^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `ghostName` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_ghostName` to suppress this warning.
-The unused variable is declared here:
-**canon_revamp_undefined_in_assoc_error.md:3:18:3:27:**
-```roc
-    callsGhost = ghostName
-```
-                 ^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

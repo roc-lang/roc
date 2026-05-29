@@ -31,10 +31,11 @@ NO CHANGE
 ~~~clojure
 (e-string
 	(e-literal (string "Hello "))
-	(e-runtime-error (tag "ident_not_in_scope"))
+	(e-lookup-local
+		(p-assign (ident "name")))
 	(e-literal (string "!")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

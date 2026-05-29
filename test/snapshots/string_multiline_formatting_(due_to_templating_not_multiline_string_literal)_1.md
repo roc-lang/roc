@@ -42,12 +42,15 @@ EndOfFile,
 (e-string
 	(e-literal (string "This is a string with "))
 	(e-call
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-lookup-local
+			(p-assign (ident "some_func")))
+		(e-lookup-local
+			(p-assign (ident "a")))
+		(e-lookup-local
+			(p-assign (ident "b"))))
 	(e-literal (string " lines of text due to the template parts")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

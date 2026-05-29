@@ -37,18 +37,21 @@ NO CHANGE
 (e-record
 	(fields
 		(field (name "name")
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "name"))))
 		(field (name "age")
 			(e-num (value "30")))
 		(field (name "email")
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "email"))))
 		(field (name "status")
 			(e-string
 				(e-literal (string "active"))))
 		(field (name "balance")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+			(e-lookup-local
+				(p-assign (ident "balance"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: Dec, balance: Error, email: Error, name: Error, status: Str }"))
+(expr (type "{ age: Dec, balance: _field, email: _field2, name: _field3, status: Str }"))
 ~~~

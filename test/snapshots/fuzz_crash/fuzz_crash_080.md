@@ -76,7 +76,7 @@ c : L
 		(p-assign (ident "c"))
 		(e-anno-only)
 		(annotation
-			(ty-malformed)
+			(ty-lookup (name "L") (local))
 			(where
 				(method (ty-rigid-var (name "o")) (name "h")
 					(args)

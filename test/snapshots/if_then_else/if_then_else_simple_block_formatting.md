@@ -49,7 +49,8 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-lookup-local
+				(p-assign (ident "bool")))
 			(e-block
 				(e-tag (name "A")))))
 	(if-else

@@ -198,13 +198,12 @@ UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
 NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
 UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
+NOT IMPLEMENTED - fuzz_crash_027.md:88:4:88:6
 NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
-NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
@@ -224,16 +223,15 @@ UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
-DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
 TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
-DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
+TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -328,6 +326,40 @@ Expressions can be identifiers, literals, function calls, or operators.
 		^
 
 
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:6:1:8:4:**
+```roc
+import Stdot
+		exposing [ #tem
+		] # Cose
+```
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:12:1:12:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:13:1:14:4:**
+```roc
+import
+	Ba
+```
+
+
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
 
@@ -418,62 +450,6 @@ Func(a) : Maybe(a), a -> Maybe(a)
                          ^^^^^
 
 
-**MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:6:1:8:4:**
-```roc
-import Stdot
-		exposing [ #tem
-		] # Cose
-```
-
-
-**MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:12:1:12:19:**
-```roc
-import Bae as Gooe
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:13:1:14:4:**
-```roc
-import
-	Ba
-```
-
-
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:29:2:29:5:**
-```roc
-	Bar, #
-```
-	^^^
-
-
-**UNDECLARED TYPE**
-The type _Baz_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:30:2:30:5:**
-```roc
-	Baz, #m
-```
-	^^^
-
-
 **EMPTY TUPLE NOT ALLOWED**
 I am part way through parsing this tuple, but it is empty:
 **fuzz_crash_027.md:52:1:52:3:**
@@ -483,39 +459,6 @@ I am part way through parsing this tuple, but it is empty:
 ^^
 
 If you want to represent nothing, try using an empty record: `{}`.
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:65:4:65:5:**
-```roc
-			x x
-```
-			^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:65:6:65:7:**
-```roc
-			x x
-```
-			  ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `ment` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:71:7:71:11:**
-```roc
-			=> ment
-```
-			   ^^^^
-
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -577,17 +520,6 @@ This feature is not yet implemented: alternatives pattern outside match expressi
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `add` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:82:37:82:40:**
-```roc
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-```
-		                                  ^^^
-
-
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
 
@@ -598,6 +530,18 @@ The unused variable is declared here:
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
 		                  ^^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: report an error when unable to resolve field identifier
+
+**fuzz_crash_027.md:88:4:88:6:**
+```roc
+			..} => 12
+```
+			^^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **NOT IMPLEMENTED**
@@ -624,107 +568,6 @@ The unused variable is declared here:
 	^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `blah` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:97:2:97:6:**
-```roc
-	blah == 1 # Commnt
-```
-	^^^^
-
-
-**UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:99:14:99:20:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-             ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `blah` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:103:9:103:13:**
-```roc
-	expect blah == 1
-```
-	       ^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `some_func` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:114:2:114:11:**
-```roc
-	some_func(
-```
-	^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:128:2:128:7:**
-```roc
-	line!("Adding ${n} to ${number}")
-```
-	^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `punned` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:131:63:131:69:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-	                                                             ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:132:42:132:48:**
-```roc
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-```
-	                                        ^^^^^^
-
-
 **INVALID ASSIGNMENT TO ITSELF**
 The value `tuple` is assigned to itself, which would cause an infinite loop at runtime.
 
@@ -735,61 +578,6 @@ Only functions can reference themselves (for recursion). For non-function values
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
 	                                                ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `tag1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:136:3:136:7:**
-```roc
-		tag1,
-```
-		^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:138:4:138:10:**
-```roc
-		(nested, tuple),
-```
-		 ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:141:14:141:17:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-	            ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `some_fn` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:142:10:142:17:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
-	        ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `arg1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_027.md:142:18:142:22:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
-	                ^^^^
 
 
 **DOES NOT EXIST**
@@ -875,6 +663,17 @@ The unused variable is declared here:
 
 
 **UNDECLARED TYPE**
+The type _Baz_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:30:2:30:5:**
+```roc
+	Baz, #m
+```
+	^^^
+
+
+**UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
@@ -885,6 +684,160 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
+**UNDECLARED TYPE**
+The type _String_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:99:14:99:20:**
+```roc
+main! : List(String) -> Try({}, _)
+```
+             ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bar_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:29:2:29:5:**
+```roc
+	Bar, #
+```
+	^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `some_func` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:114:2:114:11:**
+```roc
+	some_func(
+```
+	^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `nested` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:132:42:132:48:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                        ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:65:4:65:5:**
+```roc
+			x x
+```
+			^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `ment` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:71:7:71:11:**
+```roc
+			=> ment
+```
+			   ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `add` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:82:37:82:40:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+		                                  ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:158:2:158:6:**
+```roc
+	blah == foo
+```
+	^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:128:2:128:7:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:158:10:158:13:**
+```roc
+	blah == foo
+```
+	        ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:142:10:142:17:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	        ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:142:18:142:22:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `tag1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:136:3:136:7:**
+```roc
+		tag1,
+```
+		^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `punned` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:131:63:131:69:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	                                                             ^^^^^^
+
+
 **TOO FEW ARGS**
 The type _List_ expects 1 argument, but got 0 instead.
 **fuzz_crash_027.md:21:3:22:4:**
@@ -893,19 +846,6 @@ The type _List_ expects 1 argument, but got 0 instead.
 		),
 ```
 
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_027.md:28:1:31:2:**
-```roc
-line : ( # Cpen
-	Bar, #
-	Baz, #m
-) # Co
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TYPE MISMATCH**
 This `if` condition must evaluate to a `Bool` – either `True` or `False`:
@@ -920,54 +860,6 @@ It is:
     U64
 
 But I need this to be a `Bool` value.
-
-**TYPE MISMATCH**
-The `lue` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
-**fuzz_crash_027.md:64:2:**
-```roc
-	match a {lue | Red => {
-			x x
-		}
-		Blue		=> 1
-		"foo" => # ent
-00
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-			=> ment
-
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-ist
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # Afrd open
-			foo #
-				: #ue
-					1, # Aftd field
-			bar: 2,
-			..} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			} => 12
-		Ok(123) => 121000
-	}
-```
-                ^^^
-
-In the second pattern, `lue` is:
-
-    [Red, ..]
-
-But in the first pattern, `lue` is:
-
-    [Red, ..]
-
-A name shared across `|` patterns in the same `match` branch must have one compatible type.
 
 **TYPE MISMATCH**
 The third branch of this `match` does not match the previous ones:
@@ -1016,6 +908,177 @@ But the expression between the `match` parenthesis has the type:
     [Blue, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:67:12:67:13:**
+```roc
+		Blue		=> 1
+```
+		    		   ^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:69:1:69:3:**
+```roc
+00
+```
+^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:70:20:70:22:**
+```roc
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+```
+		                 ^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:74:32:74:35:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		                             ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:77:8:77:11:**
+```roc
+		] => 123
+```
+		     ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:78:11:78:14:**
+```roc
+		3.14 => 314
+```
+		        ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:79:18:79:21:**
+```roc
+		3.14 | 6.28 => 314
+```
+		               ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:80:16:80:19:**
+```roc
+		(1, 2, 3) => 123
+```
+		             ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:81:20:81:23:**
+```roc
+		(1, 2 | 5, 3) => 123
+```
+		                 ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:88:11:88:13:**
+```roc
+			..} => 12
+```
+			       ^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:89:29:89:31:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		                          ^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:92:9:92:11:**
+```roc
+			} => 12
+```
+			     ^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_027.md:93:14:93:20:**
+```roc
+		Ok(123) => 121000
+```
+		           ^^^^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    {}
+
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
+**fuzz_crash_027.md:111:2:113:3:**
+```roc
+	match_time(
+		..., #
+	)
+```
+
+The `match_time` function has the type:
+
+    [Blue, Red, ..], _arg -> {}
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -1087,16 +1150,70 @@ But the function's return type is:
 
 **Hint:** All `return` statements and the final expression in a function must have the same type.
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**fuzz_crash_027.md:153:1:153:25:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:100:9:148:2:**
 ```roc
-tuple : Value((a, b, c))
+main! = |_| { # Yeah Ie
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comd
+		tag
+
+	# Jusnt!
+
+	...
+	match_time(
+		..., #
+	)
+	some_func(
+		dbg # bug
+			42, # Aft expr
+	)
+	crash "Unreachtement
+	tag_with = Ok(number)
+	ited = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # Afin list
+e[, # afarg
+		),	456, # ee
+	]
+	for n in list {
+	line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	m_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # Thisnt
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+} # Commenl decl
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^
 
+It has the type:
 
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+    List(Error) => Error
+
+But the annotation say it should be:
+
+    List(Error) -> Error
+
+**Hint:** This function is effectful, but a pure function is expected.
 
 # TOKENS
 ~~~zig
@@ -1461,7 +1578,7 @@ EndOfFile,
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
 								(field (name "rest") (rest true)))
-							(e-arrow-call
+							(e-local-dispatch
 								(e-int (raw "12"))
 								(e-apply
 									(e-ident (raw "add"))
@@ -1656,17 +1773,17 @@ EndOfFile,
 							(e-question-suffix
 								(e-field-access
 									(e-question-suffix
-										(e-method-call (method ".ned")
-											(receiver
-												(e-question-suffix
-													(e-method-call (method ".statod")
-														(receiver
-															(e-question-suffix
-																(e-apply
-																	(e-ident (raw "some_fn"))
-																	(e-ident (raw "arg1")))))
-														(args))))
-											(args)))
+										(e-field-access
+											(e-question-suffix
+												(e-field-access
+													(e-question-suffix
+														(e-apply
+															(e-ident (raw "some_fn"))
+															(e-ident (raw "arg1"))))
+													(e-apply
+														(e-ident (raw "statod")))))
+											(e-apply
+												(e-ident (raw "ned")))))
 									(e-ident (raw "recd")))))
 						(e-apply
 							(e-tag (raw "Stdoline!"))
@@ -1873,8 +1990,8 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-tuple
-				(ty-malformed)
-				(ty-malformed))))
+				(ty-lookup (name "Bar") (local))
+				(ty-lookup (name "Baz") (local)))))
 	(d-let
 		(p-assign (ident "ane"))
 		(e-lambda
@@ -1937,8 +2054,10 @@ expect {
 							(value
 								(e-block
 									(s-expr
-										(e-runtime-error (tag "ident_not_in_scope")))
-									(e-runtime-error (tag "ident_not_in_scope")))))
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(e-lookup-local
+										(p-assign (ident "x"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1970,7 +2089,8 @@ expect {
 										(rest-at (index 3)
 											(p-assign (ident "rest"))))))
 							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
+								(e-lookup-local
+									(p-assign (ident "ment")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -2041,23 +2161,14 @@ expect {
 													(p-assign (ident "rest"))))))))
 							(value
 								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-lookup-local
+										(p-assign (ident "add")))
 									(e-num (value "12"))
 									(e-num (value "34")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "foo") (ident "foo")
-												(sub-pattern
-													(p-num (value "1"))))
-											(record-destruct (label "bar") (ident "bar")
-												(sub-pattern
-													(p-num (value "2"))))
-											(record-destruct (label "#others") (ident "#others")
-												(rest-pattern
-													(p-underscore)))))))
+									(p-runtime-error (tag "not_implemented"))))
 							(value
 								(e-num (value "12"))))
 						(branch
@@ -2103,11 +2214,10 @@ expect {
 					(p-assign (ident "number"))
 					(e-num (value "123")))
 				(s-expect
-					(e-method-eq (negated "false")
-						(lhs
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(rhs
-							(e-num (value "1")))))
+					(e-binop (op "eq")
+						(e-lookup-local
+							(p-assign (ident "blah")))
+						(e-num (value "1"))))
 				(s-let
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
@@ -2115,15 +2225,16 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr
 					(e-call
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr
 					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local
+							(p-assign (ident "some_func")))
 						(e-dbg
 							(e-num (value "42")))))
 				(s-crash (msg "Unreachtement"))
@@ -2152,7 +2263,8 @@ expect {
 					(e-block
 						(s-expr
 							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-lookup-local
+									(p-assign (ident "line!")))
 								(e-string
 									(e-literal (string "Adding "))
 									(e-lookup-local
@@ -2187,7 +2299,8 @@ expect {
 										(e-lookup-local
 											(p-assign (ident "world"))))))
 							(field (name "punned")
-								(e-runtime-error (tag "ident_not_in_scope"))))))
+								(e-lookup-local
+									(p-assign (ident "punned")))))))
 				(s-let
 					(p-assign (ident "tuple"))
 					(e-tuple
@@ -2203,7 +2316,8 @@ expect {
 										(p-assign (ident "world")))))
 							(e-tuple
 								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-lookup-local
+										(p-assign (ident "nested")))
 									(e-runtime-error (tag "self_referential_definition"))))
 							(e-list
 								(elems
@@ -2217,14 +2331,16 @@ expect {
 							(e-num (value "123"))
 							(e-string
 								(e-literal (string "World")))
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local
+								(p-assign (ident "tag1")))
 							(e-tag (name "Ok")
 								(args
 									(e-lookup-local
 										(p-assign (ident "world")))))
 							(e-tuple
 								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-lookup-local
+										(p-assign (ident "nested")))
 									(e-lookup-local
 										(p-assign (ident "tuple")))))
 							(e-list
@@ -2234,107 +2350,76 @@ expect {
 									(e-num (value "3")))))))
 				(s-let
 					(p-assign (ident "bsult"))
-					(e-if
-						(if-branches
-							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2725)
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-tag (name "Err")
-														(args
-															(e-runtime-error (tag "ident_not_in_scope")))))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-num (value "12"))))))))
-									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2720)
-											(receiver
-												(e-num (value "5")))
+					(e-binop (op "or")
+						(e-binop (op "gt")
+							(e-match
+								(match
+									(cond
+										(e-tag (name "Err")
 											(args
-												(e-num (value "5"))))))
-								(e-nominal-external
-									(builtin)
-									(e-tag (name "True")))))
-						(if-else
-							(e-if
-								(if-branches
-									(if-branch
-										(e-if
-											(if-branches
-												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2833)
-														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2798)
-																(receiver
-																	(e-num (value "13")))
-																(args
-																	(e-num (value "2")))))
-														(args
-															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2933)
-														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2898)
-																(receiver
-																	(e-num (value "10")))
-																(args
-																	(e-num (value "1")))))
-														(args
-															(e-num (value "16"))))))
-											(if-else
-												(e-nominal-external
-													(builtin)
-													(e-tag (name "False")))))
-										(e-nominal-external
-											(builtin)
-											(e-tag (name "True")))))
-								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3043)
-										(receiver
-											(e-num (value "12")))
-										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3038)
-												(receiver
-													(e-num (value "3")))
-												(args
-													(e-num (value "5")))))))))))
+												(e-lookup-local
+													(p-assign (ident "foo"))))))
+									(branches
+										(branch
+											(patterns
+												(pattern (degenerate false)
+													(p-nominal-external (builtin)
+														(p-applied-tag))))
+											(value
+												(e-lookup-local
+													(p-assign (ident "#ok")))))
+										(branch
+											(patterns
+												(pattern (degenerate false)
+													(p-nominal-external (builtin)
+														(p-applied-tag))))
+											(value
+												(e-num (value "12")))))))
+							(e-binop (op "mul")
+								(e-num (value "5"))
+								(e-num (value "5"))))
+						(e-binop (op "or")
+							(e-binop (op "and")
+								(e-binop (op "lt")
+									(e-binop (op "add")
+										(e-num (value "13"))
+										(e-num (value "2")))
+									(e-num (value "5")))
+								(e-binop (op "ge")
+									(e-binop (op "sub")
+										(e-num (value "10"))
+										(e-num (value "1")))
+									(e-num (value "16"))))
+							(e-binop (op "le")
+								(e-num (value "12"))
+								(e-binop (op "div")
+									(e-num (value "3"))
+									(e-num (value "5")))))))
 				(s-let
 					(p-assign (ident "stale"))
 					(e-match
 						(match
 							(cond
-								(e-field-access (field "recd")
+								(e-dot-access (field "recd")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3109)
+													(e-dot-access (field "ned")
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 3076)
+																		(e-dot-access (field "statod")
 																			(receiver
 																				(e-match
 																					(match
 																						(cond
 																							(e-call
-																								(e-runtime-error (tag "ident_not_in_scope"))
-																								(e-runtime-error (tag "ident_not_in_scope"))))
+																								(e-lookup-local
+																									(p-assign (ident "some_fn")))
+																								(e-lookup-local
+																									(p-assign (ident "arg1")))))
 																						(branches
 																							(branch
 																								(patterns
@@ -2437,7 +2522,7 @@ expect {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-malformed))
+					(ty-lookup (name "String") (local)))
 				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
@@ -2450,7 +2535,11 @@ expect {
 		(p-assign (ident "tuple"))
 		(e-anno-only)
 		(annotation
-			(ty-malformed)))
+			(ty-apply (name "Value") (local)
+				(ty-tuple
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "b"))
+					(ty-rigid-var (name "c"))))))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2529,11 +2618,10 @@ expect {
 	(s-import (module "Ba")
 		(exposes))
 	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(rhs
-				(e-num (value "1")))))
+		(e-binop (op "eq")
+			(e-lookup-local
+				(p-assign (ident "blah")))
+			(e-num (value "1"))))
 	(s-expect
 		(e-block
 			(s-let
@@ -2542,22 +2630,20 @@ expect {
 			(s-let
 				(p-assign (ident "blah"))
 				(e-num (value "1")))
-			(e-method-eq (negated "false")
-				(lhs
-					(e-lookup-local
-						(p-assign (ident "blah"))))
-				(rhs
-					(e-lookup-local
-						(p-assign (ident "foo"))))))))
+			(e-binop (op "eq")
+				(e-lookup-local
+					(p-assign (ident "blah")))
+				(e-lookup-local
+					(p-assign (ident "foo")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Bool -> Dec"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Blue, Red, ..], _arg -> Error"))
+		(patt (type "[Blue, Red, ..], _arg -> {}"))
 		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2592,9 +2678,9 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool -> Dec"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Blue, Red, ..], _arg -> Error"))
+		(expr (type "[Blue, Red, ..], _arg -> {}"))
 		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

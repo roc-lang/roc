@@ -15,7 +15,17 @@ Foo := [Whatever].{
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `absent` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**canon_revamp_forward_ref_to_anno_only.md:3:14:3:20:**
+```roc
+    callMe = absent
+```
+             ^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -60,7 +70,7 @@ Foo := [Whatever].{
 	(d-let
 		(p-assign (ident "Foo.callMe"))
 		(e-lookup-local
-			(p-assign (ident "Foo.absent")))
+			(p-assign (ident "absent")))
 		(annotation
 			(ty-lookup (name "Foo") (local))))
 	(d-let

@@ -23,7 +23,17 @@ main = { crash "todo" }
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Model_ is not declared in this scope.
+
+This type is referenced here:
+**platform_type_vars.md:3:5:3:18:**
+```roc
+			[Model : model] for main : {
+```
+			 ^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
@@ -134,7 +144,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ init: model, render: model -> I64, update: model, I64 -> model }")))
+		(patt (type "{ init: Error, render: Error -> I64, update: Error, I64 -> Error }")))
 	(expressions
-		(expr (type "{ init: model, render: model -> I64, update: model, I64 -> model }"))))
+		(expr (type "{ init: Error, render: Error -> I64, update: Error, I64 -> Error }"))))
 ~~~

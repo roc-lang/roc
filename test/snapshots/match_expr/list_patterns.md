@@ -29,28 +29,6 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
             ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `numbers` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_patterns.md:1:7:1:14:**
-```roc
-match numbers {
-```
-      ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `acc` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_patterns.md:2:11:2:14:**
-```roc
-    [] => acc
-```
-          ^^^
-
-
 **UNUSED VARIABLE**
 Variable `first` is not used anywhere in your code.
 
@@ -109,7 +87,8 @@ match numbers {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-lookup-local
+				(p-assign (ident "numbers"))))
 		(branches
 			(branch
 				(patterns
@@ -117,7 +96,8 @@ match numbers {
 						(p-list
 							(patterns))))
 				(value
-					(e-runtime-error (tag "ident_not_in_scope"))))
+					(e-lookup-local
+						(p-assign (ident "acc")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -131,5 +111,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Dec"))
 ~~~

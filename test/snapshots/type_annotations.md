@@ -30,26 +30,7 @@ open_record_with_comma : {
 UNDECLARED TYPE - type_annotations.md:3:7:3:12
 UNDECLARED TYPE - type_annotations.md:9:14:9:20
 UNDECLARED TYPE - type_annotations.md:11:13:11:18
-DECLARATION HAS NO VALUE - type_annotations.md:1:1:1:10
-DECLARATION HAS NO VALUE - type_annotations.md:3:1:3:23
-DECLARATION HAS NO VALUE - type_annotations.md:5:1:5:19
-DECLARATION HAS NO VALUE - type_annotations.md:7:1:7:27
-DECLARATION HAS NO VALUE - type_annotations.md:9:1:9:35
-DECLARATION HAS NO VALUE - type_annotations.md:11:1:11:32
-DECLARATION HAS NO VALUE - type_annotations.md:13:1:15:2
-DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Thing_ is not declared in this scope.
-
-This type is referenced here:
-**type_annotations.md:3:7:3:12:**
-```roc
-bar : Thing(_a, _b, _)
-```
-      ^^^^^
-
-
 **UNDECLARED TYPE**
 The type _String_ is not declared in this scope.
 
@@ -72,96 +53,16 @@ tag_tuple : Value((_a, _b, _c))
             ^^^^^
 
 
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:1:1:1:10:**
-```roc
-foo : U64
-```
-^^^^^^^^^
+**UNDECLARED TYPE**
+The type _Thing_ is not declared in this scope.
 
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:3:1:3:23:**
+This type is referenced here:
+**type_annotations.md:3:7:3:12:**
 ```roc
 bar : Thing(_a, _b, _)
 ```
-^^^^^^^^^^^^^^^^^^^^^^
+      ^^^^^
 
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:5:1:5:19:**
-```roc
-baz : (_a, _b, _c)
-```
-^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:7:1:7:27:**
-```roc
-add_one : (U8, U16 -> U32)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:9:1:9:35:**
-```roc
-main! : List(String) -> Try({}, _)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:11:1:11:32:**
-```roc
-tag_tuple : Value((_a, _b, _c))
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:13:1:15:2:**
-```roc
-closed_record_with_comma : {
-	a : U8,
-}
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
-
-**DECLARATION HAS NO VALUE**
-This declaration has a type annotation but no implementation.
-**type_annotations.md:17:1:20:2:**
-```roc
-open_record_with_comma : {
-	a : U8,
-	..,
-}
-```
-
-
-Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -246,7 +147,10 @@ NO CHANGE
 		(p-assign (ident "bar"))
 		(e-anno-only)
 		(annotation
-			(ty-malformed)))
+			(ty-apply (name "Thing") (local)
+				(ty-rigid-var (name "_a"))
+				(ty-rigid-var (name "_b"))
+				(ty-underscore))))
 	(d-let
 		(p-assign (ident "baz"))
 		(e-anno-only)
@@ -270,7 +174,7 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-malformed))
+					(ty-lookup (name "String") (local)))
 				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
@@ -278,7 +182,11 @@ NO CHANGE
 		(p-assign (ident "tag_tuple"))
 		(e-anno-only)
 		(annotation
-			(ty-malformed)))
+			(ty-apply (name "Value") (local)
+				(ty-tuple
+					(ty-rigid-var (name "_a"))
+					(ty-rigid-var (name "_b"))
+					(ty-rigid-var (name "_c"))))))
 	(d-let
 		(p-assign (ident "closed_record_with_comma"))
 		(e-anno-only)

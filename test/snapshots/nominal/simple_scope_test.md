@@ -28,18 +28,6 @@ Is there an `import` or `exposing` missing up-top?
                 ^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `inner_val` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_inner_val` to suppress this warning.
-The unused variable is declared here:
-**simple_scope_test.md:6:17:6:26:**
-```roc
-    outer_val = inner_val
-```
-                ^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

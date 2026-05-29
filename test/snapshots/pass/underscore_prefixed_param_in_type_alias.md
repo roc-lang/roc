@@ -34,6 +34,17 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
+**underscore_prefixed_param_in_type_alias.md:2:17:2:19:**
+```roc
+AliasType(_a) : _a
+```
+                ^^
+
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
+
 **underscore_prefixed_param_in_type_alias.md:5:12:5:14:**
 ```roc
 AliasType2(_a, b) : b
@@ -50,17 +61,6 @@ Underscores are not allowed in type alias declarations.
 AliasType3(a, _b) : a
 ```
               ^^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_prefixed_param_in_type_alias.md:2:17:2:19:**
-```roc
-AliasType(_a) : _a
-```
-                ^^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 

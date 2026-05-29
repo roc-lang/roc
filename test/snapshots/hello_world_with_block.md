@@ -22,17 +22,6 @@ main! = |_| {
 UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**hello_world_with_block.md:11:2:11:14:**
-```roc
-	Stdout.line!("Hello, world!")
-```
-	^^^^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `world` is not used anywhere in your code.
 
@@ -43,6 +32,17 @@ The unused variable is declared here:
 	world = "World"
 ```
 	^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**hello_world_with_block.md:11:2:11:14:**
+```roc
+	Stdout.line!("Hello, world!")
+```
+	^^^^^^^^^^^^
 
 
 # TOKENS
@@ -105,7 +105,8 @@ NO CHANGE
 					(e-string
 						(e-literal (string "World"))))
 				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local
+						(p-assign (ident "line!")))
 					(e-string
 						(e-literal (string "Hello, world!")))))))
 	(s-import (module "pf.Stdout")
@@ -115,7 +116,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~
