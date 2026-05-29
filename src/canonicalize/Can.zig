@@ -4913,6 +4913,13 @@ pub fn canonicalizeExpr(
                                 break :blk new_pattern_idx;
                             };
 
+                            // Mark the placeholder as used — the unused-variable
+                            // diagnostic iterates scope.idents and skips anything
+                            // in used_patterns; without this, the def that
+                            // eventually adopts this placeholder would be
+                            // reported as never used.
+                            try self.used_patterns.put(self.env.gpa, ref_pattern_idx, {});
+
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                                 .pattern_idx = ref_pattern_idx,
                             } }, region);
