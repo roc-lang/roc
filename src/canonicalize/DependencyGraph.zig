@@ -337,6 +337,9 @@ fn collectExprDependencies(
         },
 
         .e_runtime_error => {},
+        // All other leaf-shaped expression variants (literals, lookups without
+        // pattern targets, hosted lambdas, etc.) contribute no dependencies.
+        else => {},
     }
 }
 

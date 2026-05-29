@@ -568,6 +568,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(p.requires_idx),
             } };
         },
+        .expr_num_from_numeral => {
+            return CIR.Expr{ .e_num_from_numeral = .{} };
+        },
+        .expr_typed_num_from_numeral => {
+            const p = payload.expr_typed_num_from_numeral;
+            return CIR.Expr{ .e_typed_num_from_numeral = .{
+                .type_name = @bitCast(p.type_name),
+            } };
+        },
         .expr_num => {
             const p = payload.expr_num;
             const kind: CIR.NumKind = @enumFromInt(p.kind);
@@ -2209,8 +2218,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .region_span2_idx = region_idx,
             } });
         },
-        .e_num_from_numeral,
-        .e_typed_num_from_numeral,
+        .e_num_from_numeral => {
+            node.tag = .expr_num_from_numeral;
+            node.setPayload(.{ .expr_num_from_numeral = .{} });
+        },
+        .e_typed_num_from_numeral => |e| {
+            node.tag = .expr_typed_num_from_numeral;
+            node.setPayload(.{ .expr_typed_num_from_numeral = .{
+                .type_name = @bitCast(e.type_name),
+            } });
+        },
         .e_dispatch_call,
         .e_structural_eq,
         .e_method_eq,

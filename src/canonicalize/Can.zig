@@ -9,6 +9,7 @@ const build_options = @import("build_options");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
+const NumericLiteral = parse.NumericLiteral;
 const types = @import("types");
 const builtins = @import("builtins");
 const tracy = @import("tracy");
@@ -4357,6 +4358,41 @@ pub fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8)
 /// Parse integer text into a CIR.IntValue.
 /// Handles base prefixes (0x, 0b, 0o), underscores, and negative numbers.
 /// Returns null if the number is invalid (too large, etc).
+/// Project a parser-side IntValue onto the CIR-side IntValue shape.
+fn cirIntValue(value: NumericLiteral.IntValue) CIR.IntValue {
+    return .{
+        .bytes = value.bytes,
+        .kind = @enumFromInt(@intFromEnum(value.kind)),
+    };
+}
+
+/// Project a parser-side SmallDecValue onto the CIR-side shape.
+fn cirSmallDec(value: NumericLiteral.SmallDecValue) CIR.SmallDecValue {
+    return .{
+        .numerator = value.numerator,
+        .denominator_power_of_ten = value.denominator_power_of_ten,
+    };
+}
+
+/// Record the exact base-256 digits of a parsed numeric literal against the
+/// CIR expression node we just emitted. Check.zig reads this when classifying
+/// numerics (via `recordedNumeralLiteralForExpr`).
+fn recordNumeralLiteralForExpr(
+    self: *Self,
+    expr_idx: Expr.Idx,
+    literal: NumericLiteral.Stored,
+) std.mem.Allocator.Error!void {
+    try self.env.recordNumeralLiteral(
+        ModuleEnv.nodeIdxFrom(expr_idx),
+        self.parse_ir.store.numericDigitsBefore(literal),
+        self.parse_ir.store.numericDigitsAfter(literal),
+        literal.after_decimal_digit_count,
+        literal.isNegative(),
+        literal.kind == .frac,
+        literal.flags.had_decimal_point,
+    );
+}
+
 pub fn parseIntText(num_text: []const u8) ?CIR.IntValue {
     const is_negated = num_text[0] == '-';
     const after_minus_sign = @as(usize, @intFromBool(is_negated));
@@ -5122,224 +5158,49 @@ pub fn canonicalizeExpr(
         },
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const token_text = self.parse_ir.resolve(e.token);
-            const parsed = types.parseNumeralWithSuffix(token_text);
-
-            const int_value = parseIntText(parsed.num_text) orelse {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            };
-
-            // Old-style suffixes (e.g., 123u64) are deprecated - emit error but still process
-            // Only treat as a suffix if it's a known type suffix; otherwise treat as no suffix
-            // (e.g., "e4" in "2e4" is scientific notation, not a type suffix)
-            if (parsed.suffix) |suffix| {
-                // Map the old suffix to the new syntax and NumKind
-                const maybe_suffix_info: ?struct { new_name: []const u8, kind: CIR.NumKind } = if (std.mem.eql(u8, suffix, "u8"))
-                    .{ .new_name = "U8", .kind = .u8 }
-                else if (std.mem.eql(u8, suffix, "u16"))
-                    .{ .new_name = "U16", .kind = .u16 }
-                else if (std.mem.eql(u8, suffix, "u32"))
-                    .{ .new_name = "U32", .kind = .u32 }
-                else if (std.mem.eql(u8, suffix, "u64"))
-                    .{ .new_name = "U64", .kind = .u64 }
-                else if (std.mem.eql(u8, suffix, "u128"))
-                    .{ .new_name = "U128", .kind = .u128 }
-                else if (std.mem.eql(u8, suffix, "i8"))
-                    .{ .new_name = "I8", .kind = .i8 }
-                else if (std.mem.eql(u8, suffix, "i16"))
-                    .{ .new_name = "I16", .kind = .i16 }
-                else if (std.mem.eql(u8, suffix, "i32"))
-                    .{ .new_name = "I32", .kind = .i32 }
-                else if (std.mem.eql(u8, suffix, "i64"))
-                    .{ .new_name = "I64", .kind = .i64 }
-                else if (std.mem.eql(u8, suffix, "i128"))
-                    .{ .new_name = "I128", .kind = .i128 }
-                else if (std.mem.eql(u8, suffix, "f32"))
-                    .{ .new_name = "F32", .kind = .f32 }
-                else if (std.mem.eql(u8, suffix, "f64"))
-                    .{ .new_name = "F64", .kind = .f64 }
-                else if (std.mem.eql(u8, suffix, "dec"))
-                    .{ .new_name = "Dec", .kind = .dec }
-                else
-                    null;
-
-                if (maybe_suffix_info) |suffix_info| {
-                    // Build the suggested syntax: e.g., "123.U64"
-                    var suggested_buf: [256]u8 = undefined;
-                    const suggested = std.fmt.bufPrint(&suggested_buf, "{s}.{s}", .{ parsed.num_text, suffix_info.new_name }) catch {
-                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-                    };
-
-                    // Emit the deprecation diagnostic
-                    const suffix_str_idx = try self.env.insertString(suffix);
-                    const suggested_str_idx = try self.env.insertString(suggested);
-                    try self.env.pushDiagnostic(Diagnostic{ .deprecated_number_suffix = .{
-                        .suffix = suffix_str_idx,
-                        .suggested = suggested_str_idx,
-                        .region = region,
-                    } });
-
-                    // Still create a valid typed expression
-                    const expr_idx = try self.env.addExpr(
-                        .{ .e_num = .{ .value = int_value, .kind = suffix_info.kind } },
-                        region,
-                    );
-                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-                }
-                // If suffix is not a known type suffix (e.g., "e4" from scientific notation),
-                // fall through and treat as no suffix
-            }
-
-            // Insert concrete expr
-            // All integer literals (regardless of base) are treated as num_unbound
-            // so they can unify with both Int and Frac types
-            const expr_idx = try self.env.addExpr(
-                CIR.Expr{ .e_num = .{
-                    .value = int_value,
+            const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+            const numeric_expr: CIR.Expr = switch (literal.compact) {
+                .int => |value| CIR.Expr{ .e_num = .{
+                    .value = cirIntValue(value),
                     .kind = .num_unbound,
                 } },
-                region,
-            );
-
+                .exact => CIR.Expr{ .e_num_from_numeral = .{} },
+                else => {
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                },
+            };
+            const expr_idx = try self.env.addExpr(numeric_expr, region);
+            try self.recordNumeralLiteralForExpr(expr_idx, literal);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .frac => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-            // Resolve to a string slice from the source
-            const token_text = self.parse_ir.resolve(e.token);
-            const parsed_num = types.parseNumeralWithSuffix(token_text);
-
-            // Old-style suffixes (e.g., 3.14f64) are deprecated - emit error but still process
-            // Only treat as a suffix if it's a known type suffix; otherwise treat as no suffix
-            // (e.g., "e4" in "2e4" is scientific notation, not a type suffix)
-            if (parsed_num.suffix) |suffix| {
-                // Map the old suffix to the new syntax
-                const maybe_suffix_info: ?struct { new_name: []const u8, is_f32: bool, is_f64: bool } = if (std.mem.eql(u8, suffix, "f32"))
-                    .{ .new_name = "F32", .is_f32 = true, .is_f64 = false }
-                else if (std.mem.eql(u8, suffix, "f64"))
-                    .{ .new_name = "F64", .is_f32 = false, .is_f64 = true }
-                else if (std.mem.eql(u8, suffix, "dec"))
-                    .{ .new_name = "Dec", .is_f32 = false, .is_f64 = false }
-                else
-                    null;
-
-                if (maybe_suffix_info) |suffix_info| {
-                    // Build the suggested syntax: e.g., "3.14.F64"
-                    var suggested_buf: [256]u8 = undefined;
-                    const suggested = std.fmt.bufPrint(&suggested_buf, "{s}.{s}", .{ parsed_num.num_text, suffix_info.new_name }) catch {
-                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-                    };
-
-                    // Emit the deprecation diagnostic
-                    const suffix_str_idx = try self.env.insertString(suffix);
-                    const suggested_str_idx = try self.env.insertString(suggested);
-                    try self.env.pushDiagnostic(Diagnostic{ .deprecated_number_suffix = .{
-                        .suffix = suffix_str_idx,
-                        .suggested = suggested_str_idx,
-                        .region = region,
-                    } });
-
-                    // Parse and create a valid typed expression
-                    const parsed = parseFracLiteral(parsed_num.num_text) catch {
-                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-                    };
-
-                    const cir_expr: CIR.Expr = if (suffix_info.is_f32) blk: {
-                        // For f32 suffix, convert to f32
-                        const f32_val: f32 = switch (parsed) {
-                            .small => |small_info| @as(f32, @floatFromInt(small_info.numerator)) / std.math.pow(f32, 10.0, @as(f32, @floatFromInt(small_info.denominator_power_of_ten))),
-                            .dec => |dec_info| @floatCast(dec_info.value.toF64()),
-                            .f64 => |f64_info| @floatCast(f64_info.value),
-                        };
-                        break :blk CIR.Expr{ .e_frac_f32 = .{ .value = f32_val, .has_suffix = true } };
-                    } else if (suffix_info.is_f64) blk: {
-                        // For f64 suffix, convert to f64
-                        const f64_val: f64 = switch (parsed) {
-                            .small => |small_info| @as(f64, @floatFromInt(small_info.numerator)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(small_info.denominator_power_of_ten))),
-                            .dec => |dec_info| dec_info.value.toF64(),
-                            .f64 => |f64_info| f64_info.value,
-                        };
-                        break :blk CIR.Expr{ .e_frac_f64 = .{ .value = f64_val, .has_suffix = true } };
-                    } else blk: {
-                        // For dec suffix
-                        break :blk switch (parsed) {
-                            .small => |small_info| CIR.Expr{ .e_dec_small = .{
-                                .value = .{ .numerator = small_info.numerator, .denominator_power_of_ten = small_info.denominator_power_of_ten },
-                                .has_suffix = true,
-                            } },
-                            .dec => |dec_info| CIR.Expr{ .e_dec = .{ .value = dec_info.value, .has_suffix = true } },
-                            .f64 => |f64_info| CIR.Expr{ .e_frac_f64 = .{ .value = f64_info.value, .has_suffix = true } },
-                        };
-                    };
-
-                    const expr_idx = try self.env.addExpr(cir_expr, region);
+            const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+            const numeric_expr: CIR.Expr = switch (literal.compact) {
+                .small_dec => |value| CIR.Expr{ .e_dec_small = .{
+                    .value = cirSmallDec(value),
+                    .has_suffix = false,
+                } },
+                .dec => |value| CIR.Expr{ .e_dec = .{
+                    .value = builtins.dec.RocDec{ .num = value },
+                    .has_suffix = false,
+                } },
+                .exact => CIR.Expr{ .e_num_from_numeral = .{} },
+                else => {
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-                }
-                // If suffix is not a known type suffix (e.g., "e4" from scientific notation),
-                // fall through and treat as no suffix
-            }
-
-            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
-                error.InvalidNumeral => {
-                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{
-                        .region = region,
-                    } });
-                    return CanonicalizedExpr{
-                        .idx = expr_idx,
-                        .free_vars = DataSpan.empty(),
-                    };
                 },
             };
-
-            const cir_expr = switch (parsed) {
-                .small => |small_info| CIR.Expr{
-                    .e_dec_small = .{
-                        .value = .{
-                            .numerator = small_info.numerator,
-                            .denominator_power_of_ten = small_info.denominator_power_of_ten,
-                        },
-                        .has_suffix = false,
-                    },
-                },
-                .dec => |dec_info| CIR.Expr{
-                    .e_dec = .{
-                        .value = dec_info.value,
-                        .has_suffix = false,
-                    },
-                },
-                .f64 => |f64_info| CIR.Expr{
-                    .e_frac_f64 = .{
-                        .value = f64_info.value,
-                        .has_suffix = false,
-                    },
-                },
-            };
-
-            const expr_idx = try self.env.addExpr(cir_expr, region);
-
+            const expr_idx = try self.env.addExpr(numeric_expr, region);
+            try self.recordNumeralLiteralForExpr(expr_idx, literal);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .typed_int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const token_text = self.parse_ir.resolve(e.token);
+            const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+            const type_ident = e.type_ident;
 
-            const int_value = parseIntText(token_text) orelse {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            };
-
-            // Get the type identifier from the .Type token
-            const type_ident = self.parse_ir.tokens.resolveIdentifier(e.type_token) orelse {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            };
-
-            // Check that the type is in scope
             if (self.scopeLookupTypeBinding(type_ident) == null) {
                 return CanonicalizedExpr{
                     .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
@@ -5350,54 +5211,26 @@ pub fn canonicalizeExpr(
                 };
             }
 
-            const expr_idx = try self.env.addExpr(
-                CIR.Expr{ .e_typed_int = .{
-                    .value = int_value,
+            const numeric_expr: CIR.Expr = switch (literal.compact) {
+                .int => |value| CIR.Expr{ .e_typed_int = .{
+                    .value = cirIntValue(value),
                     .type_name = type_ident,
                 } },
-                region,
-            );
-
+                .exact => CIR.Expr{ .e_typed_num_from_numeral = .{ .type_name = type_ident } },
+                else => {
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                },
+            };
+            const expr_idx = try self.env.addExpr(numeric_expr, region);
+            try self.recordNumeralLiteralForExpr(expr_idx, literal);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .typed_frac => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const token_text = self.parse_ir.resolve(e.token);
+            const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+            const type_ident = e.type_ident;
 
-            // Parse the fractional value as f64 first, then convert to scaled i128
-            const f64_val = std.fmt.parseFloat(f64, token_text) catch {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            };
-
-            // Convert to scaled i128 (Dec representation: value * 10^18)
-            const dec_scale = std.math.pow(f64, 10, 18);
-            const scaled_val = f64_val * dec_scale;
-
-            // Check if it fits in i128
-            const i128_max_f64 = 170141183460469231731687303715884105727.0;
-            const i128_min_f64 = -170141183460469231731687303715884105728.0;
-
-            if (scaled_val < i128_min_f64 or scaled_val > i128_max_f64) {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            }
-
-            const rounded_val = @round(scaled_val);
-            const i128_val = builtins.compiler_rt_128.f64_to_i128(rounded_val);
-
-            const int_value = CIR.IntValue{
-                .bytes = @bitCast(i128_val),
-                .kind = .i128,
-            };
-
-            // Get the type identifier from the .Type token
-            const type_ident = self.parse_ir.tokens.resolveIdentifier(e.type_token) orelse {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            };
-
-            // Check that the type is in scope
             if (self.scopeLookupTypeBinding(type_ident) == null) {
                 return CanonicalizedExpr{
                     .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
@@ -5408,14 +5241,32 @@ pub fn canonicalizeExpr(
                 };
             }
 
-            const expr_idx = try self.env.addExpr(
-                CIR.Expr{ .e_typed_frac = .{
-                    .value = int_value,
-                    .type_name = type_ident,
-                } },
-                region,
-            );
-
+            const numeric_expr: CIR.Expr = switch (literal.compact) {
+                .small_dec => |value| blk: {
+                    const scaled: i128 = @as(i128, value.numerator) * std.math.pow(i128, 10, @as(i128, 18 - value.denominator_power_of_ten));
+                    var int_bytes: [16]u8 = undefined;
+                    @memcpy(&int_bytes, std.mem.asBytes(&scaled));
+                    break :blk CIR.Expr{ .e_typed_frac = .{
+                        .value = .{ .bytes = int_bytes, .kind = .i128 },
+                        .type_name = type_ident,
+                    } };
+                },
+                .dec => |value| blk: {
+                    var int_bytes: [16]u8 = undefined;
+                    @memcpy(&int_bytes, std.mem.asBytes(&value));
+                    break :blk CIR.Expr{ .e_typed_frac = .{
+                        .value = .{ .bytes = int_bytes, .kind = .i128 },
+                        .type_name = type_ident,
+                    } };
+                },
+                .exact => CIR.Expr{ .e_typed_num_from_numeral = .{ .type_name = type_ident } },
+                else => {
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+                },
+            };
+            const expr_idx = try self.env.addExpr(numeric_expr, region);
+            try self.recordNumeralLiteralForExpr(expr_idx, literal);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .single_quote => |e| {
@@ -5719,7 +5570,7 @@ pub fn canonicalizeExpr(
                 }
 
                 const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
-                var bound_vars_view = self.scratch_bound_vars.setViewFrom(bound_vars_top);
+                var bound_vars_view = try self.scratch_bound_vars.setViewFrom(bound_vars_top, self.env.gpa);
                 defer bound_vars_view.deinit();
                 for (body_free_vars_slice) |fv| {
                     if (!self.scratch_captures.containsFrom(captures_top, fv) and !bound_vars_view.contains(fv) and !self.isGloballyResolvablePattern(fv)) {
@@ -6739,7 +6590,7 @@ pub fn canonicalizeExpr(
                     if (can_guard_result.free_vars.len > 0) {
                         const guard_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
                         self.scratch_free_vars.clearFrom(body_free_vars_start);
-                        var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
+                        var bound_vars_view = try self.scratch_bound_vars.setViewFrom(branch_bound_vars_top, self.env.gpa);
                         defer bound_vars_view.deinit();
                         for (guard_free_vars_slice) |fv| {
                             if (!bound_vars_view.contains(fv)) {
@@ -6773,7 +6624,7 @@ pub fn canonicalizeExpr(
                     // Clear back to before body canonicalization
                     self.scratch_free_vars.clearFrom(body_free_vars_start_after_guard);
                     // Re-add only filtered vars (not bound by branch patterns)
-                    var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
+                    var bound_vars_view = try self.scratch_bound_vars.setViewFrom(branch_bound_vars_top, self.env.gpa);
                     defer bound_vars_view.deinit();
                     for (body_free_vars_slice) |fv| {
                         if (!bound_vars_view.contains(fv)) {
@@ -8522,6 +8373,16 @@ pub fn canonicalizePattern(
                 return malformed_idx;
             }
         },
+        .typed_int => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const feature = try self.env.insertString("typed_int pattern");
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{ .feature = feature, .region = region } });
+        },
+        .typed_frac => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const feature = try self.env.insertString("typed_frac pattern");
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{ .feature = feature, .region = region } });
+        },
         .var_ident => |e| {
             // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -8556,273 +8417,29 @@ pub fn canonicalizePattern(
         },
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed = types.parseNumeralWithSuffix(token_text);
-
-            // Parse the integer value
-            const is_negated = parsed.num_text[0] == '-';
-            const after_minus_sign = @as(usize, @intFromBool(is_negated));
-
-            var first_digit: usize = undefined;
-            const DEFAULT_BASE = 10;
-            var int_base: u8 = undefined;
-
-            if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
-                switch (parsed.num_text[after_minus_sign + 1]) {
-                    'x', 'X' => {
-                        int_base = 16;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    'o', 'O' => {
-                        int_base = 8;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    'b', 'B' => {
-                        int_base = 2;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    else => {
-                        int_base = DEFAULT_BASE;
-                        first_digit = after_minus_sign;
-                    },
-                }
-            } else {
-                int_base = DEFAULT_BASE;
-                first_digit = after_minus_sign;
-            }
-
-            const u128_val = parseIntWithUnderscores(u128, parsed.num_text[first_digit..], int_base) catch {
-                // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return malformed_idx;
-            };
-
-            // If this had a minus sign, but negating it would result in a negative number
-            // that would be too low to fit in i128, then this int literal is also invalid.
-            if (is_negated and u128_val > min_i128_negated) {
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return malformed_idx;
-            }
-
-            // Now we've confirmed that our int literal is one of these:
-            // * A signed integer that fits in i128
-            // * An unsigned integer that fits in u128
-            //
-            // We'll happily bitcast a u128 to i128 for storage (and bitcast it back later
-            // using its type information), but for negative numbers, we do need to actually
-            // negate them (branchlessly) if we skipped its minus sign earlier.
-            //
-            // This operation should never overflow i128, because we already would have errored out
-            // if the u128 portion was bigger than the lowest i128 without a minus sign.
-            // Special case: exactly i128 min already has the correct bit pattern when bitcast from u128,
-            // so if we try to negate it we'll get an overflow. We specifically *don't* negate that one.
-            const i128_val: i128 = if (is_negated) blk: {
-                if (u128_val == min_i128_negated) {
-                    break :blk @as(i128, @bitCast(u128_val));
-                } else {
-                    break :blk -@as(i128, @bitCast(u128_val));
-                }
-            } else @as(i128, @bitCast(u128_val));
-
-            // const is_negative_u1 = @as(u1, @intFromBool(is_negated));
-            // const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
-            // const is_minimum_signed = is_negative_u1 & is_power_of_2;
-            // const adjusted_val = u128_val - is_minimum_signed;
-
-            // const requirements = types.Num.Int.Requirements{
-            //     .sign_needed = is_negated,
-            //     .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
-            // };
-            // const int_requirements = types.Num.IntRequirements{
-            //     .sign_needed = requirements.sign_needed,
-            //     .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
-            // };
-
-            // Calculate requirements based on the value
-            // Special handling for minimum signed values (-128, -32768, etc.)
-            // These are special because they have a power-of-2 magnitude that fits exactly
-            // in their signed type. We report them as needing one less bit to make the
-            // standard "signed types have n-1 usable bits" logic work correctly.
-
-            // Old-style suffixes (e.g., 123u64) are deprecated - emit error but still process
-            // Only treat as a suffix if it's a known type suffix; otherwise treat as no suffix
-            if (parsed.suffix) |suffix| {
-                // Map the old suffix to the new syntax and kind
-                const maybe_suffix_info: ?struct { new_name: []const u8, kind: CIR.NumKind } = if (std.mem.eql(u8, suffix, "u8"))
-                    .{ .new_name = "U8", .kind = .u8 }
-                else if (std.mem.eql(u8, suffix, "u16"))
-                    .{ .new_name = "U16", .kind = .u16 }
-                else if (std.mem.eql(u8, suffix, "u32"))
-                    .{ .new_name = "U32", .kind = .u32 }
-                else if (std.mem.eql(u8, suffix, "u64"))
-                    .{ .new_name = "U64", .kind = .u64 }
-                else if (std.mem.eql(u8, suffix, "u128"))
-                    .{ .new_name = "U128", .kind = .u128 }
-                else if (std.mem.eql(u8, suffix, "i8"))
-                    .{ .new_name = "I8", .kind = .i8 }
-                else if (std.mem.eql(u8, suffix, "i16"))
-                    .{ .new_name = "I16", .kind = .i16 }
-                else if (std.mem.eql(u8, suffix, "i32"))
-                    .{ .new_name = "I32", .kind = .i32 }
-                else if (std.mem.eql(u8, suffix, "i64"))
-                    .{ .new_name = "I64", .kind = .i64 }
-                else if (std.mem.eql(u8, suffix, "i128"))
-                    .{ .new_name = "I128", .kind = .i128 }
-                else if (std.mem.eql(u8, suffix, "f32"))
-                    .{ .new_name = "F32", .kind = .f32 }
-                else if (std.mem.eql(u8, suffix, "f64"))
-                    .{ .new_name = "F64", .kind = .f64 }
-                else if (std.mem.eql(u8, suffix, "dec"))
-                    .{ .new_name = "Dec", .kind = .dec }
-                else
-                    null;
-
-                if (maybe_suffix_info) |suffix_info| {
-                    // Build the suggested syntax: e.g., "123.U64"
-                    var suggested_buf: [256]u8 = undefined;
-                    const suggested = std.fmt.bufPrint(&suggested_buf, "{s}.{s}", .{ parsed.num_text, suffix_info.new_name }) catch {
-                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                    };
-
-                    // Emit the deprecation diagnostic
-                    const suffix_str_idx = try self.env.insertString(suffix);
-                    const suggested_str_idx = try self.env.insertString(suggested);
-                    try self.env.pushDiagnostic(Diagnostic{ .deprecated_number_suffix = .{
-                        .suffix = suffix_str_idx,
-                        .suggested = suggested_str_idx,
-                        .region = region,
-                    } });
-
-                    // Still create a valid typed pattern
-                    const pattern_idx = try self.env.addPattern(
-                        Pattern{ .num_literal = .{
-                            .value = CIR.IntValue{ .bytes = @bitCast(i128_val), .kind = .i128 },
-                            .kind = suffix_info.kind,
-                        } },
-                        region,
-                    );
-                    return pattern_idx;
-                }
-                // If suffix is not a known type suffix, fall through and treat as no suffix
-            }
-
-            const pattern_idx = try self.env.addPattern(
-                Pattern{ .num_literal = .{
-                    .value = CIR.IntValue{ .bytes = @bitCast(i128_val), .kind = .i128 },
+            const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+            return switch (literal.compact) {
+                .int => |value| try self.env.addPattern(Pattern{ .num_literal = .{
+                    .value = cirIntValue(value),
                     .kind = .num_unbound,
-                } },
-                region,
-            );
-            return pattern_idx;
+                } }, region),
+                else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
+            };
         },
         .frac => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-            // Resolve to a string slice from the source
-            const token_text = self.parse_ir.resolve(e.number_tok);
-            const parsed_num = types.parseNumeralWithSuffix(token_text);
-
-            // Old-style suffixes (e.g., 3.14f64) are deprecated - emit error but still process
-            // Only treat as a suffix if it's a known type suffix; otherwise treat as no suffix
-            if (parsed_num.suffix) |suffix| {
-                // Map the old suffix to the new syntax
-                const maybe_suffix_info: ?struct { new_name: []const u8, is_f32: bool, is_f64: bool } = if (std.mem.eql(u8, suffix, "f32"))
-                    .{ .new_name = "F32", .is_f32 = true, .is_f64 = false }
-                else if (std.mem.eql(u8, suffix, "f64"))
-                    .{ .new_name = "F64", .is_f32 = false, .is_f64 = true }
-                else if (std.mem.eql(u8, suffix, "dec"))
-                    .{ .new_name = "Dec", .is_f32 = false, .is_f64 = false }
-                else
-                    null;
-
-                if (maybe_suffix_info) |suffix_info| {
-                    // Build the suggested syntax: e.g., "3.14.F64"
-                    var suggested_buf: [256]u8 = undefined;
-                    const suggested = std.fmt.bufPrint(&suggested_buf, "{s}.{s}", .{ parsed_num.num_text, suffix_info.new_name }) catch {
-                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                    };
-
-                    // Emit the deprecation diagnostic
-                    const suffix_str_idx = try self.env.insertString(suffix);
-                    const suggested_str_idx = try self.env.insertString(suggested);
-                    try self.env.pushDiagnostic(Diagnostic{ .deprecated_number_suffix = .{
-                        .suffix = suffix_str_idx,
-                        .suggested = suggested_str_idx,
-                        .region = region,
-                    } });
-
-                    // f32 and f64 are not allowed in patterns - emit additional error
-                    if (suffix_info.is_f32 or suffix_info.is_f64) {
-                        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .f64_pattern_literal = .{
-                            .region = region,
-                        } });
-                        return malformed_idx;
-                    }
-
-                    // For dec suffix, parse and create a valid pattern
-                    const parsed = parseFracLiteral(parsed_num.num_text) catch {
-                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                    };
-
-                    const cir_pattern: Pattern = switch (parsed) {
-                        .small => |small_info| Pattern{
-                            .small_dec_literal = .{
-                                .value = .{ .numerator = small_info.numerator, .denominator_power_of_ten = small_info.denominator_power_of_ten },
-                                .has_suffix = true,
-                            },
-                        },
-                        .dec => |dec_info| Pattern{
-                            .dec_literal = .{ .value = dec_info.value, .has_suffix = true },
-                        },
-                        .f64 => {
-                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .f64_pattern_literal = .{ .region = region } });
-                        },
-                    };
-
-                    return try self.env.addPattern(cir_pattern, region);
-                }
-                // If suffix is not a known type suffix, fall through and treat as no suffix
-            }
-
-            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
-                error.InvalidNumeral => {
-                    const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{
-                        .region = region,
-                    } });
-                    return malformed_idx;
-                },
+            const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+            return switch (literal.compact) {
+                .small_dec => |value| try self.env.addPattern(Pattern{ .small_dec_literal = .{
+                    .value = cirSmallDec(value),
+                    .has_suffix = false,
+                } }, region),
+                .dec => |value| try self.env.addPattern(Pattern{ .dec_literal = .{
+                    .value = builtins.dec.RocDec{ .num = value },
+                    .has_suffix = false,
+                } }, region),
+                else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
             };
-
-            // Check for f64 literals which are not allowed in patterns
-            if (parsed == .f64) {
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .f64_pattern_literal = .{
-                    .region = region,
-                } });
-                return malformed_idx;
-            }
-
-            const cir_pattern = switch (parsed) {
-                .small => |small_info| Pattern{
-                    .small_dec_literal = .{
-                        .value = .{
-                            .numerator = small_info.numerator,
-                            .denominator_power_of_ten = small_info.denominator_power_of_ten,
-                        },
-                        .has_suffix = false,
-                    },
-                },
-                .dec => |dec_info| Pattern{
-                    .dec_literal = .{
-                        .value = dec_info.value,
-                        .has_suffix = false,
-                    },
-                },
-                .f64 => unreachable, // Already handled above
-            };
-
-            const pattern_idx = try self.env.addPattern(cir_pattern, region);
-
-            return pattern_idx;
         },
         .string => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -13358,6 +12975,7 @@ fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocat
                         .e_type_method_call = .{
                             .type_var_alias_stmt = binding.statement_idx,
                             .method_name = method_name,
+                            .method_name_region = region,
                             .args = args_span,
                         },
                     }, region);
@@ -13377,6 +12995,7 @@ fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocat
                         .e_type_method_call = .{
                             .type_var_alias_stmt = binding.statement_idx,
                             .method_name = method_name,
+                            .method_name_region = region,
                             .args = .{ .span = DataSpan.empty() },
                         },
                     }, region);
@@ -13687,12 +13306,18 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.
     // Parse the right side - this could be just a field name or a method call
     const field_name, const field_name_region, const args = try self.parseFieldAccessRight(field_access);
 
-    const dot_access_expr = CIR.Expr{
-        .e_dot_access = .{
+    const dot_access_expr = if (args) |a| CIR.Expr{
+        .e_method_call = .{
+            .receiver = receiver_idx,
+            .method_name = field_name,
+            .method_name_region = field_name_region,
+            .args = a,
+        },
+    } else CIR.Expr{
+        .e_field_access = .{
             .receiver = receiver_idx,
             .field_name = field_name,
             .field_name_region = field_name_region,
-            .args = args,
         },
     };
 

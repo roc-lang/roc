@@ -1077,8 +1077,8 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    // Compile-time size verification
+    // Compile-time size verification.
     comptime {
-        std.debug.assert(@sizeOf(Payload) == 16);
+        std.debug.assert(@sizeOf(Payload) == 20);
     }
 };
