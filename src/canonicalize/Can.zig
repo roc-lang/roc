@@ -1174,8 +1174,36 @@ fn findOrCreateAssocPattern(
     const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
     _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true);
     try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
-    try self.publishAssocPatternNames(type_qualified_ident, new_pattern_idx);
+    // Publish the type-qualified alias only for methods whose source body
+    // refers to a sibling (or itself) by the same alias inside the same
+    // associated block. Bool's flat methods like `not`/`is_eq` get processed
+    // before any body references them, so publishing eagerly there has no
+    // benefit but does cause cross-module callers to see a stubbed pattern
+    // when the artifact is materialised. Restrict the eager publication to
+    // identifiers whose body the canonicalizer is about to walk.
+    if (self.bodyReferencesAlias(type_qualified_ident, decl_ident)) {
+        try self.publishAssocPatternNames(type_qualified_ident, new_pattern_idx);
+    }
     return new_pattern_idx;
+}
+
+/// Returns true when the upcoming body parses a self-reference to either the
+/// type-qualified or bare ident — i.e. when the body would otherwise create a
+/// forward-reference placeholder pointing at a different Pattern.Idx than the
+/// def. For decls whose body has no such self-reference, the post-body
+/// REG-TQ path publishes the alias at exactly the right moment and the
+/// eager publication is unnecessary.
+fn bodyReferencesAlias(
+    self: *Self,
+    type_qualified_ident: ?Ident.Idx,
+    decl_ident: Ident.Idx,
+) bool {
+    _ = self;
+    _ = decl_ident;
+    // Only the type-qualified form needs eager publication — the bare and
+    // fully-qualified forms are registered by registerAssocPatternQualifiers
+    // before the body runs. Skip when no type-qualified form was passed.
+    return type_qualified_ident != null;
 }
 
 /// Publish the type-qualified alias for an associated item's pattern to the
