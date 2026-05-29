@@ -34,7 +34,6 @@ fn flushStderr() void {
     }
 }
 
-
 fn stderrWriter(io: std.Io) *std.Io.Writer {
     if (!stderr_initialized) {
         stderr_writer = std.Io.File.stderr().writer(io, &stderr_buffer);
@@ -45,7 +44,6 @@ fn stderrWriter(io: std.Io) *std.Io.Writer {
 
 // Use the canonical BuiltinIndices from CIR
 const BuiltinIndices = CIR.BuiltinIndices;
-
 
 fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
