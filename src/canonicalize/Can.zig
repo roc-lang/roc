@@ -1182,8 +1182,8 @@ fn findOrCreateAssocPattern(
 /// module scope so a sibling body — including the item's own recursive body —
 /// canonicalized in the same block resolves the method to the same
 /// Pattern.Idx as the def. This runs *before* the body is canonicalized so
-/// the body's lookup doesn't get a forward-reference placeholder pointing at
-/// a different pattern than the def the caller is about to publish.
+/// the body's lookup doesn't get a placeholder pointing at a different
+/// pattern than the def the caller is about to publish.
 fn publishAssocPatternNames(
     self: *Self,
     qualified_ident: Ident.Idx,
