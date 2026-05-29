@@ -309,7 +309,7 @@ main! = |_args| {
 
 Although printing is an I/O operation, the `dbg` statement can be used even in pure functions. It works in two different ways:
 
-- Roc evaluates all pure functions that are run on constants at compile time when possible. (This is known as [constant folding](https://en.wikipedia.org/wiki/Constant_folding), and Roc does it as much as possible.) When you put a `dbg` inside a pure function, and that pure function gets run at compile time, you'll see the `dbg` output at compile tie.
+- Roc evaluates all pure functions that are run on constants at compile time when possible. (This is known as [constant folding](https://en.wikipedia.org/wiki/Constant_folding), and Roc does it as much as possible.) When you put a `dbg` inside a pure function, and that pure function gets run at compile time, you'll see the `dbg` output at compile time.
 - At runtime, `dbg` may work differently depending on where you're running the program. For example, in this command-line application it will be printed to stderr. However, when running a Roc program that's compiled to WebAssembly and running in the browser, it would likely appear in the browser console instead.
 
 Note that Roc's compile-time evaluation means there is no guarantee that a given `dbg` will run at runtime or at compile time. 
