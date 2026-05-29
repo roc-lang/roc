@@ -2663,6 +2663,12 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
+    // Refuse to hand out an idx that collides with TypeAnno.Idx.placeholder —
+    // a sentinel that means "this anno hasn't been filled in." Silent collision
+    // would corrupt forward-reference resolution.
+    if (@intFromEnum(nid) == @intFromEnum(CIR.TypeAnno.Idx.placeholder)) {
+        return Allocator.Error.OutOfMemory;
+    }
     return @enumFromInt(@intFromEnum(nid));
 }
 

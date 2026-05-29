@@ -88,8 +88,11 @@ pub const TypeAnno = union(enum) {
 
     pub const Idx = enum(u32) {
         /// Placeholder value indicating the anno hasn't been set yet.
-        /// Used during forward reference resolution.
-        placeholder = 0,
+        /// Used during forward reference resolution. Set to maxInt so it
+        /// cannot collide with a real node index — the first TypeAnno
+        /// added during canon lands at idx 0, and any value in the valid
+        /// node-store range would otherwise be ambiguous with this sentinel.
+        placeholder = std.math.maxInt(u32),
         _,
     };
     pub const Span = extern struct { span: DataSpan };
