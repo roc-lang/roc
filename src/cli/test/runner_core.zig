@@ -575,7 +575,7 @@ fn handleProcessResultNoCleanup(std_io: std.Io, result: std.process.RunResult, o
     }
 }
 
-fn printStderrIfAny(result: std.process.Child.RunResult) void {
+fn printStderrIfAny(result: std.process.RunResult) void {
     if (result.stderr.len > 0) {
         printTruncatedOutput(result.stderr, 5, "       ");
     }

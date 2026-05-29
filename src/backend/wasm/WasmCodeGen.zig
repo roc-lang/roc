@@ -72,7 +72,7 @@ fn tryUnsafeOffsets(self: *const Self, ret_layout: layout.Idx) TryUnsafeOffsets 
     if (ret_layout_val.tag != .struct_) {
         wasmInvariantFmt("try_unsafe result expected struct layout, got {s}", .{@tagName(ret_layout_val.tag)});
     }
-    const struct_idx = ret_layout_val.data.struct_.idx;
+    const struct_idx = ret_layout_val.getStruct().idx;
     return .{
         .success = self.getLayoutStore().getStructFieldOffsetByOriginalIndex(struct_idx, 0),
         .value = self.getLayoutStore().getStructFieldOffsetByOriginalIndex(struct_idx, 1),
@@ -2076,7 +2076,7 @@ fn findBadUtf8Variant(self: *const Self, inner_tu: *const layout.TagUnionData) ?
         const payload_layout = ls.getLayout(candidate);
         if (payload_layout.tag != .struct_) continue;
 
-        const struct_idx = payload_layout.data.struct_.idx;
+        const struct_idx = payload_layout.getStruct().idx;
         const struct_data = ls.getStructData(struct_idx);
         const fields = ls.struct_fields.sliceRange(struct_data.getFields());
         if (fields.len != 2) continue;
@@ -6739,7 +6739,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     const tu_layout = WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
     const tu_size = tu_layout.size;
     const disc_offset = tu_layout.discriminant_offset;
-    const tu_data = ls.getTagUnionData(l.data.tag_union.idx);
+    const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
     const variants = ls.getTagUnionVariants(tu_data);
     if (@as(usize, t.variant_index) >= variants.len) {
         if (builtin.mode == .Debug) {

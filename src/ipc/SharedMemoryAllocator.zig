@@ -126,6 +126,7 @@ pub fn create(io: std.Io, size: usize, page_size: usize) !SharedMemoryAllocator 
 /// "real-program floor" without worrying about targets (32-bit, valgrind
 /// builds) whose preferred size is already smaller.
 pub fn createWithMinSize(
+    io: std.Io,
     preferred_size: usize,
     min_size: usize,
     page_size: usize,
@@ -135,7 +136,7 @@ pub fn createWithMinSize(
 
     var current_size = aligned_preferred;
     while (true) {
-        if (create(current_size, page_size)) |shm| {
+        if (create(io, current_size, page_size)) |shm| {
             if (current_size < aligned_preferred) {
                 std.log.warn(
                     "shared memory: OS rejected preferred reservation of {} bytes; using {} bytes instead",

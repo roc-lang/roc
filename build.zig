@@ -1642,7 +1642,7 @@ const MiniCiStep = struct {
         try recordTiming(b.allocator, io, &timings, "fx platform test coverage", &timer);
 
         try runSubBuild(step, &.{"test-eval"}, "zig build test-eval");
-        try recordTiming(b.allocator, &timings, "zig build test-eval", &timer);
+        try recordTiming(b.allocator, io, &timings, "zig build test-eval", &timer);
 
         try runSubBuild(step, &.{"test"}, "zig build test");
         try recordTiming(b.allocator, io, &timings, "zig build test", &timer);
@@ -1756,7 +1756,7 @@ const MiniCiStep = struct {
         const b = step.owner;
         std.debug.print("---- minici: checking for snapshot changes ----\n", .{});
 
-        std.fs.cwd().access(".git", .{}) catch |err| switch (err) {
+        std.Io.Dir.cwd().access(b.graph.io, ".git", .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 std.debug.print("Skipping snapshot change check outside a Git worktree.\n", .{});
                 return;
@@ -1963,15 +1963,11 @@ const GitLintsStep = struct {
         try child_argv.append(b.allocator, "--");
         try child_argv.append(b.allocator, "--git-lints");
 
-        var child = std.process.Child.init(child_argv.items, b.allocator);
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-
-        const term = try child.spawnAndWait();
+        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        const term = try child.wait(b.graph.io);
 
         switch (term) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     return step.fail(
                         "Git lints failed. Run 'zig run ci/tidy.zig -- --git-lints' to see details.",

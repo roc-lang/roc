@@ -171,16 +171,23 @@ test "worker thread installs stack overflow handler" {
 
 fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code: u8) !void {
     const allocator = std.testing.allocator;
-    const helper_path = std.process.getEnvVarOwned(allocator, STACK_OVERFLOW_TEST_HELPER_ENV_VAR) catch |err| {
+    const io = std.testing.io;
+
+    // zig 0.16 replaced std.process.getEnvVarOwned with the Environ API.
+    const environ: std.process.Environ = if (builtin.os.tag == .windows)
+        .{ .block = .global }
+    else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+    const helper_path = environ.getAlloc(allocator, STACK_OVERFLOW_TEST_HELPER_ENV_VAR) catch |err| {
         std.debug.print("Missing {s}: {s}\n", .{ STACK_OVERFLOW_TEST_HELPER_ENV_VAR, @errorName(err) });
         return error.TestUnexpectedResult;
     };
     defer allocator.free(helper_path);
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
+    const result = try std.process.run(allocator, io, .{
         .argv = &.{ helper_path, mode },
-        .max_output_bytes = 4096,
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -194,7 +201,7 @@ fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, 
         !std.mem.eql(u8, expected, "overflowed its stack memory");
 
     switch (term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == expected_code) {
                 try std.testing.expect(has_expected_msg);
                 try std.testing.expect(!has_wrong_stack_msg);
@@ -218,7 +225,7 @@ fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, 
 
             std.debug.print("Unexpected exit code: {}\n", .{code});
         },
-        .Signal => |sig| {
+        .signal => |sig| {
             if (comptime builtin.os.tag != .windows and builtin.os.tag != .freestanding) {
                 if (sig == posix.SIG.SEGV or sig == posix.SIG.BUS) {
                     // The handler might not have caught it - this can happen on some systems

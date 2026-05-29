@@ -452,7 +452,7 @@ test "generate aarch64 windows object with unwind sections" {
         },
     };
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
 
     try generateObjectFile(

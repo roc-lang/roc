@@ -81,6 +81,15 @@ const posix = std.posix;
 /// that don't get an `io` parameter (e.g. pool worker callbacks).
 var app_io: std.Io = undefined;
 
+// zig 0.16 removed std.time.milliTimestamp; read the monotonic clock directly.
+fn milliTimestamp() i64 {
+    var ts: std.posix.timespec = undefined;
+    switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
+        .SUCCESS => return @as(i64, @intCast(ts.sec)) * 1000 + @divFloor(@as(i64, @intCast(ts.nsec)), 1_000_000),
+        else => return 0,
+    }
+}
+
 // Test definition modules
 const eval_tests = @import("eval_tests.zig");
 
@@ -244,7 +253,7 @@ const ForkResult = union(enum) {
 
 fn remainingPollTimeoutMs(deadline_ms: ?i64) i32 {
     const deadline = deadline_ms orelse return -1;
-    const remaining = deadline - std.time.milliTimestamp();
+    const remaining = deadline - milliTimestamp();
     if (remaining <= 0) return 0;
     return @intCast(@min(remaining, std.math.maxInt(i32)));
 }
@@ -350,7 +359,7 @@ fn forkAndEval(
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
     const deadline_ms: ?i64 = if (timeout_ms > 0)
-        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
+        milliTimestamp() + @as(i64, @intCast(timeout_ms))
     else
         null;
     while (true) {
@@ -373,7 +382,7 @@ fn forkAndEval(
         };
         if (poll_count == 0) {
             killForkedBackend(fork_result);
-            _ = posix.waitpid(fork_result, 0);
+            _ = harness.waitpid(fork_result, 0);
             result_buf.deinit(std.heap.page_allocator);
             return .{ .timed_out = {} };
         }
@@ -402,7 +411,7 @@ fn forkAndEval(
 
     if (read_error) {
         killForkedBackend(fork_result);
-        _ = posix.waitpid(fork_result, 0);
+        _ = harness.waitpid(fork_result, 0);
         result_buf.deinit(std.heap.page_allocator);
         return .{ .child_error = "ChildExecFailed" };
     }
@@ -451,8 +460,7 @@ fn forkAndEvalWithStats(
         return .{ .success = result };
     }
 
-    const disable_fork =
-        (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_NO_FORK") catch null) != null;
+    const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
     if (disable_fork) {
         const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
@@ -460,54 +468,38 @@ fn forkAndEvalWithStats(
         return .{ .success = result };
     }
 
-    const pipe_fds = posix.pipe() catch {
+    const pipe_fds = harness.pipe() catch {
         return .{ .fork_failed = {} };
     };
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = harness.fork() catch {
+        harness.closeFd(pipe_read);
+        harness.closeFd(pipe_write);
         return .{ .fork_failed = {} };
     };
 
     if (fork_result == 0) {
-        posix.close(pipe_read);
+        harness.closeFd(pipe_read);
 
         var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
         const result = eval_fn(child_alloc, lowered) catch |err| {
-            const name = @errorName(err);
-            var w: usize = 0;
-            while (w < name.len) {
-                w += posix.write(pipe_write, name[w..]) catch break;
-            }
-            posix.close(pipe_write);
+            harness.writeAll(pipe_write, @errorName(err));
+            harness.closeFd(pipe_write);
             std.c._exit(2);
         };
 
         const header: [4]u8 = @bitCast(result.allocation_count);
-        var written: usize = 0;
-        while (written < header.len) {
-            written += posix.write(pipe_write, header[written..]) catch {
-                posix.close(pipe_write);
-                std.c._exit(1);
-            };
-        }
-        written = 0;
-        while (written < result.output.len) {
-            written += posix.write(pipe_write, result.output[written..]) catch {
-                posix.close(pipe_write);
-                std.c._exit(1);
-            };
-        }
+        harness.writeAll(pipe_write, &header);
+        harness.writeAll(pipe_write, result.output);
 
-        posix.close(pipe_write);
+        harness.closeFd(pipe_write);
         std.c._exit(0);
     }
 
-    posix.close(pipe_write);
+    harness.closeFd(pipe_write);
 
     var result_buf: std.ArrayListUnmanaged(u8) = .empty;
     var read_buf: [4096]u8 = undefined;
@@ -523,9 +515,9 @@ fn forkAndEvalWithStats(
             break;
         };
     }
-    posix.close(pipe_read);
+    harness.closeFd(pipe_read);
 
-    const wait_result = posix.waitpid(fork_result, 0);
+    const wait_result = harness.waitpid(fork_result, 0);
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
 
@@ -589,7 +581,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) Te
                 };
             },
             .allocations_at_most => blk: {
-                var compiled = helpers.compileProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var compiled = helpers.compileProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped allocation test has parse/check/lower errors",
@@ -646,7 +638,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) Te
     }
 
     const deadline_ms: ?i64 = if (timeout_ms > 0)
-        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
+        milliTimestamp() + @as(i64, @intCast(timeout_ms))
     else
         null;
 
@@ -703,12 +695,12 @@ fn initBackendRows(skips: [NUM_BACKENDS]bool) [NUM_BACKENDS]BackendDetail {
 
 fn remainingBackendBudgetMs(deadline_ms: ?i64) u64 {
     const deadline = deadline_ms orelse return 0;
-    const remaining = deadline - std.time.milliTimestamp();
+    const remaining = deadline - milliTimestamp();
     return if (remaining <= 0) 0 else @intCast(remaining);
 }
 
 fn deadlineExpired(deadline_ms: ?i64) bool {
-    return if (deadline_ms) |deadline| std.time.milliTimestamp() >= deadline else false;
+    return if (deadline_ms) |deadline| milliTimestamp() >= deadline else false;
 }
 
 fn backendUsesStandardTimeout(index: usize) bool {
@@ -873,7 +865,7 @@ fn runInspectTest(
     skip: TestCase.Skip,
     deadline_ms: ?i64,
 ) !TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
+    var compiled = try helpers.compileInspectedProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{

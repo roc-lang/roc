@@ -681,7 +681,7 @@ pub const Type = enum(u32) {
     }
 
     pub fn isSized(self: Type, builder: *const Builder) Allocator.Error!bool {
-        var visited: IsSizedVisited = .{};
+        var visited: IsSizedVisited = .empty;
         defer visited.deinit(builder.gpa);
         const result = try self.isSizedVisited(&visited, builder);
         return result;
@@ -1645,7 +1645,7 @@ pub const FunctionAttributes = enum(u32) {
     const params_index = 2;
 
     pub const Wip = struct {
-        maps: Maps = .{},
+        maps: Maps = .empty,
 
         const Map = std.AutoArrayHashMapUnmanaged(Attribute.Kind, Attribute.Index);
         const Maps = std.ArrayList(Map);
@@ -1777,7 +1777,7 @@ pub const FunctionAttributes = enum(u32) {
         try wip.maps.ensureTotalCapacityPrecise(builder.gpa, attributes_slice.len);
         for (attributes_slice) |attributes| {
             const map = wip.maps.addOneAssumeCapacity();
-            map.* = .{};
+            map.* = .empty;
             const attribute_slice = attributes.slice(builder);
             try map.ensureTotalCapacity(builder.gpa, attribute_slice.len);
             for (attributes.slice(builder)) |attribute|
@@ -5265,13 +5265,13 @@ pub const WipFunction = struct {
             .prev_debug_location = .no_location,
             .debug_location = .no_location,
             .cursor = undefined,
-            .blocks = .{},
+            .blocks = .empty,
             .instructions = .{},
-            .names = .{},
+            .names = .empty,
             .strip = options.strip,
-            .debug_locations = .{},
-            .debug_values = .{},
-            .extra = .{},
+            .debug_locations = .empty,
+            .debug_values = .empty,
+            .extra = .empty,
         };
         errdefer self.deinit();
 
@@ -5308,7 +5308,7 @@ pub const WipFunction = struct {
         self.blocks.appendAssumeCapacity(.{
             .name = final_name,
             .incoming = incoming,
-            .instructions = .{},
+            .instructions = .empty,
         });
         return index;
     }
@@ -6353,7 +6353,7 @@ pub const WipFunction = struct {
         function.blocks = &.{};
         gpa.free(function.names[0..function.instructions.len]);
         function.debug_locations.deinit(gpa);
-        function.debug_locations = .{};
+        function.debug_locations = .empty;
         gpa.free(function.debug_values);
         function.debug_values = &.{};
         gpa.free(function.extra);
@@ -8425,7 +8425,7 @@ pub const Metadata = packed struct(u32) {
         map: std.AutoArrayHashMapUnmanaged(union(enum) {
             metadata: Metadata,
             debug_location: DebugLocation.Location,
-        }, void) = .{},
+        }, void) = .empty,
 
         const FormatData = struct {
             formatter: *Formatter,
@@ -8673,52 +8673,52 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .source_filename = .none,
         .data_layout = .none,
         .target_triple = .none,
-        .module_asm = .{},
+        .module_asm = .empty,
 
-        .string_map = .{},
-        .string_indices = .{},
-        .string_bytes = .{},
+        .string_map = .empty,
+        .string_indices = .empty,
+        .string_bytes = .empty,
 
-        .types = .{},
+        .types = .empty,
         .next_unnamed_type = .first_anon,
-        .next_unique_type_id = .{},
-        .type_map = .{},
-        .type_items = .{},
-        .type_extra = .{},
+        .next_unique_type_id = .empty,
+        .type_map = .empty,
+        .type_items = .empty,
+        .type_extra = .empty,
 
-        .attributes = .{},
-        .attributes_map = .{},
-        .attributes_indices = .{},
-        .attributes_extra = .{},
+        .attributes = .empty,
+        .attributes_map = .empty,
+        .attributes_indices = .empty,
+        .attributes_extra = .empty,
 
-        .function_attributes_set = .{},
+        .function_attributes_set = .empty,
 
-        .globals = .{},
+        .globals = .empty,
         .next_unnamed_global = .first_anon,
         .next_replaced_global = .none,
-        .next_unique_global_id = .{},
-        .aliases = .{},
-        .variables = .{},
-        .functions = .{},
+        .next_unique_global_id = .empty,
+        .aliases = .empty,
+        .variables = .empty,
+        .functions = .empty,
 
-        .strtab_string_map = .{},
-        .strtab_string_indices = .{},
-        .strtab_string_bytes = .{},
+        .strtab_string_map = .empty,
+        .strtab_string_indices = .empty,
+        .strtab_string_bytes = .empty,
 
-        .constant_map = .{},
+        .constant_map = .empty,
         .constant_items = .{},
-        .constant_extra = .{},
-        .constant_limbs = .{},
+        .constant_extra = .empty,
+        .constant_limbs = .empty,
 
-        .metadata_map = .{},
+        .metadata_map = .empty,
         .metadata_items = .{},
-        .metadata_extra = .{},
-        .metadata_limbs = .{},
-        .metadata_forward_references = .{},
-        .metadata_named = .{},
-        .metadata_string_map = .{},
-        .metadata_string_indices = .{},
-        .metadata_string_bytes = .{},
+        .metadata_extra = .empty,
+        .metadata_limbs = .empty,
+        .metadata_forward_references = .empty,
+        .metadata_named = .empty,
+        .metadata_string_map = .empty,
+        .metadata_string_indices = .empty,
+        .metadata_string_bytes = .empty,
     };
     errdefer self.deinit();
 
@@ -13492,7 +13492,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
         var attributes_set: std.AutoArrayHashMapUnmanaged(struct {
             attributes: Attributes,
             index: u32,
-        }, void) = .{};
+        }, void) = .empty;
         defer attributes_set.deinit(self.gpa);
 
         // PARAMATTR_GROUP_BLOCK

@@ -3328,7 +3328,7 @@ fn poisonRecursiveNonFunctionDefs(
     for (eval_order.sccs) |scc| {
         if (!scc.is_recursive) continue;
 
-        var defs_to_poison = std.ArrayList(RecursiveNonFunctionDef){};
+        var defs_to_poison = std.ArrayList(RecursiveNonFunctionDef).empty;
         defer defs_to_poison.deinit(self.env.gpa);
 
         for (scc.defs) |def_idx| {
@@ -9425,7 +9425,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
 fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!Expr.Span {
     const start = self.env.store.scratchExprTop();
 
-    var buffer: std.ArrayList(u8) = .{};
+    var buffer: std.ArrayList(u8) = .empty;
     defer buffer.deinit(self.env.gpa);
     var buffer_region: ?AST.TokenizedRegion = null;
     // Whether the immediately preceding (un-flushed) part was a string_part,

@@ -1006,7 +1006,7 @@ fn compileReplInspectedModule(source: []const u8) !ReplCompiledModule {
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);

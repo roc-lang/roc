@@ -68,7 +68,7 @@ pub const CacheMetadata = struct {
 /// Public `CacheManager` declaration.
 pub const CacheManager = struct {
     config: CacheConfig,
-    roc_ctx: CoreCtx,
+    roc_ctx: CoreCtx = undefined,
     allocator: Allocator,
     stats: CacheStats,
 

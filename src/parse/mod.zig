@@ -194,14 +194,10 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
         \\main = {}
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(&allocators, &env);
+    const ast = try parse(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);

@@ -120,7 +120,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 85), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
-    try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);

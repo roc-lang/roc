@@ -528,10 +528,10 @@ pub const Interpreter = struct {
             const layout_val = layout_store.getLayout(layout_idx);
             switch (layout_val.tag) {
                 .struct_ => {
-                    struct_field_count += layout_store.getStructData(layout_val.data.struct_.idx).fields.count;
+                    struct_field_count += layout_store.getStructData(layout_val.getStruct().idx).fields.count;
                 },
                 .tag_union => {
-                    const tu_data = layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                    const tu_data = layout_store.getTagUnionData(layout_val.getTagUnion().idx);
                     tag_variant_count += layout_store.getTagUnionVariants(tu_data).len;
                 },
                 else => {},
@@ -2627,7 +2627,7 @@ pub const Interpreter = struct {
     fn boxAllocInfo(self: *LirInterpreter, box_layout: Layout) BoxAllocInfo {
         return switch (box_layout.tag) {
             .box => blk: {
-                const elem_layout = box_layout.data.box;
+                const elem_layout = box_layout.getIdx();
                 const elem_layout_val = self.layout_store.getLayout(elem_layout);
                 break :blk .{
                     .elem_layout = elem_layout,
@@ -3106,7 +3106,7 @@ pub const Interpreter = struct {
         const l = self.layout_store.getLayout(helper.layout_idx);
         return switch (l.tag) {
             .zst => .noop,
-            .scalar => if (l.data.scalar.tag == .str)
+            .scalar => if (l.getScalar().tag == .str)
                 switch (helper.op) {
                     .incref => .str_incref,
                     .decref => .str_decref,
@@ -3130,16 +3130,16 @@ pub const Interpreter = struct {
                 .free => .erased_callable_free,
             },
             .struct_ => .{ .struct_ = .{
-                .struct_idx = l.data.struct_.idx,
+                .struct_idx = l.getStruct().idx,
                 .child_op = nestedDropOp(helper.op),
             } },
             .tag_union => .{ .tag_union = .{
-                .tag_union_idx = l.data.tag_union.idx,
+                .tag_union_idx = l.getTagUnion().idx,
                 .child_op = nestedDropOp(helper.op),
             } },
             .closure => .{ .closure = .{
                 .op = nestedDropOp(helper.op),
-                .layout_idx = l.data.closure.captures_layout_idx,
+                .layout_idx = l.getClosure().captures_layout_idx,
             } },
         };
     }
@@ -3154,7 +3154,7 @@ pub const Interpreter = struct {
     fn rcHelperForLayout(self: *LirInterpreter, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
         const layout_val = self.layout_store.getLayout(layout_idx);
         return switch (layout_val.tag) {
-            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.data.closure.captures_layout_idx),
+            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
             else => .{ .op = op, .layout_idx = layout_idx },
         };
     }
@@ -3232,7 +3232,7 @@ pub const Interpreter = struct {
     fn rcListPlan(self: *LirInterpreter, list_layout_idx: layout_mod.Idx) layout_mod.RcListPlan {
         const list_layout = self.layout_store.getLayout(list_layout_idx);
         const runtime_elem_layout_idx: ?layout_mod.Idx = switch (list_layout.tag) {
-            .list => self.layout_store.runtimeRepresentationLayoutIdx(list_layout.data.list),
+            .list => self.layout_store.runtimeRepresentationLayoutIdx(list_layout.getIdx()),
             .list_of_zst => null,
             else => unreachable,
         };
@@ -3261,7 +3261,7 @@ pub const Interpreter = struct {
     fn rcBoxPlan(self: *LirInterpreter, box_layout_idx: layout_mod.Idx) layout_mod.RcBoxPlan {
         const box_layout = self.layout_store.getLayout(box_layout_idx);
         const runtime_elem_layout_idx: ?layout_mod.Idx = switch (box_layout.tag) {
-            .box => self.layout_store.runtimeRepresentationLayoutIdx(box_layout.data.box),
+            .box => self.layout_store.runtimeRepresentationLayoutIdx(box_layout.getIdx()),
             .box_of_zst => null,
             else => unreachable,
         };
@@ -3296,7 +3296,7 @@ pub const Interpreter = struct {
 
         const layout_val = self.layout_store.getLayout(layout_idx);
         const direct = switch (layout_val.tag) {
-            .scalar => layout_val.data.scalar.tag == .str,
+            .scalar => layout_val.getScalar().tag == .str,
             .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
             .zst => false,
             .struct_, .tag_union, .closure => null,
@@ -3309,22 +3309,22 @@ pub const Interpreter = struct {
         self.rc_presence[raw] = .active;
         const contains = switch (layout_val.tag) {
             .struct_ => blk: {
-                const sd = self.layout_store.getStructData(layout_val.data.struct_.idx);
+                const sd = self.layout_store.getStructData(layout_val.getStruct().idx);
                 for (0..sd.fields.count) |i| {
-                    const field_layout = self.layout_store.getStructFieldLayout(layout_val.data.struct_.idx, @intCast(i));
+                    const field_layout = self.layout_store.getStructFieldLayout(layout_val.getStruct().idx, @intCast(i));
                     if (self.layoutContainsRc(field_layout)) break :blk true;
                 }
                 break :blk false;
             },
             .tag_union => blk: {
-                const tu_data = self.layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                const tu_data = self.layout_store.getTagUnionData(layout_val.getTagUnion().idx);
                 const variants = self.layout_store.getTagUnionVariants(tu_data);
                 for (0..variants.len) |i| {
                     if (self.layoutContainsRc(variants.get(@intCast(i)).payload_layout)) break :blk true;
                 }
                 break :blk false;
             },
-            .closure => self.layoutContainsRc(layout_val.data.closure.captures_layout_idx),
+            .closure => self.layoutContainsRc(layout_val.getClosure().captures_layout_idx),
             .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
         };
         self.rc_presence[raw] = if (contains) .yes else .no;
@@ -3746,7 +3746,7 @@ pub const Interpreter = struct {
             const inner_layout = self.layout_store.getLayout(unwrapped);
             if (inner_layout.tag != .struct_) continue;
 
-            const struct_idx = inner_layout.data.struct_.idx;
+            const struct_idx = inner_layout.getStruct().idx;
             const struct_data = self.layout_store.getStructData(struct_idx);
             const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
             if (fields.len != 2) continue;
@@ -5358,17 +5358,17 @@ pub const Interpreter = struct {
         // Numeral record fields are stored in lexicographic order by name:
         // digits_after_pt, digits_after_pt_count, digits_before_pt, is_negative.
         const after = try self.readNumeralU8List(record_base.value, record_base.layout, 0);
-        const after_count_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, 1);
+        const after_count_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, 1);
         if (after_count_layout != .u64) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: Numeral digits_after_pt_count layout {d} was not U64",
                 .{@intFromEnum(after_count_layout)},
             );
         }
-        const after_count_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, 1);
+        const after_count_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, 1);
         const before = try self.readNumeralU8List(record_base.value, record_base.layout, 2);
-        const neg_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, 3);
-        const neg_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, 3);
+        const neg_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, 3);
+        const neg_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, 3);
 
         return .{
             .is_negative = try self.readBoolValue(record_base.value.offset(neg_offset), neg_layout),
@@ -5385,7 +5385,7 @@ pub const Interpreter = struct {
         field_index: u32,
     ) Error![]const u8 {
         const record_layout_val = self.layout_store.getLayout(record_layout);
-        const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout_val.data.struct_.idx, field_index);
+        const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout_val.getStruct().idx, field_index);
         const elem = self.listElemLayout(field_layout);
         if (elem != .u8) {
             return self.invariantFailedError(
@@ -5393,7 +5393,7 @@ pub const Interpreter = struct {
                 .{ field_index, @intFromEnum(elem) },
             );
         }
-        const offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout_val.data.struct_.idx, field_index);
+        const offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout_val.getStruct().idx, field_index);
         const list = self.valueToRocListForLayout(record_base.offset(offset), field_layout);
         if (list.len() == 0) return &.{};
         const bytes = list.bytes orelse {
@@ -5428,7 +5428,7 @@ pub const Interpreter = struct {
             );
         }
 
-        const tu_data = self.layout_store.getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
         const variants = self.layout_store.getTagUnionVariants(tu_data);
         var ok_discriminant: ?u16 = null;
         var ok_payload_layout: layout_mod.Idx = .none;
@@ -5670,7 +5670,7 @@ pub const Interpreter = struct {
                 };
                 const inner = try self.invalidNumeralValue(unwrapped);
                 const value = try self.alloc(err_layout);
-                const struct_idx = err_layout_val.data.struct_.idx;
+                const struct_idx = err_layout_val.getStruct().idx;
                 const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
                 try self.writeStructFieldValue(value, field_offset, unwrapped, inner, unwrapped);
                 return value;
@@ -5702,7 +5702,7 @@ pub const Interpreter = struct {
         }
         if (self.unwrapSingleFieldPayloadLayout(variant_payload_layout)) |field_layout| {
             const variant_layout_val = self.layout_store.getLayout(variant_payload_layout);
-            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(variant_layout_val.data.struct_.idx, 0);
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(variant_layout_val.getStruct().idx, 0);
             return self.writeStructFieldValue(destination, field_offset, field_layout, payload, payload_layout);
         }
         const coerced = try self.coerceExplicitRefValueToLayout(payload, payload_layout, variant_payload_layout);
@@ -5715,7 +5715,7 @@ pub const Interpreter = struct {
             return self.runtimeError("low-level try record expected a struct return layout");
         }
 
-        const struct_idx = layout_val.data.struct_.idx;
+        const struct_idx = layout_val.getStruct().idx;
         const struct_info = self.layout_store.getStructInfo(layout_val);
         if (struct_info.fields.len != 2) {
             return self.runtimeError("low-level try record expected exactly two fields");

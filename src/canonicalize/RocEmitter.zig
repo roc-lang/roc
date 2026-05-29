@@ -163,7 +163,7 @@ fn emitRecordedNumeral(self: *Self, expr_idx: Expr.Idx, maybe_type_name: ?base.I
     }
 
     if (maybe_type_name) |type_name| {
-        try self.writer().print(".{s}", .{self.module_env.getIdent(type_name)});
+        try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(type_name)});
     }
 }
 

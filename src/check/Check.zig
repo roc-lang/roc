@@ -4422,7 +4422,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
             _ = try self.unify(expr_var, flex_var, env);
         },
-        .e_typed_frac => |_| {
+        .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
             const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
 

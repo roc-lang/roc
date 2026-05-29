@@ -5694,7 +5694,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (ret_layout_val.tag != .struct_) {
                 std.debug.panic("try_unsafe result expected struct layout, got {s}", .{@tagName(ret_layout_val.tag)});
             }
-            const struct_idx = ret_layout_val.data.struct_.idx;
+            const struct_idx = ret_layout_val.getStruct().idx;
             return .{
                 .success = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
                 .value = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
@@ -10521,7 +10521,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const payload_layout = self.layout_store.getLayout(candidate);
                 if (payload_layout.tag != .struct_) continue;
 
-                const struct_idx = payload_layout.data.struct_.idx;
+                const struct_idx = payload_layout.getStruct().idx;
                 const struct_data = self.layout_store.getStructData(struct_idx);
                 const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
                 if (fields.len != 2) continue;

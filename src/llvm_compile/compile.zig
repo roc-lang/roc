@@ -107,6 +107,7 @@ pub const CompileOptions = struct {
 };
 
 fn emitMergedBitcodeToObjectFile(
+    io: std.Io,
     bitcode: []const u32,
     options: CompileOptions,
     output_path: [:0]const u8,
@@ -114,13 +115,12 @@ fn emitMergedBitcodeToObjectFile(
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
-    if (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_LLVM_KEEP_BITCODE")) |keep_path| {
-        defer std.heap.page_allocator.free(keep_path);
-        std.Io.Dir.cwd().writeFile(.{
-            .sub_path = keep_path,
+    if (std.c.getenv("ROC_LLVM_KEEP_BITCODE")) |keep_path_z| {
+        std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = std.mem.sliceTo(keep_path_z, 0),
             .data = bitcode_bytes,
         }) catch {};
-    } else |_| {}
+    }
 
     // Initialize all targets
     bindings.initializeAllTargets();
@@ -278,29 +278,30 @@ fn emitMergedBitcodeToObjectFile(
 }
 
 /// Compile LLVM bitcode to a native object file.
-pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
+pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
     const temp_path = createTempPath(allocator, ".o") catch return Error.TempFileError;
     defer allocator.free(temp_path);
 
-    try emitMergedBitcodeToObjectFile(bitcode, options, temp_path);
+    try emitMergedBitcodeToObjectFile(io, bitcode, options, temp_path);
 
     // Read the object file back into memory
     const object_bytes = std.Io.Dir.cwd().readFileAlloc(
-        allocator,
+        io,
         std.mem.sliceTo(temp_path, 0),
-        10 * 1024 * 1024, // 10MB max
+        allocator,
+        .limited(10 * 1024 * 1024), // 10MB max
     ) catch return Error.TempFileError;
 
     if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
         defer allocator.free(keep_path);
-        std.Io.Dir.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(io, .{
             .sub_path = keep_path,
             .data = object_bytes,
         }) catch {};
     } else |_| {}
 
     // Clean up temp file
-    std.Io.Dir.cwd().deleteFile(std.mem.sliceTo(temp_path, 0)) catch {};
+    std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(temp_path, 0)) catch {};
 
     return object_bytes;
 }
@@ -310,13 +311,13 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: Comp
 pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
     const object_path = createTempPath(allocator, objectExtension()) catch return Error.TempFileError;
     defer {
-        std.Io.Dir.cwd().deleteFile(std.mem.sliceTo(object_path, 0)) catch {};
+        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(object_path, 0)) catch {};
         allocator.free(object_path);
     }
 
     const shared_lib_path = createTempPath(allocator, sharedLibraryExtension()) catch return Error.TempFileError;
     errdefer {
-        std.Io.Dir.cwd().deleteFile(std.mem.sliceTo(shared_lib_path, 0)) catch {};
+        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(shared_lib_path, 0)) catch {};
         allocator.free(shared_lib_path);
     }
 
@@ -324,29 +325,29 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
 
-    try emitMergedBitcodeToObjectFile(bitcode, pic_options, object_path);
+    try emitMergedBitcodeToObjectFile(io, bitcode, pic_options, object_path);
 
-    if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
-        defer allocator.free(keep_path);
+    if (std.c.getenv("ROC_LLVM_KEEP_OBJECT")) |keep_path_z| {
         std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(object_path, 0),
             std.Io.Dir.cwd(),
-            keep_path,
+            std.mem.sliceTo(keep_path_z, 0),
+            io,
             .{},
         ) catch {};
-    } else |_| {}
+    }
 
     try linkSharedLibrary(allocator, io, object_path, shared_lib_path);
 
-    if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_DYLIB")) |keep_path| {
-        defer allocator.free(keep_path);
+    if (std.c.getenv("ROC_LLVM_KEEP_DYLIB")) |keep_path_z| {
         std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(shared_lib_path, 0),
             std.Io.Dir.cwd(),
-            keep_path,
+            std.mem.sliceTo(keep_path_z, 0),
+            io,
             .{},
         ) catch {};
-    } else |_| {}
+    }
 
     return shared_lib_path;
 }
@@ -448,8 +449,13 @@ fn linkSharedLibraryMacos(
 /// Create a unique temporary file path for an artifact output.
 fn createTempPath(allocator: Allocator, extension: []const u8) ![:0]const u8 {
     const counter = temp_path_counter.fetchAdd(1, .monotonic);
-    const random_hi = std.crypto.random.int(u64);
-    const random_lo = std.crypto.random.int(u64);
+    // zig 0.16 removed std.crypto.random; seed a PRNG from the per-call counter
+    // mixed with the pid for cross-process uniqueness of the temp path.
+    const pid: u64 = @intCast(std.c.getpid());
+    var prng = std.Random.DefaultPrng.init((@as(u64, counter) << 32) ^ pid);
+    const rng = prng.random();
+    const random_hi = rng.int(u64);
+    const random_lo = rng.int(u64);
 
     // Use appropriate temp directory for each platform
     const tmp_prefix = if (builtin.os.tag == .windows) "C:\\Windows\\Temp\\roc_llvm_" else "/tmp/roc_llvm_";

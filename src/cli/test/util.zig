@@ -10,6 +10,15 @@ const builtin = @import("builtin");
 /// fork()). In tests we use `std.testing.io`, which is initialized with `testing.allocator`.
 const io: std.Io = if (builtin.is_test) std.testing.io else std.Options.debug_io;
 
+// zig 0.16 removed std.time.milliTimestamp; read the monotonic clock directly.
+fn milliTimestamp() i64 {
+    var ts: std.posix.timespec = undefined;
+    switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
+        .SUCCESS => return @as(i64, @intCast(ts.sec)) * 1000 + @divFloor(@as(i64, @intCast(ts.nsec)), 1_000_000),
+        else => return 0,
+    }
+}
+
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 /// Default timeout for CLI test child processes that would otherwise run unbounded.
@@ -32,13 +41,17 @@ fn reserveTestCacheRoot(allocator: std.mem.Allocator) ![]u8 {
     const cache_parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache" });
     defer allocator.free(cache_parent_rel);
 
-    try std.fs.cwd().makePath(cache_parent_rel);
+    try std.Io.Dir.cwd().createDirPath(io, cache_parent_rel);
 
     while (true) {
         const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-        const random = std.crypto.random.int(u64);
+        // Zig 0.16 removed std.time.nanoTimestamp and std.crypto.random. This is
+        // test code, so seed a PRNG from the test seed mixed with the per-call
+        // monotonic counter to produce a unique-ish temp-dir suffix.
+        var prng = std.Random.DefaultPrng.init(@as(u64, std.testing.random_seed) ^ cache_dir_id);
+        const random = prng.random().int(u64);
         const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x}-{d}", .{
-            @as(u64, @intCast(std.time.nanoTimestamp())),
+            cache_dir_id,
             random,
             cache_dir_id,
         });
@@ -47,7 +60,7 @@ fn reserveTestCacheRoot(allocator: std.mem.Allocator) ![]u8 {
         const cache_root_rel = try std.fs.path.join(allocator, &.{ cache_parent_rel, cache_leaf });
         errdefer allocator.free(cache_root_rel);
 
-        std.fs.cwd().makeDir(cache_root_rel) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDir(io, cache_root_rel, .default_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 allocator.free(cache_root_rel);
                 continue;
@@ -126,12 +139,12 @@ pub fn runChildWithTimeout(
 
         fn run(self: *@This()) void {
             if (self.timeout_ms == 0) return;
-            const start_ms = std.time.milliTimestamp();
+            const start_ms = milliTimestamp();
             while (!self.done.load(.acquire)) {
-                std.Thread.sleep(100 * std.time.ns_per_ms);
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
                 if (self.done.load(.acquire)) return;
 
-                const elapsed_ms: u64 = @intCast(@max(0, std.time.milliTimestamp() - start_ms));
+                const elapsed_ms: u64 = @intCast(@max(0, milliTimestamp() - start_ms));
                 if (elapsed_ms >= self.timeout_ms) {
                     self.timed_out.store(true, .release);
                     terminateChildGroup(self.child_id);

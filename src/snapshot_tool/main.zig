@@ -4490,6 +4490,7 @@ fn compileSnapshotReplInspectedModule(
     if (config.builtin_modules_ref) |bm| {
         return eval_mod.test_helpers.compileInspectedProgramWithBuiltin(
             allocator,
+            app_io,
             .module,
             source,
             &.{},
@@ -4504,7 +4505,7 @@ fn compileSnapshotReplInspectedModule(
 }
 
 fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) !eval_mod.test_helpers.CompiledProgram {
-    return eval_mod.test_helpers.compileInspectedProgram(allocator, .expr, source, &.{});
+    return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .expr, source, &.{});
 }
 
 fn renderSnapshotReplTypeProblems(

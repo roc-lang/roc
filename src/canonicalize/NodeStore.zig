@@ -305,7 +305,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 51;
+pub const MODULEENV_EXPR_NODE_COUNT = 52;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -2092,7 +2092,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .has_suffix = e.has_suffix,
             } });
         },
-        .e_num_from_numeral => |_| {
+        .e_num_from_numeral => {
             node.tag = .expr_num_from_numeral;
             node.setPayload(.{ .expr_num_from_numeral = .{} });
         },
@@ -4568,7 +4568,7 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
         // 1. Full member_name (for nested module access like "Outer.Inner.inner")
         // 2. Qualified "Module.member" (for methods on opaque types like "Stdout.line!")
         // 3. Base member name only (for simple exports)
-        const target_node_idx_opt: ?u16 = blk: {
+        const target_node_idx_opt: ?u32 = blk: {
             if (tenv.common.findIdent(member_name)) |full_ident| {
                 if (tenv.getExposedNodeIndexById(full_ident)) |idx| break :blk idx;
             }

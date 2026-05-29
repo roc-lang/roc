@@ -66,16 +66,35 @@ const Mutex = threading.Mutex;
 const Condition = threading.Condition;
 
 const stage_timers_supported = !threading.is_freestanding;
-const StageTimer = if (stage_timers_supported) std.time.Timer else void;
+
+// Zig 0.16 removed std.time.Timer/Instant; the monotonic clock now lives behind
+// the Io interface. These stage timers are read from call sites without an Io
+// handle, so read the OS monotonic clock directly via std.posix. StageTimer is
+// only non-void when stage_timers_supported (excludes wasm/freestanding).
+const StageTimer = if (stage_timers_supported) struct {
+    start_ns: u64,
+
+    fn now() u64 {
+        var ts: std.posix.timespec = undefined;
+        switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
+            .SUCCESS => {
+                const sec: u64 = @intCast(ts.sec);
+                const nsec: u64 = @intCast(ts.nsec);
+                return sec * std.time.ns_per_s + nsec;
+            },
+            else => return 0,
+        }
+    }
+} else void;
 
 fn startStageTimer() ?StageTimer {
     if (comptime !stage_timers_supported) return null;
-    return std.time.Timer.start() catch null;
+    return .{ .start_ns = StageTimer.now() };
 }
 
 fn readStageTimer(timer: *?StageTimer) u64 {
     if (comptime !stage_timers_supported) return 0;
-    if (timer.*) |*active| return active.read();
+    if (timer.*) |active| return StageTimer.now() -| active.start_ns;
     return 0;
 }
 

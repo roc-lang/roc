@@ -136,10 +136,10 @@ pub const Writer = struct {
     fn storeScalar(self: *Writer, layout_idx: layout.Idx, value: Value) checked.ConstScalar {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         if (layout_value.tag != .scalar) writerInvariant("scalar const plan had non-scalar layout");
-        const scalar = layout_value.data.scalar;
+        const scalar = layout_value.getScalar();
         return switch (scalar.tag) {
             .str => writerInvariant("string scalar layout reached scalar const plan"),
-            .int => switch (scalar.data.int) {
+            .int => switch (scalar.getInt()) {
                 .u8 => .{ .u8 = value.read(u8) },
                 .i8 => .{ .i8 = value.read(i8) },
                 .u16 => .{ .u16 = value.read(u16) },
@@ -151,7 +151,7 @@ pub const Writer = struct {
                 .u128 => .{ .u128 = value.read(u128) },
                 .i128 => .{ .i128 = value.read(i128) },
             },
-            .frac => switch (scalar.data.frac) {
+            .frac => switch (scalar.getFrac()) {
                 .f32 => .{ .f32_bits = @bitCast(value.read(f32)) },
                 .f64 => .{ .f64_bits = @bitCast(value.read(f64)) },
                 .dec => .{ .dec_bits = value.read(builtins.dec.RocDec).num },
@@ -220,7 +220,7 @@ pub const Writer = struct {
         if (layout_value.tag == .list_of_zst) {
             for (nodes) |*node| node.* = try self.storeValue(elem_plan, .zst, Value.zst);
         } else {
-            const elem_layout = layout_value.data.list;
+            const elem_layout = layout_value.getIdx();
             const elem_size: usize = self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout));
             if (roc_list.bytes) |bytes| {
                 for (nodes, 0..) |*node, index| {
@@ -244,7 +244,7 @@ pub const Writer = struct {
             .box_of_zst => try self.storeValue(elem_plan, .zst, Value.zst),
             .box => blk: {
                 const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed value had null payload pointer");
-                break :blk try self.storeValue(elem_plan, layout_value.data.box, .{ .ptr = ptr });
+                break :blk try self.storeValue(elem_plan, layout_value.getIdx(), .{ .ptr = ptr });
             },
             .erased_callable => try self.storeValue(elem_plan, layout_idx, value),
             else => writerInvariant("box const plan had incompatible layout"),
@@ -292,8 +292,8 @@ pub const Writer = struct {
         if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
 
         for (nodes, 0..) |*node, index| {
-            const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
-            const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+            const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
+            const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
             node.* = try self.storeValue(plans[index], field_layout, value.offset(offset));
         }
         return nodes;
@@ -338,8 +338,8 @@ pub const Writer = struct {
             }
         } else if (layout_value.tag == .struct_) {
             for (nodes, 0..) |*node, index| {
-                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
-                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
+                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
                 node.* = try self.storeValue(plans[index], field_layout, value.offset(offset));
             }
         } else {
@@ -410,8 +410,8 @@ pub const Writer = struct {
             }
         } else if (layout_value.tag == .struct_) {
             for (slots, 0..) |slot, index| {
-                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, slot.slot);
-                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, slot.slot);
+                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
+                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 captures[index] = .{
                     .binder = slot.binder,
                     .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
@@ -488,7 +488,7 @@ pub const Writer = struct {
             for (0..roc_list.len()) |_| try self.collectStrBackings(elem_plan, .zst, Value.zst);
             return;
         }
-        const elem_layout = layout_value.data.list;
+        const elem_layout = layout_value.getIdx();
         const elem_size: usize = self.program.layouts.layoutSize(self.program.layouts.getLayout(elem_layout));
         if (roc_list.bytes) |bytes| {
             for (0..roc_list.len()) |index| {
@@ -510,7 +510,7 @@ pub const Writer = struct {
             .box_of_zst => try self.collectStrBackings(elem_plan, .zst, Value.zst),
             .box => {
                 const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed value had null payload pointer");
-                try self.collectStrBackings(elem_plan, layout_value.data.box, .{ .ptr = ptr });
+                try self.collectStrBackings(elem_plan, layout_value.getIdx(), .{ .ptr = ptr });
             },
             .erased_callable => try self.collectStrBackings(elem_plan, layout_idx, value),
             else => writerInvariant("box const plan had incompatible layout"),
@@ -532,8 +532,8 @@ pub const Writer = struct {
         if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
 
         for (plans, 0..) |plan, index| {
-            const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
-            const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+            const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
+            const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
             try self.collectStrBackings(plan, field_layout, value.offset(offset));
         }
     }
@@ -566,8 +566,8 @@ pub const Writer = struct {
             for (plans) |plan| try self.collectStrBackings(plan, .zst, Value.zst);
         } else if (layout_value.tag == .struct_) {
             for (plans, 0..) |plan, index| {
-                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
-                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, @intCast(index));
+                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
+                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, @intCast(index));
                 try self.collectStrBackings(plan, field_layout, value.offset(offset));
             }
         } else {
@@ -616,8 +616,8 @@ pub const Writer = struct {
             for (slots) |slot| try self.collectStrBackings(slot.plan, .zst, Value.zst);
         } else if (layout_value.tag == .struct_) {
             for (slots) |slot| {
-                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.data.struct_.idx, slot.slot);
-                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.data.struct_.idx, slot.slot);
+                const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(layout_value.getStruct().idx, slot.slot);
+                const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 try self.collectStrBackings(slot.plan, field_layout, payload_value.offset(offset));
             }
         } else if (slots.len == 1) {
@@ -658,7 +658,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
             .zst => 0,
-            .tag_union => self.program.layouts.getTagUnionData(layout_value.data.tag_union.idx).readDiscriminant(value.ptr),
+            .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr),
             else => writerInvariant("tag discriminant read had non-tag-union layout"),
         };
     }
@@ -667,7 +667,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         if (layout_value.tag == .zst) return .zst;
         if (layout_value.tag != .tag_union) writerInvariant("tag payload read had non-tag-union layout");
-        const data = self.program.layouts.getTagUnionData(layout_value.data.tag_union.idx);
+        const data = self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx);
         const variants = self.program.layouts.getTagUnionVariants(data);
         const index: usize = discriminant;
         if (index >= variants.len) writerInvariant("tag discriminant was outside variant layouts");
@@ -691,7 +691,7 @@ pub const Writer = struct {
                 .value = .{
                     .ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed tag value had null payload pointer"),
                 },
-                .layout_idx = layout_value.data.box,
+                .layout_idx = layout_value.getIdx(),
             },
             else => writerInvariant("tag value read had non-tag layout"),
         };
@@ -718,7 +718,7 @@ pub const Writer = struct {
                 const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
                 break :blk if (roc_list.bytes) |bytes| @intFromPtr(bytes) else null;
             },
-            .scalar => if (layout_value.data.scalar.tag == .str) blk: {
+            .scalar => if (layout_value.getScalar().tag == .str) blk: {
                 const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                 break :blk @intFromPtr(roc_str.asSlice().ptr);
             } else null,
@@ -731,7 +731,7 @@ pub const Writer = struct {
                     const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
                     break :blk roc_list.len();
                 },
-                .scalar => if (layout_value.data.scalar.tag == .str) blk: {
+                .scalar => if (layout_value.getScalar().tag == .str) blk: {
                     const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                     break :blk roc_str.len();
                 } else 0,

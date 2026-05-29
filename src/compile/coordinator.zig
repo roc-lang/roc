@@ -153,16 +153,41 @@ const thread_safe_allocator: Allocator = if (threads_available)
 else
     std.heap.page_allocator;
 
-const StageTimer = if (threads_available) std.time.Timer else void;
+/// Lightweight monotonic stage timer.
+///
+/// Zig 0.16 removed `std.time.Timer`/`std.time.Instant`; the monotonic clock
+/// now lives behind the `Io` interface. These stage timers are read from many
+/// call sites that have no `Io` handle, so we read the OS monotonic clock
+/// directly via `std.posix`. `StageTimer` is only ever non-`void` when
+/// `threads_available` is true (which excludes wasm/freestanding), so the
+/// posix path is always valid here.
+const StageTimer = if (threads_available) struct {
+    start_ns: u64,
+
+    fn now() u64 {
+        var ts: std.posix.timespec = undefined;
+        switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
+            .SUCCESS => {
+                const sec: u64 = @intCast(ts.sec);
+                const nsec: u64 = @intCast(ts.nsec);
+                return sec * std.time.ns_per_s + nsec;
+            },
+            else => return 0,
+        }
+    }
+} else void;
 
 fn startStageTimer() ?StageTimer {
     if (comptime !threads_available) return null;
-    return std.time.Timer.start() catch null;
+    return StageTimer{ .start_ns = StageTimer.now() };
 }
 
 fn readStageTimer(timer: *?StageTimer) u64 {
     if (comptime !threads_available) return 0;
-    if (timer.*) |*active| return active.read();
+    if (timer.*) |active| {
+        const current = StageTimer.now();
+        return if (current >= active.start_ns) current - active.start_ns else 0;
+    }
     return 0;
 }
 
@@ -3527,16 +3552,17 @@ fn compileAppWithCheckedModuleCache(
 }
 
 fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) !usize {
-    var dir = try std.fs.cwd().openDir(absolute_dir, .{ .iterate = true });
-    defer dir.close();
+    const io = std.testing.io;
+    var dir = try std.Io.Dir.cwd().openDir(io, absolute_dir, .{ .iterate = true });
+    defer dir.close(io);
 
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
     var overwritten: usize = 0;
-    while (try walker.next()) |entry| {
+    while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        try dir.writeFile(.{ .sub_path = entry.path, .data = contents });
+        try dir.writeFile(io, .{ .sub_path = entry.path, .data = contents });
         overwritten += 1;
     }
     return overwritten;
@@ -3547,7 +3573,7 @@ test "Coordinator checked module cache hits on second compile" {
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const cache_dir = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cache_dir);
 
     const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
@@ -3567,7 +3593,7 @@ test "Coordinator corrupt checked module cache entries compile from source" {
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const cache_dir = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cache_dir);
 
     const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");

@@ -428,7 +428,7 @@ pub const CoffWriter = struct {
             return;
         }
 
-        var chunks: std.ArrayList(u32) = .{};
+        var chunks: std.ArrayList(u32) = .empty;
         defer chunks.deinit(self.allocator);
 
         var remaining = frame_size;
@@ -531,7 +531,7 @@ pub const CoffWriter = struct {
         }
         if (func.frame_size == 0) unreachable;
 
-        var codes: std.ArrayList(u8) = .{};
+        var codes: std.ArrayList(u8) = .empty;
         errdefer codes.deinit(self.allocator);
 
         try self.appendArm64BodySequence(&codes, func);
@@ -1114,7 +1114,7 @@ test "coff aarch64 unwind sections" {
         .epilogue_offset = 12,
     });
 
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
 
     try writer.write(&output);

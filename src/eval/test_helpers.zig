@@ -64,8 +64,8 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         };
     }
 
-    fn createWithMinSize(preferred_size: usize, _: usize, page_size: usize) !@This() {
-        return create(preferred_size, page_size);
+    fn createWithMinSize(_: std.Io, preferred_size: usize, _: usize, page_size: usize) !@This() {
+        return create({}, preferred_size, page_size);
     }
 
     fn deinit(self: *@This(), _: Allocator) void {
@@ -508,23 +508,25 @@ pub fn compileInspectedProgram(
     source: []const u8,
     imports: []const ModuleSource,
 ) !CompiledProgram {
-    return compileInspectedProgramImpl(allocator, source_kind, source, imports, null);
+    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, null);
 }
 
 /// Same as `compileInspectedProgram` but reuses a pre-published Builtin
 /// artifact owned by the caller.
 pub fn compileInspectedProgramWithBuiltin(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
 ) !CompiledProgram {
-    return compileInspectedProgramImpl(allocator, source_kind, source, imports, pre_published_builtin);
+    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, pre_published_builtin);
 }
 
 fn compileInspectedProgramImpl(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -569,24 +571,26 @@ pub fn compileInspectedProgramForTarget(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
 ) !CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, source_kind, source, imports, target_usize, null);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null);
 }
 
 /// Same as `compileInspectedProgramForTarget` but reuses a pre-published
 /// Builtin artifact owned by the caller.
 pub fn compileInspectedProgramForTargetWithBuiltin(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
 ) !CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, source_kind, source, imports, target_usize, pre_published_builtin);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin);
 }
 
 fn compileInspectedProgramForTargetImpl(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -1010,7 +1014,7 @@ fn lowerParsedProgramToLir(
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
     if (resources.borrowed_builtin_artifact == null) {
-        return lowerCheckedModuleSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
+        return lowerCheckedModuleSetToLir(allocator, io, &resources.checked_artifact, resources.import_artifacts, target_usize);
     }
 
     const borrowed = resources.borrowed_builtin_artifact.?;
@@ -1021,12 +1025,13 @@ fn lowerParsedProgramToLir(
     for (resources.import_artifacts, 0..) |*module, i| {
         import_views[i + 1] = check.CheckedArtifact.importedView(module);
     }
-    return lowerCheckedRootWithViews(allocator, &resources.checked_artifact, import_views, target_usize);
+    return lowerCheckedRootWithViews(allocator, io, &resources.checked_artifact, import_views, target_usize);
 }
 
 /// Lower already-published checked modules to a LIR image.
 pub fn lowerCheckedModuleSetToLir(
     allocator: Allocator,
+    io: std.Io,
     root_module: *check.CheckedArtifact.CheckedModuleArtifact,
     import_modules: []check.CheckedArtifact.CheckedModuleArtifact,
     target_usize: base.target.TargetUsize,
@@ -1036,17 +1041,18 @@ pub fn lowerCheckedModuleSetToLir(
     for (import_modules, 0..) |*module, i| {
         import_views[i] = check.CheckedArtifact.importedView(module);
     }
-    return lowerCheckedRootWithViews(allocator, root_module, import_views, target_usize);
+    return lowerCheckedRootWithViews(allocator, io, root_module, import_views, target_usize);
 }
 
 fn lowerCheckedRootWithViews(
     allocator: Allocator,
+    io: std.Io,
     root_module: *check.CheckedArtifact.CheckedModuleArtifact,
     import_views: []const check.CheckedArtifact.ImportedModuleView,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.createWithMinSize(EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
+    var shm = try SharedMemoryAllocator.createWithMinSize(io, EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
     errdefer shm.deinit(allocator);
 
     const shm_allocator = shm.allocator();
@@ -1311,7 +1317,7 @@ fn renderCheckedModuleProblems(
         try report.render(&out.writer, .color_terminal);
     }
     const raw = try out.toOwnedSlice();
-    const trimmed = std.mem.trimRight(u8, raw, "\r\n");
+    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
     if (trimmed.len == raw.len) return raw;
     const result = try allocator.dupe(u8, trimmed);
     allocator.free(raw);
@@ -1618,12 +1624,12 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
         owned.deinit();
     }
 
-    const dylib_path = try llvm_compile.compileToSharedLibrary(allocator, bitcode.bitcode, .{
+    const dylib_path = try llvm_compile.compileToSharedLibrary(allocator, std.Options.debug_io, bitcode.bitcode, .{
         .function_sections = false,
         .use_module_target_triple = true,
     });
     defer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(dylib_path, 0)) catch {};
+        std.Io.Dir.cwd().deleteFile(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
         allocator.free(dylib_path);
     }
 

@@ -242,6 +242,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
     };
     var compiled = eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
         self.allocator,
+        self.io,
         .module,
         source,
         &.{},
@@ -501,6 +502,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) !void {
 
     var compiled = try eval.test_helpers.compileInspectedProgramWithBuiltin(
         testing.allocator,
+        repl.io,
         .module,
         source,
         &.{},
