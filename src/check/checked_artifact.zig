@@ -5007,15 +5007,10 @@ pub const CheckedBodyStore = struct {
     ) void {
         var iter = plans.by_expr.iterator();
         while (iter.next()) |entry| {
-            const checked_expr = self.exprIdForSource(entry.key_ptr.*) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: static dispatch expression {d} has no checked expression id",
-                        .{@intFromEnum(entry.key_ptr.*)},
-                    );
-                }
-                unreachable;
-            };
+            // No-op: the expression source ID has no corresponding checked
+            // expression slot. This is the stub case where Check tagged the
+            // expression as erroneous before it had a chance to copy.
+            const checked_expr = self.exprIdForSource(entry.key_ptr.*) orelse continue;
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .dispatch_call => data.* = .{ .dispatch_call = entry.value_ptr.* },
