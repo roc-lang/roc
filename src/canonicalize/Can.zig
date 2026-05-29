@@ -1077,6 +1077,7 @@ fn findOrCreateAssocPattern(
             const placeholder = kv.value.pattern_idx;
             var mut_regions = kv.value.reference_regions;
             mut_regions.deinit(self.env.gpa);
+            self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
             return placeholder;
         }
@@ -1086,6 +1087,7 @@ fn findOrCreateAssocPattern(
                 var mut_regions = kv.value.reference_regions;
                 mut_regions.deinit(self.env.gpa);
                 _ = scope.idents.remove(tq);
+                self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
                 try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
                 return placeholder;
             }
@@ -1094,6 +1096,7 @@ fn findOrCreateAssocPattern(
             const placeholder = kv.value.pattern_idx;
             var mut_regions = kv.value.reference_regions;
             mut_regions.deinit(self.env.gpa);
+            self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
             return placeholder;
         }
@@ -1104,6 +1107,24 @@ fn findOrCreateAssocPattern(
     _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true);
     try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
     return new_pattern_idx;
+}
+
+/// Update an existing pattern node's stored identifier in place. Used to
+/// promote a forward-reference placeholder pattern (whose original ident
+/// matched the reference site spelling, e.g. `b`) to the canonical qualified
+/// name for the definition that adopts it (e.g. `Test.MyType.b`), so
+/// downstream consumers that key off `pattern.assign.ident` — including the
+/// test harness's `assertDefType` — see the fully-qualified name.
+fn rebindPlaceholderPatternIdent(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    new_ident: Ident.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    var node = self.env.store.nodes.get(node_idx);
+    if (node.tag != .pattern_identifier) return;
+    node.setPayload(.{ .pattern_identifier = .{ .ident = @bitCast(new_ident) } });
+    self.env.store.nodes.set(node_idx, node);
 }
 
 fn registerAssocPatternQualifiers(
