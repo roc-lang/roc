@@ -491,7 +491,7 @@ pub const NumericSuffixType = extern struct {
         local: CIR.Statement.Idx,
         external: struct {
             import_idx: CIR.Import.Idx,
-            target_node_idx: u16,
+            target_node_idx: u32,
         },
     };
 
@@ -501,7 +501,7 @@ pub const NumericSuffixType = extern struct {
             .local => .{ .local = @enumFromInt(self.data1) },
             .external => .{ .external = .{
                 .import_idx = @enumFromInt(self.data1),
-                .target_node_idx = @intCast(self.data2),
+                .target_node_idx = self.data2,
             } },
         };
     }

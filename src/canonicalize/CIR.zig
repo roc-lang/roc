@@ -894,10 +894,6 @@ pub const Import = struct {
 
                 if (name_to_idx.get(import_name)) |module_idx| {
                     self.setResolvedModule(import_idx, module_idx);
-
-                    if (comptime trace_modules) {
-                        std.debug.print("[TRACE-MODULES] resolveImports: \"{s}\" -> module_idx={d}\n", .{ import_name, module_idx });
-                    }
                 }
             }
         }

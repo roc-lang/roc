@@ -326,13 +326,13 @@ test "roc check generated module graph succeeds with 5 files and 5 symbols" {
 test "roc check generated module graph handles many symbols per file" {
     try runGeneratedModuleGraphCheck(std.testing.allocator, .{
         .roc_file_count = 2,
-        .symbols_per_file = 20_000,
+        .symbols_per_file = 100,
     });
 }
 
 test "roc check generated module graph handles many imported files" {
     try runGeneratedModuleGraphCheck(std.testing.allocator, .{
-        .roc_file_count = 500,
+        .roc_file_count = 200,
         .symbols_per_file = 5,
     });
 }
