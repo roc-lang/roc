@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+/// Default timeout for CLI test child processes that would otherwise run unbounded.
 pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
 
 /// Absolute cache directory paths reserved for a single CLI test subprocess.
@@ -58,6 +59,7 @@ pub const RocResult = struct {
     term: std.process.Child.Term,
 };
 
+/// Options for running a child process from CLI integration tests.
 pub const ChildRunOptions = struct {
     cwd: ?[]const u8 = null,
     env_map: ?*const std.process.EnvMap = null,
@@ -95,6 +97,7 @@ fn appendTimeoutMessage(
     try stderr.appendSlice(allocator, "\n");
 }
 
+/// Run a child process with captured output and a watchdog timeout.
 pub fn runChildWithTimeout(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
