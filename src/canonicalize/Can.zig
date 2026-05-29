@@ -633,6 +633,39 @@ fn registerTypeDecl(
         break :blk try self.env.addTypeHeader(qualified_header, region);
     } else header_idx;
 
+    // A forward reference to this type may have parked a placeholder under
+    // its bare name (because `createPlaceholderTypeDecl` only knows the
+    // unqualified identifier the reference site spelled). For nested types
+    // whose real binding is keyed under a fully-qualified name, rebind that
+    // placeholder under the qualified name now so the lookup below finds it
+    // and reuses the same statement index — keeping every `TypeAnno.lookup`
+    // created at the reference site pointing at one canonical statement.
+    if (parent_name != null and !qualified_name_idx.eql(type_header.name)) {
+        if (self.scopeLookupTypeDecl(qualified_name_idx) == null) {
+            if (self.scopeLookupTypeDecl(type_header.name)) |bare_existing| {
+                const bare_stmt = self.env.store.getStatement(bare_existing);
+                const bare_is_placeholder = switch (bare_stmt) {
+                    .s_alias_decl => |a| a.anno == .placeholder,
+                    .s_nominal_decl => |n| n.anno == .placeholder,
+                    else => false,
+                };
+                if (bare_is_placeholder) {
+                    var s_idx_rebind = self.scopes.items.len;
+                    while (s_idx_rebind > 0) {
+                        s_idx_rebind -= 1;
+                        const scope_ptr = &self.scopes.items[s_idx_rebind];
+                        if (scope_ptr.type_bindings.getPtr(type_header.name)) |bare_binding_ptr| {
+                            const moved = bare_binding_ptr.*;
+                            _ = scope_ptr.type_bindings.remove(type_header.name);
+                            try self.scopes.items[0].type_bindings.put(self.env.gpa, qualified_name_idx, moved);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Check if this type was already introduced (handles redeclaration case)
     const type_decl_stmt_idx = if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| blk: {
         // Type was already introduced - check if it's a placeholder (anno = 0) or a real declaration
@@ -766,18 +799,21 @@ fn registerTypeDecl(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // If this entry was originally a placeholder (an alias stub created on
-    // demand by a forward reference) and the real declaration is a nominal
-    // type, the scope binding's kind needs to flip from local_alias to
-    // local_nominal so later type lookups treat it correctly. Search the
-    // scope chain for the binding and rewrite it in place.
-    if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
+    // If this entry was a placeholder (a stub created on demand by a forward
+    // reference), the scope binding kind may no longer match the real
+    // declaration we just installed. Rewrite the binding to match — flipping
+    // to local_alias for `:`, or local_nominal for `:=` / opaque.
+    {
+        const desired_binding: Scope.TypeBinding = switch (type_decl.kind) {
+            .alias => Scope.TypeBinding{ .local_alias = type_decl_stmt_idx },
+            .nominal, .@"opaque" => Scope.TypeBinding{ .local_nominal = type_decl_stmt_idx },
+        };
         var s_idx = self.scopes.items.len;
         while (s_idx > 0) {
             s_idx -= 1;
             const scope_ptr = &self.scopes.items[s_idx];
             if (scope_ptr.type_bindings.getPtr(qualified_name_idx)) |binding_ptr| {
-                binding_ptr.* = Scope.TypeBinding{ .local_nominal = type_decl_stmt_idx };
+                binding_ptr.* = desired_binding;
                 break;
             }
         }
@@ -798,11 +834,14 @@ fn registerTypeDecl(
     const type_text = self.env.getIdent(type_header.name);
     _ = self.exposed_type_texts.remove(type_text);
 
-    // Process associated items completely (both symbol introduction and canonicalization)
     // Canonicalize the associated block (if any) inline as part of the same
-    // source-order walk that produced this type declaration.
-    if (type_decl.associated) |assoc| {
-        try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc);
+    // source-order walk that produced this type declaration. The caller can
+    // suppress this when it wants to re-key the block under a module-qualified
+    // parent name (see `canonicalizeTopLevelTypeDecl`).
+    if (!defer_associated_blocks) {
+        if (type_decl.associated) |assoc| {
+            try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc);
+        }
     }
 }
 
@@ -1014,6 +1053,7 @@ fn findOrCreateAssocPattern(
     self: *Self,
     qualified_ident: Ident.Idx,
     decl_ident: Ident.Idx,
+    type_qualified_ident: ?Ident.Idx,
     pattern_region: Region,
 ) std.mem.Allocator.Error!CIR.Pattern.Idx {
     if (self.scopeLookup(.ident, qualified_ident) == .found) {
@@ -1030,6 +1070,16 @@ fn findOrCreateAssocPattern(
             mut_regions.deinit(self.env.gpa);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
             return placeholder;
+        }
+        if (type_qualified_ident) |tq| {
+            if (scope.forward_references.fetchRemove(tq)) |kv| {
+                const placeholder = kv.value.pattern_idx;
+                var mut_regions = kv.value.reference_regions;
+                mut_regions.deinit(self.env.gpa);
+                _ = scope.idents.remove(tq);
+                try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
+                return placeholder;
+            }
         }
         if (scope.forward_references.fetchRemove(decl_ident)) |kv| {
             const placeholder = kv.value.pattern_idx;
@@ -1066,13 +1116,14 @@ fn canonicalizeAssociatedDecl(
     decl: AST.Statement.Decl,
     qualified_ident: Ident.Idx,
     decl_ident: Ident.Idx,
+    type_qualified_ident: ?Ident.Idx,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
 
-    const pattern_idx = try self.findOrCreateAssocPattern(qualified_ident, decl_ident, pattern_region);
+    const pattern_idx = try self.findOrCreateAssocPattern(qualified_ident, decl_ident, type_qualified_ident, pattern_region);
 
     // Canonicalize the body expression in expression context (RHS of assignment)
     const saved_stmt_pos = self.in_statement_position;
@@ -1098,6 +1149,7 @@ fn canonicalizeAssociatedDeclWithAnno(
     decl: AST.Statement.Decl,
     qualified_ident: Ident.Idx,
     decl_ident: Ident.Idx,
+    type_qualified_ident: ?Ident.Idx,
     type_anno_idx: CIR.TypeAnno.Idx,
     mb_where_clauses: ?CIR.WhereClause.Span,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
@@ -1106,7 +1158,7 @@ fn canonicalizeAssociatedDeclWithAnno(
 
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
 
-    const pattern_idx = try self.findOrCreateAssocPattern(qualified_ident, decl_ident, pattern_region);
+    const pattern_idx = try self.findOrCreateAssocPattern(qualified_ident, decl_ident, type_qualified_ident, pattern_region);
 
     // Canonicalize the body expression in expression context (RHS of assignment)
     const saved_stmt_pos = self.in_statement_position;
@@ -1156,12 +1208,26 @@ fn canonicalizeAssociatedItems(
                     self.env.getIdent(nested_type_ident),
                 );
 
+                // Register the nested type itself first so its type binding is
+                // visible (qualified, bare, and type-qualified) to sibling items
+                // and to the body of its own associated block. The block itself
+                // is canonicalized via processAssociatedBlock below so we can key
+                // it under the fully-qualified parent name we already computed.
+                // The relative-parent-name passed to `registerTypeDecl` is the
+                // path up to (but not including) this type — `null` for direct
+                // children of the module root so the type's relative_name stays
+                // bare, the parent path joined with `.` for deeper nesting.
+                try self.registerTypeDecl(nested_type_decl, parent_name, relative_name_idx, true);
+
+                // The relative parent for the inner block IS this type's path,
+                // so nested items inside the block get prefixes like
+                // `Outer.Inner.item`.
+                const nested_relative_for_block: ?Ident.Idx = if (relative_name_idx) |rel_idx|
+                    try self.env.insertQualifiedIdent(self.env.getIdent(rel_idx), self.env.getIdent(nested_type_ident))
+                else
+                    nested_type_ident;
                 if (nested_type_decl.associated) |nested_assoc| {
-                    const nested_relative_idx = if (relative_name_idx) |rel_idx|
-                        try self.env.insertQualifiedIdent(self.env.getIdent(rel_idx), self.env.getIdent(nested_type_ident))
-                    else
-                        nested_type_ident;
-                    try self.processAssociatedBlock(nested_qualified_idx, nested_relative_idx, nested_type_ident, nested_assoc);
+                    try self.processAssociatedBlock(nested_qualified_idx, nested_relative_for_block, nested_type_ident, nested_assoc);
                 }
 
                 if (self.scopeLookupTypeDecl(nested_qualified_idx)) |nested_type_decl_idx| {
@@ -1238,11 +1304,22 @@ fn canonicalizeAssociatedItems(
                                         break :blk2 try self.env.insertQualifiedIdent(parent_text, decl_text);
                                     };
 
+                                    // Type-qualified form (e.g. "Str.count_utf8_bytes")
+                                    // for resolving forward references from sibling bodies.
+                                    const type_qualified_idx: ?Ident.Idx = if (parent_name.eql(type_name))
+                                        qualified_idx
+                                    else blk_tq: {
+                                        const type_text = self.env.getIdent(type_name);
+                                        const decl_text = self.env.getIdent(decl_ident);
+                                        break :blk_tq try self.env.insertQualifiedIdent(type_text, decl_text);
+                                    };
+
                                     // Canonicalize with the qualified name and type annotation
                                     const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
                                         decl,
                                         qualified_idx,
                                         decl_ident,
+                                        type_qualified_idx,
                                         type_anno_idx,
                                         where_clauses,
                                     );
@@ -1300,7 +1377,11 @@ fn canonicalizeAssociatedItems(
                     break :blk false; // No matching decl found
                 } else false; // No next statement
 
-                // If there's no matching decl, create an anno-only def
+                // If there's no matching decl, create an anno-only def and
+                // expose the same pattern under the unqualified, type-qualified,
+                // and fully-qualified names so siblings that reference this item
+                // (and possibly satisfy a pre-existing forward reference for
+                // either qualified form) all resolve to one Pattern.Idx.
                 if (!has_matching_decl) {
                     const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
                     const parent_text = self.env.getIdent(parent_name);
@@ -1311,6 +1392,48 @@ fn canonicalizeAssociatedItems(
                     try self.env.setExposedNodeIndexById(qualified_idx, @intFromEnum(def_idx));
                     try self.env.registerMethodIdent(type_name, name_ident, qualified_idx);
                     try self.env.store.addScratchDef(def_idx);
+
+                    const def_cir_anno = self.env.store.getDef(def_idx);
+                    const anno_pattern_idx = def_cir_anno.pattern;
+
+                    const anno_type_qualified_idx: Ident.Idx = if (parent_name.eql(type_name))
+                        qualified_idx
+                    else blk_atq: {
+                        // Re-fetch the ident texts here — earlier calls
+                        // (createAnnoOnlyDef, setExposedNodeIndexById, …) may
+                        // have grown the interner and invalidated the slices
+                        // captured before this point.
+                        const type_text_now = self.env.getIdent(type_name);
+                        const name_text_now = self.env.getIdent(name_ident);
+                        break :blk_atq try self.env.insertQualifiedIdent(type_text_now, name_text_now);
+                    };
+
+                    var anno_search_idx = self.scopes.items.len;
+                    var anno_type_home_scope_idx: usize = 0;
+                    while (anno_search_idx > 0) {
+                        anno_search_idx -= 1;
+                        if (self.scopes.items[anno_search_idx].idents.get(type_name)) |_| {
+                            anno_type_home_scope_idx = anno_search_idx;
+                            break;
+                        }
+                    }
+                    var anno_scope_idx = anno_type_home_scope_idx;
+                    while (true) {
+                        const anno_scope_ptr = &self.scopes.items[anno_scope_idx];
+                        // Pick up any forward-reference placeholder for the
+                        // type-qualified name keyed at the module scope, so the
+                        // anno-only pattern coincides with reference sites that
+                        // ran before the annotation was canonicalized.
+                        if (anno_scope_ptr.forward_references.fetchRemove(anno_type_qualified_idx)) |kv| {
+                            var mut_regions = kv.value.reference_regions;
+                            mut_regions.deinit(self.env.gpa);
+                            _ = anno_scope_ptr.idents.remove(anno_type_qualified_idx);
+                            try self.used_patterns.put(self.env.gpa, kv.value.pattern_idx, {});
+                        }
+                        try anno_scope_ptr.idents.put(self.env.gpa, anno_type_qualified_idx, anno_pattern_idx);
+                        if (anno_scope_idx == 0) break;
+                        anno_scope_idx -= 1;
+                    }
                 }
             },
             .decl => |decl| {
@@ -1325,8 +1448,17 @@ fn canonicalizeAssociatedItems(
                         const decl_text = self.env.getIdent(decl_ident);
                         const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
+                        // Type-qualified form used to pick up any forward-reference
+                        // placeholder a sibling body created.
+                        const type_qualified_decl_idx: ?Ident.Idx = if (parent_name.eql(type_name))
+                            qualified_idx
+                        else blk_tqd: {
+                            const type_text = self.env.getIdent(type_name);
+                            break :blk_tqd try self.env.insertQualifiedIdent(type_text, decl_text);
+                        };
+
                         // Canonicalize with the qualified name
-                        const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx, decl_ident);
+                        const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx, decl_ident, type_qualified_decl_idx);
                         try self.env.store.addScratchDef(def_idx);
 
                         // Register this associated item by its qualified name
@@ -1401,47 +1533,6 @@ fn canonicalizeAssociatedItems(
             },
         }
     }
-}
-
-/// Register the user-facing fully qualified name in the module scope.
-/// Given a fully qualified name like "module.Foo.Bar.baz", this registers:
-/// - "Foo.Bar.baz" in module scope (user-facing fully qualified)
-///
-/// Note: Partially qualified names (e.g., "Bar.baz" for Foo's scope, "baz" for Bar's scope)
-/// are NOT registered here. They are registered in processAssociatedBlock when the
-/// actual scopes are entered, via the alias registration logic there.
-fn registerUserFacingName(
-    self: *Self,
-    fully_qualified_idx: Ident.Idx,
-    pattern_idx: CIR.Pattern.Idx,
-) std.mem.Allocator.Error!void {
-
-    // Get the fully qualified text and strip the module prefix
-    const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
-    const module_prefix = self.env.module_name;
-
-    // Must start with module prefix
-    if (!std.mem.startsWith(u8, fully_qualified_text, module_prefix) or
-        fully_qualified_text.len <= module_prefix.len or
-        fully_qualified_text[module_prefix.len] != '.')
-    {
-        return; // Not a module-qualified identifier, nothing to register
-    }
-
-    // Get user-facing text (without module prefix), e.g., "Foo.Bar.baz"
-    const user_facing_start = module_prefix.len + 1;
-    const user_facing_text = fully_qualified_text[user_facing_start..];
-
-    // Copy to local buffer to avoid invalidation during insertIdent calls
-    var buf: [512]u8 = undefined;
-    if (user_facing_text.len > buf.len) return;
-    @memcpy(buf[0..user_facing_text.len], user_facing_text);
-    const user_text = buf[0..user_facing_text.len];
-
-    // Register ONLY the fully qualified user-facing name in the module scope.
-    // For "Foo.Bar.baz", we register just "Foo.Bar.baz" - not the shorter suffixes.
-    const user_facing_idx = try self.env.insertIdent(base.Ident.for_text(user_text));
-    try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, pattern_idx);
 }
 
 /// After the file-level walk completes, examine every top-level type
@@ -1664,14 +1755,31 @@ fn createPlaceholderTypeDecl(
     };
     const header_idx = try self.env.addTypeHeader(header, region);
 
+    // Default placeholders to `s_nominal_decl`. Forward references inside
+    // qualified-tag expressions (e.g. `Try.Ok(...)`) require the lookup target
+    // to be nominal; if the real declaration turns out to be an alias,
+    // `registerTypeDecl` rewrites both the statement and the scope binding
+    // kind during placeholder replacement.
     const placeholder_stmt = Statement{
-        .s_alias_decl = .{
+        .s_nominal_decl = .{
             .header = header_idx,
             .anno = .placeholder,
+            .is_opaque = false,
         },
     };
     const stmt_idx = try self.env.addStatement(placeholder_stmt, region);
-    try self.introduceType(name_ident, stmt_idx, region);
+    // Park the binding at the module scope so it outlives whichever inner
+    // scope made the forward reference, and so the later real declaration
+    // (which runs in a parent scope) can still find and replace it.
+    if (self.scopes.items.len > 0) {
+        try self.scopes.items[0].type_bindings.put(
+            self.env.gpa,
+            name_ident,
+            Scope.TypeBinding{ .local_nominal = stmt_idx },
+        );
+    } else {
+        try self.introduceType(name_ident, stmt_idx, region);
+    }
     return stmt_idx;
 }
 
@@ -4138,7 +4246,44 @@ pub fn canonicalizeExpr(
                                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
                                     },
                                     .not_found => {
-                                        // Associated item not found - generate error
+                                        // The lookup might refer to a sibling associated item
+                                        // that hasn't been canonicalized yet. Park a forward
+                                        // reference keyed by the type-qualified name so the
+                                        // sibling's def picks up this same pattern when it
+                                        // arrives. `diagnosePostWalkTypeDecls` reports any
+                                        // forward reference that never gets filled.
+                                        if (self.scopes.items.len > 0) {
+                                            const owner_scope = &self.scopes.items[0];
+                                            const gop = try owner_scope.forward_references.getOrPut(self.env.gpa, type_qualified_idx);
+                                            const ref_pattern_idx = if (gop.found_existing) blk_fr: {
+                                                try gop.value_ptr.reference_regions.append(self.env.gpa, region);
+                                                break :blk_fr gop.value_ptr.pattern_idx;
+                                            } else blk_fr: {
+                                                const new_pattern_idx = try self.env.addPattern(
+                                                    Pattern{ .assign = .{ .ident = type_qualified_idx } },
+                                                    region,
+                                                );
+                                                var reference_regions = std.ArrayList(Region){};
+                                                try reference_regions.append(self.env.gpa, region);
+                                                gop.value_ptr.* = .{
+                                                    .pattern_idx = new_pattern_idx,
+                                                    .reference_regions = reference_regions,
+                                                };
+                                                try owner_scope.idents.put(self.env.gpa, type_qualified_idx, new_pattern_idx);
+                                                break :blk_fr new_pattern_idx;
+                                            };
+                                            try self.used_patterns.put(self.env.gpa, ref_pattern_idx, {});
+                                            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                                                .pattern_idx = ref_pattern_idx,
+                                            } }, region);
+                                            const free_vars_start = self.scratch_free_vars.top();
+                                            try self.scratch_free_vars.append(ref_pattern_idx);
+                                            return CanonicalizedExpr{
+                                                .idx = expr_idx,
+                                                .free_vars = self.scratch_free_vars.spanFrom(free_vars_start),
+                                            };
+                                        }
+
                                         if (trace_modules) {
                                             const parent_text = self.env.getIdent(module_alias);
                                             const nested_text = self.env.getIdent(ident);
@@ -4470,24 +4615,15 @@ pub fn canonicalizeExpr(
                             }
                         }
 
-                        // Forward references resolve to whichever ancestor scope
-                        // could plausibly bind the name from a later statement:
-                        // the closest associated-block scope if any, otherwise the
-                        // module scope (scope[0]).
-                        const owner_scope_idx: ?usize = blk: {
-                            var s_idx = self.scopes.items.len;
-                            while (s_idx > 0) {
-                                s_idx -= 1;
-                                if (self.scopes.items[s_idx].associated_type_name != null) {
-                                    break :blk s_idx;
-                                }
-                            }
-                            if (self.scopes.items.len > 0) break :blk 0;
-                            break :blk null;
-                        };
-
-                        if (owner_scope_idx) |owner_idx| {
-                            const owner_scope = &self.scopes.items[owner_idx];
+                        // Forward references are always parked at the module scope.
+                        // Definitions at any container scope (module top level or an
+                        // associated block) drain them by walking the scope chain
+                        // in `canonicalizePattern` / `scopeIntroduceInternal`, so the
+                        // same placeholder pattern resolves whether the real
+                        // definition turns out to live at top level or inside an
+                        // associated block.
+                        if (self.scopes.items.len > 0) {
+                            const owner_scope = &self.scopes.items[0];
 
                             // If this scope already has a forward reference for the
                             // same ident, append this reference region and reuse
@@ -7837,13 +7973,30 @@ pub fn canonicalizePattern(
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 const placeholder_exists = self.isPlaceholder(ident_idx);
 
-                // Check if a forward reference exists for this ident (from block hoisting).
-                // Reuse its pattern so that e_lookup_local nodes created during the
-                // forward-reference phase point to the same pattern as the def.
-                if (current_scope.forward_references.fetchRemove(ident_idx)) |kv| {
-                    var mut_regions = kv.value.reference_regions;
-                    mut_regions.deinit(self.env.gpa);
-                    return kv.value.pattern_idx;
+                // Forward references for top-level / associated-block names are
+                // parked in the module scope's `forward_references`. Drain a
+                // matching entry from any ancestor scope (current_scope first,
+                // then walking outward) so this definition reuses the placeholder
+                // pattern earlier references already pointed at.
+                {
+                    var s_idx = self.scopes.items.len;
+                    while (s_idx > 0) {
+                        s_idx -= 1;
+                        const scope_ptr = &self.scopes.items[s_idx];
+                        if (scope_ptr.forward_references.fetchRemove(ident_idx)) |kv| {
+                            var mut_regions = kv.value.reference_regions;
+                            mut_regions.deinit(self.env.gpa);
+                            // The forward-reference creation parked an entry in
+                            // scope[0].idents so unqualified lookups would reuse
+                            // the same pattern. If the real definition belongs to
+                            // a deeper scope, scrub the speculative top-level entry
+                            // so it doesn't masquerade as a top-level binding.
+                            if (s_idx != self.scopes.items.len - 1) {
+                                _ = scope_ptr.idents.remove(ident_idx);
+                            }
+                            return kv.value.pattern_idx;
+                        }
+                    }
                 }
 
                 // Create a Pattern node for our identifier
@@ -9552,19 +9705,24 @@ fn canonicalizeTypeAnnoBasicType(
                 .not_found => {},
             }
 
-            // Not in scope yet — register a placeholder type declaration on
-            // demand and return a lookup pointing at it. If the type really is
-            // declared later in source order, registerTypeDecl will find this
-            // placeholder via scopeLookupTypeDecl and overwrite its `anno` with
-            // the canonicalized annotation. If no such declaration ever
-            // appears, the placeholder stays with `anno = .placeholder` — the
-            // mutually-recursive-alias / undeclared-type diagnostics fire from
-            // the post-walk check.
-            if (try self.createPlaceholderTypeDecl(type_name_ident, region)) |placeholder_stmt| {
-                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                    .name = type_name_ident,
-                    .base = .{ .local = .{ .decl_idx = placeholder_stmt } },
-                } }, region);
+            // Not in scope yet. For capitalized names, plant a placeholder
+            // type declaration on demand so a later real declaration in source
+            // order can fill it in. Anything starting lowercase / underscore
+            // would have been routed through `.ty_var` above, so getting here
+            // with such a name is a genuine undeclared lookup.
+            const can_be_forward_type = blk: {
+                const text = self.env.getIdent(type_name_ident);
+                if (text.len == 0) break :blk false;
+                const c0 = text[0];
+                break :blk c0 >= 'A' and c0 <= 'Z';
+            };
+            if (can_be_forward_type) {
+                if (try self.createPlaceholderTypeDecl(type_name_ident, region)) |placeholder_stmt| {
+                    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .local = .{ .decl_idx = placeholder_stmt } },
+                    } }, region);
+                }
             }
             return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
                 .name = type_name_ident,
@@ -11748,17 +11906,36 @@ pub fn scopeIntroduceInternal(
         return Scope.IntroduceResult{ .top_level_var_error = {} };
     }
 
-    // Check if this identifier was previously referenced as a forward reference
-    // If so, upgrade it from forward reference to defined
+    // Check if this identifier was previously referenced as a forward reference.
+    // Forward refs are parked in the module scope (or, for sibling refs, an
+    // associated block scope); walk the chain so the def upgrades whichever
+    // scope holds the placeholder. When the def lives in a deeper scope than
+    // the forward ref, drop the speculative top-level idents entry so it
+    // doesn't masquerade as a top-level binding.
     if (item_kind == .ident) {
-        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-        if (current_scope.forward_references.fetchRemove(ident_idx)) |kv| {
-            // This was a forward reference - upgrade it to defined
-            // The pattern is already in the idents map from when we created the forward ref
-            // Just update it to point to the real pattern
+        var fwd_scope_idx: ?usize = null;
+        {
+            var s_idx = self.scopes.items.len;
+            while (s_idx > 0) {
+                s_idx -= 1;
+                if (self.scopes.items[s_idx].forward_references.contains(ident_idx)) {
+                    fwd_scope_idx = s_idx;
+                    break;
+                }
+            }
+        }
+        if (fwd_scope_idx) |s_idx| {
+            const owner_scope = &self.scopes.items[s_idx];
+            const current_scope_idx = self.scopes.items.len - 1;
+            const current_scope = &self.scopes.items[current_scope_idx];
+            const kv = owner_scope.forward_references.fetchRemove(ident_idx).?;
+            // Bind in the actual definition's scope, and drop the speculative
+            // entry from the owning scope when they differ.
             try current_scope.idents.put(gpa, ident_idx, pattern_idx);
+            if (s_idx != current_scope_idx) {
+                _ = owner_scope.idents.remove(ident_idx);
+            }
 
-            // Clean up the reference regions arraylist
             var mut_regions = kv.value.reference_regions;
             mut_regions.deinit(gpa);
 
