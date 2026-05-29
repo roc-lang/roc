@@ -154,6 +154,14 @@ pub const Expr = union(enum) {
         ident_idx: Ident.Idx,
         region: Region,
     },
+    /// Pending external lookup that hasn't yet had its target module resolved.
+    /// Created by canon when an import target hasn't finished canonicalizing.
+    /// Replaced with `e_lookup_external` before type-check.
+    e_lookup_pending: struct {
+        module_idx: CIR.Import.Idx,
+        ident_idx: Ident.Idx,
+        region: Region,
+    },
     /// Lookup of a required identifier from the platform's `requires` clause.
     /// This represents a value that the app provides to the platform.
     /// ```roc

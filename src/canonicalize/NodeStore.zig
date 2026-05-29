@@ -2004,11 +2004,17 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             // Store args span in span2_data
             const span2_idx: u32 = @intCast(store.span2_data.len());
             _ = try store.span2_data.append(store.gpa, .{ .start = tvd.args.span.start, .len = tvd.args.span.len });
+            const region_idx_tvd: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = tvd.method_name_region.start.offset,
+                .len = tvd.method_name_region.end.offset,
+            });
 
             node.setPayload(.{ .expr_type_method_call = .{
                 .type_var_alias_stmt = @intFromEnum(tvd.type_var_alias_stmt),
                 .method_name = @bitCast(tvd.method_name),
                 .args_span2_idx = span2_idx,
+                .region_span2_idx = region_idx_tvd,
             } });
         },
         .e_hosted_lambda => |hosted| {

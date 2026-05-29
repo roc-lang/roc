@@ -2193,7 +2193,7 @@ pub fn canonicalizeFile(
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
         .module => |h| {
-            self.env.module_kind = .deprecated_module;
+            self.env.module_kind = .module;
             // Emit deprecation warning
             const header_region = self.parse_ir.tokenizedRegionToRegion(h.region);
             try self.env.pushDiagnostic(.{
@@ -2227,7 +2227,6 @@ pub fn canonicalizeFile(
             self.env.module_kind = .app;
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
-            self.env.defer_numeric_defaults = true;
             // App headers have 'provides' instead of 'exposes'
             // but we need to track the provided functions for export
             try self.createExposedScope(h.provides);
@@ -2238,7 +2237,6 @@ pub fn canonicalizeFile(
             const main_status = try self.checkMainFunction(false);
             if (main_status == .valid) {
                 self.env.module_kind = .default_app;
-                self.env.defer_numeric_defaults = true;
             } else {
                 // Set to undefined placeholder - will be properly set during validation
                 // when we find the matching type declaration
@@ -2249,7 +2247,6 @@ pub fn canonicalizeFile(
             self.env.module_kind = .default_app;
             // Default app modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
-            self.env.defer_numeric_defaults = true;
             // Default app modules don't have an exposes list
             // They have a main! function that will be validated
         },
@@ -2662,7 +2659,7 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                 try self.reportTypeModuleOrDefaultAppError();
             }
         },
-        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
             // No validation needed for these module kinds in checking mode
         },
     }
@@ -2678,7 +2675,7 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
                 try self.reportExecutionRequiresAppOrDefaultApp();
             }
         },
-        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
             // No validation needed for these module kinds in execution mode
         },
     }
@@ -4483,10 +4480,11 @@ pub fn canonicalizeExpr(
                                         }
                                         const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
-                                        // Create e_type_var_dispatch expression with args
-                                        const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{ .e_type_var_dispatch = .{
+                                        // Create e_type_method_call expression with args
+                                        const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{ .e_type_method_call = .{
                                             .type_var_alias_stmt = binding.statement_idx,
                                             .method_name = method_name,
+                                            .method_name_region = region,
                                             .args = args_span,
                                         } }, region);
 
@@ -4582,11 +4580,12 @@ pub fn canonicalizeExpr(
                                         // Get the method name from the ident (e.g., "default")
                                         const method_name = ident;
 
-                                        // Create e_type_var_dispatch expression
+                                        // Create e_type_method_call expression
                                         const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
-                                            .e_type_var_dispatch = .{
+                                            .e_type_method_call = .{
                                                 .type_var_alias_stmt = binding.statement_idx,
                                                 .method_name = method_name,
+                                                .method_name_region = region,
                                                 .args = .{ .span = .{ .start = 0, .len = 0 } }, // No args for now; filled in by apply
                                             },
                                         }, region);
@@ -5862,17 +5861,51 @@ pub fn canonicalizeExpr(
                 .free_vars = free_vars_span,
             };
         },
-        .local_dispatch => |local_dispatch| {
+        .method_call => |mc| {
+            // value.method(args) — receiver is a value (lowercase ident or expression),
+            // method is dispatched at type-check time once the receiver's type is known.
+            const region = self.parse_ir.tokenizedRegionToRegion(mc.region);
+            const free_vars_start = self.scratch_free_vars.top();
+
+            const can_receiver = try self.canonicalizeExpr(mc.receiver) orelse return null;
+            const method_name = self.parse_ir.tokens.resolveIdentifier(mc.method_token) orelse {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = region,
+                } });
+                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            };
+
+            const method_name_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = mc.method_token, .end = mc.method_token });
+
+            const scratch_top = self.env.store.scratchExprTop();
+            for (self.parse_ir.store.exprSlice(mc.args)) |arg| {
+                if (try self.canonicalizeExpr(arg)) |can_arg| {
+                    try self.env.store.addScratchExpr(can_arg.idx);
+                }
+            }
+            const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_method_call = .{
+                .receiver = can_receiver.idx,
+                .method_name = method_name,
+                .method_name_region = method_name_region,
+                .args = args_span,
+            } }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
+        },
+        .arrow_call => |arrow_call| {
             // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
             // and `arg1->fn` to `fn(arg1)`
-            const region = self.parse_ir.tokenizedRegionToRegion(local_dispatch.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(arrow_call.region);
             const free_vars_start = self.scratch_free_vars.top();
 
             // Canonicalize the left expression (first argument)
-            const can_first_arg = try self.canonicalizeExpr(local_dispatch.left) orelse return null;
+            const can_first_arg = try self.canonicalizeExpr(arrow_call.left) orelse return null;
 
             // Get the right expression to determine the function and additional args
-            const right_expr = self.parse_ir.store.getExpr(local_dispatch.right);
+            const right_expr = self.parse_ir.store.getExpr(arrow_call.right);
 
             switch (right_expr) {
                 .apply => |apply| {
@@ -5969,7 +6002,7 @@ pub fn canonicalizeExpr(
                     }
 
                     // It's an ident
-                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+                    const can_fn_expr = try self.canonicalizeExpr(arrow_call.right) orelse return null;
 
                     const scratch_top = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -5989,7 +6022,7 @@ pub fn canonicalizeExpr(
                 else => {
                     // Generic case: expr->(any_expression)
                     // Desugar to (any_expression)(left)
-                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+                    const can_fn_expr = try self.canonicalizeExpr(arrow_call.right) orelse return null;
 
                     const scratch_top = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -13322,7 +13355,7 @@ fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocat
 
                     // Create the type var dispatch expression
                     const expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_type_var_dispatch = .{
+                        .e_type_method_call = .{
                             .type_var_alias_stmt = binding.statement_idx,
                             .method_name = method_name,
                             .args = args_span,
@@ -13341,7 +13374,7 @@ fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocat
 
                     // Create the type var dispatch expression with empty args
                     const expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_type_var_dispatch = .{
+                        .e_type_method_call = .{
                             .type_var_alias_stmt = binding.statement_idx,
                             .method_name = method_name,
                             .args = .{ .span = DataSpan.empty() },
@@ -13828,21 +13861,11 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
     try self.env.store.scratch.?.patterns.append(arg_pattern_idx);
     const args_span = try self.env.store.patternSpanFrom(patterns_start);
 
-    // Create a crash body placeholder (never executed — hosted fn ptr is called at runtime)
-    const crash_msg = try self.env.insertString("echo! is a hosted function");
-    const body_idx = try self.env.addExpr(.{ .e_crash = .{ .msg = crash_msg } }, synthetic_region);
-    // Ensure types array has entries for the body expression
-    while (self.env.types.len() <= @intFromEnum(body_idx)) {
-        _ = try self.env.types.fresh();
-    }
-
-    // Create e_hosted_lambda expression with index 0 (sole hosted function)
+    // Create e_hosted_lambda expression (sole hosted function)
     const expr_idx = try self.env.addExpr(.{
         .e_hosted_lambda = .{
             .symbol_name = echo_ident,
-            .index = 0,
             .args = args_span,
-            .body = body_idx,
         },
     }, synthetic_region);
     // Ensure types array has entries for the hosted lambda expression
