@@ -196,8 +196,8 @@ fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code
 }
 
 fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, expected: []const u8, expected_code: u8) !void {
-    const has_expected_msg = std.mem.indexOf(u8, stderr_output, expected) != null;
-    const has_wrong_stack_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null and
+    const has_expected_msg = std.mem.find(u8, stderr_output, expected) != null;
+    const has_wrong_stack_msg = std.mem.find(u8, stderr_output, "overflowed its stack memory") != null and
         !std.mem.eql(u8, expected, "overflowed its stack memory");
 
     switch (term) {
@@ -215,7 +215,7 @@ fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, 
             if (comptime builtin.os.tag != .windows and builtin.os.tag != .freestanding and builtin.abi == .musl) {
                 const expected_stack_overflow = std.mem.eql(u8, expected, "overflowed its stack memory");
                 const fell_back_to_access_violation = code == 139 and
-                    std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
+                    std.mem.find(u8, stderr_output, "Segmentation fault") != null;
 
                 if (expected_stack_overflow and fell_back_to_access_violation) {
                     std.debug.print("Warning: Stack overflow was handled as access violation on musl\n", .{});

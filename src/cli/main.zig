@@ -400,18 +400,6 @@ else if (builtin.os.tag == .windows)
 else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux
 
-/// Floor for the retry loop in `createSharedMemory`. Set to the
-/// macOS/Windows reservation — documented as "ample headroom for real
-/// programs" — so a smaller reservation still produces a usable arena. On
-/// 32-bit targets the preferred size is already smaller than 8 GiB and an
-/// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
-/// itself (single attempt, no retry); `-Dshared-memory-size` builds are
-/// likewise handled by the allocator clamping `min_size` to the preferred.
-const SHARED_MEMORY_MIN_SIZE: usize = if (@sizeOf(usize) < 8)
-    SHARED_MEMORY_SIZE
-else
-    8 * 1024 * 1024 * 1024;
-
 fn configuredSharedMemorySize() usize {
     if (comptime build_options.shared_memory_size > std.math.maxInt(usize)) {
         @compileError("-Dshared-memory-size does not fit in usize for this target");
@@ -5559,9 +5547,9 @@ fn resolveFilePath(gpa: Allocator, docs_dir: []const u8, url_path: []const u8) !
 
     // If the last path component has an extension, serve it directly;
     // otherwise treat the path as a directory and serve its index.html.
-    const last_slash = std.mem.lastIndexOfScalar(u8, clean_path, '/') orelse 0;
+    const last_slash = std.mem.findScalarLast(u8, clean_path, '/') orelse 0;
     const last_component = clean_path[last_slash..];
-    const has_extension = std.mem.indexOfScalar(u8, last_component, '.') != null;
+    const has_extension = std.mem.findScalar(u8, last_component, '.') != null;
 
     if (has_extension) {
         return try std.fmt.allocPrint(gpa, "{s}/{s}", .{ docs_dir, clean_path });

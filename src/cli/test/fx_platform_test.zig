@@ -862,7 +862,7 @@ test "str seamless slice rc uses original allocation pointer" {
 
     try util.checkSuccess(run_result);
     try testing.expectEqualStrings("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n", run_result.stdout);
-    if (std.mem.indexOf(u8, run_result.stderr, "[Roc Memory Info]") != null) {
+    if (std.mem.find(u8, run_result.stderr, "[Roc Memory Info]") != null) {
         std.debug.print("Detected leaked allocation in seamless-slice RC regression:\n{s}\n", .{run_result.stderr});
         return error.SeamlessSliceRcLeak;
     }

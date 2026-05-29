@@ -3553,7 +3553,7 @@ fn compileAppWithCheckedModuleCache(
 
 fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) !usize {
     const io = std.testing.io;
-    var dir = try std.Io.Dir.cwd().openDir(io, absolute_dir, .{ .iterate = true });
+    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
     defer dir.close(io);
 
     var walker = try dir.walk(allocator);

@@ -532,8 +532,8 @@ fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, fo
     );
 
     const readonly = try readonlySection(target, output.items);
-    try std.testing.expect(std.mem.indexOf(u8, readonly, required) != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, forbidden) == null);
+    try std.testing.expect(std.mem.find(u8, readonly, required) != null);
+    try std.testing.expect(std.mem.find(u8, output.items, forbidden) == null);
 }
 
 fn readonlySection(target: RocTarget, object_bytes: []const u8) ![]const u8 {
@@ -574,7 +574,7 @@ fn elfSectionData(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
         const name_offset = std.mem.readInt(u32, sh[0..4], .little);
         if (name_offset >= shstr.len) return error.InvalidObjectFile;
         const name_tail = shstr[name_offset..];
-        const name_len = std.mem.indexOfScalar(u8, name_tail, 0) orelse return error.InvalidObjectFile;
+        const name_len = std.mem.findScalar(u8, name_tail, 0) orelse return error.InvalidObjectFile;
         const name = name_tail[0..name_len];
         if (!std.mem.eql(u8, name, wanted_name)) continue;
 
@@ -608,7 +608,7 @@ fn machoSection(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
             while (section_index < nsects) : (section_index += 1) {
                 if (section_offset + 80 > bytes.len) return error.InvalidObjectFile;
                 const raw_name = bytes[section_offset..][0..16];
-                const name_len = std.mem.indexOfScalar(u8, raw_name, 0) orelse raw_name.len;
+                const name_len = std.mem.findScalar(u8, raw_name, 0) orelse raw_name.len;
                 const name = raw_name[0..name_len];
                 if (std.mem.eql(u8, name, wanted_name)) {
                     const size = std.mem.readInt(u64, bytes[section_offset + 40 ..][0..8], .little);
@@ -638,7 +638,7 @@ fn coffSectionData(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
     while (section_index < number_of_sections) : (section_index += 1) {
         if (section_offset + 40 > bytes.len) return error.InvalidObjectFile;
         const raw_name = bytes[section_offset..][0..8];
-        const name_len = std.mem.indexOfScalar(u8, raw_name, 0) orelse raw_name.len;
+        const name_len = std.mem.findScalar(u8, raw_name, 0) orelse raw_name.len;
         const name = raw_name[0..name_len];
         if (std.mem.eql(u8, name, wanted_name)) {
             const size = std.mem.readInt(u32, bytes[section_offset + 16 ..][0..4], .little);

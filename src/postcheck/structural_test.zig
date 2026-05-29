@@ -33,14 +33,14 @@ fn unionPayloadType(comptime T: type, comptime name: []const u8) type {
 }
 
 fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []const u8 {
-    const start_index = std.mem.indexOf(u8, source, start) orelse @panic("missing source slice start marker");
+    const start_index = std.mem.find(u8, source, start) orelse @panic("missing source slice start marker");
     const after_start = source[start_index..];
-    const end_index = std.mem.indexOf(u8, after_start, end) orelse @panic("missing source slice end marker");
+    const end_index = std.mem.find(u8, after_start, end) orelse @panic("missing source slice end marker");
     return after_start[0..end_index];
 }
 
 fn expectContains(haystack: []const u8, needle: []const u8) !void {
-    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+    try std.testing.expect(std.mem.find(u8, haystack, needle) != null);
 }
 
 test "Monotype has direct calls and no checked-only expression forms" {

@@ -87,8 +87,8 @@ pub const RunOptions = struct {
     /// to `BuildEnv.init`, the WasmFilesystem fallback, and stored in
     /// `EchoEnv` so `echoHostedFn` can call `writeStreamingAll`. On WASM
     /// builds the value is unused (freestanding stubs trap), but callers
-    /// must still pass a value; `compile.CoreCtx.default(...).std_io` on
-    /// freestanding is a valid sentinel.
+    /// must still pass a value; a default CoreCtx's `std_io` on freestanding
+    /// is a valid sentinel.
     std_io: std.Io,
     /// The headerless user source (the body of the synthetic app).
     source: []const u8,

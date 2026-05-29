@@ -1497,9 +1497,9 @@ test "roc check reports comptime division by zero without panicking" {
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check reports comptime modulo by zero without panicking" {
@@ -1511,9 +1511,9 @@ test "roc check reports comptime modulo by zero without panicking" {
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check reports large default Dec scientific literal without panicking" {
@@ -1525,9 +1525,9 @@ test "roc check reports large default Dec scientific literal without panicking" 
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check preserves numeric literal constraints before reporting large default Dec scientific literal" {
@@ -1539,9 +1539,9 @@ test "roc check preserves numeric literal constraints before reporting large def
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check treats integral scientific notation as integer syntax sugar" {
@@ -1553,9 +1553,9 @@ test "roc check treats integral scientific notation as integer syntax sugar" {
     defer gpa.free(result.stderr);
 
     try testing.expect(result.term == .Exited and result.term.Exited == 0);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "No errors found") != null or
-        std.mem.indexOf(u8, result.stderr, "No errors found") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "No errors found") != null or
+        std.mem.find(u8, result.stderr, "No errors found") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc run returns exit code 2 for warnings (interpreter)" {
@@ -1802,13 +1802,13 @@ test "roc test runs expects in Parser type module (dev)" {
     try testing.expect(result.term == .Exited and result.term.Exited == 0);
 
     // 2. Output indicates tests passed
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
     // 3. Should have run 7 tests (extract count from "(N)" in output)
     const count = blk: {
-        const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
-        const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
+        const open = std.mem.find(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
+        const close = std.mem.findPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
     try testing.expect(count == 7);
@@ -1935,7 +1935,7 @@ test "roc run issue 9208 open union tag before Exit matches wildcard" {
         },
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "exited with other error: Bar") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "exited with other error: Bar") != null);
 }
 
 test "roc build issue 9435 hosted nominal return builds without mono panic" {
@@ -1977,9 +1977,9 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
         },
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "panic") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "mono nominal materialization") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "published instantiated nominal backing") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "mono nominal materialization") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "published instantiated nominal backing") == null);
 }
 
 test "roc docs Builtin.roc succeeds" {

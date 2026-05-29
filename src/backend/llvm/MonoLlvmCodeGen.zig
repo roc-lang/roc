@@ -1181,9 +1181,9 @@ pub const MonoLlvmCodeGen = struct {
             try self.emitIntTryConversion(target, args[0]);
             return;
         }
-        if (std.mem.indexOf(u8, name, "_to_") != null and args.len >= 1 and
-            std.mem.indexOf(u8, name, "_try") == null and
-            std.mem.indexOf(u8, name, "_str") == null)
+        if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
+            std.mem.find(u8, name, "_try") == null and
+            std.mem.find(u8, name, "_str") == null)
         {
             const value = try self.loadScalar(self.slot(args[0]).ptr, self.localLayout(args[0]));
             const coerced = try self.coerceScalar(value, self.scalarType(self.localLayout(target)), self.localLayout(args[0]).isSigned());

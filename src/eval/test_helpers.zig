@@ -1629,7 +1629,7 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
         .use_module_target_triple = true,
     });
     defer {
-        std.Io.Dir.cwd().deleteFile(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
         allocator.free(dylib_path);
     }
 

@@ -346,7 +346,7 @@ fn markBuildRootsFromFile(
 
     while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
         const literal_start = match_pos + pattern.len;
-        const literal_end = std.mem.indexOfScalarPos(u8, source, literal_start, '"') orelse break;
+        const literal_end = std.mem.findScalarPos(u8, source, literal_start, '"') orelse break;
         const rel_path = source[literal_start..literal_end];
         search_index = literal_end + 1;
 

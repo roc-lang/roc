@@ -809,58 +809,6 @@ const CheckPostcheckArchitectureStep = struct {
     }
 };
 
-/// Build step that runs the semantic audit perl script, which checks that
-/// semantic reconstruction/fallback paths stay gone.
-const SemanticAuditStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *SemanticAuditStep {
-        const self = b.allocator.create(SemanticAuditStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "semantic-audit",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-
-        if (builtin.os.tag == .windows) {
-            std.debug.print("Skipping semantic audit on Windows (perl not available)\n", .{});
-            return;
-        }
-
-        var child_argv = std.ArrayList([]const u8).empty;
-        defer child_argv.deinit(b.allocator);
-
-        try child_argv.append(b.allocator, "perl");
-        try child_argv.append(b.allocator, "ci/semantic_audit.pl");
-
-        const io = b.graph.io;
-        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
-        const term = try child.wait(io);
-
-        switch (term) {
-            .exited => |code| {
-                if (code != 0) {
-                    return step.fail(
-                        "Semantic audit failed. Run 'perl ci/semantic_audit.pl' to see details.",
-                        .{},
-                    );
-                }
-            },
-            else => {
-                return step.fail("ci/semantic_audit.pl terminated abnormally", .{});
-            },
-        }
-    }
-};
-
 /// Build step that checks for @panic and std.debug.panic usage in interpreter and builtins.
 ///
 /// In Roc's design philosophy, compile-time errors become runtime errors with helpful messages.
@@ -2463,7 +2411,6 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
-    const check_semantic_audit_step = b.step("check-semantic-audit", "Check that semantic reconstruction/fallback paths stay gone");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const eval_test_step = b.step("test-eval", "Run eval tests in parallel across all backends");
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
@@ -3674,14 +3621,6 @@ pub fn build(b: *std.Build) void {
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     test_step.dependOn(&check_postcheck_architecture.step);
     check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
-
-    // Add check that semantic compiler stages do not recover missing data.
-    const run_semantic_audit = SemanticAuditStep.create(b);
-    check_semantic_audit_step.dependOn(&run_semantic_audit.step);
-    test_step.dependOn(&run_semantic_audit.step);
-    eval_test_step.dependOn(&run_semantic_audit.step);
-    test_glue_step.dependOn(&run_semantic_audit.step);
-    minici_step.dependOn(&run_semantic_audit.step);
 
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);

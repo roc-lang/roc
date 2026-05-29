@@ -4760,8 +4760,8 @@ fn snapshotReplExpressionStep(
 
                 if (use_expr_fallback) {
                     const is_top_level_wrapper_problem =
-                        std.mem.indexOf(u8, module_problems, "EFFECTFUL TOP-LEVEL VALUE") != null or
-                        std.mem.indexOf(u8, module_problems, "POLYMORPHIC VALUE") != null;
+                        std.mem.find(u8, module_problems, "EFFECTFUL TOP-LEVEL VALUE") != null or
+                        std.mem.find(u8, module_problems, "POLYMORPHIC VALUE") != null;
                     if (is_top_level_wrapper_problem) {
                         allocator.free(module_problems);
                         return compileAndEvaluateSnapshotReplExpr(allocator, input, config);

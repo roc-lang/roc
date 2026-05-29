@@ -39,10 +39,14 @@ pub fn main(init: std.process.Init) !void {
     const gpa = gpa_impl.allocator();
     const io = init.io;
 
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
+    // zig 0.16 removed std.process.argsAlloc; iterate the args provided on Init.
+    var arg_it = std.process.Args.Iterator.init(init.minimal.args);
+    defer arg_it.deinit();
+    var arg_list = std.ArrayList([]const u8).empty;
+    defer arg_list.deinit(gpa);
+    while (arg_it.next()) |a| try arg_list.append(gpa, a);
 
-    const mode = parseMode(args);
+    const mode = parseMode(arg_list.items);
     switch (mode) {
         .tidy => try runTidy(gpa, io),
         .git_lints => try runGitLints(gpa, io),
@@ -429,6 +433,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
         "src/playground_wasm/main.zig",
         "src/compile/compile_build.zig",
         "src/compile/coordinator.zig",
+        "src/echo_platform/echo_native.zig",
         "src/lsp/syntax.zig",
         "src/ctx/CoreCtx.zig",
     };
@@ -788,8 +793,8 @@ const DeadFilesDetector = struct {
             std.mem.startsWith(u8, file.path, "ci/");
         if (!should_scan) return;
 
-        try detector.recordQuotedZigPaths(file.path, file.text, "@import(\"", false);
-        try detector.recordQuotedZigPaths(file.path, file.text, "b.path(\"", true);
+        try detector.recordQuotedZigPaths(gpa, file.path, file.text, "@import(\"", false);
+        try detector.recordQuotedZigPaths(gpa, file.path, file.text, "b.path(\"", true);
     }
 
     fn finish(detector: *DeadFilesDetector, errors: *Errors) void {
@@ -813,6 +818,7 @@ const DeadFilesDetector = struct {
 
     fn recordQuotedZigPaths(
         detector: *DeadFilesDetector,
+        gpa: Allocator,
         file_path: []const u8,
         text: []const u8,
         marker: []const u8,
@@ -832,7 +838,7 @@ const DeadFilesDetector = struct {
             {
                 continue;
             }
-            (try detector.fileState(path)).import_count += 1;
+            (try detector.fileState(gpa, path)).import_count += 1;
         } else {
             std.debug.panic("file with too many quoted Zig paths: {s}", .{file_path});
         }

@@ -1,7 +1,6 @@
 //! Tests for CLI platform resolution that do not cross the post-check lowering boundary
 
 const std = @import("std");
-const builtin = @import("builtin");
 const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");

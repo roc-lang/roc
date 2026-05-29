@@ -2717,7 +2717,7 @@ const Formatter = struct {
     fn hasCommentBefore(fmt: *Formatter, tokenIdx: Token.Idx) bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return std.mem.indexOfScalar(u8, fmt.ast.env.source[start..end], '#') != null;
+        return std.mem.findScalar(u8, fmt.ast.env.source[start..end], '#') != null;
     }
 
     /// Like `flushCommentsBefore`, but ensures at least `min_leading_newlines` newlines
