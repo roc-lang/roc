@@ -1,7 +1,10 @@
 //! Utilities for CLI tests using the actual roc binary.
 
 const std = @import("std");
+const builtin = @import("builtin");
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
 
 /// Absolute cache directory paths reserved for a single CLI test subprocess.
 pub const IsolatedCacheDirs = struct {
@@ -54,6 +57,132 @@ pub const RocResult = struct {
     stderr: []u8,
     term: std.process.Child.Term,
 };
+
+pub const ChildRunOptions = struct {
+    cwd: ?[]const u8 = null,
+    env_map: ?*const std.process.EnvMap = null,
+    max_output_bytes: usize = 10 * 1024 * 1024,
+    stdin: ?[]const u8 = null,
+    timeout_ms: u64 = default_child_timeout_ms,
+};
+
+fn terminateChildGroup(child_id: std.process.Child.Id) void {
+    switch (builtin.os.tag) {
+        .windows => std.os.windows.TerminateProcess(child_id, 1) catch {},
+        .wasi => {},
+        else => {
+            const pid: std.posix.pid_t = child_id;
+            std.posix.kill(-pid, std.posix.SIG.KILL) catch {
+                std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+            };
+        },
+    }
+}
+
+fn appendTimeoutMessage(
+    allocator: std.mem.Allocator,
+    stderr: *std.ArrayList(u8),
+    argv: []const []const u8,
+    timeout_ms: u64,
+) !void {
+    try stderr.writer(allocator).print(
+        "\nstuck: child command timed out after {d}ms:",
+        .{timeout_ms},
+    );
+    for (argv) |arg| {
+        try stderr.writer(allocator).print(" {s}", .{arg});
+    }
+    try stderr.appendSlice(allocator, "\n");
+}
+
+pub fn runChildWithTimeout(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    options: ChildRunOptions,
+) !std.process.Child.RunResult {
+    const Watch = struct {
+        child_id: std.process.Child.Id,
+        timeout_ms: u64,
+        timed_out: std.atomic.Value(bool),
+        done: std.atomic.Value(bool),
+
+        fn run(self: *@This()) void {
+            if (self.timeout_ms == 0) return;
+            const start_ms = std.time.milliTimestamp();
+            while (!self.done.load(.acquire)) {
+                std.Thread.sleep(100 * std.time.ns_per_ms);
+                if (self.done.load(.acquire)) return;
+
+                const elapsed_ms: u64 = @intCast(@max(0, std.time.milliTimestamp() - start_ms));
+                if (elapsed_ms >= self.timeout_ms) {
+                    self.timed_out.store(true, .release);
+                    terminateChildGroup(self.child_id);
+                    return;
+                }
+            }
+        }
+    };
+
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = if (options.stdin == null) .Ignore else .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.cwd = options.cwd;
+    child.env_map = options.env_map;
+    switch (builtin.os.tag) {
+        .windows, .wasi => {},
+        else => child.pgid = 0,
+    }
+
+    var stdout: std.ArrayList(u8) = .empty;
+    defer stdout.deinit(allocator);
+    var stderr: std.ArrayList(u8) = .empty;
+    defer stderr.deinit(allocator);
+
+    try child.spawn();
+    errdefer {
+        terminateChildGroup(child.id);
+        _ = child.wait() catch {};
+    }
+
+    var watch = Watch{
+        .child_id = child.id,
+        .timeout_ms = options.timeout_ms,
+        .timed_out = std.atomic.Value(bool).init(false),
+        .done = std.atomic.Value(bool).init(false),
+    };
+    const watch_thread = if (options.timeout_ms == 0)
+        null
+    else
+        try std.Thread.spawn(.{}, Watch.run, .{&watch});
+    defer {
+        watch.done.store(true, .release);
+        if (watch_thread) |thread| thread.join();
+    }
+
+    if (options.stdin) |stdin_input| {
+        try child.stdin.?.writeAll(stdin_input);
+        child.stdin.?.close();
+        child.stdin = null;
+    }
+
+    child.collectOutput(allocator, &stdout, &stderr, options.max_output_bytes) catch |err| {
+        terminateChildGroup(child.id);
+        _ = child.wait() catch {};
+        return err;
+    };
+
+    const term = try child.wait();
+    if (watch.timed_out.load(.acquire)) {
+        try appendTimeoutMessage(allocator, &stderr, argv, options.timeout_ms);
+    }
+
+    return .{
+        .stdout = try stdout.toOwnedSlice(allocator),
+        .stderr = try stderr.toOwnedSlice(allocator),
+        .term = term,
+    };
+}
 
 /// Create unique Roc and Zig local cache directories for one CLI test subprocess.
 pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheDirs {
@@ -119,9 +248,7 @@ fn runChild(
     var env_map = try buildIsolatedTestEnvMap(allocator, extra_env);
     defer env_map.deinit();
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
+    const result = try runChildWithTimeout(allocator, argv, .{
         .cwd = cwd_path,
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024, // 10MB
@@ -310,35 +437,18 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     });
     defer allocator.free(argv);
 
-    // Run roc with stdin pipe
-    var child = std.process.Child.init(argv, allocator);
     var env_map = try buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.cwd = cwd_path;
-    child.env_map = &env_map;
-
-    try child.spawn();
-
-    // Write input to stdin and close it
-    try child.stdin.?.writeAll(stdin_input);
-    child.stdin.?.close();
-    child.stdin = null;
-
-    // Collect output before waiting
-    const stdout = try child.stdout.?.readToEndAlloc(allocator, 10 * 1024 * 1024);
-    errdefer allocator.free(stdout);
-    const stderr = try child.stderr.?.readToEndAlloc(allocator, 10 * 1024 * 1024);
-    errdefer allocator.free(stderr);
-
-    // Wait for completion
-    const term = try child.wait();
+    const result = try runChildWithTimeout(allocator, argv, .{
+        .cwd = cwd_path,
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+        .stdin = stdin_input,
+    });
 
     return RocResult{
-        .stdout = stdout,
-        .stderr = stderr,
-        .term = term,
+        .stdout = result.stdout,
+        .stderr = result.stderr,
+        .term = result.term,
     };
 }
