@@ -2339,6 +2339,28 @@ fn createAnnoOnlyDef(
             },
         }
     } else create_new: {
+        // If an earlier reference parked a forward-reference placeholder for
+        // this ident, adopt that pattern instead of creating a new one — all
+        // existing e_lookup_local nodes already point at it, so the def must
+        // use the same Pattern.Idx to stay consistent.
+        {
+            var s_idx = self.scopes.items.len;
+            while (s_idx > 0) {
+                s_idx -= 1;
+                const scope_ptr = &self.scopes.items[s_idx];
+                if (scope_ptr.forward_references.fetchRemove(ident)) |kv| {
+                    var mut_regions = kv.value.reference_regions;
+                    mut_regions.deinit(self.env.gpa);
+                    const current_scope_idx = self.scopes.items.len - 1;
+                    if (s_idx != current_scope_idx) {
+                        _ = scope_ptr.idents.remove(ident);
+                    }
+                    try self.scopes.items[current_scope_idx].idents.put(self.env.gpa, ident, kv.value.pattern_idx);
+                    break :create_new kv.value.pattern_idx;
+                }
+            }
+        }
+
         // No placeholder - create new pattern and introduce to scope
         const pattern = Pattern{
             .assign = .{
@@ -11906,43 +11928,11 @@ pub fn scopeIntroduceInternal(
         return Scope.IntroduceResult{ .top_level_var_error = {} };
     }
 
-    // Check if this identifier was previously referenced as a forward reference.
-    // Forward refs are parked in the module scope (or, for sibling refs, an
-    // associated block scope); walk the chain so the def upgrades whichever
-    // scope holds the placeholder. When the def lives in a deeper scope than
-    // the forward ref, drop the speculative top-level idents entry so it
-    // doesn't masquerade as a top-level binding.
-    if (item_kind == .ident) {
-        var fwd_scope_idx: ?usize = null;
-        {
-            var s_idx = self.scopes.items.len;
-            while (s_idx > 0) {
-                s_idx -= 1;
-                if (self.scopes.items[s_idx].forward_references.contains(ident_idx)) {
-                    fwd_scope_idx = s_idx;
-                    break;
-                }
-            }
-        }
-        if (fwd_scope_idx) |s_idx| {
-            const owner_scope = &self.scopes.items[s_idx];
-            const current_scope_idx = self.scopes.items.len - 1;
-            const current_scope = &self.scopes.items[current_scope_idx];
-            const kv = owner_scope.forward_references.fetchRemove(ident_idx).?;
-            // Bind in the actual definition's scope, and drop the speculative
-            // entry from the owning scope when they differ.
-            try current_scope.idents.put(gpa, ident_idx, pattern_idx);
-            if (s_idx != current_scope_idx) {
-                _ = owner_scope.idents.remove(ident_idx);
-            }
-
-            var mut_regions = kv.value.reference_regions;
-            mut_regions.deinit(gpa);
-
-            // Return success - forward reference successfully upgraded
-            return Scope.IntroduceResult{ .success = {} };
-        }
-    }
+    // Forward-reference draining is the caller's responsibility — see
+    // `canonicalizePattern` and `createAnnoOnlyDef`, which fetch the
+    // forward-reference pattern and use it as the def's pattern so existing
+    // e_lookup_local nodes stay consistent. By the time we get here, any
+    // such drain has already happened, so we don't try again.
 
     // Check for existing identifier in any scope level for shadowing detection
     if (self.scopeContains(item_kind, ident_idx)) |existing| {
