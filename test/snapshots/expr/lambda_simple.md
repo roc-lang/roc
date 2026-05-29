@@ -34,12 +34,14 @@ NO CHANGE
 (e-lambda
 	(args
 		(p-assign (ident "x")))
-	(e-binop (op "add")
-		(e-lookup-local
-			(p-assign (ident "x")))
-		(e-num (value "1"))))
+	(e-dispatch-call (method "plus") (constraint-fn-var 41)
+		(receiver
+			(e-lookup-local
+				(p-assign (ident "x"))))
+		(args
+			(e-num (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> a where [a.plus : a, Dec -> a]"))
+(expr (type "a -> a where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

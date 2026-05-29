@@ -7,6 +7,7 @@
 //! Entry point: make_glue : List Types -> Result (List File) Str
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
@@ -81,7 +82,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         const msg2 = "\n\n";
@@ -97,7 +98,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         _ = posix.write(posix.STDERR_FILENO, msg) catch {};
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
         _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
         _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
         posix.exit(139);
@@ -205,7 +206,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     }) catch {};
     host.alloc_count += 1;
 
-    if (trace_refcount) {
+    if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
     }
 }
@@ -226,7 +227,7 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
 
-    if (trace_refcount) {
+    if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
             @intFromPtr(roc_dealloc.ptr),
             roc_dealloc.alignment,
@@ -302,7 +303,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 
-    if (trace_refcount) {
+    if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
     }
 }
@@ -474,8 +475,8 @@ fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
 
         return RocStr{
             .bytes = first_element,
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(SMALL_STRING_SIZE),
             .length = str.len,
-            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
         };
     } else {
         return RocStr.fromSlice(str, roc_ops);
@@ -582,7 +583,7 @@ fn parseTypesJson(
             break :blk RocList{
                 .bytes = funcs_bytes,
                 .length = mod.functions.len,
-                .capacity_or_alloc_ptr = mod.functions.len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(mod.functions.len),
             };
         } else RocList.empty();
 
@@ -610,7 +611,7 @@ fn parseTypesJson(
             break :blk RocList{
                 .bytes = hosted_bytes,
                 .length = mod.hosted_functions.len,
-                .capacity_or_alloc_ptr = mod.hosted_functions.len,
+                .capacity_or_alloc_ptr = RocList.encodeCapacity(mod.hosted_functions.len),
             };
         } else RocList.empty();
 
@@ -625,13 +626,12 @@ fn parseTypesJson(
     return RocList{
         .bytes = modules_bytes,
         .length = modules.len,
-        .capacity_or_alloc_ptr = modules.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(modules.len),
     };
 }
 
 /// Platform host entrypoint
 /// Receives args: [platform_path, --types-json=<json>, entry_point_names...]
-/// If no entry point names are provided, defaults to ["main"].
 fn platform_main(args: [][*:0]u8) !c_int {
     if (args.len < 1) {
         return error.MissingPlatformPath;
@@ -656,7 +656,14 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
 
     // Install signal handlers
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = base.signal_handler.installForCurrentThread(.{
+        .stack_overflow = handleRocStackOverflow,
+        .access_violation = handleRocAccessViolation,
+        .arithmetic_error = handleRocArithmeticError,
+    });
+    if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+        builtins.utils.DebugRefcountTracker.enable();
+    }
 
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
@@ -667,6 +674,9 @@ fn platform_main(args: [][*:0]u8) !c_int {
         const remaining_count = host_env.roc_allocations.items.len;
 
         if (remaining_count > 0) {
+            if (builtin.mode == .Debug and builtin.os.tag != .freestanding) {
+                _ = builtins.utils.DebugRefcountTracker.reportLeaks();
+            }
             const stderr_file: std.fs.File = .stderr();
             var buf: [512]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf,
@@ -709,23 +719,16 @@ fn platform_main(args: [][*:0]u8) !c_int {
         },
     };
 
-    // Build entrypoints list
-    // For now, create a single entry point with the platform path as the name
-    // TODO: Extract actual entry points from compiled platform module
     const allocator = host_env.gpa.allocator();
 
     const stdout: std.fs.File = .stdout();
 
-    // Entry point names from args[entry_point_start_idx..], or default to ["main"] if none provided
-    const default_entry_points = [_][]const u8{"main"};
-    const entry_point_names: []const []const u8 = if (args.len > entry_point_start_idx) blk: {
-        const names = allocator.alloc([]const u8, args.len - entry_point_start_idx) catch return error.OutOfMemory;
-        for (args[entry_point_start_idx..], 0..) |arg, i| {
-            names[i] = std.mem.span(arg);
-        }
-        break :blk names;
-    } else &default_entry_points;
-    defer if (args.len > entry_point_start_idx) allocator.free(entry_point_names);
+    if (args.len <= entry_point_start_idx) return error.MissingEntrypointNames;
+    const entry_point_names = allocator.alloc([]const u8, args.len - entry_point_start_idx) catch return error.OutOfMemory;
+    for (args[entry_point_start_idx..], 0..) |arg, i| {
+        entry_point_names[i] = std.mem.span(arg);
+    }
+    defer allocator.free(entry_point_names);
 
     // Allocate array for EntryPoint entries using Roc's allocation scheme
     // This ensures a valid refcount is present at bytes-8, which Roc's
@@ -762,8 +765,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
             break :blk RocStr{
                 .bytes = first_element,
+                .capacity_or_alloc_ptr = RocStr.encodeCapacity(SMALL_STRING_SIZE),
                 .length = name.len,
-                .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
             };
         } else blk: {
             // For strings >= 24 bytes, fromSlice already creates a big string
@@ -780,7 +783,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     const entrypoints_list = RocList{
         .bytes = entrypoints_bytes,
         .length = entry_point_names.len,
-        .capacity_or_alloc_ptr = entry_point_names.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(entry_point_names.len),
     };
 
     // Parse types_json to create modules list
@@ -812,7 +815,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
         break :pblk RocList{
             .bytes = prov_bytes,
             .length = entry_point_names.len,
-            .capacity_or_alloc_ptr = entry_point_names.len,
+            .capacity_or_alloc_ptr = RocList.encodeCapacity(entry_point_names.len),
         };
     } else RocList.empty();
 
@@ -839,7 +842,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     var types_list = RocList{
         .bytes = types_inner_bytes,
         .length = 1,
-        .capacity_or_alloc_ptr = 1,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(1),
     };
 
     // Call the Roc glue spec

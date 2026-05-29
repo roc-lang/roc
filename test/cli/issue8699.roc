@@ -24,3 +24,5 @@ expect {
 	# The actual result is [[1, 2, 3], [4]] but we expect something different.
 	chunks([1, 2, 3, 4], 3) == [[1, 2]]
 }
+
+main! = |_| 0

@@ -851,21 +851,21 @@ main = |_| {
 									(p-assign (ident "val"))))))))))
 	(d-let
 		(p-assign (ident "container1"))
-		(e-call
+		(e-call (constraint-fn-var 1027)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "container2"))
-		(e-call
+		(e-call (constraint-fn-var 1032)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "container3"))
-		(e-call
+		(e-call (constraint-fn-var 1037)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -894,14 +894,18 @@ main = |_| {
 												(elems
 													(e-lookup-local
 														(p-assign (ident "num")))
-													(e-binop (op "mul")
-														(e-lookup-local
-															(p-assign (ident "num")))
-														(e-num (value "2")))
-													(e-binop (op "mul")
-														(e-lookup-local
-															(p-assign (ident "num")))
-														(e-num (value "3")))))))))
+													(e-dispatch-call (method "times") (constraint-fn-var 1069)
+														(receiver
+															(e-lookup-local
+																(p-assign (ident "num"))))
+														(args
+															(e-num (value "2"))))
+													(e-dispatch-call (method "times") (constraint-fn-var 1101)
+														(receiver
+															(e-lookup-local
+																(p-assign (ident "num"))))
+														(args
+															(e-num (value "3"))))))))))
 							(field (name "collection")
 								(e-lookup-local
 									(p-assign (ident "empty_list")))))))
@@ -940,16 +944,20 @@ main = |_| {
 											(e-literal (string "more"))))))))))))
 	(d-let
 		(p-assign (ident "compute1"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-num (value "10"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1347)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "compute2"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-num (value "2"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 1379)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "compute3"))
 		(e-list
@@ -970,14 +978,18 @@ main = |_| {
 						(elems
 							(e-lookup-local
 								(p-assign (ident "num")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "num")))
-								(e-num (value "1")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "num")))
-								(e-num (value "2")))))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 1413)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "num"))))
+								(args
+									(e-num (value "1"))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 1445)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "num"))))
+								(args
+									(e-num (value "2"))))))))))
 	(d-let
 		(p-assign (ident "mixed"))
 		(e-record
@@ -1032,15 +1044,19 @@ main = |_| {
 					(e-record
 						(fields
 							(field (name "from_num")
-								(e-binop (op "mul")
-									(e-lookup-local
-										(p-assign (ident "num")))
-									(e-num (value "100"))))
+								(e-dispatch-call (method "times") (constraint-fn-var 1490)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "num"))))
+									(args
+										(e-num (value "100")))))
 							(field (name "from_frac")
-								(e-binop (op "mul")
-									(e-lookup-local
-										(p-assign (ident "frac")))
-									(e-dec-small (numerator "100") (denominator-power-of-ten "1") (value "10"))))
+								(e-dispatch-call (method "times") (constraint-fn-var 1522)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "frac"))))
+									(args
+										(e-dec-small (numerator "10") (denominator-power-of-ten "0") (value "10")))))
 							(field (name "list_from_num")
 								(e-list
 									(elems
@@ -1056,12 +1072,14 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-binop (op "add")
-					(e-dot-access (field "value")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "container1")))))
-					(e-num (value "10")))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 1562)
+					(receiver
+						(e-field-access (field "value")
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "container1"))))))
+					(args
+						(e-num (value "10"))))))))
 ~~~
 # TYPES
 ~~~clojure

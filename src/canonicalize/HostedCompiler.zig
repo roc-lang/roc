@@ -1,7 +1,7 @@
 //! Compiler support for hosted functions in platform modules.
 //!
 //! This module handles the transformation of annotation-only declarations
-//! into hosted lambda expressions that will be provided by the platform at runtime.
+//! into explicit hosted lambda facts that will be provided by the platform at runtime.
 
 const std = @import("std");
 const base = @import("base");
@@ -94,25 +94,11 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             }
             const args_span = try env.store.patternSpanFrom(patterns_start);
 
-            // Create an e_crash body that crashes when the function is called in the interpreter.
-            // This is a placeholder - hosted functions are provided by the platform's native code,
-            // so this body should never be evaluated during normal compilation/execution.
-            const crash_msg = try env.insertString("Hosted functions cannot be called in the interpreter");
-            const body_idx = try env.addExpr(.{ .e_crash = .{ .msg = crash_msg } }, def_region);
-
-            // Ensure types array has entries for all new expressions
-            const body_int = @intFromEnum(body_idx);
-            while (env.types.len() <= body_int) {
-                _ = try env.types.fresh();
-            }
-
             // Create e_hosted_lambda expression
             const expr_idx = try env.addExpr(.{
                 .e_hosted_lambda = .{
                     .symbol_name = ident,
-                    .index = 0, // Placeholder; will be assigned during sorting pass
                     .args = args_span,
-                    .body = body_idx,
                 },
             }, def_region);
 
@@ -206,20 +192,4 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
     std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
 
     return hosted_fns;
-}
-
-/// Assign indices to e_hosted_lambda expressions based on sorted order
-pub fn assignHostedIndices(env: *ModuleEnv, sorted_fns: []const HostedFunctionInfo) !void {
-    for (sorted_fns, 0..) |fn_info, index| {
-        // Get the expression node (Expr.Idx and Node.Idx have same underlying representation)
-        const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
-        var expr_node = env.store.nodes.get(expr_node_idx);
-
-        // For e_hosted_lambda nodes, update the index field in the payload
-        var payload = expr_node.getPayload().expr_hosted_lambda;
-        payload.index = @intCast(index);
-        expr_node.setPayload(.{ .expr_hosted_lambda = payload });
-
-        env.store.nodes.set(expr_node_idx, expr_node);
-    }
 }

@@ -8,19 +8,9 @@ type=expr
 !blah
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_not.md:1:2:1:6
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `blah` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unary_not.md:1:2:1:6:**
-```roc
-!blah
-```
- ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpBang,LowerIdent,
@@ -37,8 +27,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-not
-	(e-runtime-error (tag "ident_not_in_scope")))
+(e-dispatch-call (method "not") (constraint-fn-var 9)
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

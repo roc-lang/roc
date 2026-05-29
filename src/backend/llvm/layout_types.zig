@@ -1,9 +1,9 @@
 //! Layout to LLVM Type Conversion
 //!
 //! This module provides conversion from Roc's Layout system to LLVM types.
-//! It bridges the Roc compiler's layout representation with the LLVM IR builder.
+//! It converts the Roc compiler's layout representation to LLVM IR builder types.
 //!
-//! Key conversions:
+//! Main conversions:
 //! - Scalars → i8/i16/i32/i64/i128/float/double
 //! - Records/Tuples → LLVM struct types
 //! - Tag Unions → { payload_bytes, discriminant }
@@ -23,8 +23,6 @@ const Idx = layout.Idx;
 /// Errors that can occur during layout conversion
 pub const Error = error{
     OutOfMemory,
-    UnsupportedLayout,
-    InvalidLayoutIndex,
 };
 
 /// Converts a Roc Layout to an LLVM Builder.Type
@@ -49,7 +47,7 @@ pub fn layoutToLlvmType(
 fn scalarToLlvmType(builder: *Builder, layout_val: Layout) Error!Builder.Type {
     return switch (layout_val.data.scalar.tag) {
         .opaque_ptr => .ptr,
-        .str => strLlvmType(builder), // RocStr: { ptr, len }
+        .str => strLlvmType(builder), // RocStr: { ptr, encoded capacity, len }
         .int => intPrecisionToLlvmType(layout_val.data.scalar.data.int),
         .frac => fracPrecisionToLlvmType(layout_val.data.scalar.data.frac),
     };
@@ -82,11 +80,11 @@ fn listLlvmType(builder: *Builder) Error!Builder.Type {
     return builder.structType(.normal, &fields) catch return error.OutOfMemory;
 }
 
-/// Get the LLVM type for a Roc Str (2-element struct: ptr, len)
+/// Get the LLVM type for a Roc Str (3-element struct: ptr, encoded capacity, len)
 /// Note: Str also has seamless small string optimization, but the LLVM type
 /// is the same (the SSO is handled at runtime)
 pub fn strLlvmType(builder: *Builder) Error!Builder.Type {
-    const fields = [_]Builder.Type{ .ptr, .i64 };
+    const fields = [_]Builder.Type{ .ptr, .i64, .i64 };
     return builder.structType(.normal, &fields) catch return error.OutOfMemory;
 }
 
@@ -180,19 +178,24 @@ fn tagUnionToLlvmType(
 }
 
 /// Get the discriminant type for a tag union.
-/// Returns an error for unsupported discriminant sizes.
+/// Unsupported discriminant sizes indicate a compiler layout bug.
 pub fn getDiscriminantTypeChecked(discriminant_size: u8) Error!Builder.Type {
     return switch (discriminant_size) {
         1 => .i8,
         2 => .i16,
         4 => .i32,
         8 => .i64,
-        else => error.UnsupportedLayout, // Unsupported discriminant size
+        else => {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("LLVM layout invariant violated: unsupported discriminant size {d}", .{discriminant_size});
+            }
+            unreachable;
+        },
     };
 }
 
 /// Get the discriminant type for a tag union.
-/// Panics on unsupported discriminant sizes (use getDiscriminantTypeChecked for error handling).
+/// Unsupported discriminant sizes indicate a compiler layout bug.
 pub fn getDiscriminantType(discriminant_size: u8) Builder.Type {
     return getDiscriminantTypeChecked(discriminant_size) catch unreachable;
 }
@@ -284,7 +287,7 @@ fn getScalarSize(layout_val: Layout) u32 {
 pub fn getScalarSizeWithPtrSize(layout_val: Layout, ptr_size: u32) u32 {
     return switch (layout_val.data.scalar.tag) {
         .opaque_ptr => ptr_size,
-        .str => ptr_size * 2, // { ptr, len }
+        .str => ptr_size * 3, // { ptr, encoded capacity, len }
         .int => switch (layout_val.data.scalar.data.int) {
             .u8, .i8 => 1,
             .u16, .i16 => 2,

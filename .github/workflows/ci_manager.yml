@@ -20,7 +20,7 @@ jobs:
       zig: ${{ steps.filter.outputs.zig }}
       other_than_zig: ${{ steps.other_filter.outputs.other_than_zig }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -36,8 +36,11 @@ jobs:
               - '.github/workflows/ci_zig_benchmarks.yml'
               - '.github/actions/flaky-retry/action.yml'
               - 'ci/zig_lints.sh'
+              - 'ci/tidy.zig'
               - 'ci/check_test_wiring.zig'
               - 'ci/custom_valgrind.sh'
+              - 'ci/valgrind_snapshots.sh'
+              - 'ci/zig_nix_ci.sh'
               - 'ci/valgrind.supp'
       - uses: dorny/paths-filter@v3
         id: other_filter
@@ -60,6 +63,8 @@ jobs:
               - '!ci/zig_lints.sh'
               - '!ci/check_test_wiring.zig'
               - '!ci/custom_valgrind.sh'
+              - '!ci/valgrind_snapshots.sh'
+              - '!ci/zig_nix_ci.sh'
               - '!ci/valgrind.supp'
               - '!ci/tidy.zig'
               # Files that ci manager workflows should not run on.

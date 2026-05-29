@@ -321,6 +321,11 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
 
     _ = wasm_interface.module_instance.invoke(wasm_interface.processAndRespond_handle, &params_process, &returns_process, .{}) catch |err| {
         logDebug("[ERROR] Error invoking WASM processAndRespond: {}\n", .{err});
+        var backtrace = wasm_interface.module_instance.formatBacktrace(2, allocator) catch null;
+        if (backtrace) |*bt| {
+            defer bt.deinit();
+            logDebug("[ERROR] WASM backtrace:\n{s}\n", .{bt.items});
+        }
         logDebug("Printing WASM internal debug log after invocation error:\n", .{});
         printWasmDebugLog(wasm_interface);
         // Important: Try to free the message buffer even if processing failed.
@@ -342,15 +347,16 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     }
 
     // Read the null-terminated response string from WASM memory.
+    const wasm_memory_after = wasm_interface.memory.buffer();
     const response_ptr: usize = @intCast(response_ptr_opt);
-    if (response_ptr >= wasm_memory.len) {
+    if (response_ptr >= wasm_memory_after.len) {
         logDebug("[ERROR] WASM returned response pointer out of bounds: {}\n", .{response_ptr});
         // Attempt to free the response string if possible.
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};
         return error.WasmReturnedInvalidPointer;
     }
 
-    const response_slice = wasm_memory[response_ptr..];
+    const response_slice = wasm_memory_after[response_ptr..];
     const null_terminator_idx = std.mem.indexOfScalar(u8, response_slice, 0) orelse {
         logDebug("[ERROR] WASM returned response string without a null terminator.\n", .{});
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};

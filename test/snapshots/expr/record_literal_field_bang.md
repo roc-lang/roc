@@ -51,9 +51,9 @@ EndOfFile,
 				(args
 					(p-record-destructure
 						(destructs)))
-				(e-not-implemented)))))
+				(e-runtime-error (tag "not_implemented"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ answer: Dec, launchTheNukes!: { .. } -> _ret }"))
+(expr (type "{ answer: Dec, launchTheNukes!: { .. } -> Error }"))
 ~~~

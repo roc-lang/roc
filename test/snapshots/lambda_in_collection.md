@@ -71,21 +71,25 @@ NO CHANGE
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
 			(e-block
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "a")))
-					(e-lookup-local
-						(p-assign (ident "b"))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 21)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "a"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "b")))))))
 		(e-lambda
 			(args
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
 			(e-block
-				(e-binop (op "sub")
-					(e-lookup-local
-						(p-assign (ident "a")))
-					(e-lookup-local
-						(p-assign (ident "b"))))))))
+				(e-dispatch-call (method "minus") (constraint-fn-var 23)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "a"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "b")))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -8,19 +8,9 @@ type=expr
 -foo
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unary_negation.md:1:2:1:5:**
-```roc
--foo
-```
- ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpUnaryMinus,LowerIdent,
@@ -37,8 +27,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus
-	(e-runtime-error (tag "ident_not_in_scope")))
+(e-dispatch-call (method "negate") (constraint-fn-var 9)
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

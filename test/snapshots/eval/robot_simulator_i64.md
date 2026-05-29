@@ -26,9 +26,63 @@ expect retreat_x({ x: 0, y: 0 }) == { x: -1, y: 0 }
 expect advance_y(retreat_y({ x: 5, y: 5 })) == { x: 5, y: 5 }
 ~~~
 # EXPECTED
-NIL
+INFINITE TYPE - robot_simulator_i64.md:4:1:4:48
+INFINITE TYPE - robot_simulator_i64.md:7:1:7:48
+INFINITE TYPE - robot_simulator_i64.md:10:1:10:48
+INFINITE TYPE - robot_simulator_i64.md:13:1:13:48
 # PROBLEMS
-NIL
+**INFINITE TYPE**
+I am inferring a weird self-referential type:
+**robot_simulator_i64.md:4:1:4:48:**
+```roc
+advance_y = |robot| { ..robot, y: robot.y + 1 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+
+    Robot
+
+
+**INFINITE TYPE**
+I am inferring a weird self-referential type:
+**robot_simulator_i64.md:7:1:7:48:**
+```roc
+retreat_y = |robot| { ..robot, y: robot.y - 1 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+
+    Robot
+
+
+**INFINITE TYPE**
+I am inferring a weird self-referential type:
+**robot_simulator_i64.md:10:1:10:48:**
+```roc
+advance_x = |robot| { ..robot, x: robot.x + 1 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+
+    Robot
+
+
+**INFINITE TYPE**
+I am inferring a weird self-referential type:
+**robot_simulator_i64.md:13:1:13:48:**
+```roc
+retreat_x = |robot| { ..robot, x: robot.x - 1 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+
+    Robot
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
@@ -223,12 +277,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-binop (op "add")
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 228)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -244,12 +300,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-binop (op "sub")
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "minus") (constraint-fn-var 385)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -265,12 +323,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-binop (op "add")
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 542)
+							(receiver
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -286,12 +346,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-binop (op "sub")
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "minus") (constraint-fn-var 699)
+							(receiver
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -304,108 +366,112 @@ NO CHANGE
 			(field (field "y")
 				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "advance_y")))
-				(e-record
-					(fields
-						(field (name "x")
-							(e-num (value "0")))
-						(field (name "y")
-							(e-num (value "0"))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "0")))
-					(field (name "y")
-						(e-num (value "1")))))))
-	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "retreat_y")))
-				(e-record
-					(fields
-						(field (name "x")
-							(e-num (value "0")))
-						(field (name "y")
-							(e-num (value "0"))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "0")))
-					(field (name "y")
-						(e-num (value "-1")))))))
-	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "advance_x")))
-				(e-record
-					(fields
-						(field (name "x")
-							(e-num (value "0")))
-						(field (name "y")
-							(e-num (value "0"))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "1")))
-					(field (name "y")
-						(e-num (value "0")))))))
-	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "retreat_x")))
-				(e-record
-					(fields
-						(field (name "x")
-							(e-num (value "0")))
-						(field (name "y")
-							(e-num (value "0"))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "-1")))
-					(field (name "y")
-						(e-num (value "0")))))))
-	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "advance_y")))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "retreat_y")))
+		(e-structural-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 845)
+					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
 							(field (name "x")
-								(e-num (value "5")))
+								(e-num (value "0")))
 							(field (name "y")
-								(e-num (value "5")))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "5")))
-					(field (name "y")
-						(e-num (value "5"))))))))
+								(e-num (value "0")))))))
+			(rhs
+				(e-record
+					(fields
+						(field (name "x")
+							(e-num (value "0")))
+						(field (name "y")
+							(e-num (value "1"))))))))
+	(s-expect
+		(e-structural-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 1262)
+					(e-runtime-error (tag "erroneous_value_use"))
+					(e-record
+						(fields
+							(field (name "x")
+								(e-num (value "0")))
+							(field (name "y")
+								(e-num (value "0")))))))
+			(rhs
+				(e-record
+					(fields
+						(field (name "x")
+							(e-num (value "0")))
+						(field (name "y")
+							(e-num (value "-1"))))))))
+	(s-expect
+		(e-structural-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 1679)
+					(e-runtime-error (tag "erroneous_value_use"))
+					(e-record
+						(fields
+							(field (name "x")
+								(e-num (value "0")))
+							(field (name "y")
+								(e-num (value "0")))))))
+			(rhs
+				(e-record
+					(fields
+						(field (name "x")
+							(e-num (value "1")))
+						(field (name "y")
+							(e-num (value "0"))))))))
+	(s-expect
+		(e-structural-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 2096)
+					(e-runtime-error (tag "erroneous_value_use"))
+					(e-record
+						(fields
+							(field (name "x")
+								(e-num (value "0")))
+							(field (name "y")
+								(e-num (value "0")))))))
+			(rhs
+				(e-record
+					(fields
+						(field (name "x")
+							(e-num (value "-1")))
+						(field (name "y")
+							(e-num (value "0"))))))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 2514)
+					(e-runtime-error (tag "erroneous_value_use"))
+					(e-call (constraint-fn-var 2513)
+						(e-runtime-error (tag "erroneous_value_use"))
+						(e-record
+							(fields
+								(field (name "x")
+									(e-num (value "5")))
+								(field (name "y")
+									(e-num (value "5"))))))))
+			(rhs
+				(e-record
+					(fields
+						(field (name "x")
+							(e-num (value "5")))
+						(field (name "y")
+							(e-num (value "5")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Robot -> Robot"))
-		(patt (type "Robot -> Robot"))
-		(patt (type "Robot -> Robot"))
-		(patt (type "Robot -> Robot")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(alias (type "Robot")
 			(ty-header (name "Robot"))))
 	(expressions
-		(expr (type "Robot -> Robot"))
-		(expr (type "Robot -> Robot"))
-		(expr (type "Robot -> Robot"))
-		(expr (type "Robot -> Robot"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

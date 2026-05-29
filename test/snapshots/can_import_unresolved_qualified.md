@@ -33,6 +33,7 @@ parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
+MODULE NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
@@ -52,6 +53,17 @@ Is there an `import` or `exposing` missing up-top?
 main = Json.NonExistent.method
 ```
        ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `InvalidType` is qualified by the module `json.Json`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_unresolved_qualified.md:8:17:8:29:**
+```roc
+parseData : Json.InvalidType -> Str
+```
+                ^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -237,7 +249,7 @@ NO CHANGE
 					(p-assign (ident "data")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "InvalidType") (external-module "json.Json"))
+				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))

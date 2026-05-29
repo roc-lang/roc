@@ -33,13 +33,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
+(e-call (constraint-fn-var 44)
 	(e-lambda
 		(args
 			(p-assign (ident "x")))
-		(e-unary-minus
-			(e-lookup-local
-				(p-assign (ident "x")))))
+		(e-dispatch-call (method "negate") (constraint-fn-var 12)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "x"))))
+			(args)))
 	(e-num (value "5")))
 ~~~
 # TYPES

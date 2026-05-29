@@ -111,6 +111,51 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
     return result;
 }
 
+/// Like `create`, but if the OS rejects the preferred reservation (typically
+/// ENOMEM from `mmap` because the requested size doesn't fit in the available
+/// user virtual address space), halve the size and retry until it succeeds or
+/// the next attempt would drop below `min_size`. Errors unrelated to size
+/// (e.g. memfd_create failure) propagate immediately without retrying.
+///
+/// This matters on aarch64 Linux kernels built with `CONFIG_ARM64_VA_BITS=39`
+/// — the default on 64-bit Raspberry Pi OS — which cap user VA at ~256 GiB and
+/// reject a 2 TiB reservation outright. On systems where the preferred size
+/// fits, a single attempt succeeds and no retry happens.
+///
+/// `min_size` is clamped to `preferred_size` so callers can pass a fixed
+/// "real-program floor" without worrying about targets (32-bit, valgrind
+/// builds) whose preferred size is already smaller.
+pub fn createWithMinSize(
+    preferred_size: usize,
+    min_size: usize,
+    page_size: usize,
+) !SharedMemoryAllocator {
+    const aligned_preferred = std.mem.alignForward(usize, preferred_size, page_size);
+    const aligned_min = std.mem.alignForward(usize, @min(min_size, preferred_size), page_size);
+
+    var current_size = aligned_preferred;
+    while (true) {
+        if (create(current_size, page_size)) |shm| {
+            if (current_size < aligned_preferred) {
+                std.log.warn(
+                    "shared memory: OS rejected preferred reservation of {} bytes; using {} bytes instead",
+                    .{ aligned_preferred, current_size },
+                );
+            }
+            return shm;
+        } else |err| {
+            const size_related = switch (err) {
+                error.MmapFailed, error.FtruncateFailed, error.OutOfMemory => true,
+                else => false,
+            };
+            if (!size_related or current_size <= aligned_min) return err;
+
+            const halved = current_size / 2;
+            current_size = if (halved < aligned_min) aligned_min else halved;
+        }
+    }
+}
+
 /// Opens an existing shared memory region by reading its header first.
 /// This function will map only the required amount of memory as specified in the header.
 pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize) !SharedMemoryAllocator {
@@ -209,8 +254,7 @@ pub fn updateHeader(self: *SharedMemoryAllocator) void {
 }
 
 /// Deinitializes the shared memory allocator
-pub fn deinit(self: *SharedMemoryAllocator, gpa: std.mem.Allocator) void {
-    _ = gpa; // No longer needed since we don't store the name
+pub fn deinit(self: *SharedMemoryAllocator, _: std.mem.Allocator) void {
     // Update header before closing
     if (self.is_owner) {
         self.updateHeader();
@@ -282,7 +326,7 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, _: usize) ?[
     }
 }
 
-fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, _: usize) bool {
+fn resize(ctx: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
     const self: *SharedMemoryAllocator = @ptrCast(@alignCast(ctx));
     const buf_ptr = @intFromPtr(buf.ptr);
     const base = @intFromPtr(self.base_ptr);
@@ -297,7 +341,10 @@ fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usi
         if (new_len <= buf.len) {
             // Shrinking - just update the offset
             const shrink_amount = buf.len - new_len;
-            _ = self.offset.fetchSub(shrink_amount, .monotonic);
+            const previous_offset = self.offset.fetchSub(shrink_amount, .monotonic);
+            if (previous_offset < shrink_amount) {
+                unreachable;
+            }
             return true;
         } else {
             // Growing - check if we have room
@@ -345,7 +392,6 @@ fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usi
     if (new_len <= buf.len) {
         // For non-last allocations, just report success for shrinking
         // The extra space becomes wasted, but that's unavoidable
-        _ = alignment; // Suppress unused warning
         return true;
     }
 

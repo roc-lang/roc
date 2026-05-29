@@ -189,11 +189,16 @@ test "PackedDataSpan different configurations" {
 
 test "PackedDataSpan compile-time validation" {
     // These should compile fine
-    _ = PackedDataSpan(16, 16);
-    _ = PackedDataSpan(20, 12);
-    _ = PackedDataSpan(24, 8);
-    _ = PackedDataSpan(1, 31);
-    _ = PackedDataSpan(31, 1);
+    const span_a = PackedDataSpan(16, 16);
+    const span_b = PackedDataSpan(20, 12);
+    const span_c = PackedDataSpan(24, 8);
+    const span_d = PackedDataSpan(1, 31);
+    const span_e = PackedDataSpan(31, 1);
+    std.mem.doNotOptimizeAway(span_a);
+    std.mem.doNotOptimizeAway(span_b);
+    std.mem.doNotOptimizeAway(span_c);
+    std.mem.doNotOptimizeAway(span_d);
+    std.mem.doNotOptimizeAway(span_e);
 
     // These would cause compile errors if uncommented:
     // _ = PackedDataSpan(16, 15); // doesn't sum to 32

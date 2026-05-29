@@ -38,10 +38,10 @@ EndOfFile,
 				(e-block
 					(statements
 						(s-dbg
-							(e-field-access
-								(e-ident (raw "num"))
-								(e-apply
-									(e-ident (raw "to_str")))))
+							(e-method-call (method ".to_str")
+								(receiver
+									(e-ident (raw "num")))
+								(args)))
 						(s-dbg
 							(e-tuple
 								(e-ident (raw "num"))))))))))
@@ -66,7 +66,7 @@ foo = |num| {
 				(p-assign (ident "num")))
 			(e-block
 				(s-dbg
-					(e-dot-access (field "to_str")
+					(e-dispatch-call (method "to_str") (constraint-fn-var 16)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "num"))))
@@ -79,7 +79,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a => {} where [a.to_str : a -> _ret]")))
+		(patt (type "a -> {} where [a.to_str : a -> _ret]")))
 	(expressions
-		(expr (type "a => {} where [a.to_str : a -> _ret]"))))
+		(expr (type "a -> {} where [a.to_str : a -> _ret]"))))
 ~~~

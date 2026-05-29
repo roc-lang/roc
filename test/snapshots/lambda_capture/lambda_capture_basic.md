@@ -39,8 +39,8 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
-	(e-call
+(e-call (constraint-fn-var 84)
+	(e-call (constraint-fn-var 51)
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
@@ -50,11 +50,13 @@ NO CHANGE
 				(e-lambda
 					(args
 						(p-assign (ident "y")))
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y")))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 19)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y"))))))))
 		(e-num (value "1")))
 	(e-num (value "2")))
 ~~~

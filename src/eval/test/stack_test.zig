@@ -45,7 +45,7 @@ test "Stack.alloca with alignment" {
 
         // Create initial misalignment
         if (misalign > 0) {
-            _ = try stack.alloca(@intCast(misalign), .@"1");
+            try stack.alloca(@intCast(misalign), .@"1");
         }
 
         // Test each alignment with the current misalignment
@@ -73,7 +73,7 @@ test "Stack.alloca with alignment" {
     stack.used = 0;
     for (alignments) |alignment| {
         // Create some misalignment
-        _ = try stack.alloca(3, .@"1");
+        try stack.alloca(3, .@"1");
 
         const before_used = stack.used;
         const ptr = try stack.alloca(alignment * 2, @enumFromInt(std.math.log2_int(u32, alignment)));
@@ -91,7 +91,7 @@ test "Stack.alloca overflow" {
     defer stack.deinit();
 
     // This should succeed
-    _ = try stack.alloca(50, .@"1");
+    try stack.alloca(50, .@"1");
 
     // This should fail (would total 150 bytes)
     try std.testing.expectError(StackOverflow.StackOverflow, stack.alloca(100, .@"1"));
@@ -105,7 +105,7 @@ test "Stack.restore" {
     defer stack.deinit();
 
     const checkpoint = stack.next();
-    _ = try stack.alloca(100, .@"1");
+    try stack.alloca(100, .@"1");
     try std.testing.expectEqual(@as(u32, 100), stack.used);
 
     stack.restore(checkpoint);
@@ -123,7 +123,7 @@ test "Stack.isEmpty" {
     try std.testing.expect(stack.isEmpty());
     try std.testing.expectEqual(@as(u32, 100), stack.available());
 
-    _ = try stack.alloca(30, .@"1");
+    try stack.alloca(30, .@"1");
     try std.testing.expect(!stack.isEmpty());
     try std.testing.expectEqual(@as(u32, 70), stack.available());
 }
@@ -150,8 +150,8 @@ test "Stack memory is aligned to max_roc_alignment" {
     try std.testing.expectEqual(@as(usize, 0), start_addr % max_alignment_value);
 
     // Also verify after some allocations
-    _ = try stack.alloca(100, .@"1");
-    _ = try stack.alloca(200, .@"1");
+    try stack.alloca(100, .@"1");
+    try stack.alloca(200, .@"1");
 
     // The start pointer should still be aligned
     try std.testing.expectEqual(@as(usize, 0), start_addr % max_alignment_value);

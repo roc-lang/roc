@@ -88,10 +88,12 @@ NO CHANGE
 			(e-if
 				(if-branches
 					(if-branch
-						(e-binop (op "gt")
-							(e-lookup-local
-								(p-assign (ident "id")))
-							(e-num (value "10")))
+						(e-dispatch-call (method "is_gt") (constraint-fn-var 91)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "id"))))
+							(args
+								(e-num (value "10"))))
 						(e-string
 							(e-literal (string "big")))))
 				(if-else
@@ -106,7 +108,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call
+			(e-call (constraint-fn-var 222)
 				(e-lookup-local
 					(p-assign (ident "getUser")))
 				(e-num (value "100")))))

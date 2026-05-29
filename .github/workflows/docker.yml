@@ -13,7 +13,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Copy example docker file
         run: cp docker/nightly-ubuntu-latest/docker-compose.example.yml docker/nightly-ubuntu-latest/docker-compose.yml
@@ -32,7 +32,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Copy example docker file
         run: cp docker/nightly-ubuntu-2204/docker-compose.example.yml docker/nightly-ubuntu-2204/docker-compose.yml
@@ -50,7 +50,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Copy example docker file
         run: cp docker/nightly-ubuntu-2004/docker-compose.example.yml docker/nightly-ubuntu-2004/docker-compose.yml
@@ -68,7 +68,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Copy example docker file
         run: cp docker/nightly-debian-latest/docker-compose.example.yml docker/nightly-debian-latest/docker-compose.yml
@@ -86,7 +86,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Copy example docker file
         run: cp docker/nightly-debian-bookworm/docker-compose.example.yml docker/nightly-debian-bookworm/docker-compose.yml

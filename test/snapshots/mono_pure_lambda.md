@@ -16,8 +16,10 @@ result = add_one(5)
 one : Dec
 one = 1
 
+add_one = |x| x.plus(one)
+
 result : Dec
-result = 6
+result = add_one(5)
 ~~~
 # FORMATTED
 ~~~roc
@@ -67,14 +69,19 @@ EndOfFile,
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-lookup-local
-					(p-assign (ident "one"))))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 51)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "one")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "6"))))
+		(e-call (constraint-fn-var 86)
+			(e-lookup-local
+				(p-assign (ident "add_one")))
+			(e-num (value "5")))))
 ~~~
 # TYPES
 ~~~clojure

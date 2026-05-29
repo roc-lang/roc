@@ -19,6 +19,8 @@ pub const Scope = @import("Scope.zig");
 pub const DependencyGraph = @import("DependencyGraph.zig");
 /// Hosted function compiler - replaces annotation-only with hosted lambdas
 pub const HostedCompiler = @import("HostedCompiler.zig");
+/// Builtin.roc low-level operation transform
+pub const BuiltinLowLevel = @import("BuiltinLowLevel.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)
@@ -73,7 +75,11 @@ pub fn canonicalizeExpr(
     var czer = try Can.initModule(allocators, module_env, parse_ast, context);
     defer czer.deinit();
     const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    return try czer.canonicalizeExpr(expr_idx);
+    const result = try czer.canonicalizeExpr(expr_idx);
+    if (module_env.store.scratch != null) {
+        module_env.diagnostics = try module_env.store.diagnosticSpanFrom(0);
+    }
+    return result;
 }
 
 test "compile tests" {

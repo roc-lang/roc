@@ -15,15 +15,14 @@ result = func(1)
 ~~~
 # MONO
 ~~~roc
-func : Dec -> Dec
 func = |offset| {
 	condition = True
-	f = if (condition) |x| x + offset else |x| x * 2
+	f = if (condition) |x| x.plus(offset) else |x| x.times(2)
 	f(10)
 }
 
 result : Dec
-result = 11
+result = func(1)
 ~~~
 # FORMATTED
 ~~~roc
@@ -108,34 +107,41 @@ EndOfFile,
 									(e-lambda
 										(args
 											(p-assign (ident "x")))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "x")))
-											(e-lookup-local
-												(p-assign (ident "offset"))))))))
+										(e-dispatch-call (method "plus") (constraint-fn-var 44)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "x"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "offset")))))))))
 						(if-else
 							(e-lambda
 								(args
 									(p-assign (ident "x")))
-								(e-binop (op "mul")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "2")))))))
-				(e-call
+								(e-dispatch-call (method "times") (constraint-fn-var 76)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "2"))))))))
+				(e-call (constraint-fn-var 116)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "11"))))
+		(e-call (constraint-fn-var 159)
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec -> Dec"))
+		(patt (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec -> Dec"))
+		(expr (type "a -> b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b, b.times : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~

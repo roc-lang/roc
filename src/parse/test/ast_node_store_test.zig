@@ -6,12 +6,27 @@ const base = @import("base");
 
 const NodeStore = @import("../NodeStore.zig");
 const AST = @import("../AST.zig");
+const NumericLiteral = @import("../NumericLiteral.zig");
 
 var rand = std.Random.DefaultPrng.init(1234);
 
 /// Generate a random index of type `T`.
 fn rand_idx(comptime T: type) T {
-    return @enumFromInt(rand.random().int(u32));
+    if (T == base.Ident.Idx) {
+        return .{
+            .attributes = .{
+                .effectful = rand.random().boolean(),
+                .ignored = rand.random().boolean(),
+                .reassignable = rand.random().boolean(),
+            },
+            .idx = rand.random().int(u29),
+        };
+    }
+
+    return switch (@typeInfo(T)) {
+        .@"enum" => @enumFromInt(rand.random().int(u32)),
+        else => @compileError("rand_idx needs an explicit constructor for this index type"),
+    };
 }
 
 /// Generate a random token index.
@@ -289,12 +304,30 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, AST.Pattern{
         .int = .{
             .number_tok = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
             .region = rand_region(),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .frac = .{
             .number_tok = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
+        .typed_int = .{
+            .number_tok = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
+        .typed_frac = .{
+            .number_tok = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
             .region = rand_region(),
         },
     });
@@ -513,26 +546,30 @@ test "NodeStore round trip - Expr" {
         .int = .{
             .region = rand_region(),
             .token = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .frac = .{
             .region = rand_region(),
             .token = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_int = .{
             .region = rand_region(),
             .token = rand_token_idx(),
-            .type_token = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_frac = .{
             .region = rand_region(),
             .token = rand_token_idx(),
-            .type_token = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
@@ -549,6 +586,13 @@ test "NodeStore round trip - Expr" {
     });
     try expressions.append(gpa, AST.Expr{
         .string = .{
+            .parts = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+            .token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .multiline_string = .{
             .parts = AST.Expr.Span{ .span = rand_span() },
             .region = rand_region(),
             .token = rand_token_idx(),
@@ -594,6 +638,12 @@ test "NodeStore round trip - Expr" {
             .region = rand_region(),
         },
     });
+    try expressions.append(gpa, AST.Expr{
+        .record_updater = .{
+            .token = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
 
     try expressions.append(gpa, AST.Expr{
         .field_access = .{
@@ -604,7 +654,22 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
-        .local_dispatch = .{
+        .method_call = .{
+            .receiver = rand_idx(AST.Expr.Idx),
+            .method_token = rand_token_idx(),
+            .args = AST.Expr.Span{ .span = rand_span() },
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .tuple_access = .{
+            .expr = rand_idx(AST.Expr.Idx),
+            .elem_token = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .arrow_call = .{
             .left = rand_idx(AST.Expr.Idx),
             .right = rand_idx(AST.Expr.Idx),
             .operator = rand_token_idx(),
@@ -636,6 +701,13 @@ test "NodeStore round trip - Expr" {
     try expressions.append(gpa, AST.Expr{
         .if_then_else = .{
             .@"else" = rand_idx(AST.Expr.Idx),
+            .condition = rand_idx(AST.Expr.Idx),
+            .then = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .if_without_else = .{
             .condition = rand_idx(AST.Expr.Idx),
             .then = rand_idx(AST.Expr.Idx),
             .region = rand_region(),
@@ -675,6 +747,14 @@ test "NodeStore round trip - Expr" {
         .block = .{
             .region = rand_region(),
             .statements = AST.Statement.Span{ .span = rand_span() },
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .for_expr = .{
+            .patt = rand_idx(AST.Pattern.Idx),
+            .expr = rand_idx(AST.Expr.Idx),
+            .body = rand_idx(AST.Expr.Idx),
+            .region = rand_region(),
         },
     });
 

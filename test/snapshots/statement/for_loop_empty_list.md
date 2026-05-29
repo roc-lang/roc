@@ -87,10 +87,12 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "unchanged")))
-			(e-num (value "42")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "unchanged"))))
+			(rhs
+				(e-num (value "42"))))))
 ~~~
 # TYPES
 ~~~clojure

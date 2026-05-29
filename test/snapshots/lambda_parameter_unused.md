@@ -219,10 +219,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "_factor")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "_factor")))
-				(e-num (value "2"))))
+			(e-dispatch-call (method "times") (constraint-fn-var 241)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "_factor"))))
+				(args
+					(e-num (value "2")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -242,10 +244,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "value")))
-				(e-num (value "2"))))
+			(e-dispatch-call (method "times") (constraint-fn-var 479)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "value"))))
+				(args
+					(e-num (value "2")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -258,39 +262,45 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call
+					(e-call (constraint-fn-var 589)
 						(e-lookup-local
 							(p-assign (ident "add")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call
+					(e-call (constraint-fn-var 690)
 						(e-lookup-local
 							(p-assign (ident "multiply")))
 						(e-num (value "3"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call
+					(e-call (constraint-fn-var 791)
 						(e-lookup-local
 							(p-assign (ident "process")))
 						(e-num (value "7"))))
 				(s-let
 					(p-assign (ident "result4"))
-					(e-call
+					(e-call (constraint-fn-var 892)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "4"))))
-				(e-binop (op "add")
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "result1")))
-							(e-lookup-local
-								(p-assign (ident "result2"))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 983)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 973)
+							(receiver
+								(e-dispatch-call (method "plus") (constraint-fn-var 963)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "result1"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "result2"))))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "result3"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "result3"))))
-					(e-lookup-local
-						(p-assign (ident "result4"))))))))
+							(p-assign (ident "result4")))))))))
 ~~~
 # TYPES
 ~~~clojure

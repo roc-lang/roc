@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Record field access used in expressions (dot-access)
+description=Record field access used in expressions (field-access)
 type=expr
 ~~~
 # SOURCE
@@ -8,18 +8,22 @@ type=expr
 person.age + 5
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_access_in_expression.md:1:1:1:7
+POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_access_in_expression.md:1:1:1:7:**
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**record_access_in_expression.md:1:1:1:15:**
 ```roc
 person.age + 5
 ```
-^^^^^^
+^^^^^^^^^^^^^^
 
+
+Its type is:
+```roc
+a where [a.plus : a, Dec -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -40,11 +44,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "add")
-	(e-dot-access (field "age")
-		(receiver
-			(e-runtime-error (tag "ident_not_in_scope"))))
-	(e-num (value "5")))
+(e-dispatch-call (method "plus") (constraint-fn-var 44)
+	(receiver
+		(e-field-access (field "age")
+			(receiver
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(args
+		(e-num (value "5"))))
 ~~~
 # TYPES
 ~~~clojure

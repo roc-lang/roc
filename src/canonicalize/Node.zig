@@ -65,11 +65,15 @@ pub const Tag = enum {
     record_field,
     record_destruct,
     expr_field_access,
+    expr_method_call,
+    expr_dispatch_call,
+    expr_structural_eq,
+    expr_method_eq,
+    expr_type_method_call,
+    expr_type_dispatch_call,
     expr_static_dispatch,
     expr_external_lookup,
-    expr_pending_lookup,
     expr_required_lookup,
-    expr_dot_access,
     expr_apply,
     expr_string,
     expr_string_segment,
@@ -79,8 +83,10 @@ pub const Tag = enum {
     expr_frac_f64,
     expr_dec,
     expr_dec_small,
+    expr_num_from_numeral,
     expr_typed_int,
     expr_typed_frac,
+    expr_typed_num_from_numeral,
     expr_tag,
     expr_nominal,
     expr_nominal_external,
@@ -106,7 +112,6 @@ pub const Tag = enum {
     expr_for,
     expr_record_builder,
     expr_return,
-    expr_type_var_dispatch,
     match_branch,
     match_branch_pattern,
     type_header,
@@ -182,6 +187,9 @@ pub const Tag = enum {
     diag_ident_already_in_scope,
     diag_ident_not_in_scope,
     diag_self_referential_definition,
+    diag_circular_value_definition,
+    diag_erroneous_value_use,
+    diag_erroneous_value_expr,
     diag_qualified_ident_does_not_exist,
     diag_invalid_top_level_statement,
     diag_expr_not_canonicalized,
@@ -273,7 +281,6 @@ pub const Payload = extern union {
     // === Expression payloads ===
     expr_var: ExprVar,
     expr_external_lookup: ExprExternalLookup,
-    expr_pending_lookup: ExprPendingLookup,
     expr_required_lookup: ExprRequiredLookup,
     expr_tuple: ExprTuple,
     expr_tuple_access: ExprTupleAccess,
@@ -293,9 +300,15 @@ pub const Payload = extern union {
     expr_num: ExprNum,
     expr_dec: ExprDec,
     expr_dec_small: ExprDecSmall,
+    expr_num_from_numeral: ExprNumFromNumeral,
     expr_string: ExprString,
-    expr_dot_access: ExprDotAccess,
     expr_field_access: ExprFieldAccess,
+    expr_method_call: ExprMethodCall,
+    expr_dispatch_call: ExprDispatchCall,
+    expr_structural_eq: ExprStructuralEq,
+    expr_method_eq: ExprMethodEq,
+    expr_type_method_call: ExprTypeMethodCall,
+    expr_type_dispatch_call: ExprTypeDispatchCall,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
     expr_run_low_level: ExprRunLowLevel,
@@ -304,6 +317,7 @@ pub const Payload = extern union {
     expr_expect: ExprExpect,
     expr_typed_int: ExprTypedInt,
     expr_typed_frac: ExprTypedFrac,
+    expr_typed_num_from_numeral: ExprTypedNumFromNumeral,
     expr_string_segment: ExprStringSegment,
     expr_nominal: ExprNominal,
     expr_nominal_external: ExprNominalExternal,
@@ -311,7 +325,6 @@ pub const Payload = extern union {
     expr_dbg: ExprDbg,
     expr_anno_only: ExprAnnoOnly,
     expr_return: ExprReturn,
-    expr_type_var_dispatch: ExprTypeVarDispatch,
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
     pattern_as: PatternAs,
@@ -474,13 +487,6 @@ pub const Payload = extern union {
         ident_idx: u32,
     };
 
-    /// expr_pending_lookup: deferred lookup from another module (not yet resolved)
-    pub const ExprPendingLookup = extern struct {
-        module_idx: u32,
-        ident_idx: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
-    };
-
     /// expr_required_lookup: lookup from platform requires clause
     pub const ExprRequiredLookup = extern struct {
         requires_idx: u32,
@@ -517,6 +523,7 @@ pub const Payload = extern union {
         func: u32,
         args_span2_idx: u32,
         called_via: u32,
+        constraint_fn_var_plus_one: u32,
     };
 
     pub const ExprRecord = extern struct {
@@ -595,28 +602,66 @@ pub const Payload = extern union {
         _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
     };
 
+    pub const ExprNumFromNumeral = extern struct {
+        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
     pub const ExprString = extern struct {
         segments_start: u32,
         segments_len: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
-    pub const ExprDotAccess = extern struct {
-        receiver: u32,
-        field_name: u32,
-        region_args_idx: u32, // Index into span_with_node_data: (region_start, region_end, packed_args)
-    };
-
     pub const ExprFieldAccess = extern struct {
         receiver: u32,
         field_name: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        field_name_region_span2_idx: u32,
+    };
+
+    pub const ExprMethodCall = extern struct {
+        receiver: u32,
+        method_name: u32,
+        method_call_data_idx: u32,
+    };
+
+    pub const ExprDispatchCall = extern struct {
+        receiver: u32,
+        method_name: u32,
+        method_call_data_idx: u32,
+        constraint_fn_var: u32,
+    };
+
+    pub const ExprStructuralEq = extern struct {
+        lhs: u32,
+        rhs: u32,
+        negated: u8,
+        _padding: [3]u8 = .{ 0, 0, 0 },
+    };
+
+    pub const ExprMethodEq = extern struct {
+        lhs: u32,
+        rhs: u32,
+        negated: u8,
+        _padding: [3]u8 = .{ 0, 0, 0 },
+        constraint_fn_var: u32,
+    };
+
+    pub const ExprTypeMethodCall = extern struct {
+        type_var_alias_stmt: u32,
+        method_name: u32,
+        method_call_data_idx: u32,
+    };
+
+    pub const ExprTypeDispatchCall = extern struct {
+        type_var_alias_stmt: u32,
+        method_name: u32,
+        method_call_data_idx: u32,
+        constraint_fn_var: u32,
     };
 
     pub const ExprHostedLambda = extern struct {
         symbol_name: u32,
-        index: u32,
-        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
+        args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
     };
 
     pub const ExprLowLevel = extern struct {
@@ -659,6 +704,11 @@ pub const Payload = extern union {
         type_name: u32,
         val_kind: u32,
         int128_idx: u32,
+    };
+
+    pub const ExprTypedNumFromNumeral = extern struct {
+        type_name: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_string_segment: string segment reference
@@ -704,13 +754,6 @@ pub const Payload = extern union {
         expr: u32,
         lambda: u32,
         context: u32,
-    };
-
-    /// expr_type_var_dispatch: type variable method dispatch
-    pub const ExprTypeVarDispatch = extern struct {
-        type_var_alias_stmt: u32,
-        method_name: u32,
-        args_span2_idx: u32,
     };
 
     // --- Patterns ---
@@ -1021,6 +1064,6 @@ pub const Payload = extern union {
 
     // Compile-time size verification
     comptime {
-        std.debug.assert(@sizeOf(Payload) == 12);
+        std.debug.assert(@sizeOf(Payload) == 16);
     }
 };

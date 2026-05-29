@@ -8,19 +8,9 @@ type=expr
 t.0
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tuple_access_variable.md:1:1:1:2
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `t` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_access_variable.md:1:1:1:2:**
-```roc
-t.0
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotInt,

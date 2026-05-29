@@ -218,10 +218,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "n")))
-				(e-num (value "1"))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 125)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "n"))))
+				(args
+					(e-num (value "1")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -234,20 +236,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call
+					(e-call (constraint-fn-var 237)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "text"))
-					(e-call
+					(e-call (constraint-fn-var 246)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "pair"))
-					(e-call
+					(e-call (constraint-fn-var 251)
 						(e-lookup-local
 							(p-assign (ident "combine")))
 						(e-lookup-local
@@ -256,7 +258,7 @@ main! = |_| {
 							(p-assign (ident "text")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call
+					(e-call (constraint-fn-var 282)
 						(e-lookup-local
 							(p-assign (ident "addOne")))
 						(e-num (value "5"))))

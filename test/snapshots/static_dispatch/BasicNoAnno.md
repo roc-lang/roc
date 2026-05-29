@@ -63,28 +63,28 @@ EndOfFile,
 					(e-lambda
 						(args
 							(p-ident (raw "test")))
-						(e-field-access
-							(e-ident (raw "test"))
-							(e-apply
-								(e-ident (raw "to_str"))))))))
+						(e-method-call (method ".to_str")
+							(receiver
+								(e-ident (raw "test")))
+							(args))))))
 		(s-decl
 			(p-ident (raw "helper1"))
 			(e-lambda
 				(args
 					(p-ident (raw "x")))
-				(e-field-access
-					(e-ident (raw "x"))
-					(e-apply
-						(e-ident (raw "to_str"))))))
+				(e-method-call (method ".to_str")
+					(receiver
+						(e-ident (raw "x")))
+					(args))))
 		(s-decl
 			(p-ident (raw "helper2"))
 			(e-lambda
 				(args
 					(p-ident (raw "x")))
-				(e-field-access
-					(e-ident (raw "x"))
-					(e-apply
-						(e-ident (raw "to_str2"))))))
+				(e-method-call (method ".to_str2")
+					(receiver
+						(e-ident (raw "x")))
+					(args))))
 		(s-decl
 			(p-ident (raw "val"))
 			(e-apply
@@ -138,7 +138,7 @@ main = (helper1(val), helper2(val))
 		(e-lambda
 			(args
 				(p-assign (ident "test")))
-			(e-dot-access (field "to_str")
+			(e-dispatch-call (method "to_str") (constraint-fn-var 69)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "test"))))
@@ -148,7 +148,7 @@ main = (helper1(val), helper2(val))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dot-access (field "to_str")
+			(e-dispatch-call (method "to_str") (constraint-fn-var 71)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -158,7 +158,7 @@ main = (helper1(val), helper2(val))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dot-access (field "to_str2")
+			(e-dispatch-call (method "to_str2") (constraint-fn-var 73)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -174,12 +174,12 @@ main = (helper1(val), helper2(val))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call
+				(e-call (constraint-fn-var 106)
 					(e-lookup-local
 						(p-assign (ident "helper1")))
 					(e-lookup-local
 						(p-assign (ident "val"))))
-				(e-call
+				(e-call (constraint-fn-var 111)
 					(e-lookup-local
 						(p-assign (ident "helper2")))
 					(e-lookup-local

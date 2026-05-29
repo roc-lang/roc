@@ -8,31 +8,9 @@ type=expr
 foo(x-1)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - minus_no_space_in_call.md:1:1:1:4
-UNDEFINED VARIABLE - minus_no_space_in_call.md:1:5:1:6
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**minus_no_space_in_call.md:1:1:1:4:**
-```roc
-foo(x-1)
-```
-^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**minus_no_space_in_call.md:1:5:1:6:**
-```roc
-foo(x-1)
-```
-    ^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceOpenRound,LowerIdent,OpBinaryMinus,Int,CloseRound,
@@ -54,9 +32,11 @@ foo(x - 1)
 ~~~clojure
 (e-call
 	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-binop (op "sub")
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-num (value "1"))))
+	(e-dispatch-call (method "minus") (constraint-fn-var 43)
+		(receiver
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(args
+			(e-num (value "1")))))
 ~~~
 # TYPES
 ~~~clojure

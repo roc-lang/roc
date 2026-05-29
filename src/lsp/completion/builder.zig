@@ -228,7 +228,7 @@ pub const CompletionBuilder = struct {
             for (sched.modules.items) |*module_state| {
                 // Check if this module's name matches
                 if (std.mem.eql(u8, module_state.name, module_name)) {
-                    if (module_state.env) |*imported_env| {
+                    if (module_state.moduleEnv()) |imported_env| {
                         try self.addModuleMemberCompletionsFromModuleEnv(imported_env, module_name);
                     }
                     return;
@@ -323,12 +323,13 @@ pub const CompletionBuilder = struct {
                 }
             }
 
-            _ = try self.addItem(.{
+            const added = try self.addItem(.{
                 .label = label,
                 .kind = kind,
                 .detail = detail,
                 .documentation = documentation,
             });
+            if (added) {} else {}
         }
     }
 
@@ -400,7 +401,7 @@ pub const CompletionBuilder = struct {
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
             for (sched.modules.items) |*module_state| {
-                if (module_state.env) |*module_env| {
+                if (module_state.moduleEnv()) |module_env| {
                     try self.addTypeNamesFromModuleEnv(module_env);
                 }
             }
@@ -758,11 +759,12 @@ pub const CompletionBuilder = struct {
                                 // Use a stack buffer; addItem duplicates accepted labels.
                                 var label_buf: [32]u8 = undefined;
                                 const label = std.fmt.bufPrint(&label_buf, "{d}", .{i}) catch continue;
-                                _ = try self.addItem(.{
+                                const added = try self.addItem(.{
                                     .label = label,
                                     .kind = @intFromEnum(CompletionItemKind.field),
                                     .detail = detail,
                                 });
+                                if (added) {} else {}
                             }
                             return;
                         },
@@ -918,11 +920,12 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            _ = try self.addItem(.{
+            const added = try self.addItem(.{
                 .label = field_name,
                 .kind = @intFromEnum(CompletionItemKind.field),
                 .detail = detail,
             });
+            if (added) {} else {}
         }
     }
 
@@ -1136,11 +1139,12 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            _ = try self.addItem(.{
+            const added = try self.addItem(.{
                 .label = method_name,
                 .kind = @intFromEnum(CompletionItemKind.method),
                 .detail = detail,
             });
+            if (added) {} else {}
         }
     }
 
@@ -1219,12 +1223,13 @@ pub const CompletionBuilder = struct {
                 // Extract documentation for the method definition.
                 const documentation = self.findMethodDocumentation(module_env, qualified_ident);
 
-                _ = try self.addItem(.{
+                const added = try self.addItem(.{
                     .label = method_name,
                     .kind = @intFromEnum(CompletionItemKind.method),
                     .detail = detail,
                     .documentation = documentation,
                 });
+                if (added) {} else {}
             }
         }
     }
@@ -1410,11 +1415,12 @@ pub const CompletionBuilder = struct {
                             // Show the tag signature (e.g. "SubVal(Str)") as detail
                             const detail = self.formatTagSignature(module_env, tag_name, t.args);
 
-                            _ = try self.addItem(.{
+                            const added = try self.addItem(.{
                                 .label = tag_name,
                                 .kind = @intFromEnum(CompletionItemKind.enum_member),
                                 .detail = detail,
                             });
+                            if (added) {} else {}
                         },
                         else => {},
                     }

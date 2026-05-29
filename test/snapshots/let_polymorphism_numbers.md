@@ -190,46 +190,56 @@ main = |_| {
 			(p-assign (ident "frac"))))
 	(d-let
 		(p-assign (ident "int_add"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-num (value "10"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 153)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "int_multiply"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-num (value "2"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 185)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "float_add"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 217)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))))
 	(d-let
 		(p-assign (ident "float_multiply"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "num")))
-			(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 249)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "num"))))
+			(args
+				(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5")))))
 	(d-let
 		(p-assign (ident "double"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-num (value "2")))))
+			(e-dispatch-call (method "times") (constraint-fn-var 281)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "int_doubled"))
-		(e-call
+		(e-call (constraint-fn-var 320)
 			(e-lookup-local
 				(p-assign (ident "double")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "float_doubled"))
-		(e-call
+		(e-call (constraint-fn-var 358)
 			(e-lookup-local
 				(p-assign (ident "double")))
 			(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
@@ -239,11 +249,13 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "int_add")))
-					(e-lookup-local
-						(p-assign (ident "int_multiply"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 359)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "int_add"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "int_multiply")))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -257,7 +269,7 @@ main = |_| {
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "a -> a where [a.times : a, Dec -> a]"))
+		(patt (type "a -> a where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "_arg -> Dec")))
@@ -270,7 +282,7 @@ main = |_| {
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "a -> a where [a.times : a, Dec -> a]"))
+		(expr (type "a -> a where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "_arg -> Dec"))))

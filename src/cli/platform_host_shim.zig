@@ -56,6 +56,43 @@ fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Inde
     return entrypoint_fn;
 }
 
+/// Adds the extern declaration for `roc_entrypoint_from_image`.
+///
+/// Embedded interpreter builds pass an already-lowered LIR image as a
+/// pointer/length pair. The interpreter shim views that image directly; it does
+/// not rebuild compiler data or perform compiler lowering.
+fn addEmbeddedRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Index {
+    const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
+    const usize_type: Builder.Type = if (target.ptrBitWidth() == 32) .i32 else .i64;
+
+    const entrypoint_params = [_]Builder.Type{ .i32, ptr_type, ptr_type, ptr_type, ptr_type, usize_type };
+    const entrypoint_type = try builder.fnType(.void, &entrypoint_params, .normal);
+
+    const base_name = "roc_entrypoint_from_image";
+    const full_name = if (target.isMacOS())
+        try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
+    else
+        try builder.gpa.dupe(u8, base_name);
+    defer builder.gpa.free(full_name);
+    const fn_name = try builder.strtabString(full_name);
+
+    const entrypoint_fn = try builder.addFunction(entrypoint_type, fn_name, .default);
+    entrypoint_fn.setLinkage(.external, builder);
+
+    return entrypoint_fn;
+}
+
+fn addLirImageGlobal(builder: *Builder, lir_image: []const u8) !Builder.Variable.Index {
+    const image_string = try builder.string(lir_image);
+    const image_const = try builder.stringConst(image_string);
+    const image_name = try builder.strtabString("roc_lir_image");
+    const image_var = try builder.addVariable(image_name, image_const.typeOf(builder), .default);
+    image_var.setLinkage(.internal, builder);
+    image_var.setMutability(.global, builder);
+    try image_var.setInitializer(image_const, builder);
+    return image_var;
+}
+
 /// Generates a single exported platform function that delegates to roc_entrypoint.
 ///
 /// This creates the "glue" functions that a Roc platform host expects to find when
@@ -133,6 +170,65 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
     return roc_fn;
 }
 
+fn addEmbeddedRocExportedFunction(
+    builder: *Builder,
+    entrypoint_fn: Builder.Function.Index,
+    lir_image: Builder.Variable.Index,
+    lir_image_len: usize,
+    name: []const u8,
+    entry_idx: u32,
+    target: RocTarget,
+) !Builder.Function.Index {
+    const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
+    const usize_type: Builder.Type = if (target.ptrBitWidth() == 32) .i32 else .i64;
+
+    const roc_fn_params = [_]Builder.Type{ ptr_type, ptr_type, ptr_type };
+    const roc_fn_type = try builder.fnType(.void, &roc_fn_params, .normal);
+
+    const base_name = try std.fmt.allocPrint(builder.gpa, "roc__{s}", .{name});
+    defer builder.gpa.free(base_name);
+    const full_name = if (target.isMacOS())
+        try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
+    else
+        try builder.gpa.dupe(u8, base_name);
+    defer builder.gpa.free(full_name);
+    const fn_name = try builder.strtabString(full_name);
+
+    const roc_fn = try builder.addFunction(roc_fn_type, fn_name, .default);
+    roc_fn.setLinkage(.external, builder);
+
+    var wip = try WipFunction.init(builder, .{
+        .function = roc_fn,
+        .strip = false,
+    });
+    defer wip.deinit();
+
+    const entry_block = try wip.block(0, "entry");
+    wip.cursor = .{ .block = entry_block };
+
+    const ops_ptr = wip.arg(0);
+    const ret_ptr = wip.arg(1);
+    const arg_ptr = wip.arg(2);
+
+    const idx_const = try builder.intConst(.i32, entry_idx);
+    const image_len_const = try builder.intConst(usize_type, lir_image_len);
+
+    const call_args = [_]Builder.Value{
+        idx_const.toValue(),
+        ops_ptr,
+        ret_ptr,
+        arg_ptr,
+        lir_image.toValue(builder),
+        image_len_const.toValue(),
+    };
+    _ = try wip.call(.normal, .ccc, .none, entrypoint_fn.typeOf(builder), entrypoint_fn.toValue(builder), &call_args, "");
+
+    _ = try wip.retVoid();
+    try wip.finish();
+
+    return roc_fn;
+}
+
 /// Creates a complete Roc platform library with all necessary entrypoints.
 ///
 /// This generates a shim that translates between the pre-built roc interpreter
@@ -159,7 +255,7 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
 ///
 /// The generated library is then compiled using LLVM to an object file and linked with
 /// both the host and the Roc interpreter to create a dev build executable.
-pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint, target: RocTarget, serialized_module: ?[]const u8) !void {
+pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint, target: RocTarget) !void {
     // Add the extern roc_entrypoint declaration
     const entrypoint_fn = try addRocEntrypoint(builder, target);
 
@@ -167,82 +263,27 @@ pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint,
     for (entrypoints) |entry| {
         _ = try addRocExportedFunction(builder, entrypoint_fn, entry.name, entry.idx, target);
     }
-
-    try addRocSerializedModule(builder, target, serialized_module);
 }
 
-/// Adds exported globals for serialized module data.
-///
-/// This creates two exported globals:
-/// - roc__serialized_base_ptr: pointer to the serialized data (or null)
-/// - roc__serialized_size: size of the serialized data in bytes (or 0)
-///
-/// When data is provided, an internal constant array is created and the base_ptr
-/// points to it. When data is null, both values are set to null/zero.
-fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_module: ?[]const u8) !void {
-    // Use opaque pointer type for globals - LLVM sizes them correctly based on target data layout
-    const ptr_type = try builder.ptrType(.default);
+/// Public `createEmbeddedInterpreterShim` function.
+pub fn createEmbeddedInterpreterShim(
+    builder: *Builder,
+    entrypoints: []const EntryPoint,
+    target: RocTarget,
+    lir_image: []const u8,
+) !void {
+    const lir_image_global = try addLirImageGlobal(builder, lir_image);
+    const entrypoint_fn = try addEmbeddedRocEntrypoint(builder, target);
 
-    // Determine usize type based on target pointer width
-    const usize_type: Builder.Type = switch (target.ptrBitWidth()) {
-        32 => .i32,
-        64 => .i64,
-        else => unreachable,
-    };
-
-    // Create platform-specific name for base_ptr
-    // Add underscore prefix for macOS (required for MachO symbol names)
-    const base_ptr_name_str = if (target.isMacOS())
-        try std.fmt.allocPrint(builder.gpa, "_roc__serialized_base_ptr", .{})
-    else
-        try builder.gpa.dupe(u8, "roc__serialized_base_ptr");
-    defer builder.gpa.free(base_ptr_name_str);
-    const base_ptr_name = try builder.strtabString(base_ptr_name_str);
-
-    // Create platform-specific name for size
-    const size_name_str = if (target.isMacOS())
-        try std.fmt.allocPrint(builder.gpa, "_roc__serialized_size", .{})
-    else
-        try builder.gpa.dupe(u8, "roc__serialized_size");
-    defer builder.gpa.free(size_name_str);
-    const size_name = try builder.strtabString(size_name_str);
-
-    if (serialized_module) |bytes| {
-        // Create a string constant for the byte data
-        const str = try builder.string(bytes);
-        const str_const = try builder.stringConst(str);
-
-        // Create an internal constant variable to hold the array
-        // IMPORTANT: Set 16-byte alignment to ensure i128 values can be accessed properly
-        // (int128_values contains i128 which requires 16-byte alignment)
-        const internal_name = try builder.strtabString(".roc_serialized_data");
-        const array_var = try builder.addVariable(internal_name, str_const.typeOf(builder), .default);
-        try array_var.setInitializer(str_const, builder);
-        array_var.setLinkage(.internal, builder);
-        array_var.setMutability(.global, builder);
-        array_var.setAlignment(Builder.Alignment.fromByteUnits(16), builder);
-
-        // Create the external base_ptr variable pointing to the internal array
-        const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);
-        try base_ptr_var.setInitializer(array_var.toConst(builder), builder);
-        base_ptr_var.setLinkage(.external, builder);
-
-        // Create the external size variable
-        const size_const = try builder.intConst(usize_type, bytes.len);
-        const size_var = try builder.addVariable(size_name, usize_type, .default);
-        try size_var.setInitializer(size_const, builder);
-        size_var.setLinkage(.external, builder);
-    } else {
-        // Create null pointer for base_ptr
-        const null_ptr = try builder.nullConst(ptr_type);
-        const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);
-        try base_ptr_var.setInitializer(null_ptr, builder);
-        base_ptr_var.setLinkage(.external, builder);
-
-        // Create zero size
-        const zero_size = try builder.intConst(usize_type, 0);
-        const size_var = try builder.addVariable(size_name, usize_type, .default);
-        try size_var.setInitializer(zero_size, builder);
-        size_var.setLinkage(.external, builder);
+    for (entrypoints) |entry| {
+        _ = try addEmbeddedRocExportedFunction(
+            builder,
+            entrypoint_fn,
+            lir_image_global,
+            lir_image.len,
+            entry.name,
+            entry.idx,
+            target,
+        );
     }
 }

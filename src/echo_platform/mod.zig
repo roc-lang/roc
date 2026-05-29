@@ -28,10 +28,12 @@ pub const DefaultRocOpsEnv = struct {
     inline_expect_failed: bool = false,
 };
 
-/// Echo host function: reads a RocStr arg and prints it + newline to stdout.
-/// Arguments are borrowed — refcounting is handled by the caller (RC insertion pass).
-pub fn echoHostedFn(_: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
+/// Echo host function: consumes a RocStr arg and prints it + newline to stdout.
+pub fn echoHostedFn(opaque_ops: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
+    const roc_ops: *host_abi.RocOps = @ptrCast(@alignCast(opaque_ops));
     const message = roc_str.asSlice();
+    defer roc_str.decref(roc_ops);
+
     if (comptime is_wasm) {
         const js = struct {
             extern "env" fn js_echo(ptr: [*]const u8, len: usize) void;
@@ -226,7 +228,10 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) []const u8 {
             in_i += 1;
         }
     }
-    _ = allocator.resize(buf, out_i);
+    const resized = allocator.resize(buf, out_i);
+    if (!resized) {
+        // resize can fail but the buffer remains valid; keep original allocation
+    }
     return buf[0..out_i];
 }
 

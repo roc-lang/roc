@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small (numerator "1500") (denominator-power-of-ten "1") (value "150"))
+(e-dec-small (numerator "150") (denominator-power-of-ten "0") (value "150"))
 ~~~
 # TYPES
 ~~~clojure

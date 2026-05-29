@@ -60,17 +60,19 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-num (value "1"))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 71)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-num (value "1")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "my_number"))
-		(e-call
+		(e-call (constraint-fn-var 188)
 			(e-lookup-local
 				(p-assign (ident "add_one")))
 			(e-num (value "42")))

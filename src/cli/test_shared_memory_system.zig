@@ -1,14 +1,16 @@
-//! Tests for the shared memory ModuleEnv system
+//! Tests for CLI platform resolution that do not cross the post-check lowering boundary
 
 const std = @import("std");
-const builtin = @import("builtin");
 const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");
+const eval = @import("eval");
+const lir = @import("lir");
 const Allocators = base.Allocators;
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
 const Io = cli_context.Io;
+const test_helpers = eval.test_helpers;
 
 test "platform resolution - basic cli platform" {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
@@ -134,407 +136,143 @@ test "platform resolution - insecure HTTP URL rejected" {
     try testing.expectError(error.CliError, result);
 }
 
-// Integration tests that test the full shared memory pipeline
+fn compileLirImageForSharedTest(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    imports: []const test_helpers.ModuleSource,
+) !test_helpers.CompiledTargetProgram {
+    return test_helpers.compileProgramForTarget(allocator, .module, source, imports, .native);
+}
+
+fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) !void {
+    const used = compiled.lowered.shm.getUsedSize();
+    try testing.expect(used > @sizeOf(lir.LirImage.Header));
+    try testing.expect(compiled.lowered.view.root_procs.len > 0);
+    try testing.expect(compiled.lowered.view.store.proc_specs.items.len > 0);
+    try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
+
+    const header = compiled.lowered.image_header;
+    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used);
+    try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
+    try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
+    try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
+    try testing.expectEqual(compiled.lowered.view.store.proc_specs.items.len, child_view.store.proc_specs.items.len);
+    try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
+}
 
 test "integration - shared memory setup and parsing" {
-    if (builtin.os.tag == .windows) {
-        // Skip on Windows for now since shared memory implementation differs
-        return;
-    }
+    var compiled = try compileLirImageForSharedTest(
+        testing.allocator,
+        "main : () -> I64\nmain = || 40 + 2",
+        &.{},
+    );
+    defer compiled.deinit(testing.allocator);
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
-
-    // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
-    defer allocs.gpa.free(cwd_path);
-
-    // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Use the real int test platform
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/int/app.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
-
-    // Test that we can set up shared memory with ModuleEnv
-    const shm_result = try main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true);
-    const shm_handle = shm_result.handle;
-
-    // Clean up shared memory resources
-    defer {
-        if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-        } else {
-            const posix = struct {
-                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-                extern "c" fn close(fd: c_int) c_int;
-            };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = posix.close(shm_handle.fd);
-        }
-    }
-
-    // Verify that shared memory was set up correctly
-    try testing.expect(shm_handle.size > 0);
-    try testing.expect(@intFromPtr(shm_handle.ptr) != 0);
-
-    std.log.debug("Integration test: Successfully set up shared memory with size: {} bytes\n", .{shm_handle.size});
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
 }
 
 test "integration - compilation pipeline for different platforms" {
-    if (builtin.os.tag == .windows) {
-        return;
-    }
+    var native = try test_helpers.compileProgramForTarget(
+        testing.allocator,
+        .module,
+        "main : () -> List(I64)\nmain = || [1, 2, 3]",
+        &.{},
+        .native,
+    );
+    defer native.deinit(testing.allocator);
 
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    var wasm32 = try test_helpers.compileProgramForTarget(
+        testing.allocator,
+        .module,
+        "main : () -> List(I64)\nmain = || [1, 2, 3]",
+        &.{},
+        .u32,
+    );
+    defer wasm32.deinit(testing.allocator);
 
-    // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
-    defer allocs.gpa.free(cwd_path);
-
-    // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Test with our real test platforms
-    const test_apps = [_][]const u8{
-        "test/int/app.roc",
-        "test/str/app.roc",
-        "test/fx/app.roc",
-    };
-
-    for (test_apps) |relative_path| {
-        const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, relative_path }) catch continue;
-        defer allocs.gpa.free(roc_path);
-        // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
-        const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
-            std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
-            continue;
-        };
-        const shm_handle = shm_result.handle;
-
-        // Clean up shared memory resources
-        defer {
-            if (comptime builtin.os.tag == .windows) {
-                _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-                _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-            } else {
-                const posix = struct {
-                    extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-                    extern "c" fn close(fd: c_int) c_int;
-                };
-                _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-                _ = posix.close(shm_handle.fd);
-            }
-        }
-
-        // Verify shared memory was set up successfully
-        try testing.expect(shm_handle.size > 0);
-        std.log.debug("Successfully compiled {s} (shared memory size: {} bytes)\n", .{ roc_path, shm_handle.size });
-    }
+    try expectLirImageCanBeViewedFromMappedHeader(&native);
+    try expectLirImageCanBeViewedFromMappedHeader(&wasm32);
+    try testing.expectEqual(base.target.TargetUsize.native, native.lowered.view.target_usize);
+    try testing.expectEqual(base.target.TargetUsize.u32, wasm32.lowered.view.target_usize);
 }
 
 test "integration - error handling for non-existent file" {
-    if (builtin.os.tag == .windows) {
-        return;
-    }
-
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
-    // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
-    defer allocs.gpa.free(cwd_path);
-
-    // Create a CLI context for error reporting
     var io = Io.init();
     var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
-    // Test with a non-existent file path
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/nonexistent/app.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
-
-    // This should fail because the file doesn't exist
-    const result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true);
-
-    // We expect this to fail - the important thing is that it doesn't crash
-    if (result) |shm_result| {
-        const shm_handle = shm_result.handle;
-        // Clean up shared memory resources if somehow successful
-        defer {
-            if (comptime builtin.os.tag == .windows) {
-                _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-                _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-            } else {
-                const posix = struct {
-                    extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-                    extern "c" fn close(fd: c_int) c_int;
-                };
-                _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-                _ = posix.close(shm_handle.fd);
-            }
-        }
-        // This shouldn't happen with a non-existent file
-        return error.UnexpectedSuccess;
-    } else |err| {
-        // Expected to fail
-        std.log.debug("Compilation failed as expected with error: {}\n", .{err});
-    }
+    try testing.expectError(error.CliError, main.resolvePlatformPaths(&ctx, "does/not/exist.roc"));
 }
 
 test "integration - automatic module dependency ordering" {
-    // This test verifies that platform modules are automatically sorted by their
-    // import dependencies, regardless of the order they appear in the exposes list.
-    //
-    // The test platform at test/str/platform/main.roc has:
-    //   exposes [Helper, Core]  -- WRONG order! Helper imports Core
-    //
-    // Without automatic dependency ordering, this would fail because Helper would
-    // be compiled before Core, and Helper's import of Core would fail.
-    //
-    // With automatic ordering (topological sort), we detect that Helper imports Core
-    // and automatically compile Core first, making the compilation succeed.
-    if (builtin.os.tag == .windows) {
-        return;
-    }
-
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
-
-    // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
-    defer allocs.gpa.free(cwd_path);
-
-    // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Test app_transitive.roc which uses the platform with wrong-order exposes
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
-
-    // This should compile successfully because modules are automatically sorted
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
-        std.log.err("Failed to compile with automatic dependency ordering: {}\n", .{err});
-        return err;
+    const imports = [_]test_helpers.ModuleSource{
+        .{ .name = "Leaf", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
+        .{ .name = "Branch", .source = "module [value]\nimport Leaf\nvalue : I64\nvalue = Leaf.value + 2\n" },
     };
-    const shm_handle = shm_result.handle;
+    var compiled = try compileLirImageForSharedTest(
+        testing.allocator,
+        "import Branch\nmain : () -> I64\nmain = || Branch.value",
+        &imports,
+    );
+    defer compiled.deinit(testing.allocator);
 
-    // Clean up shared memory resources
-    defer {
-        if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-        } else {
-            const posix = struct {
-                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-                extern "c" fn close(fd: c_int) c_int;
-            };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = posix.close(shm_handle.fd);
-        }
-    }
-
-    // Verify shared memory was set up successfully
-    try testing.expect(shm_handle.size > 0);
-    std.log.debug("Successfully compiled with automatic dependency ordering (shared memory size: {} bytes)\n", .{shm_handle.size});
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
+    try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
 }
 
 test "integration - transitive module imports (module A imports module B)" {
-    // This test verifies that platform modules can import other platform modules.
-    // For example, if Helper imports Core, and the app calls Helper.wrap_fancy which
-    // internally calls Core.wrap, the compilation should succeed without errors.
-    //
-    // Without proper sibling module passing during compilation, transitive module
-    // calls would cause "TypeMismatch in body evaluation" panic at compile time.
-    if (builtin.os.tag == .windows) {
-        return;
-    }
-
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
-
-    // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
-    defer allocs.gpa.free(cwd_path);
-
-    // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Test app_transitive.roc which uses Helper -> Core transitive import
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
-
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
-        std.log.err("Failed to compile transitive import test: {}\n", .{err});
-        return err;
+    const imports = [_]test_helpers.ModuleSource{
+        .{ .name = "B", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
+        .{ .name = "A", .source = "module [value]\nimport B\nvalue : I64\nvalue = B.value + 2\n" },
     };
-    const shm_handle = shm_result.handle;
+    var compiled = try compileLirImageForSharedTest(
+        testing.allocator,
+        "import A\nmain : () -> I64\nmain = || A.value",
+        &imports,
+    );
+    defer compiled.deinit(testing.allocator);
 
-    // Clean up shared memory resources
-    defer {
-        if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-        } else {
-            const posix = struct {
-                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-                extern "c" fn close(fd: c_int) c_int;
-            };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = posix.close(shm_handle.fd);
-        }
-    }
-
-    // Verify shared memory was set up successfully
-    try testing.expect(shm_handle.size > 0);
-    std.log.debug("Successfully compiled transitive import test (shared memory size: {} bytes)\n", .{shm_handle.size});
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
+    try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
 }
 
 test "integration - diamond dependency pattern (A imports B and C, both import D)" {
-    // This test verifies that diamond dependencies are handled correctly.
-    // Diamond pattern:
-    //   Helper imports Core AND Utils
-    //   Core imports Utils
-    //   So: Helper→Core→Utils AND Helper→Utils (diamond with Utils at bottom)
-    //
-    // The platform exposes [Helper, Core, Utils] (WRONG order)
-    // Correct compilation order should be: Utils, Core, Helper
-    //
-    // This tests that:
-    // 1. Multiple modules can import the same dependency (Utils)
-    // 2. Topological sort produces valid order for diamond graphs
-    // 3. Runtime module resolution works for shared dependencies
-    if (builtin.os.tag == .windows) {
-        return;
-    }
-
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
-
-    // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
-    defer allocs.gpa.free(cwd_path);
-
-    // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Test app_diamond.roc which uses Helper.wrap_quoted (calls both Core and Utils)
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_diamond.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
-
-    // This should compile successfully with correct dependency ordering
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
-        std.log.err("Failed to compile diamond dependency test: {}\n", .{err});
-        return err;
+    const imports = [_]test_helpers.ModuleSource{
+        .{ .name = "D", .source = "module [value]\nvalue : {} -> I64\nvalue = |_| 10\n" },
+        .{ .name = "B", .source = "module [value]\nimport D\nvalue : {} -> I64\nvalue = |_| D.value({}) + 10\n" },
+        .{ .name = "C", .source = "module [value]\nimport D\nvalue : {} -> I64\nvalue = |_| D.value({}) + 12\n" },
+        .{ .name = "A", .source = "module [value]\nimport B\nimport C\nvalue : {} -> I64\nvalue = |_| B.value({}) + C.value({})\n" },
     };
-    const shm_handle = shm_result.handle;
+    var compiled = try compileLirImageForSharedTest(
+        testing.allocator,
+        "import A\nmain : () -> I64\nmain = || A.value({})",
+        &imports,
+    );
+    defer compiled.deinit(testing.allocator);
 
-    // Clean up shared memory resources
-    defer {
-        if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-        } else {
-            const posix = struct {
-                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-                extern "c" fn close(fd: c_int) c_int;
-            };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = posix.close(shm_handle.fd);
-        }
-    }
-
-    // Verify shared memory was set up successfully
-    try testing.expect(shm_handle.size > 0);
-    std.log.debug("Successfully compiled diamond dependency test (shared memory size: {} bytes)\n", .{shm_handle.size});
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
+    try testing.expectEqual(@as(usize, 5), compiled.resources.import_artifacts.len);
 }
 
 test "integration - direct Core and Utils calls from app" {
-    // This test verifies that an app can directly call platform modules
-    // that have their own inter-module dependencies.
-    // Core.wrap_tagged internally calls Utils.tag (Core→Utils dependency)
-    if (builtin.os.tag == .windows) {
-        return;
-    }
-
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
-
-    // Get absolute path from current working directory
-    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
-    defer allocs.gpa.free(cwd_path);
-
-    // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Test app_direct_core.roc which calls Core.wrap directly
-    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_direct_core.roc" }) catch return;
-    defer allocs.gpa.free(roc_path);
-
-    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
-        std.log.err("Failed to compile direct Core call test: {}\n", .{err});
-        return err;
+    const imports = [_]test_helpers.ModuleSource{
+        .{ .name = "Core", .source = "module [inc]\ninc : I64 -> I64\ninc = |x| x + 1\n" },
+        .{ .name = "Utils", .source = "module [double]\ndouble : I64 -> I64\ndouble = |x| x * 2\n" },
     };
-    const shm_handle = shm_result.handle;
+    var compiled = try compileLirImageForSharedTest(
+        testing.allocator,
+        "import Core\nimport Utils\nmain : () -> I64\nmain = || Utils.double(Core.inc(20))",
+        &imports,
+    );
+    defer compiled.deinit(testing.allocator);
 
-    // Clean up shared memory resources
-    defer {
-        if (comptime builtin.os.tag == .windows) {
-            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
-            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
-        } else {
-            const posix = struct {
-                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-                extern "c" fn close(fd: c_int) c_int;
-            };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
-            _ = posix.close(shm_handle.fd);
-        }
-    }
-
-    // Verify shared memory was set up successfully
-    try testing.expect(shm_handle.size > 0);
-    std.log.debug("Successfully compiled direct Core call test (shared memory size: {} bytes)\n", .{shm_handle.size});
+    try expectLirImageCanBeViewedFromMappedHeader(&compiled);
+    try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
 }

@@ -2476,7 +2476,7 @@ pub const Global = struct {
             const old_name = self.name(builder);
             if (new_name == old_name) return;
             const index = @intFromEnum(self.unwrap(builder));
-            _ = builder.addGlobalAssumeCapacity(new_name, builder.globals.values()[index]);
+            builder.addGlobalAssumeCapacity(new_name, builder.globals.values()[index]);
             builder.globals.swapRemoveAt(index);
             if (!old_name.isAnon()) return;
             builder.next_unnamed_global = @enumFromInt(@intFromEnum(builder.next_unnamed_global) - 1);
@@ -5411,7 +5411,7 @@ pub const WipFunction = struct {
                 .weights = weights,
             }),
         });
-        _ = self.extra.addManyAsSliceAssumeCapacity(cases_len * 2);
+        self.extra.addManyAsSliceAssumeCapacity(cases_len * 2);
         default.ptr(self).branches += 1;
         return .{ .index = 0, .instruction = instruction };
     }
@@ -5429,7 +5429,7 @@ pub const WipFunction = struct {
                 .targets_len = @intCast(targets.len),
             }),
         });
-        _ = self.extra.appendSliceAssumeCapacity(@ptrCast(targets));
+        self.extra.appendSliceAssumeCapacity(@ptrCast(targets));
         for (targets) |target| target.ptr(self).branches += 1;
         return instruction;
     }
@@ -5573,7 +5573,7 @@ pub const WipFunction = struct {
         assert(lhs.typeOfWip(self).isVector(self.builder));
         assert(lhs.typeOfWip(self) == rhs.typeOfWip(self));
         assert(mask.typeOfWip(self).scalarType(self.builder).isInteger(self.builder));
-        _ = try self.ensureUnusedExtraCapacity(1, Instruction.ShuffleVector, 0);
+        try self.ensureUnusedExtraCapacity(1, Instruction.ShuffleVector, 0);
         const instruction = try self.addInst(name, .{
             .tag = .shufflevector,
             .data = self.addExtraAssumeCapacity(Instruction.ShuffleVector{
@@ -5606,7 +5606,7 @@ pub const WipFunction = struct {
         name: []const u8,
     ) Allocator.Error!Value {
         assert(indices.len > 0);
-        _ = val.typeOfWip(self).childTypeAt(indices, self.builder);
+        val.typeOfWip(self).childTypeAt(indices, self.builder);
         try self.ensureUnusedExtraCapacity(1, Instruction.ExtractValue, indices.len);
         const instruction = try self.addInst(name, .{
             .tag = .extractvalue,
@@ -5664,7 +5664,7 @@ pub const WipFunction = struct {
         name: []const u8,
     ) Allocator.Error!Value {
         assert(len == .none or len.typeOfWip(self).isInteger(self.builder));
-        _ = try self.builder.ptrType(addr_space);
+        try self.builder.ptrType(addr_space);
         try self.ensureUnusedExtraCapacity(1, Instruction.Alloca, 0);
         const instruction = try self.addInst(name, .{
             .tag = switch (kind) {
@@ -5807,7 +5807,7 @@ pub const WipFunction = struct {
         assert(success_ordering != .none);
         assert(failure_ordering != .none);
 
-        _ = try self.builder.structType(.normal, &.{ ty, .i1 });
+        try self.builder.structType(.normal, &.{ ty, .i1 });
         try self.ensureUnusedExtraCapacity(1, Instruction.CmpXchg, 0);
         const instruction = try self.addInst(name, .{
             .tag = switch (kind) {
@@ -6850,7 +6850,7 @@ pub const WipFunction = struct {
             => assert(lhs.typeOfWip(self) == rhs.typeOfWip(self)),
             else => unreachable,
         }
-        _ = try lhs.typeOfWip(self).changeScalar(.i1, self.builder);
+        try lhs.typeOfWip(self).changeScalar(.i1, self.builder);
         try self.ensureUnusedExtraCapacity(1, Instruction.Binary, 0);
         const instruction = try self.addInst(name, .{
             .tag = tag,
@@ -6879,7 +6879,7 @@ pub const WipFunction = struct {
             .tag = tag,
             .data = self.addExtraAssumeCapacity(Instruction.Phi{ .type = ty }),
         });
-        _ = self.extra.addManyAsSliceAssumeCapacity(incoming * 2);
+        self.extra.addManyAsSliceAssumeCapacity(incoming * 2);
         return .{ .block = self.cursor.block, .instruction = instruction };
     }
 
@@ -9054,7 +9054,7 @@ pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Erro
             0],
     )));
 
-    _ = self.function_attributes_set.getOrPutAssumeCapacity(function_attributes);
+    self.function_attributes_set.getOrPutAssumeCapacity(function_attributes);
     return function_attributes;
 }
 
@@ -9068,7 +9068,7 @@ pub fn addGlobal(self: *Builder, name: StrtabString, global: Global) Allocator.E
 
 /// Adds a global value assuming capacity has been pre-allocated.
 pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Global) Global.Index {
-    _ = self.ptrTypeAssumeCapacity(global.addr_space);
+    self.ptrTypeAssumeCapacity(global.addr_space);
     var id = name;
     if (name == .empty) {
         id = self.next_unnamed_global;
@@ -12668,7 +12668,7 @@ fn metadataSimpleAssumeCapacity(self: *Builder, tag: Metadata.Tag, value: anytyp
 
 fn metadataDistinctAssumeCapacity(self: *Builder, tag: Metadata.Tag, value: anytype) Metadata {
     const index = self.metadata_items.len;
-    _ = self.metadata_map.entries.addOneAssumeCapacity();
+    self.metadata_map.entries.addOneAssumeCapacity();
     self.metadata_items.appendAssumeCapacity(.{
         .tag = tag,
         .data = self.addMetadataExtraAssumeCapacity(value),

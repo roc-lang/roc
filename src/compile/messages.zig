@@ -8,14 +8,12 @@
 
 const std = @import("std");
 const can = @import("can");
+const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const cache_module = @import("cache_module.zig");
-const cache_manager = @import("cache_manager.zig");
 
 const ModuleEnv = can.ModuleEnv;
-const CacheData = cache_module.CacheModule.CacheData;
-const ImportInfo = cache_manager.ImportInfo;
+const CheckedArtifact = check.CheckedArtifact;
 const Report = reporting.Report;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -35,6 +33,14 @@ pub const DiscoveredLocalImport = struct {
 pub const DiscoveredExternalImport = struct {
     /// The qualified import name (e.g., "pf.Stdout")
     import_name: []const u8,
+};
+
+/// Ready imported module data passed into canonicalization.
+pub const CanonicalizeImport = struct {
+    /// The direct import name for canonicalization lookup
+    import_name: []const u8,
+    /// The fully-ready semantic env for this import
+    module_env: *const ModuleEnv,
 };
 
 /// Information about detected import cycles
@@ -71,14 +77,16 @@ pub const CanonicalizeTask = struct {
     module_name: []const u8,
     /// Filesystem path (for diagnostics)
     path: []const u8,
+    /// Source-relative import base directory.
+    source_dir: []const u8,
     /// Dependency depth
     depth: u32,
     /// Module environment (ownership transferred from coordinator)
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
-    /// Root directory for resolving local imports
-    root_dir: []const u8,
+    /// Real imported semantic envs available to canonicalization
+    imported_modules: []const CanonicalizeImport,
 };
 
 /// Task to type-check a canonicalized module
@@ -95,6 +103,10 @@ pub const TypeCheckTask = struct {
     module_env: *ModuleEnv,
     /// Imported module environments (read-only pointers to completed modules)
     imported_envs: []const *ModuleEnv,
+    /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    /// Published checked artifacts currently available for exact-key lookup during checking finalization
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation
@@ -145,6 +157,10 @@ pub const ParsedResult = struct {
     module_env: *ModuleEnv,
     /// Cached AST for reuse in canonicalization (ownership returned)
     cached_ast: *AST,
+    /// Discovered local imports (within the same package)
+    discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
+    /// Discovered external imports (cross-package qualified imports)
+    discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
@@ -176,6 +192,16 @@ pub const CanonicalizedResult = struct {
 };
 
 /// Result of successfully type-checking a module
+pub const OwnedSemanticModuleData = struct {
+    module_env: *ModuleEnv,
+    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+
+    pub fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+    }
+};
+
+/// Result of successfully type-checking a module
 pub const TypeCheckedResult = struct {
     /// Package this module belongs to
     package_name: []const u8,
@@ -185,8 +211,8 @@ pub const TypeCheckedResult = struct {
     module_name: []const u8,
     /// Path to the module file
     path: []const u8,
-    /// The type-checked module environment (ownership returned)
-    module_env: *ModuleEnv,
+    /// The type-checked semantic module data (ownership returned)
+    semantic: *OwnedSemanticModuleData,
     /// Any reports generated during type checking
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent type checking
@@ -211,6 +237,22 @@ pub const ParseFailure = struct {
     partial_env: ?*ModuleEnv,
 };
 
+/// Result when a non-parsing compilation stage cannot continue safely.
+pub const CompileFailure = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+    /// Path to the module file
+    path: []const u8,
+    /// Error reports explaining the failure
+    reports: std.ArrayList(Report),
+    /// Partial module env if available. The coordinator takes ownership.
+    partial_env: ?*ModuleEnv,
+};
+
 /// Result when an import cycle is detected during canonicalization
 pub const CycleDetected = struct {
     /// Package where the cycle was detected
@@ -229,30 +271,6 @@ pub const CycleDetected = struct {
     module_env: *ModuleEnv,
 };
 
-/// Result when a module is loaded from cache (fast path)
-pub const CacheHitResult = struct {
-    /// Package this module belongs to
-    package_name: []const u8,
-    /// Module identifier
-    module_id: ModuleId,
-    /// Module name
-    module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// The cached module environment (ownership returned)
-    module_env: *ModuleEnv,
-    /// Source code (kept for ModuleEnv)
-    source: []const u8,
-    /// Error count from cache
-    error_count: u32,
-    /// Warning count from cache
-    warning_count: u32,
-    /// Cache data buffer - must be kept alive for the lifetime of module_env
-    cache_data: CacheData,
-    /// Imports from cached metadata - these need to be recursively loaded (owned slice)
-    imports: []ImportInfo,
-};
-
 /// Result sent from workers - contains ALL outputs from the operation
 pub const WorkerResult = union(enum) {
     /// Module was successfully parsed
@@ -263,10 +281,10 @@ pub const WorkerResult = union(enum) {
     type_checked: TypeCheckedResult,
     /// Parsing failed
     parse_failed: ParseFailure,
+    /// A later compilation stage failed before producing explicit facts
+    compile_failed: CompileFailure,
     /// Import cycle was detected
     cycle_detected: CycleDetected,
-    /// Module was loaded from cache (fast path)
-    cache_hit: CacheHitResult,
 
     pub fn getPackageName(self: WorkerResult) []const u8 {
         return switch (self) {
@@ -274,8 +292,8 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .parse_failed => |r| r.package_name,
+            .compile_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
-            .cache_hit => |r| r.package_name,
         };
     }
 
@@ -285,8 +303,8 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .parse_failed => |r| r.module_id,
+            .compile_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
-            .cache_hit => |r| r.module_id,
         };
     }
 
@@ -296,8 +314,8 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .parse_failed => |r| r.module_name,
+            .compile_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
-            .cache_hit => |r| r.module_name,
         };
     }
 
@@ -305,6 +323,15 @@ pub const WorkerResult = union(enum) {
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
             .parsed => |*r| {
+                for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.module_name);
+                    gpa.free(imp.path);
+                }
+                r.discovered_local_imports.deinit(gpa);
+                for (r.discovered_external_imports.items) |imp| {
+                    gpa.free(imp.import_name);
+                }
+                r.discovered_external_imports.deinit(gpa);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
@@ -322,6 +349,8 @@ pub const WorkerResult = union(enum) {
                 r.reports.deinit(gpa);
             },
             .type_checked => |*r| {
+                r.semantic.deinit();
+                gpa.destroy(r.semantic);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
@@ -329,13 +358,14 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
+            .compile_failed => |*r| {
+                for (r.reports.items) |*rep| rep.deinit();
+                r.reports.deinit(gpa);
+            },
             .cycle_detected => |*r| {
                 if (r.cycle_info.cycle_path) |path| gpa.free(path);
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
-            },
-            .cache_hit => |_| {
-                // Module env ownership is transferred to ModuleState, nothing to free here
             },
         }
     }
@@ -382,6 +412,8 @@ test "WorkerResult accessors" {
             .path = "/path/to/Foo.roc",
             .module_env = undefined,
             .cached_ast = undefined,
+            .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
+            .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
             .reports = reports,
             .parse_ns = 1000,
         },

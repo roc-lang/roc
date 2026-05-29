@@ -36,13 +36,15 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "test"))
-		(e-binop (op "eq")
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "True")))
-			(e-nominal-external
-				(builtin)
-				(e-tag (name "True"))))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-nominal-external
+					(builtin)
+					(e-tag (name "True"))))
+			(rhs
+				(e-nominal-external
+					(builtin)
+					(e-tag (name "True")))))))
 ~~~
 # TYPES
 ~~~clojure

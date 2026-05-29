@@ -157,7 +157,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         .imported_modules = &module_envs,
     });
     defer can.deinit();
-    _ = try can.canonicalizeFile();
+    try can.canonicalizeFile();
     // Collect all diagnostics
     var module_not_found_count: u32 = 0;
     var value_not_exposed_count: u32 = 0;
@@ -238,7 +238,7 @@ test "import validation - no module_envs provided" {
     // Create czer without any explicit import envs
     var can = try Can.initModule(&allocators, parse_env, ast, builtin_ctx.canInitContext());
     defer can.deinit();
-    _ = try can.canonicalizeFile();
+    try can.canonicalizeFile();
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
@@ -284,7 +284,7 @@ test "import interner - Import.Idx functionality" {
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
-    _ = try result.can.canonicalizeFile();
+    try result.can.canonicalizeFile();
     // Check that the explicit user imports are deduplicated.
     // Builtin is also present as an implicit compiler-owned import.
     var explicit_import_count: usize = 0;
@@ -349,7 +349,7 @@ test "import interner - comprehensive usage example" {
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
-    _ = try result.can.canonicalizeFile();
+    try result.can.canonicalizeFile();
     // Check that the explicit user imports are present once each.
     // Builtin is also present as an implicit compiler-owned import.
     var explicit_import_count: usize = 0;
@@ -404,7 +404,7 @@ test "module scopes - imports work in module scope" {
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
-    _ = try result.can.canonicalizeFile();
+    try result.can.canonicalizeFile();
     // Verify that List and Dict imports were processed correctly
     const imports = result.parse_env.imports.imports;
     try testing.expect(imports.len() >= 2); // List and Dict
@@ -445,7 +445,7 @@ test "module-qualified lookups with e_lookup_external" {
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
-    _ = try result.can.canonicalizeFile();
+    try result.can.canonicalizeFile();
     // Verify the module names are correct
     const imports_list = result.parse_env.imports.imports;
     try testing.expect(imports_list.len() >= 2); // List and Dict
@@ -514,7 +514,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         result.parse_env.deinit();
         allocator.destroy(result.parse_env);
     }
-    _ = try result.can.canonicalizeFile();
+    try result.can.canonicalizeFile();
     // Verify the MathUtils import was registered
     const imports_list = result.parse_env.imports.imports;
     var has_mathutils = false;

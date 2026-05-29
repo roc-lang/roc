@@ -725,11 +725,44 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Store float32 to stack slot.
+        pub fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) !void {
+            if (offset >= 0 and offset <= 16380) {
+                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 2);
+                try self.emit.fstrRegMemUoff(.single, src, .FP, uoffset);
+            } else {
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.fstrRegMemUoff(.single, src, .IP0, 0);
+            }
+        }
+
         // Immediate loading
 
         /// Load immediate value into register
         pub fn emitLoadImm(self: *Self, dst: GeneralReg, value: i64) !void {
             try self.emit.movRegImm64(dst, @bitCast(value));
+        }
+
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) !void {
+            const page_offset = self.currentOffset();
+            try self.emit.adrp(dst);
+            const offset12 = self.currentOffset();
+            try self.emit.addRegRegImm12(.w64, dst, dst, 0);
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(page_offset),
+                    .name = symbol_name,
+                    .kind = .page21,
+                },
+            });
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(offset12),
+                    .name = symbol_name,
+                    .kind = .pageoff12,
+                },
+            });
         }
 
         // Control flow

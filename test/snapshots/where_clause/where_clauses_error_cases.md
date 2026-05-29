@@ -26,6 +26,9 @@ WHERE CLAUSE ERROR - where_clauses_error_cases.md:7:3:7:10
 PARSE ERROR - where_clauses_error_cases.md:7:10:7:11
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:3:10:3:21
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:7:3:7:10
+DECLARATION HAS NO VALUE - where_clauses_error_cases.md:2:1:3:21
+DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
+DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
@@ -117,6 +120,39 @@ This where clause could not be parsed correctly.
   ^^^^^^^
 
 Check the syntax of your where clause.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**where_clauses_error_cases.md:2:1:3:21:**
+```roc
+broken_fn1 : a -> b
+  where [a.method -> b]
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**where_clauses_error_cases.md:6:1:7:10:**
+```roc
+broken_fn2 : a -> b
+  where []
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**where_clauses_error_cases.md:10:1:11:28:**
+```roc
+broken_fn3 : a -> b
+  where [c.method : c -> d]
+```
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

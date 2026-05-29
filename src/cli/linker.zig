@@ -115,6 +115,13 @@ pub const LinkConfig = struct {
     /// For example, if this is "/path/to/platform/targets", the linker will look for
     /// "/path/to/platform/targets/macos-sysroot" when linking for macOS.
     platform_files_dir: ?[]const u8 = null,
+
+    /// Per-build scratch directory for linker-generated intermediate object files
+    /// (e.g. the Windows stack_probe.obj). When multiple `roc build` processes
+    /// run in parallel against the same exe_dir they would otherwise collide on
+    /// a shared filename. When null, the linker falls back to the directory
+    /// containing the running `roc` executable.
+    scratch_dir: ?[]const u8 = null,
 };
 
 /// Errors that can occur during linking
@@ -420,15 +427,15 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             // the MinGW ABI, which requires ___chkstk_ms for functions with large stack frames.
             if (target_arch == .x86_64) {
                 const stack_probe_obj = stack_probe.generateStackProbeObject(ctx.arena) catch return LinkError.OutOfMemory;
-                // Write to a temp file and add to link line
+                // Prefer a per-build scratch dir so parallel `roc build` invocations
+                // don't race on a shared zig-out/bin/stack_probe.obj (truncated
+                // writes from one linker can corrupt what another linker is reading).
+                const probe_dir = config.scratch_dir orelse (std.fs.selfExeDirPathAlloc(ctx.arena) catch return LinkError.OutOfMemory);
                 const stack_probe_path = std.fs.path.join(ctx.arena, &.{
-                    std.fs.selfExeDirPathAlloc(ctx.arena) catch return LinkError.OutOfMemory,
+                    probe_dir,
                     "stack_probe.obj",
                 }) catch return LinkError.OutOfMemory;
-                std.fs.cwd().writeFile(.{
-                    .sub_path = stack_probe_path,
-                    .data = stack_probe_obj,
-                }) catch return LinkError.OutOfMemory;
+                @import("backend").writeFileWindowsAvSafe(stack_probe_path, stack_probe_obj) catch return LinkError.OutOfMemory;
                 try args.append(stack_probe_path);
             }
         },

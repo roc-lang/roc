@@ -42,10 +42,10 @@ EndOfFile,
 				(e-binop (op "+")
 					(e-ident (raw "x"))
 					(e-int (raw "1")))))
-		(e-field-access
-			(e-ident (raw "list"))
-			(e-apply
-				(e-ident (raw "map"))
+		(e-method-call (method ".map")
+			(receiver
+				(e-ident (raw "list")))
+			(args
 				(e-ident (raw "fn"))))))
 ~~~
 # FORMATTED
@@ -71,11 +71,13 @@ EndOfFile,
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-num (value "1")))))
-	(e-dot-access (field "map")
+			(e-dispatch-call (method "plus") (constraint-fn-var 145)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-num (value "1"))))))
+	(e-dispatch-call (method "map") (constraint-fn-var 154)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "list"))))

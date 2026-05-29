@@ -198,10 +198,12 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "number")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "number")))
-				(e-num (value "1")))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 152)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "number"))))
+				(args
+					(e-num (value "1"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -210,53 +212,59 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "a"))
-					(e-call
+					(e-call (constraint-fn-var 190)
 						(e-lookup-local
 							(p-assign (ident "unused_regular")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "b"))
-					(e-call
+					(e-call (constraint-fn-var 223)
 						(e-lookup-local
 							(p-assign (ident "used_underscore")))
 						(e-num (value "10"))))
 				(s-let
 					(p-assign (ident "c"))
-					(e-call
+					(e-call (constraint-fn-var 260)
 						(e-lookup-local
 							(p-assign (ident "unused_underscore")))
 						(e-num (value "15"))))
 				(s-let
 					(p-assign (ident "d"))
-					(e-call
+					(e-call (constraint-fn-var 298)
 						(e-lookup-local
 							(p-assign (ident "used_regular")))
 						(e-num (value "20"))))
-				(e-binop (op "add")
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "a")))
-							(e-lookup-local
-								(p-assign (ident "b"))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 303)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 301)
+							(receiver
+								(e-dispatch-call (method "plus") (constraint-fn-var 299)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))
+									(args
+										(e-lookup-local
+											(p-assign (ident "b"))))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "c"))))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "c"))))
-					(e-lookup-local
-						(p-assign (ident "d"))))))))
+							(p-assign (ident "d")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Dec"))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e -> e"))
-		(patt (type "_arg -> Dec"))
-		(patt (type "e -> e where [e.plus : e, Dec -> e]"))
-		(patt (type "_arg -> Dec")))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e -> e where [e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]")))
 	(expressions
-		(expr (type "_arg -> Dec"))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e -> e"))
-		(expr (type "_arg -> Dec"))
-		(expr (type "e -> e where [e.plus : e, Dec -> e]"))
-		(expr (type "_arg -> Dec"))))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e -> e where [e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))))
 ~~~

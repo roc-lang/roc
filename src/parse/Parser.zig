@@ -12,6 +12,7 @@ const tracy = @import("tracy");
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
+const NumericLiteral = @import("NumericLiteral.zig");
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
@@ -186,6 +187,22 @@ fn unnest(self: *Parser) void {
         return;
     }
     self.nesting_counter = self.nesting_counter + 1;
+}
+
+fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
+    const region = self.tok_buf.resolve(token);
+    return self.tok_buf.env.source[region.start.offset..region.end.offset];
+}
+
+fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) Error!?base.Ident.Idx {
+    const type_name = suffix.newTypeName() orelse return null;
+    return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(type_name));
+}
+
+fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) Error!void {
+    if (suffix != .none) {
+        try self.pushDiagnostic(.deprecated_number_suffix, region);
+    }
 }
 
 /// add a diagnostic error
@@ -2000,17 +2017,71 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
             },
             .Int => {
                 self.advance();
-                pattern = try self.store.addPattern(.{ .int = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .number_tok = start,
-                } });
+                const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+
+                if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                    pattern = try self.store.addPattern(.{ .typed_int = .{
+                        .region = deprecated_region,
+                        .number_tok = start,
+                        .type_ident = type_ident,
+                        .literal = literal,
+                    } });
+                } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                    };
+                    pattern = try self.store.addPattern(.{ .typed_int = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .number_tok = start,
+                        .type_ident = type_ident,
+                        .literal = literal,
+                    } });
+                } else {
+                    pattern = try self.store.addPattern(.{ .int = .{
+                        .region = deprecated_region,
+                        .number_tok = start,
+                        .literal = literal,
+                    } });
+                }
             },
             .Float => {
                 self.advance();
-                pattern = try self.store.addPattern(.{ .frac = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .number_tok = start,
-                } });
+                const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+
+                if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                    pattern = try self.store.addPattern(.{ .typed_frac = .{
+                        .region = deprecated_region,
+                        .number_tok = start,
+                        .type_ident = type_ident,
+                        .literal = literal,
+                    } });
+                } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                    };
+                    pattern = try self.store.addPattern(.{ .typed_frac = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .number_tok = start,
+                        .type_ident = type_ident,
+                        .literal = literal,
+                    } });
+                } else {
+                    pattern = try self.store.addPattern(.{ .frac = .{
+                        .region = deprecated_region,
+                        .number_tok = start,
+                        .literal = literal,
+                    } });
+                }
             },
             .OpenSquare => {
                 // List - custom parsing to handle DoubleDot rest patterns
@@ -2388,6 +2459,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         },
         .Int => {
             self.advance();
+            const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+            const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+            const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+            try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
             // Disallow NoSpaceDotInt after Int (ambiguous with decimal literals like 35.123)
             // But allow NoSpaceDotLowerIdent for method calls like 35.to_str()
@@ -2395,37 +2470,64 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
             }
 
-            // Check for typed integer syntax: 123.U64
-            if (self.peek() == .NoSpaceDotUpperIdent) {
-                const type_token = self.pos;
-                self.advance();
+            if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
                 expr = try self.store.addExpr(.{ .typed_int = .{
                     .token = start,
-                    .type_token = type_token,
+                    .type_ident = type_ident,
+                    .literal = literal,
+                    .region = deprecated_region,
+                } });
+            } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                    return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                };
+                expr = try self.store.addExpr(.{ .typed_int = .{
+                    .token = start,
+                    .type_ident = type_ident,
+                    .literal = literal,
                     .region = .{ .start = start, .end = self.pos },
                 } });
             } else {
                 expr = try self.store.addExpr(.{ .int = .{
                     .token = start,
-                    .region = .{ .start = start, .end = self.pos },
+                    .literal = literal,
+                    .region = deprecated_region,
                 } });
             }
         },
         .Float => {
             self.advance();
-            // Check for typed fractional syntax: 3.14.Dec
-            if (self.peek() == .NoSpaceDotUpperIdent) {
-                const type_token = self.pos;
-                self.advance();
+            const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+            const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+            const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+            try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+
+            if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
                 expr = try self.store.addExpr(.{ .typed_frac = .{
                     .token = start,
-                    .type_token = type_token,
+                    .type_ident = type_ident,
+                    .literal = literal,
+                    .region = deprecated_region,
+                } });
+            } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                    return try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                };
+                expr = try self.store.addExpr(.{ .typed_frac = .{
+                    .token = start,
+                    .type_ident = type_ident,
+                    .literal = literal,
                     .region = .{ .start = start, .end = self.pos },
                 } });
             } else {
                 expr = try self.store.addExpr(.{ .frac = .{
                     .token = start,
-                    .region = .{ .start = start, .end = self.pos },
+                    .literal = literal,
+                    .region = deprecated_region,
                 } });
             }
         },
@@ -2767,7 +2869,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
 
                     // Only parse function applications on the right side, not ? suffix
                     const ident_suffixed = try self.parseExprApplicationSuffix(s, expr_node);
-                    expression = try self.store.addExpr(.{ .local_dispatch = .{
+                    expression = try self.store.addExpr(.{ .arrow_call = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
                         .left = expression,
@@ -2783,7 +2885,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     self.advance(); // consume )
                     // Allow chained application: expr->(|x| x)(extra_args)
                     const rhs_suffixed = try self.parseExprApplicationSuffix(s, inner_expr);
-                    expression = try self.store.addExpr(.{ .local_dispatch = .{
+                    expression = try self.store.addExpr(.{ .arrow_call = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
                         .left = expression,
@@ -2801,26 +2903,28 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     .token = s,
                     .qualifiers = empty_qualifiers,
                 } });
-                // Only parse function applications on the right side, not ? suffix
-                const ident_suffixed = try self.parseExprApplicationSuffix(s, ident);
-                expression = try self.store.addExpr(.{ .field_access = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .operator = start,
-                    .left = expression,
-                    .right = ident_suffixed,
-                } });
+                if (self.peek() == .NoSpaceOpenRound) {
+                    if (try self.parseExprArgsSuffix(s)) |args| {
+                        expression = try self.store.addExpr(.{ .method_call = .{
+                            .receiver = expression,
+                            .method_token = s,
+                            .args = args,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    } else {
+                        expression = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, s);
+                    }
+                } else {
+                    expression = try self.store.addExpr(.{ .field_access = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .operator = start,
+                        .left = expression,
+                        .right = ident,
+                    } });
+                }
             }
 
-            // Handle ? suffix on the entire field access / local dispatch expression.
-            // This ensures `a.b()?` is parsed as `(a.b())?` rather than `a.(b()?)`.
-            while (self.peek() == .NoSpaceOpQuestion) {
-                self.advance();
-                expression = try self.store.addExpr(.{ .suffix_single_question = .{
-                    .expr = expression,
-                    .operator = start,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-            }
+            expression = try self.parseExprSuffix(start, expression);
         }
         while (getTokenBP(self.peek())) |bp| {
             if (bp.left < min_bp) {
@@ -2929,6 +3033,24 @@ fn parseExprApplicationSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!
         });
     }
     return expression;
+}
+
+fn parseExprArgsSuffix(self: *Parser, _: u32) Error!?AST.Expr.Span {
+    std.debug.assert(self.peek() == .NoSpaceOpenRound);
+
+    self.advance();
+    const scratch_top = self.store.scratchExprTop();
+    self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchExprsFrom(scratch_top);
+                return null;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    return try self.store.exprSpanFrom(scratch_top);
 }
 
 /// todo
@@ -3201,6 +3323,7 @@ fn parseTypeIdent(self: *Parser) Error!AST.TypeAnno.Idx {
 const TyFnArgs = enum {
     not_looking_for_args,
     looking_for_args,
+    looking_for_type_arg,
 };
 
 /// Parse a type annotation, e.g. `Foo(a) : (a,Str,I64)`
@@ -3450,10 +3573,14 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         // - CloseCurly (end of record)
         // - DoubleDot (record extension like { field: Type, ..ext })
         // - CloseSquare (where clause)
-        if (looking_for_args == .not_looking_for_args and
-            (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot and next_tok != .CloseSquare)))
-        {
+        const can_parse_arrow = looking_for_args != .looking_for_args and curr_is_arrow;
+        const can_parse_comma_args = looking_for_args == .not_looking_for_args and
+            curr == .Comma and
+            (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and
+            next_tok != .CloseCurly and
+            next_tok != .DoubleDot and
+            next_tok != .CloseSquare;
+        if (can_parse_arrow or can_parse_comma_args) {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);
             while (self.peek() == .Comma) {
@@ -3486,7 +3613,7 @@ pub fn parseTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.parseTypeAnno(.looking_for_args);
+    return try self.parseTypeAnno(.looking_for_type_arg);
 }
 
 /// todo

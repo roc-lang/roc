@@ -83,7 +83,7 @@ EndOfFile,
 							(e-ident (raw "thing")))))))
 		(s-decl
 			(p-ident (raw "y"))
-			(e-local-dispatch
+			(e-arrow-call
 				(e-int (raw "5"))
 				(e-apply
 					(e-ident (raw "call"))
@@ -127,7 +127,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call
+				(e-call (constraint-fn-var 45)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -142,7 +142,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call
+		(e-call (constraint-fn-var 112)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -150,16 +150,16 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "i")))
-						(e-num (value "1")))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 110)
+						(receiver
+							(e-runtime-error (tag "erroneous_value_use")))
+						(args
+							(e-num (value "1"))))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-string
 			(e-literal (string ""))
-			(e-lookup-local
-				(p-assign (ident "y")))
+			(e-runtime-error (tag "erroneous_value_use"))
 			(e-literal (string "")))))
 ~~~
 # TYPES
@@ -167,10 +167,10 @@ main = "${y}"
 (inferred-types
 	(defs
 		(patt (type "a, (a -> b) -> b"))
-		(patt (type "Dec"))
+		(patt (type "Error"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "a, (a -> b) -> b"))
-		(expr (type "Dec"))
+		(expr (type "Error"))
 		(expr (type "Str"))))
 ~~~

@@ -14,71 +14,9 @@ match ... {
 }
 ~~~
 # EXPECTED
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
-REDUNDANT PATTERN - nested_record_patterns.md:1:1:7:2
+NIL
 # PROBLEMS
-**REDUNDANT PATTERN**
-The second branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The third branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The fourth branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The fifth branch of this `match` is redundant:
-**nested_record_patterns.md:1:1:7:2:**
-```roc
-match ... {
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -123,10 +61,10 @@ EndOfFile,
 				(e-string-part (raw ""))
 				(e-ident (raw "name"))
 				(e-string-part (raw " ("))
-				(e-field-access
-					(e-ident (raw "age"))
-					(e-apply
-						(e-ident (raw "to_str"))))
+				(e-method-call (method ".to_str")
+					(receiver
+						(e-ident (raw "age")))
+					(args))
 				(e-string-part (raw ") from "))
 				(e-ident (raw "city"))
 				(e-string-part (raw ""))))
@@ -168,7 +106,7 @@ match ... {
 (e-match
 	(match
 		(cond
-			(e-not-implemented))
+			(e-runtime-error (tag "not_implemented")))
 		(branches
 			(branch
 				(patterns
@@ -228,7 +166,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "name")))
 						(e-literal (string " ("))
-						(e-dot-access (field "to_str")
+						(e-dispatch-call (method "to_str") (constraint-fn-var 110)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "age"))))

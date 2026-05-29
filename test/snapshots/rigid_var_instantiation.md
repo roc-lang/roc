@@ -176,20 +176,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call
+					(e-call (constraint-fn-var 78)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "str"))
-					(e-call
+					(e-call (constraint-fn-var 87)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "lst"))
-					(e-call
+					(e-call (constraint-fn-var 182)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-list

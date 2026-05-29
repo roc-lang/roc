@@ -5,33 +5,38 @@
 //!
 //! The pipeline:
 //! 1. Parse platform header to extract requires entries and type aliases
-//! 2. Compile the platform via BuildEnv with a synthetic app
-//! 3. Collect hosted functions and module type info
-//! 4. Build a type table from compiler type variables
-//! 5. Serialize everything into Roc C-ABI structs
-//! 6. Run the glue spec (e.g., ZigGlue.roc) via the interpreter
+//! 2. Compile the platform via BuildEnv with a synthetic app, publishing checked artifacts
+//! 3. Collect hosted functions and module type info from checked artifacts
+//! 4. Build the glue input type table from artifact-owned checked type data
+//! 5. Materialize the glue input as Roc C-ABI values
+//! 6. Compile the glue spec through checked artifacts, lower to LIR, and run the LIR interpreter
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
+const check = @import("check");
 const can = @import("can");
-const reporting = @import("reporting");
 const echo_platform = @import("echo_platform");
 const roc_target = @import("roc_target");
 const layout = @import("layout");
+const lir = @import("lir");
 
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
-const Mode = compile.package.Mode;
 const RocTarget = roc_target.RocTarget;
+const CheckedArtifact = check.CheckedArtifact;
+const CanonicalNameStore = check.CanonicalNames.CanonicalNameStore;
+const CIR = can.CIR;
 
 const builtins = @import("builtins");
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
-const EvalBackend = @import("backend").EvalBackend;
+const eval_mod = @import("eval");
+const EvalBackend = eval_mod.EvalBackend;
 
 /// Arguments for glue code generation.
 pub const GlueArgs = struct {
@@ -56,8 +61,8 @@ pub const GlueError = error{
     OutOfMemory,
 };
 
-/// Print platform glue information for a platform's main.roc file using full compilation path.
-/// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
+/// Print platform glue information for a platform's main.roc file using the checked-artifact pipeline.
+/// Hosted function ordering comes from published `HostedProcTable` records.
 pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
     rocGlueInner(gpa, stderr, stdout, args, temp_dir) catch |err| {
         (switch (err) {
@@ -81,13 +86,14 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
 }
 
 fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
-
     // 0. Validate glue spec file exists
     std.fs.cwd().access(args.glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
     };
 
-    // 1. Parse platform header to get requires entries and verify it's a platform file
+    // 1. Parse platform header to get requires entries and verify it's a platform file.
+    // Header parsing is still allowed here because it is parser-stage syntax handling,
+    // not post-check semantic recovery.
     const platform_info = parsePlatformHeader(gpa, args.platform_path) catch |err| {
         return switch (err) {
             error.NotPlatformFile => error.NotPlatformFile,
@@ -98,28 +104,24 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer platform_info.deinit(gpa);
 
-    // 2. Compile platform using BuildEnv by creating a synthetic app
-    // BuildEnv expects an app file, so we create a minimal app that imports the platform
+    // 2. Compile platform using BuildEnv by creating a synthetic app.
+    // BuildEnv publishes checked artifacts for both the synthetic app and the platform.
     const platform_abs_path = std.fs.cwd().realpathAlloc(gpa, args.platform_path) catch {
         return error.PlatformPathResolution;
     };
     defer gpa.free(platform_abs_path);
 
-    // Generate synthetic app source that imports the platform
     var app_source = std.ArrayList(u8).empty;
     defer app_source.deinit(gpa);
     const w = app_source.writer(gpa);
 
-    // Build requires clause: app [Alias1, Alias2, entry1, entry2, ...] { pf: platform "path" }
     try w.print("app [", .{});
 
-    // Add type aliases first
     for (platform_info.type_aliases, 0..) |alias_name, i| {
         if (i > 0) try w.print(", ", .{});
         try w.print("{s}", .{alias_name});
     }
 
-    // Add requires entries
     for (platform_info.requires_entries, 0..) |entry, i| {
         if (platform_info.type_aliases.len > 0 or i > 0) {
             try w.print(", ", .{});
@@ -128,7 +130,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     try w.print("] {{ pf: platform \"", .{});
-    // Escape backslashes for the Roc string literal (Windows paths contain backslashes)
     for (platform_abs_path) |ch| {
         if (ch == '\\') {
             try w.print("\\\\", .{});
@@ -138,7 +139,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
     try w.print("\" }}\n\n", .{});
 
-    // Generate type alias definitions: Model : {}
     for (platform_info.type_aliases) |alias_name| {
         try w.print("{s} : {{}}\n", .{alias_name});
     }
@@ -146,12 +146,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         try w.print("\n", .{});
     }
 
-    // Generate stub implementations for each requires entry
     for (platform_info.requires_entries) |entry| {
         try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
     }
 
-    // Write synthetic app to temp file
     const synthetic_app_path = std.fs.path.join(gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
         return error.OutOfMemory;
     };
@@ -164,97 +162,35 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.SyntheticAppWrite;
     };
 
-    // Compile using BuildEnv
-    const thread_count: usize = 1;
-    const mode: Mode = .single_threaded;
-
     const cwd = std.process.getCwdAlloc(gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(cwd);
-    var build_env = BuildEnv.init(gpa, mode, thread_count, RocTarget.detectNative(), cwd) catch {
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd) catch {
         return error.BuildEnvInit;
     };
-
     defer build_env.deinit();
 
-    // Build the synthetic app (which compiles the platform as a dependency)
     build_env.build(synthetic_app_path) catch {
-        // Drain and display error reports
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
-            }
-        }
+        _ = build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
+    _ = build_env.renderDiagnostics(stderr);
 
-    // Drain any reports (warnings, etc.)
-    {
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.gpa.free(drained);
-        for (drained) |mod| {
-            for (mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
-            }
-        }
-    }
-
-    // Get compiled modules in dependency order
     const modules = build_env.getModulesInSerializationOrder(gpa) catch {
         return error.ModuleRetrieval;
     };
     defer gpa.free(modules);
 
-    // 3. Collect hosted functions from compiled platform modules
-    const HostedCompiler = can.HostedCompiler;
-    var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-    defer {
-        for (all_hosted_fns.items) |fn_info| {
-            gpa.free(fn_info.name_text);
-        }
-        all_hosted_fns.deinit(gpa);
-    }
-
-    for (modules) |mod| {
-        if (mod.is_platform_sibling or mod.is_platform_main) {
-            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
-            defer {
-                for (module_fns.items) |fn_info| {
-                    mod.env.gpa.free(fn_info.name_text);
-                }
-                module_fns.deinit(mod.env.gpa);
-            }
-
-            for (module_fns.items) |fn_info| {
-                const name_copy = gpa.dupe(u8, fn_info.name_text) catch continue;
-                all_hosted_fns.append(gpa, .{
-                    .symbol_name = fn_info.symbol_name,
-                    .expr_idx = fn_info.expr_idx,
-                    .name_text = name_copy,
-                }) catch {
-                    gpa.free(name_copy);
-                    continue;
-                };
-            }
-        }
-    }
-
-    // Sort hosted functions globally
-    const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-        }
+    const hosted_indices = collectHostedProcGlobalIndices(gpa, modules) catch {
+        return error.OutOfMemory;
     };
-    std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+    defer {
+        for (hosted_indices) |index| gpa.free(index.sort_key);
+        gpa.free(hosted_indices);
+    }
 
-    // 4. Collect module type info for JSON serialization
+    // 3. Collect platform module type information from checked artifacts.
     var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
     defer {
         for (collected_modules.items) |*mod_info| {
@@ -268,89 +204,63 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     for (modules) |mod| {
         if (mod.is_platform_sibling or mod.is_platform_main) {
+            const artifact = mod.semantic.checked_artifact orelse continue;
             type_table.clearVarMap();
-            if (collectModuleTypeInfo(gpa, &mod, mod.name, &all_hosted_fns, &type_table)) |mod_info| {
+            if (collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &type_table)) |mod_info| {
                 collected_modules.append(gpa, mod_info) catch {};
             }
         }
     }
 
-    // Register entrypoint types and provides function types from the platform main module.
+    // 4. Register platform entrypoint and provided-function type ids from the
+    // platform main artifact's published requires/provides metadata.
     var entrypoint_type_ids = std.StringHashMap(u64).init(gpa);
     defer entrypoint_type_ids.deinit();
     var provides_type_ids = std.StringHashMap(u64).init(gpa);
     defer provides_type_ids.deinit();
 
-    // Collect provides entries from the CIR (populated during canonicalization)
-    var cir_provides_entries = std.ArrayList(PlatformHeaderInfo.ProvidesEntry).empty;
+    var provides_entries = std.ArrayList(PlatformHeaderInfo.ProvidesEntry).empty;
     defer {
-        for (cir_provides_entries.items) |entry| {
+        for (provides_entries.items) |entry| {
             gpa.free(entry.name);
             gpa.free(entry.ffi_symbol);
         }
-        cir_provides_entries.deinit(gpa);
+        provides_entries.deinit(gpa);
     }
 
     for (modules) |mod| {
-        if (mod.is_platform_main) {
-            type_table.clearVarMap();
-            const env = mod.env;
+        if (!mod.is_platform_main) continue;
+        const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
+        type_table.clearVarMap();
 
-            // Extract provides entries from CIR
-            const provides_items = env.provides_entries.items;
-            for (provides_items.items) |prov_entry| {
-                const ident_name = env.getIdent(prov_entry.ident);
-                const ffi_symbol = env.getString(prov_entry.ffi_symbol);
-                cir_provides_entries.append(gpa, .{
-                    .name = gpa.dupe(u8, ident_name) catch continue,
-                    .ffi_symbol = gpa.dupe(u8, ffi_symbol) catch continue,
-                }) catch continue;
-            }
-
-            // Register entrypoint types from requires_types
-            for (env.requires_types.items.items) |required_type| {
-                const name = env.getIdent(required_type.ident);
-                const type_var = ModuleEnv.varFrom(required_type.type_anno);
-                const type_id = type_table.getOrInsert(env, type_var);
-                try entrypoint_type_ids.put(name, type_id);
-            }
-
-            // Register provides function types from definitions.
-            // We look up the provides function's type (not the requires entry type) because
-            // the provides function may have a different signature than the requires type
-            // (e.g. main! : List(Str) => Try(...) vs main_for_host! : List(Str) => I32).
-            const module_prefix = try std.fmt.allocPrint(gpa, "{s}.", .{mod.name});
-            defer gpa.free(module_prefix);
-
-            const all_defs = env.store.sliceDefs(env.all_defs);
-            for (all_defs) |def_idx| {
-                const def = env.store.getDef(def_idx);
-                const pattern = env.store.getPattern(def.pattern);
-                if (pattern != .assign) continue;
-
-                const def_name = env.getIdent(pattern.assign.ident);
-
-                // Strip module prefix if present; provides functions may or may not be qualified
-                const local_name = if (std.mem.startsWith(u8, def_name, module_prefix))
-                    def_name[module_prefix.len..]
-                else
-                    def_name;
-
-                // Check if this def matches any provides entry
-                for (cir_provides_entries.items) |prov| {
-                    if (std.mem.eql(u8, local_name, prov.name)) {
-                        const type_var = ModuleEnv.varFrom(def_idx);
-                        const type_id = type_table.getOrInsert(env, type_var);
-                        try provides_type_ids.put(prov.ffi_symbol, type_id);
-                        break;
-                    }
-                }
-            }
-            break;
+        for (artifact.provides_requires.provides) |provides_entry| {
+            try provides_entries.append(gpa, .{
+                .name = try gpa.dupe(u8, artifact.canonical_names.exportNameText(provides_entry.source_name)),
+                .ffi_symbol = try gpa.dupe(u8, artifact.canonical_names.externalSymbolNameText(provides_entry.ffi_symbol)),
+            });
         }
+
+        for (artifact.platform_required_declarations.declarations) |declaration| {
+            const name = artifact.canonical_names.exportNameText(declaration.platform_name);
+            const scheme = artifact.checked_types.schemeForKey(declaration.declared_source_ty) orelse
+                glueInvariant("platform-required declaration has no checked type scheme", .{});
+            const type_id = type_table.getOrInsert(artifact, scheme.root);
+            try entrypoint_type_ids.put(name, type_id);
+        }
+
+        for (provides_entries.items) |provides_entry| {
+            const def_idx = findTopLevelDefByName(artifact, provides_entry.name) orelse continue;
+            const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse
+                glueInvariant("provided entry has no top-level value", .{});
+            const scheme = artifact.checked_types.schemeForKey(top_level.source_scheme) orelse
+                glueInvariant("provided entry has no checked type scheme", .{});
+            const type_id = type_table.getOrInsert(artifact, scheme.root);
+            try provides_type_ids.put(provides_entry.ffi_symbol, type_id);
+        }
+        break;
     }
 
-    // 5. Compile glue spec in-process and run via interpreter
+    // 5. Compile glue spec through checked artifacts and lower to LIR.
     const glue_spec_abs = std.fs.cwd().realpathAlloc(gpa, args.glue_spec) catch {
         return error.GlueSpecNotFound;
     };
@@ -366,95 +276,95 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer glue_build_env.deinit();
 
     glue_build_env.build(glue_spec_abs) catch {
-        // Drain and display error reports
-        const drained = glue_build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer glue_build_env.gpa.free(drained);
-        for (drained) |glue_mod| {
-            for (glue_mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
-            }
-        }
+        _ = glue_build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
+    _ = glue_build_env.renderDiagnostics(stderr);
 
-    // Drain any glue spec warnings
-    {
-        const drained = glue_build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer glue_build_env.gpa.free(drained);
-        for (drained) |glue_mod| {
-            for (glue_mod.reports) |*report| {
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
-                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
-            }
+    const root_artifact = glue_build_env.executableRootCheckedArtifact();
+    const imported_artifacts = glue_build_env.collectImportedArtifactViews(gpa, root_artifact) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(imported_artifacts);
+    const relation_artifacts = glue_build_env.collectRelationArtifactViews(gpa, root_artifact) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(relation_artifacts);
+
+    var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = root_artifact.root_requests.runtime_requests },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+        },
+    ) catch {
+        return error.OutOfMemory;
+    };
+    defer lowered.deinit();
+
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, "make_glue") orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
+        unreachable;
+    };
+
+    const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(arg_layouts);
+    if (arg_layouts.len != 1) {
+        glueInvariant("make_glue expected one List(Types) argument, got {d}", .{arg_layouts.len});
     }
 
-    // Get resolved module envs and find entrypoint
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
-    var resolved = glue_build_env.getResolvedModuleEnvs(arena.allocator()) catch {
-        return error.ModuleRetrieval;
-    };
-
-    resolved.processHostedFunctions(gpa, null) catch {};
-
-    const entry = resolved.findEntrypoint() catch {
-        stderr.print("Error: Could not find glue spec entrypoint\n", .{}) catch {};
-        return error.CompilationFailed;
-    };
-
-    // 6. Construct List(Types) as C-ABI structs
+    // 6. Construct List(Types) using the exact committed LIR layout and invoke the LIR interpreter.
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
     var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
     var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, @constCast(&hosted_function_ptrs));
+    const glue_writer = GlueRocValueWriter{
+        .layouts = &lowered.lir_result.layouts,
+        .schemas = &lowered.runtime_value_schemas,
+        .roc_ops = &roc_ops,
+    };
+    var types_list = constructTypesRocList(&glue_writer, collected_modules.items, &platform_info, provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, arg_layouts[0]);
 
-    var types_list = constructTypesRocList(collected_modules.items, &platform_info, cir_provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, &roc_ops);
+    var interpreter = eval_mod.LirInterpreter.init(
+        gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &roc_ops,
+    ) catch {
+        return error.OutOfMemory;
+    };
+    defer interpreter.deinit();
 
-    // 7. Run glue spec via selected backend
-    var result_buf: ResultListFileStr = undefined;
+    const proc = lowered.lir_result.store.getProcSpec(glue_proc);
+    const ret_size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(proc.ret_layout));
+    const ret_alignment = std.mem.Alignment.fromByteUnits(ret_size_align.alignment.toByteUnits());
+    const result_ptr = gpa.rawAlloc(ret_size_align.size, ret_alignment, @returnAddress()) orelse {
+        return error.OutOfMemory;
+    };
+    const result_buf = result_ptr[0..ret_size_align.size];
+    defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
+    if (result_buf.len > 0) @memset(result_buf, 0);
 
-    switch (args.backend) {
-        .dev, .llvm => {
-            runViaDev(
-                gpa,
-                entry.platform_env,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&types_list),
-                @ptrCast(&result_buf),
-            ) catch |err| {
-                stderr.print("Dev backend error running glue spec: {}\n", .{err}) catch {};
-                return error.CompilationFailed;
-            };
-        },
-        .interpreter => {
-            compile.runner.runViaInterpreter(
-                gpa,
-                entry.platform_env,
-                glue_build_env.builtin_modules,
-                resolved.all_module_envs,
-                entry.app_module_env,
-                entry.entrypoint_expr,
-                &roc_ops,
-                @ptrCast(&types_list),
-                @ptrCast(&result_buf),
-                RocTarget.detectNative(),
-            ) catch |err| {
-                stderr.print("Interpreter error running glue spec: {}\n", .{err}) catch {};
-                return error.CompilationFailed;
-            };
-        },
-    }
+    _ = interpreter.eval(.{
+        .proc_id = glue_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .arg_ptr = @ptrCast(&types_list),
+        .ret_ptr = @ptrCast(result_buf.ptr),
+    }) catch |err| {
+        stderr.print("Error running glue spec: {}\n", .{err}) catch {};
+        return error.CompilationFailed;
+    };
 
-    // 8. Extract Try(List(File), Str) and write files
-    const glue_result = extractGlueResult(&result_buf);
-
+    const glue_result = extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
+    defer glue_result.deinit();
     if (glue_result.err_msg) |err_msg| {
         stderr.print("Glue spec error: {s}\n", .{err_msg}) catch {};
         return error.CompilationFailed;
@@ -466,17 +376,14 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return;
     }
 
-    // Create output directory if needed
     std.fs.cwd().makePath(args.output_dir) catch {
         stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
         return error.CompilationFailed;
     };
 
     stdout.print("Glue spec returned {d} file(s):\n", .{files.len}) catch {};
-
-    // Write each file
     for (files) |file| {
-        const file_name = file.name.asSlice();
+        const file_name = file.name;
         const file_path = std.fs.path.join(gpa, &.{ args.output_dir, file_name }) catch {
             return error.OutOfMemory;
         };
@@ -484,7 +391,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
         std.fs.cwd().writeFile(.{
             .sub_path = file_path,
-            .data = file.content.asSlice(),
+            .data = file.content,
         }) catch {
             stderr.print("Error: Could not write file '{s}'\n", .{file_path}) catch {};
             return error.CompilationFailed;
@@ -492,6 +399,205 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
         stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
     }
+}
+
+const HostedProcGlobalIndex = struct {
+    artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    def_idx: can.CIR.Def.Idx,
+    index: usize,
+    sort_key: []const u8,
+};
+
+fn checkedArtifactKeysEqual(
+    a: CheckedArtifact.CheckedModuleArtifactKey,
+    b: CheckedArtifact.CheckedModuleArtifactKey,
+) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: " ++ message, args);
+    }
+    unreachable;
+}
+
+fn hostedProcSortKey(
+    allocator: Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    hosted: CheckedArtifact.HostedProc,
+) Allocator.Error![]const u8 {
+    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
+    const local_name = artifact.canonical_names.externalSymbolNameText(hosted.external_symbol_name);
+    const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, local_name });
+    if (!std.mem.endsWith(u8, qualified, "!")) return qualified;
+
+    const stripped = try allocator.dupe(u8, qualified[0 .. qualified.len - 1]);
+    allocator.free(qualified);
+    return stripped;
+}
+
+fn hostedProcForDef(
+    table: *const CheckedArtifact.HostedProcTable,
+    def_idx: CIR.Def.Idx,
+) ?CheckedArtifact.HostedProc {
+    for (table.procs) |proc| {
+        if (proc.def_idx == def_idx) return proc;
+    }
+    return null;
+}
+
+fn collectHostedProcGlobalIndices(
+    allocator: Allocator,
+    modules: []const BuildEnv.CompiledModuleInfo,
+) Allocator.Error![]HostedProcGlobalIndex {
+    var indices = std.ArrayList(HostedProcGlobalIndex).empty;
+    errdefer {
+        for (indices.items) |index| allocator.free(index.sort_key);
+        indices.deinit(allocator);
+    }
+
+    for (modules) |mod| {
+        if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
+        const artifact = mod.semantic.checked_artifact orelse continue;
+        for (artifact.hosted_procs.procs) |hosted| {
+            try indices.append(allocator, .{
+                .artifact_key = artifact.key,
+                .def_idx = hosted.def_idx,
+                .index = 0,
+                .sort_key = try hostedProcSortKey(allocator, artifact, hosted),
+            });
+        }
+    }
+
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedProcGlobalIndex, b: HostedProcGlobalIndex) bool {
+            return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
+                .lt => true,
+                .gt => false,
+                .eq => @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx),
+            };
+        }
+    };
+    std.mem.sort(HostedProcGlobalIndex, indices.items, {}, SortContext.lessThan);
+
+    for (indices.items, 0..) |*index, i| {
+        index.index = i;
+    }
+
+    return try indices.toOwnedSlice(allocator);
+}
+
+fn hostedGlobalIndexForDef(
+    indices: []const HostedProcGlobalIndex,
+    artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    def_idx: can.CIR.Def.Idx,
+) usize {
+    for (indices) |index| {
+        if (index.def_idx == def_idx and checkedArtifactKeysEqual(index.artifact_key, artifact_key)) {
+            return index.index;
+        }
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: hosted proc has no global index", .{});
+    }
+    unreachable;
+}
+
+fn findTopLevelDefByName(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    local_name: []const u8,
+) ?can.CIR.Def.Idx {
+    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
+
+    for (artifact.top_level_values.entries) |entry| {
+        const def_name = artifact.canonical_names.exportNameText(entry.source_name);
+        const candidate = if (std.mem.startsWith(u8, def_name, module_name) and
+            def_name.len > module_name.len and
+            def_name[module_name.len] == '.')
+            def_name[module_name.len + 1 ..]
+        else
+            def_name;
+        if (std.mem.eql(u8, candidate, local_name)) return entry.def;
+    }
+
+    return null;
+}
+
+fn selectGlueSpecRootProc(
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_ffi_symbol: []const u8,
+) ?lir.LirProcSpecId {
+    for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
+        if (metadata.kind != .provided_export) continue;
+        const root = rootRequestByOrder(root_artifact, metadata.order);
+        const ffi_symbol = providedRootFfiSymbol(root_artifact, root);
+        if (std.mem.eql(u8, ffi_symbol, expected_ffi_symbol)) return root_proc;
+    }
+    return null;
+}
+
+fn rootRequestByOrder(
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    order: u32,
+) CheckedArtifact.RootRequest {
+    for (root_artifact.root_requests.requests) |request| {
+        if (request.order == order) return request;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: missing root request order {d}", .{order});
+    }
+    unreachable;
+}
+
+fn providedRootFfiSymbol(
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    root: CheckedArtifact.RootRequest,
+) []const u8 {
+    const def_idx = switch (root.source) {
+        .def => |def| def,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("glue invariant violated: provided export root is not a definition", .{});
+            }
+            unreachable;
+        },
+    };
+    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("glue invariant violated: provided export root has no published top-level value", .{});
+        }
+        unreachable;
+    };
+
+    for (root_artifact.provides_requires.provides) |entry| {
+        if (entry.source_name == top_level.source_name) {
+            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
+        }
+    }
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glue invariant violated: provided export root has no published FFI symbol", .{});
+    }
+    unreachable;
+}
+
+fn argLayoutsForProc(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    proc_id: lir.LirProcSpecId,
+) Allocator.Error![]layout.Idx {
+    const proc = store.getProcSpec(proc_id);
+    const arg_ids = store.getLocalSpan(proc.args);
+    const arg_layouts = try allocator.alloc(layout.Idx, arg_ids.len);
+    errdefer allocator.free(arg_layouts);
+
+    for (arg_ids, 0..) |local_id, i| {
+        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    }
+
+    return arg_layouts;
 }
 
 /// Information extracted from a platform header for glue generation.
@@ -733,18 +839,16 @@ const CollectedTagInfo = struct {
     payload_alignment: u64,
 };
 
-/// Builds a type table from compiler type vars, deduplicating entries.
+/// Builds a type table from artifact-owned checked type payloads.
 const TypeTable = struct {
     entries: std.ArrayList(CollectedTypeRepr),
-    var_map: std.AutoHashMap(@import("types").Var, u64),
+    var_map: std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64),
     gpa: std.mem.Allocator,
-
-    const types = @import("types");
 
     fn init(gpa: std.mem.Allocator) TypeTable {
         return .{
             .entries = std.ArrayList(CollectedTypeRepr).empty,
-            .var_map = std.AutoHashMap(types.Var, u64).init(gpa),
+            .var_map = std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64).init(gpa),
             .gpa = gpa,
         };
     }
@@ -809,33 +913,31 @@ const TypeTable = struct {
         self.gpa.free(slice);
     }
 
-    /// Clear the var map when switching modules (vars are module-local).
+    /// Clear the checked-type map when switching modules (checked ids are artifact-local).
     fn clearVarMap(self: *TypeTable) void {
         self.var_map.clearRetainingCapacity();
     }
 
-    /// Get an existing type table index for a var, or insert a new entry.
+    /// Get an existing type table index for a checked type, or insert a new entry.
     /// Pre-registers a placeholder before conversion to prevent infinite recursion
     /// on cyclic types (the placeholder is updated in-place after conversion).
-    fn getOrInsert(self: *TypeTable, env: *const ModuleEnv, type_var: types.Var) u64 {
-        const resolved = env.types.resolveVar(type_var);
-        const root_var = resolved.var_;
-
-        if (self.var_map.get(root_var)) |idx| {
+    fn getOrInsert(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) u64 {
+        if (self.var_map.get(checked_type)) |idx| {
             return idx;
         }
 
-        // Pre-register placeholder to break cycles
         const idx: u64 = @intCast(self.entries.items.len);
-        self.entries.append(self.gpa, .{ .unknown = "" }) catch return 0;
-        self.var_map.put(root_var, idx) catch {};
+        self.entries.append(self.gpa, .{ .unknown = "" }) catch glueInvariant("could not allocate glue type-table placeholder", .{});
+        self.var_map.put(checked_type, idx) catch glueInvariant("could not allocate glue type-table index", .{});
 
-        const repr = self.convertContent(env, resolved.desc.content);
+        const repr = self.convertCheckedType(artifact, checked_type);
 
-        // Update placeholder with actual representation
         self.entries.items[@intCast(idx)] = repr;
 
-        // Assign synthetic names to anonymous records so glue generates struct defs
         switch (repr) {
             .record => |rec| {
                 if (rec.name.len == 0) {
@@ -888,178 +990,149 @@ const TypeTable = struct {
         };
     }
 
-    fn convertContent(self: *TypeTable, env: *const ModuleEnv, content: types.Content) CollectedTypeRepr {
-        switch (content) {
-            .structure => |flat_type| return self.convertFlatType(env, flat_type),
-            .alias => |alias| {
-                const backing_var = env.types.getAliasBackingVar(alias);
-                return self.convertContent(env, env.types.resolveVar(backing_var).desc.content);
+    fn convertCheckedType(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        const payload = checkedTypePayload(artifact, checked_type);
+        return switch (payload) {
+            .pending => glueInvariant("pending checked type reached glue type table", .{}),
+            .flex => .{ .unknown = self.gpa.dupe(u8, "flex") catch "" },
+            .rigid => .{ .unknown = self.gpa.dupe(u8, "rigid") catch "" },
+            .alias => |alias| self.getAliasBackingRepr(artifact, alias.backing),
+            .record => |record| self.convertRecord(artifact, record.fields, record.ext),
+            .record_unbound => |fields| self.convertRecord(artifact, fields, null),
+            .tuple => |items| self.convertTuple(artifact, items),
+            .nominal => |nominal| self.convertNominal(artifact, nominal),
+            .function => |func| self.convertFunc(artifact, func),
+            .empty_record, .empty_tag_union => .unit,
+            .tag_union => |tag_union| self.convertTagUnion(artifact, tag_union.tags, tag_union.ext),
+        };
+    }
+
+    fn getAliasBackingRepr(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        backing: CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        return self.convertCheckedType(artifact, backing);
+    }
+
+    fn convertNominal(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        nominal: CheckedArtifact.CheckedNominalType,
+    ) CollectedTypeRepr {
+        const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+
+        if (nominal.builtin) |builtin_nominal| {
+            switch (builtin_nominal) {
+                .list => {
+                    if (nominal.args.len >= 1) return .{ .list = self.getOrInsert(artifact, nominal.args[0]) };
+                    return .{ .unknown = self.gpa.dupe(u8, "List") catch "" };
+                },
+                .box => {
+                    if (nominal.args.len >= 1) return .{ .box = self.getOrInsert(artifact, nominal.args[0]) };
+                    return .{ .unknown = self.gpa.dupe(u8, "Box") catch "" };
+                },
+                .str => return .str_,
+                .bool => return .bool_,
+                .dec => return .dec,
+                .u8 => return .u8_,
+                .u16 => return .u16_,
+                .u32 => return .u32_,
+                .u64 => return .u64_,
+                .u128 => return .u128_,
+                .i8 => return .i8_,
+                .i16 => return .i16_,
+                .i32 => return .i32_,
+                .i64 => return .i64_,
+                .i128 => return .i128_,
+                .f32 => return .f32_,
+                .f64 => return .f64_,
+            }
+        }
+
+        const backing_repr = self.convertCheckedType(artifact, nominal.backing);
+        return switch (backing_repr) {
+            .record => |rec| .{ .record = .{
+                .name = self.gpa.dupe(u8, display_name) catch "",
+                .fields = rec.fields,
+                .size = rec.size,
+                .alignment = rec.alignment,
+            } },
+            .tag_union => |tu| blk: {
+                self.freeDuped(tu.name);
+                break :blk .{ .tag_union = .{
+                    .name = self.gpa.dupe(u8, display_name) catch "",
+                    .tags = tu.tags,
+                    .size = tu.size,
+                    .alignment = tu.alignment,
+                } };
             },
-            .flex => return .{ .unknown = self.gpa.dupe(u8, "flex") catch "" },
-            .rigid => return .{ .unknown = self.gpa.dupe(u8, "rigid") catch "" },
-            .err => return .{ .unknown = self.gpa.dupe(u8, "error") catch "" },
-        }
+            else => backing_repr,
+        };
     }
 
-    fn convertFlatType(self: *TypeTable, env: *const ModuleEnv, flat_type: types.FlatType) CollectedTypeRepr {
-        switch (flat_type) {
-            .nominal_type => |nominal| return self.convertNominal(env, nominal),
-            .record => |record| return self.convertRecord(env, record),
-            .tag_union => |tag_union| return self.convertTagUnion(env, tag_union),
-            .fn_pure, .fn_effectful, .fn_unbound => |func| return self.convertFunc(env, func),
-            .empty_record => return .unit,
-            .empty_tag_union => return .unit,
-            .tuple => |tuple| return self.convertTuple(env, tuple),
-            .record_unbound => return .{ .unknown = self.gpa.dupe(u8, "record_unbound") catch "" },
-        }
+    fn convertRecord(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        fields: []const CheckedArtifact.CheckedRecordField,
+        ext: ?CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
+        defer all_fields.deinit(self.gpa);
+        appendRecordRowFields(self.gpa, artifact, fields, ext, &all_fields) catch return self.oomUnknown("record");
+        return self.convertRecordFields(artifact, all_fields.items);
     }
 
-    fn convertNominal(self: *TypeTable, env: *const ModuleEnv, nominal: types.NominalType) CollectedTypeRepr {
-        const ident_store = env.getIdentStoreConst();
-        const raw_name = ident_store.getText(nominal.ident.ident_idx);
-        const display_name = getTypeDisplayName(raw_name);
+    fn convertRecordFields(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        fields: []const CheckedArtifact.CheckedRecordField,
+    ) CollectedTypeRepr {
+        if (fields.len == 0) return .unit;
 
-        // Check for known builtin types
-        if (std.mem.eql(u8, display_name, "List")) {
-            const args = env.types.sliceNominalArgs(nominal);
-            if (args.len >= 1) {
-                const elem_id = self.getOrInsert(env, args[0]);
-                return .{ .list = elem_id };
-            }
-            return .{ .unknown = self.gpa.dupe(u8, "List") catch "" };
-        }
-        if (std.mem.eql(u8, display_name, "Box")) {
-            const args = env.types.sliceNominalArgs(nominal);
-            if (args.len >= 1) {
-                const inner_id = self.getOrInsert(env, args[0]);
-                return .{ .box = inner_id };
-            }
-            return .{ .unknown = self.gpa.dupe(u8, "Box") catch "" };
-        }
-        if (std.mem.eql(u8, display_name, "Str")) return .str_;
-        if (std.mem.eql(u8, display_name, "Bool")) return .bool_;
-        if (std.mem.eql(u8, display_name, "Dec")) return .dec;
-        if (std.mem.eql(u8, display_name, "U8")) return .u8_;
-        if (std.mem.eql(u8, display_name, "U16")) return .u16_;
-        if (std.mem.eql(u8, display_name, "U32")) return .u32_;
-        if (std.mem.eql(u8, display_name, "U64")) return .u64_;
-        if (std.mem.eql(u8, display_name, "U128")) return .u128_;
-        if (std.mem.eql(u8, display_name, "I8")) return .i8_;
-        if (std.mem.eql(u8, display_name, "I16")) return .i16_;
-        if (std.mem.eql(u8, display_name, "I32")) return .i32_;
-        if (std.mem.eql(u8, display_name, "I64")) return .i64_;
-        if (std.mem.eql(u8, display_name, "I128")) return .i128_;
-        if (std.mem.eql(u8, display_name, "F32")) return .f32_;
-        if (std.mem.eql(u8, display_name, "F64")) return .f64_;
-
-        // Not a known builtin — check if it's an opaque wrapping something
-        if (nominal.vars.nonempty.count > 0) {
-            const backing_var = env.types.getNominalBackingVar(nominal);
-            const backing_resolved = env.types.resolveVar(backing_var);
-
-            // If it wraps a record, convert it but preserve the qualified name
-            if (backing_resolved.desc.content.unwrapRecord()) |record| {
-                const record_repr = self.convertRecord(env, record);
-                switch (record_repr) {
-                    .record => |rec| {
-                        return .{ .record = .{
-                            .name = self.gpa.dupe(u8, display_name) catch "",
-                            .fields = rec.fields,
-                            .size = rec.size,
-                            .alignment = rec.alignment,
-                        } };
-                    },
-                    else => return record_repr,
-                }
-            }
-
-            // If it wraps a tag union, convert it but preserve the qualified name
-            if (backing_resolved.desc.content.unwrapTagUnion()) |tu| {
-                const tu_repr = self.convertTagUnion(env, tu);
-                switch (tu_repr) {
-                    .tag_union => |collected_tu| {
-                        // Free the auto-generated name from convertTagUnion
-                        // before replacing it with the nominal's display name.
-                        self.freeDuped(collected_tu.name);
-                        return .{ .tag_union = .{
-                            .name = self.gpa.dupe(u8, display_name) catch "",
-                            .tags = collected_tu.tags,
-                            .size = collected_tu.size,
-                            .alignment = collected_tu.alignment,
-                        } };
-                    },
-                    else => return tu_repr,
-                }
-            }
-
-            // Otherwise, follow the backing var
-            return self.convertContent(env, backing_resolved.desc.content);
-        }
-
-        return .{ .unknown = self.gpa.dupe(u8, display_name) catch "" };
-    }
-
-    fn convertRecord(self: *TypeTable, env: *const ModuleEnv, record: types.Record) CollectedTypeRepr {
-        const ident_store = env.getIdentStoreConst();
-        const fields_slice = env.types.getRecordFieldsSlice(record.fields);
-        const field_names = fields_slice.items(.name);
-        const field_vars = fields_slice.items(.var_);
-
-        if (field_names.len == 0) return .unit;
-
-        // First pass: getOrInsert all field type_ids so nested types are in the table
-        const field_type_ids = self.gpa.alloc(u64, field_names.len) catch return self.oomUnknown("record");
+        const field_type_ids = self.gpa.alloc(u64, fields.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_type_ids);
-        for (0..field_names.len) |i| {
-            field_type_ids[i] = self.getOrInsert(env, field_vars[i]);
+        for (fields, 0..) |field, i| {
+            field_type_ids[i] = self.getOrInsert(artifact, field.ty);
         }
 
-        // Get size/alignment for each field
-        const field_sizes = self.gpa.alloc(SizeAlign, field_names.len) catch return self.oomUnknown("record");
+        const field_sizes = self.gpa.alloc(SizeAlign, fields.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_sizes);
-        for (0..field_names.len) |i| {
+        for (0..fields.len) |i| {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
-        // Build sortable array of field indices
-        var field_indices = self.gpa.alloc(usize, field_names.len) catch return self.oomUnknown("record");
+        var field_indices = self.gpa.alloc(usize, fields.len) catch return self.oomUnknown("record");
         defer self.gpa.free(field_indices);
-        for (0..field_names.len) |i| {
-            field_indices[i] = i;
-        }
+        for (0..fields.len) |i| field_indices[i] = i;
 
-        // Sort by alignment descending, then name ascending (matching store.zig ABI)
         const SortCtx = struct {
-            names: []const base.Ident.Idx,
-            idents: *const base.Ident.Store,
+            fields: []const CheckedArtifact.CheckedRecordField,
+            names: *const CanonicalNameStore,
             sizes: []const SizeAlign,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
                 const a_align = ctx.sizes[a].alignment;
                 const b_align = ctx.sizes[b].alignment;
-                if (a_align != b_align) {
-                    return a_align > b_align; // descending alignment
-                }
-                const a_text = ctx.idents.getText(ctx.names[a]);
-                const b_text = ctx.idents.getText(ctx.names[b]);
+                if (a_align != b_align) return a_align > b_align;
+                const a_text = ctx.names.recordFieldLabelText(ctx.fields[a].name);
+                const b_text = ctx.names.recordFieldLabelText(ctx.fields[b].name);
                 return std.mem.order(u8, a_text, b_text) == .lt;
             }
         };
-        std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store, .sizes = field_sizes }, SortCtx.lessThan);
+        std.mem.sort(usize, field_indices, SortCtx{ .fields = fields, .names = &artifact.canonical_names, .sizes = field_sizes }, SortCtx.lessThan);
 
-        // Build collected fields in sorted order and compute record size
-        const collected_fields = self.gpa.alloc(CollectedRecordField, field_names.len) catch return self.oomUnknown("record");
+        const collected_fields = self.gpa.alloc(CollectedRecordField, fields.len) catch return self.oomUnknown("record");
         var max_alignment: u64 = 0;
         var current_offset: u64 = 0;
         for (field_indices, 0..) |src_idx, dst_idx| {
-            const name_text = ident_store.getText(field_names[src_idx]);
             const f_size = field_sizes[src_idx].size;
             const f_align = field_sizes[src_idx].alignment;
-
-            // Track max alignment for the record
             if (f_align > max_alignment) max_alignment = f_align;
-
-            // Align current offset
             if (f_align > 0) {
                 const rem = current_offset % f_align;
                 if (rem != 0) current_offset += f_align - rem;
@@ -1067,14 +1140,13 @@ const TypeTable = struct {
             current_offset += f_size;
 
             collected_fields[dst_idx] = .{
-                .name = self.gpa.dupe(u8, name_text) catch "",
+                .name = self.gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(fields[src_idx].name)) catch "",
                 .type_id = field_type_ids[src_idx],
                 .size = f_size,
                 .alignment = f_align,
             };
         }
 
-        // Round total size up to max alignment
         var record_size = current_offset;
         if (max_alignment > 0) {
             const rem = record_size % max_alignment;
@@ -1093,34 +1165,37 @@ const TypeTable = struct {
         return .{ .unknown = self.gpa.dupe(u8, name) catch "" };
     }
 
-    fn convertTuple(self: *TypeTable, env: *const ModuleEnv, tuple: types.Tuple) CollectedTypeRepr {
-        const elem_vars = env.types.sliceVars(tuple.elems);
-        if (elem_vars.len == 0) return .unit;
+    fn convertTuple(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        elems: []const CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        if (elems.len == 0) return .unit;
 
         // Convert tuple elements as record fields with positional names (_0, _1, ...)
-        const field_type_ids = self.gpa.alloc(u64, elem_vars.len) catch return self.oomUnknown("tuple");
+        const field_type_ids = self.gpa.alloc(u64, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_type_ids);
-        for (elem_vars, 0..) |ev, i| {
-            field_type_ids[i] = self.getOrInsert(env, ev);
+        for (elems, 0..) |elem, i| {
+            field_type_ids[i] = self.getOrInsert(artifact, elem);
         }
 
-        const field_sizes = self.gpa.alloc(SizeAlign, elem_vars.len) catch return self.oomUnknown("tuple");
+        const field_sizes = self.gpa.alloc(SizeAlign, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_sizes);
-        for (0..elem_vars.len) |i| {
+        for (0..elems.len) |i| {
             field_sizes[i] = self.getSizeAlign(field_type_ids[i]);
         }
 
         // Generate positional field names (_0, _1, ...) before sorting
-        const field_names = self.gpa.alloc([]const u8, elem_vars.len) catch return self.oomUnknown("tuple");
+        const field_names = self.gpa.alloc([]const u8, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_names);
-        for (0..elem_vars.len) |i| {
+        for (0..elems.len) |i| {
             field_names[i] = std.fmt.allocPrint(self.gpa, "_{d}", .{i}) catch "";
         }
 
         // Sort by alignment descending, then name ascending (matching Roc ABI)
-        var field_indices = self.gpa.alloc(usize, elem_vars.len) catch return self.oomUnknown("tuple");
+        var field_indices = self.gpa.alloc(usize, elems.len) catch return self.oomUnknown("tuple");
         defer self.gpa.free(field_indices);
-        for (0..elem_vars.len) |i| {
+        for (0..elems.len) |i| {
             field_indices[i] = i;
         }
 
@@ -1139,7 +1214,7 @@ const TypeTable = struct {
         };
         std.mem.sort(usize, field_indices, SortCtx{ .sizes = field_sizes, .names = field_names }, SortCtx.lessThan);
 
-        const collected_fields = self.gpa.alloc(CollectedRecordField, elem_vars.len) catch return self.oomUnknown("tuple");
+        const collected_fields = self.gpa.alloc(CollectedRecordField, elems.len) catch return self.oomUnknown("tuple");
         var max_alignment: u64 = 0;
         var current_offset: u64 = 0;
         for (field_indices, 0..) |src_idx, dst_idx| {
@@ -1176,58 +1251,61 @@ const TypeTable = struct {
         } };
     }
 
-    fn convertTagUnion(self: *TypeTable, env: *const ModuleEnv, tag_union: types.TagUnion) CollectedTypeRepr {
-        const ident_store = env.getIdentStoreConst();
-        const tags_slice = env.types.getTagsSlice(tag_union.tags);
-        const tag_names = tags_slice.items(.name);
-        const tag_args = tags_slice.items(.args);
+    fn convertTagUnion(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        tags: []const CheckedArtifact.CheckedTag,
+        ext: CheckedArtifact.CheckedTypeId,
+    ) CollectedTypeRepr {
+        var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
+        defer all_tags.deinit(self.gpa);
+        appendTagRowTags(self.gpa, artifact, tags, ext, &all_tags) catch return self.oomUnknown("tag_union");
 
-        if (tag_names.len == 0) return .unit;
+        if (all_tags.items.len == 0) return .unit;
 
         // Build sortable array of tag indices
-        var tag_indices = self.gpa.alloc(usize, tag_names.len) catch return self.oomUnknown("tag_union");
+        var tag_indices = self.gpa.alloc(usize, all_tags.items.len) catch return self.oomUnknown("tag_union");
         defer self.gpa.free(tag_indices);
-        for (0..tag_names.len) |i| {
+        for (0..all_tags.items.len) |i| {
             tag_indices[i] = i;
         }
 
         // Sort by name (alphabetical = discriminant order)
         const SortCtx = struct {
-            names: []const base.Ident.Idx,
-            idents: *const base.Ident.Store,
+            tags: []const CheckedArtifact.CheckedTag,
+            names: *const CanonicalNameStore,
 
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_text = ctx.idents.getText(ctx.names[a]);
-                const b_text = ctx.idents.getText(ctx.names[b]);
+                const a_text = ctx.names.tagLabelText(ctx.tags[a].name);
+                const b_text = ctx.names.tagLabelText(ctx.tags[b].name);
                 return std.mem.order(u8, a_text, b_text) == .lt;
             }
         };
-        std.mem.sort(usize, tag_indices, SortCtx{ .names = tag_names, .idents = ident_store }, SortCtx.lessThan);
+        std.mem.sort(usize, tag_indices, SortCtx{ .tags = all_tags.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
 
         // Collect tags and compute per-variant payload layout
-        const collected_tags = self.gpa.alloc(CollectedTagInfo, tag_names.len) catch return self.oomUnknown("tag_union");
+        const collected_tags = self.gpa.alloc(CollectedTagInfo, all_tags.items.len) catch return self.oomUnknown("tag_union");
         var max_payload_size: u64 = 0;
         var max_payload_alignment: u64 = 0;
 
         // Also build auto-generated name from variant names joined with "Or"
         var name_len: usize = 0;
         for (tag_indices) |src_idx| {
-            const nt = ident_store.getText(tag_names[src_idx]);
+            const nt = artifact.canonical_names.tagLabelText(all_tags.items[src_idx].name);
             name_len += nt.len;
         }
         // Add "Or" separators between names
-        if (tag_names.len > 1) name_len += (tag_names.len - 1) * 2;
+        if (all_tags.items.len > 1) name_len += (all_tags.items.len - 1) * 2;
         const auto_name_buf: []u8 = self.gpa.alloc(u8, name_len) catch return self.oomUnknown("tag_union");
         var name_pos: usize = 0;
 
         for (tag_indices, 0..) |src_idx, dst_idx| {
-            const name_text = ident_store.getText(tag_names[src_idx]);
-            const args_range = tag_args[src_idx];
-            const arg_vars = env.types.sliceVars(args_range);
+            const tag = all_tags.items[src_idx];
+            const name_text = artifact.canonical_names.tagLabelText(tag.name);
 
-            const payload_ids = self.gpa.alloc(u64, arg_vars.len) catch return self.oomUnknown("tag_union");
-            for (arg_vars, 0..) |av, i| {
-                payload_ids[i] = self.getOrInsert(env, av);
+            const payload_ids = self.gpa.alloc(u64, tag.args.len) catch return self.oomUnknown("tag_union");
+            for (tag.args, 0..) |arg, i| {
+                payload_ids[i] = self.getOrInsert(artifact, arg);
             }
 
             // Compute payload as a tuple: sequential fields with alignment padding
@@ -1277,7 +1355,7 @@ const TypeTable = struct {
 
         // Compute discriminant size/alignment from tag count.
         // Single-variant tag unions have no discriminant (ZigGlue unwraps them to payload).
-        const disc_size: u64 = if (tag_names.len <= 1) 0 else layout.TagUnionData.discriminantSize(tag_names.len);
+        const disc_size: u64 = if (all_tags.items.len <= 1) 0 else layout.TagUnionData.discriminantSize(all_tags.items.len);
         const disc_align: u64 = disc_size;
 
         // Compute overall tag union layout: payload at offset 0, discriminant at end
@@ -1306,13 +1384,16 @@ const TypeTable = struct {
         } };
     }
 
-    fn convertFunc(self: *TypeTable, env: *const ModuleEnv, func: types.Func) CollectedTypeRepr {
-        const arg_vars = env.types.sliceVars(func.args);
-        const arg_ids = self.gpa.alloc(u64, arg_vars.len) catch return self.oomUnknown("function");
-        for (arg_vars, 0..) |av, i| {
-            arg_ids[i] = self.getOrInsert(env, av);
+    fn convertFunc(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        func: CheckedArtifact.CheckedFunctionType,
+    ) CollectedTypeRepr {
+        const arg_ids = self.gpa.alloc(u64, func.args.len) catch return self.oomUnknown("function");
+        for (func.args, 0..) |arg, i| {
+            arg_ids[i] = self.getOrInsert(artifact, arg);
         }
-        const ret_id = self.getOrInsert(env, func.ret);
+        const ret_id = self.getOrInsert(artifact, func.ret);
 
         return .{ .function = .{
             .arg_ids = arg_ids,
@@ -1321,7 +1402,7 @@ const TypeTable = struct {
     }
 
     /// Strip "Builtin." and "Num." prefixes from type names (mirrors TypeWriter.getDisplayName).
-    fn getTypeDisplayName(raw_name: []const u8) []const u8 {
+    pub fn getTypeDisplayName(raw_name: []const u8) []const u8 {
         if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
             const without_builtin = raw_name[8..];
             if (std.mem.startsWith(u8, without_builtin, "Num.")) {
@@ -1336,158 +1417,169 @@ const TypeTable = struct {
     }
 };
 
-// Roc C-ABI struct definitions for glue platform types.
-// Fields are ordered alphabetically to match Roc's C ABI layout.
-
-/// RecordFieldInfo := { name : Str, type_str : Str }
-const RecordFieldInfoRoc = extern struct {
-    name: RocStr, // offset 0
-    type_str: RocStr, // offset 24
+const GlueFieldSlot = struct {
+    ptr: [*]u8,
+    layout_idx: layout.Idx,
 };
 
-/// HostedFunctionInfo := { arg_fields : List(RecordFieldInfo), arg_type_ids : List(U64), index : U64, name : Str, ret_fields : List(RecordFieldInfo), ret_type_id : U64, type_str : Str }
-const HostedFunctionInfoRoc = extern struct {
-    arg_fields: RocList,
-    arg_type_ids: RocList,
-    index: u64,
-    name: RocStr,
-    ret_fields: RocList,
-    ret_type_id: u64,
-    type_str: RocStr,
+const GlueAllocatedList = struct {
+    list: RocList,
+    bytes: ?[*]u8,
+    elem_layout: layout.Idx,
+    elem_size: usize,
 };
 
-/// FunctionInfo := { name : Str, type_str : Str }
-const FunctionInfoRoc = extern struct {
-    name: RocStr,
-    type_str: RocStr,
-};
+const GlueRocValueWriter = struct {
+    layouts: *const layout.Store,
+    schemas: *const lir.CheckedPipeline.RuntimeValueSchemaStore,
+    roc_ops: *builtins.host_abi.RocOps,
 
-/// ModuleTypeInfo := { functions : List(FunctionInfo), hosted_functions : List(HostedFunctionInfo), main_type : Str, name : Str }
-const ModuleTypeInfoRoc = extern struct {
-    functions: RocList,
-    hosted_functions: RocList,
-    main_type: RocStr,
-    name: RocStr,
-};
+    fn recordField(
+        self: *const GlueRocValueWriter,
+        record_base: [*]u8,
+        record_layout_idx: layout.Idx,
+        record_type_name: []const u8,
+        field_name: []const u8,
+    ) GlueFieldSlot {
+        const schema = self.schemas.record(record_type_name);
+        const field_index = schema.fieldLogicalIndex(field_name) orelse
+            glueInvariant("glue schema record '{s}' missing field '{s}'", .{ record_type_name, field_name });
+        const record_layout = self.layouts.getLayout(record_layout_idx);
+        if (record_layout.tag != .struct_) {
+            glueInvariant("glue record '{s}' used non-struct layout {d}", .{ record_type_name, @intFromEnum(record_layout_idx) });
+        }
+        const offset = self.layouts.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, field_index);
+        const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, field_index);
+        return .{
+            .ptr = record_base + offset,
+            .layout_idx = field_layout,
+        };
+    }
 
-/// ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U64 }
-/// Fields ordered by alignment descending, then alphabetically
-const ProvidesEntryRoc = extern struct {
-    ffi_symbol: RocStr,
-    name: RocStr,
-    type_id: u64,
-};
+    fn tagIndex(self: *const GlueRocValueWriter, tag_union_type_name: []const u8, tag_name: []const u8) u16 {
+        return self.schemas.tagUnion(tag_union_type_name).tagDiscriminant(tag_name) orelse
+            glueInvariant("glue schema tag union '{s}' missing tag '{s}'", .{ tag_union_type_name, tag_name });
+    }
 
-/// Types := { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), type_table : List(TypeRepr) }
-/// Fields ordered by alignment descending, then alphabetically
-const TypesInnerRoc = extern struct {
-    entrypoints: RocList,
-    modules: RocList,
-    provides_entries: RocList,
-    type_table: RocList,
-};
+    fn listElementLayout(self: *const GlueRocValueWriter, list_layout_idx: layout.Idx) layout.Idx {
+        const list_layout = self.layouts.getLayout(list_layout_idx);
+        return switch (list_layout.tag) {
+            .list => list_layout.data.list,
+            .list_of_zst => .zst,
+            else => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
+        };
+    }
 
-/// File := { name : Str, content : Str }
-const FileRoc = extern struct {
-    content: RocStr,
-    name: RocStr,
-};
+    fn sizeOf(self: *const GlueRocValueWriter, layout_idx: layout.Idx) usize {
+        return self.layouts.layoutSize(self.layouts.getLayout(layout_idx));
+    }
 
-/// Result tag: Err=0, Ok=1 (alphabetical)
-const ResultTag = enum(u8) {
-    Err = 0,
-    Ok = 1,
-};
+    fn alignmentOf(self: *const GlueRocValueWriter, layout_idx: layout.Idx) usize {
+        return self.layouts.layoutSizeAlign(self.layouts.getLayout(layout_idx)).alignment.toByteUnits();
+    }
 
-/// Try(List(File), Str) result layout
-const ResultListFileStr = extern struct {
-    payload: extern union {
-        ok: RocList,
-        err: RocStr,
-    },
-    tag: ResultTag,
-};
+    fn allocateList(
+        self: *const GlueRocValueWriter,
+        list_layout_idx: layout.Idx,
+        len: usize,
+        elements_refcounted: bool,
+    ) GlueAllocatedList {
+        const elem_layout = self.listElementLayout(list_layout_idx);
+        const elem_size = self.sizeOf(elem_layout);
+        if (len == 0) {
+            return .{
+                .list = RocList.empty(),
+                .bytes = null,
+                .elem_layout = elem_layout,
+                .elem_size = elem_size,
+            };
+        }
+        if (elem_size == 0) {
+            return .{
+                .list = .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(len) },
+                .bytes = null,
+                .elem_layout = elem_layout,
+                .elem_size = elem_size,
+            };
+        }
 
-// TypeRepr ABI structs for the type table
+        const elem_alignment = self.alignmentOf(elem_layout);
+        if (elem_alignment > std.math.maxInt(u32)) {
+            glueInvariant("glue list element alignment {d} exceeds Roc allocation ABI", .{elem_alignment});
+        }
+        const bytes = builtins.utils.allocateWithRefcount(
+            len * elem_size,
+            @intCast(elem_alignment),
+            elements_refcounted,
+            self.roc_ops,
+        );
+        return .{
+            .list = .{
+                .bytes = bytes,
+                .length = len,
+                .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(len),
+            },
+            .bytes = bytes,
+            .elem_layout = elem_layout,
+            .elem_size = elem_size,
+        };
+    }
 
-/// Tag discriminant for TypeRepr tagged union (21 variants, alphabetical with Roc prefix)
-const TypeReprTag = enum(u8) {
-    RocBool = 0,
-    RocBox = 1,
-    RocDec = 2,
-    RocF32 = 3,
-    RocF64 = 4,
-    RocFunction = 5,
-    RocI128 = 6,
-    RocI16 = 7,
-    RocI32 = 8,
-    RocI64 = 9,
-    RocI8 = 10,
-    RocList = 11,
-    RocRecord = 12,
-    RocStr = 13,
-    RocTagUnion = 14,
-    RocU128 = 15,
-    RocU16 = 16,
-    RocU32 = 17,
-    RocU64 = 18,
-    RocU8 = 19,
-    RocUnit = 20,
-    RocUnknown = 21,
-};
+    fn zeroValue(self: *const GlueRocValueWriter, ptr: [*]u8, layout_idx: layout.Idx) void {
+        const size = self.sizeOf(layout_idx);
+        if (size > 0) @memset(ptr[0..size], 0);
+    }
 
-/// FunctionRepr := { args : List(U64), ret : U64 } — fields alphabetical
-const FunctionPayload = extern struct {
-    args: RocList,
-    ret: u64,
-};
+    fn writeValue(_: *const GlueRocValueWriter, ptr: [*]u8, comptime T: type, value: T) void {
+        const bytes = std.mem.asBytes(&value);
+        @memcpy(ptr[0..bytes.len], bytes);
+    }
 
-/// RecordRepr := { alignment : U64, fields : List(RecordField), name : Str, size : U64 } — fields alphabetical
-const RecordPayload = extern struct {
-    alignment: u64,
-    fields: RocList,
-    name: RocStr,
-    size: u64,
-};
+    fn readValue(_: *const GlueRocValueWriter, ptr: [*]const u8, comptime T: type) T {
+        const typed: *const T = @ptrCast(@alignCast(ptr));
+        return typed.*;
+    }
 
-/// TagUnionRepr := { alignment : U64, name : Str, size : U64, tags : List(TagVariant) } — fields alphabetical
-const TagUnionPayload = extern struct {
-    alignment: u64,
-    name: RocStr,
-    size: u64,
-    tags: RocList,
-};
+    fn writeField(
+        self: *const GlueRocValueWriter,
+        record_base: [*]u8,
+        record_layout_idx: layout.Idx,
+        record_type_name: []const u8,
+        field_name: []const u8,
+        comptime T: type,
+        value: T,
+    ) void {
+        const slot = self.recordField(record_base, record_layout_idx, record_type_name, field_name);
+        self.writeValue(slot.ptr, T, value);
+    }
 
-/// Payload union for TypeRepr — max payload is 64 bytes (RecordPayload)
-const TypeReprPayload = extern union {
-    box_elem: u64,
-    function: FunctionPayload,
-    list_elem: u64,
-    record: RecordPayload,
-    tag_union: TagUnionPayload,
-    unknown: RocStr,
-};
+    fn variantPayloadLayout(self: *const GlueRocValueWriter, tag_union_layout_idx: layout.Idx, tag_index: u16) layout.Idx {
+        const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
+        if (tag_union_layout.tag != .tag_union) {
+            glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
+        }
+        const info = self.layouts.getTagUnionInfo(tag_union_layout);
+        if (tag_index >= info.variants.len) {
+            glueInvariant("glue tag index {d} out of bounds for layout {d}", .{ tag_index, @intFromEnum(tag_union_layout_idx) });
+        }
+        return info.variants.get(tag_index).payload_layout;
+    }
 
-/// TypeRepr Roc ABI layout: payload then discriminant
-const TypeReprRoc = extern struct {
-    payload: TypeReprPayload,
-    tag: TypeReprTag,
-};
+    fn writeTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]u8, tag_union_layout_idx: layout.Idx, tag_index: u16) void {
+        const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
+        if (tag_union_layout.tag != .tag_union) {
+            glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
+        }
+        self.layouts.getTagUnionInfo(tag_union_layout).data.writeDiscriminant(tag_union_base, tag_index);
+    }
 
-/// RecordField := { alignment : U64, name : Str, size : U64, type_id : U64 }
-const RecordFieldTypeReprRoc = extern struct {
-    alignment: u64,
-    name: RocStr,
-    size: u64,
-    type_id: u64,
-};
-
-/// TagVariant := { name : Str, payload : List(U64), payload_alignment : U64, payload_size : U64 }
-const TagVariantRoc = extern struct {
-    name: RocStr,
-    payload: RocList,
-    payload_alignment: u64,
-    payload_size: u64,
+    fn readTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]const u8, tag_union_layout_idx: layout.Idx) u64 {
+        const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
+        if (tag_union_layout.tag != .tag_union) {
+            glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
+        }
+        return self.layouts.getTagUnionInfo(tag_union_layout).data.readDiscriminant(@constCast(tag_union_base));
+    }
 };
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
@@ -1506,538 +1598,770 @@ fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
 
         return RocStr{
             .bytes = first_element,
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(SMALL_STRING_SIZE),
             .length = str.len,
-            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
         };
     } else {
         return RocStr.fromSlice(str, roc_ops);
     }
 }
 
-/// Build a RocList of RecordFieldInfoRoc from collected field info.
+/// Build a RocList of RecordFieldInfo from collected field info.
 fn buildRecordFieldsRocList(
+    writer: *const GlueRocValueWriter,
     fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo,
-    roc_ops: *builtins.host_abi.RocOps,
+    list_layout: layout.Idx,
 ) RocList {
-    if (fields.len == 0) return RocList.empty();
-
-    const data_size = fields.len * @sizeOf(RecordFieldInfoRoc);
-    const bytes = builtins.utils.allocateWithRefcount(
-        data_size,
-        @alignOf(RecordFieldInfoRoc),
-        true,
-        roc_ops,
-    );
-    const ptr: [*]RecordFieldInfoRoc = @ptrCast(@alignCast(bytes));
+    const allocated = writer.allocateList(list_layout, fields.len, true);
+    if (allocated.bytes == null) return allocated.list;
 
     for (fields, 0..) |field, i| {
-        ptr[i] = RecordFieldInfoRoc{
-            .name = createBigRocStr(field.name, roc_ops),
-            .type_str = createBigRocStr(field.type_str, roc_ops),
-        };
+        const elem_base = allocated.bytes.? + i * allocated.elem_size;
+        writer.zeroValue(elem_base, allocated.elem_layout);
+        writer.writeField(elem_base, allocated.elem_layout, "RecordFieldInfo", "name", RocStr, createBigRocStr(field.name, writer.roc_ops));
+        writer.writeField(elem_base, allocated.elem_layout, "RecordFieldInfo", "type_str", RocStr, createBigRocStr(field.type_str, writer.roc_ops));
     }
 
-    return RocList{
-        .bytes = bytes,
-        .length = fields.len,
-        .capacity_or_alloc_ptr = fields.len,
-    };
+    return allocated.list;
 }
 
 /// Build a RocList of u64 from a slice of u64.
 fn buildU64RocList(
+    writer: *const GlueRocValueWriter,
     ids: []const u64,
-    roc_ops: *builtins.host_abi.RocOps,
+    list_layout: layout.Idx,
 ) RocList {
-    if (ids.len == 0) return RocList.empty();
-
-    const data_size = ids.len * @sizeOf(u64);
-    const bytes = builtins.utils.allocateWithRefcount(
-        data_size,
-        @alignOf(u64),
-        false, // u64 elements are not refcounted
-        roc_ops,
-    );
+    const allocated = writer.allocateList(list_layout, ids.len, false);
+    if (allocated.bytes == null) return allocated.list;
+    if (allocated.elem_size != @sizeOf(u64)) {
+        glueInvariant("glue U64 list element layout had size {d}", .{allocated.elem_size});
+    }
+    const bytes = allocated.bytes.?;
     const ptr: [*]u64 = @ptrCast(@alignCast(bytes));
     for (ids, 0..) |id, i| {
         ptr[i] = id;
     }
-    return RocList{
-        .bytes = bytes,
-        .length = ids.len,
-        .capacity_or_alloc_ptr = ids.len,
-    };
+    return allocated.list;
 }
 
-/// Serialize a CollectedTypeRepr into a TypeReprRoc for the Roc ABI.
-fn serializeTypeRepr(
-    entry: CollectedTypeRepr,
-    roc_ops: *builtins.host_abi.RocOps,
-) TypeReprRoc {
-    var result: TypeReprRoc = undefined;
-    // Zero-initialize the payload to avoid undefined bytes
-    result.payload = std.mem.zeroes(TypeReprPayload);
+fn writeRecordFieldTypeRepr(
+    writer: *const GlueRocValueWriter,
+    value_base: [*]u8,
+    record_field_layout: layout.Idx,
+    field: CollectedRecordField,
+) void {
+    writer.zeroValue(value_base, record_field_layout);
+    writer.writeField(value_base, record_field_layout, "RecordField", "alignment", u64, field.alignment);
+    writer.writeField(value_base, record_field_layout, "RecordField", "name", RocStr, createBigRocStr(field.name, writer.roc_ops));
+    writer.writeField(value_base, record_field_layout, "RecordField", "size", u64, field.size);
+    writer.writeField(value_base, record_field_layout, "RecordField", "type_id", u64, field.type_id);
+}
 
-    switch (entry) {
-        .bool_ => result.tag = .RocBool,
+fn buildRecordFieldTypeReprList(
+    writer: *const GlueRocValueWriter,
+    fields: []const CollectedRecordField,
+    list_layout: layout.Idx,
+) RocList {
+    const allocated = writer.allocateList(list_layout, fields.len, true);
+    if (allocated.bytes == null) return allocated.list;
+    for (fields, 0..) |field, i| {
+        writeRecordFieldTypeRepr(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, field);
+    }
+    return allocated.list;
+}
+
+fn writeTagVariant(
+    writer: *const GlueRocValueWriter,
+    value_base: [*]u8,
+    tag_variant_layout: layout.Idx,
+    tag: CollectedTagInfo,
+) void {
+    writer.zeroValue(value_base, tag_variant_layout);
+    const payload_slot = writer.recordField(value_base, tag_variant_layout, "TagVariant", "payload");
+    writer.writeField(value_base, tag_variant_layout, "TagVariant", "name", RocStr, createBigRocStr(tag.name, writer.roc_ops));
+    writer.writeField(value_base, tag_variant_layout, "TagVariant", "payload", RocList, buildU64RocList(writer, tag.payload_ids, payload_slot.layout_idx));
+    writer.writeField(value_base, tag_variant_layout, "TagVariant", "payload_alignment", u64, tag.payload_alignment);
+    writer.writeField(value_base, tag_variant_layout, "TagVariant", "payload_size", u64, tag.payload_size);
+}
+
+fn buildTagVariantList(
+    writer: *const GlueRocValueWriter,
+    tags: []const CollectedTagInfo,
+    list_layout: layout.Idx,
+) RocList {
+    const allocated = writer.allocateList(list_layout, tags.len, true);
+    if (allocated.bytes == null) return allocated.list;
+    for (tags, 0..) |tag, i| {
+        writeTagVariant(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, tag);
+    }
+    return allocated.list;
+}
+
+/// Serialize a CollectedTypeRepr into the exact committed TypeRepr layout.
+fn writeTypeRepr(
+    writer: *const GlueRocValueWriter,
+    value_base: [*]u8,
+    type_repr_layout: layout.Idx,
+    entry: CollectedTypeRepr,
+) void {
+    writer.zeroValue(value_base, type_repr_layout);
+
+    const tag_name: []const u8 = switch (entry) {
+        .bool_ => "RocBool",
         .box => |inner_id| {
-            result.tag = .RocBox;
-            result.payload.box_elem = inner_id;
+            const tag_index = writer.tagIndex("TypeRepr", "RocBox");
+            writer.writeValue(value_base, u64, inner_id);
+            writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
+            return;
         },
-        .dec => result.tag = .RocDec,
-        .f32_ => result.tag = .RocF32,
-        .f64_ => result.tag = .RocF64,
-        .i8_ => result.tag = .RocI8,
-        .i16_ => result.tag = .RocI16,
-        .i32_ => result.tag = .RocI32,
-        .i64_ => result.tag = .RocI64,
-        .i128_ => result.tag = .RocI128,
-        .u8_ => result.tag = .RocU8,
-        .u16_ => result.tag = .RocU16,
-        .u32_ => result.tag = .RocU32,
-        .u64_ => result.tag = .RocU64,
-        .u128_ => result.tag = .RocU128,
-        .str_ => result.tag = .RocStr,
-        .unit => result.tag = .RocUnit,
+        .dec => "RocDec",
+        .f32_ => "RocF32",
+        .f64_ => "RocF64",
+        .i8_ => "RocI8",
+        .i16_ => "RocI16",
+        .i32_ => "RocI32",
+        .i64_ => "RocI64",
+        .i128_ => "RocI128",
+        .u8_ => "RocU8",
+        .u16_ => "RocU16",
+        .u32_ => "RocU32",
+        .u64_ => "RocU64",
+        .u128_ => "RocU128",
+        .str_ => "RocStr",
+        .unit => "RocUnit",
         .list => |elem_id| {
-            result.tag = .RocList;
-            result.payload.list_elem = elem_id;
+            const tag_index = writer.tagIndex("TypeRepr", "RocList");
+            _ = writer.variantPayloadLayout(type_repr_layout, tag_index);
+            writer.writeValue(value_base, u64, elem_id);
+            writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
+            return;
         },
         .function => |func| {
-            result.tag = .RocFunction;
-            result.payload.function = .{
-                .args = buildU64RocList(func.arg_ids, roc_ops),
-                .ret = func.ret_id,
-            };
+            const tag_index = writer.tagIndex("TypeRepr", "RocFunction");
+            const payload_layout = writer.variantPayloadLayout(type_repr_layout, tag_index);
+            writer.zeroValue(value_base, payload_layout);
+            const args_slot = writer.recordField(value_base, payload_layout, "FunctionRepr", "args");
+            writer.writeField(value_base, payload_layout, "FunctionRepr", "args", RocList, buildU64RocList(writer, func.arg_ids, args_slot.layout_idx));
+            writer.writeField(value_base, payload_layout, "FunctionRepr", "ret", u64, func.ret_id);
+            writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
+            return;
         },
         .record => |rec| {
-            result.tag = .RocRecord;
-            // Build RocList of RecordFieldTypeReprRoc
-            const fields_list = if (rec.fields.len > 0) fblk: {
-                const data_size = rec.fields.len * @sizeOf(RecordFieldTypeReprRoc);
-                const fb = builtins.utils.allocateWithRefcount(
-                    data_size,
-                    @alignOf(RecordFieldTypeReprRoc),
-                    true,
-                    roc_ops,
-                );
-                const fptr: [*]RecordFieldTypeReprRoc = @ptrCast(@alignCast(fb));
-                for (rec.fields, 0..) |field, i| {
-                    fptr[i] = .{
-                        .alignment = field.alignment,
-                        .name = createBigRocStr(field.name, roc_ops),
-                        .size = field.size,
-                        .type_id = field.type_id,
-                    };
-                }
-                break :fblk RocList{
-                    .bytes = fb,
-                    .length = rec.fields.len,
-                    .capacity_or_alloc_ptr = rec.fields.len,
-                };
-            } else RocList.empty();
-
-            result.payload.record = .{
-                .alignment = rec.alignment,
-                .fields = fields_list,
-                .name = createBigRocStr(rec.name, roc_ops),
-                .size = rec.size,
-            };
+            const tag_index = writer.tagIndex("TypeRepr", "RocRecord");
+            const payload_layout = writer.variantPayloadLayout(type_repr_layout, tag_index);
+            writer.zeroValue(value_base, payload_layout);
+            const fields_slot = writer.recordField(value_base, payload_layout, "RecordRepr", "fields");
+            writer.writeField(value_base, payload_layout, "RecordRepr", "alignment", u64, rec.alignment);
+            writer.writeField(value_base, payload_layout, "RecordRepr", "fields", RocList, buildRecordFieldTypeReprList(writer, rec.fields, fields_slot.layout_idx));
+            writer.writeField(value_base, payload_layout, "RecordRepr", "name", RocStr, createBigRocStr(rec.name, writer.roc_ops));
+            writer.writeField(value_base, payload_layout, "RecordRepr", "size", u64, rec.size);
+            writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
+            return;
         },
         .tag_union => |tu| {
-            result.tag = .RocTagUnion;
-            // Build RocList of TagVariantRoc
-            const tags_list = if (tu.tags.len > 0) tblk: {
-                const data_size = tu.tags.len * @sizeOf(TagVariantRoc);
-                const tb = builtins.utils.allocateWithRefcount(
-                    data_size,
-                    @alignOf(TagVariantRoc),
-                    true,
-                    roc_ops,
-                );
-                const tptr: [*]TagVariantRoc = @ptrCast(@alignCast(tb));
-                for (tu.tags, 0..) |tag, i| {
-                    tptr[i] = .{
-                        .name = createBigRocStr(tag.name, roc_ops),
-                        .payload = buildU64RocList(tag.payload_ids, roc_ops),
-                        .payload_alignment = tag.payload_alignment,
-                        .payload_size = tag.payload_size,
-                    };
-                }
-                break :tblk RocList{
-                    .bytes = tb,
-                    .length = tu.tags.len,
-                    .capacity_or_alloc_ptr = tu.tags.len,
-                };
-            } else RocList.empty();
-
-            result.payload.tag_union = .{
-                .alignment = tu.alignment,
-                .name = createBigRocStr(tu.name, roc_ops),
-                .size = tu.size,
-                .tags = tags_list,
-            };
+            const tag_index = writer.tagIndex("TypeRepr", "RocTagUnion");
+            const payload_layout = writer.variantPayloadLayout(type_repr_layout, tag_index);
+            writer.zeroValue(value_base, payload_layout);
+            const tags_slot = writer.recordField(value_base, payload_layout, "TagUnionRepr", "tags");
+            writer.writeField(value_base, payload_layout, "TagUnionRepr", "alignment", u64, tu.alignment);
+            writer.writeField(value_base, payload_layout, "TagUnionRepr", "name", RocStr, createBigRocStr(tu.name, writer.roc_ops));
+            writer.writeField(value_base, payload_layout, "TagUnionRepr", "size", u64, tu.size);
+            writer.writeField(value_base, payload_layout, "TagUnionRepr", "tags", RocList, buildTagVariantList(writer, tu.tags, tags_slot.layout_idx));
+            writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
+            return;
         },
         .unknown => |text| {
-            result.tag = .RocUnknown;
-            result.payload.unknown = createBigRocStr(text, roc_ops);
+            const tag_index = writer.tagIndex("TypeRepr", "RocUnknown");
+            _ = writer.variantPayloadLayout(type_repr_layout, tag_index);
+            writer.writeValue(value_base, RocStr, createBigRocStr(text, writer.roc_ops));
+            writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
+            return;
         },
-    }
-    return result;
+    };
+    writer.writeTagDiscriminant(value_base, type_repr_layout, writer.tagIndex("TypeRepr", tag_name));
 }
 
 /// Build a RocList of TypeReprRoc from the type table.
 fn buildTypeTableRocList(
+    writer: *const GlueRocValueWriter,
     type_table: *const TypeTable,
-    roc_ops: *builtins.host_abi.RocOps,
+    list_layout: layout.Idx,
 ) RocList {
-    if (type_table.entries.items.len == 0) return RocList.empty();
-
-    const data_size = type_table.entries.items.len * @sizeOf(TypeReprRoc);
-    const bytes = builtins.utils.allocateWithRefcount(
-        data_size,
-        @alignOf(TypeReprRoc),
-        true,
-        roc_ops,
-    );
-    const ptr: [*]TypeReprRoc = @ptrCast(@alignCast(bytes));
+    const allocated = writer.allocateList(list_layout, type_table.entries.items.len, true);
+    if (allocated.bytes == null) return allocated.list;
 
     for (type_table.entries.items, 0..) |entry, i| {
-        ptr[i] = serializeTypeRepr(entry, roc_ops);
+        writeTypeRepr(writer, allocated.bytes.? + i * allocated.elem_size, allocated.elem_layout, entry);
     }
 
-    return RocList{
-        .bytes = bytes,
-        .length = type_table.entries.items.len,
-        .capacity_or_alloc_ptr = type_table.entries.items.len,
-    };
+    return allocated.list;
+}
+
+fn buildFunctionInfoList(
+    writer: *const GlueRocValueWriter,
+    functions: []const CollectedModuleTypeInfo.CollectedFunctionInfo,
+    list_layout: layout.Idx,
+) RocList {
+    const allocated = writer.allocateList(list_layout, functions.len, true);
+    if (allocated.bytes == null) return allocated.list;
+    for (functions, 0..) |func, index| {
+        const elem_base = allocated.bytes.? + index * allocated.elem_size;
+        writer.zeroValue(elem_base, allocated.elem_layout);
+        writer.writeField(elem_base, allocated.elem_layout, "FunctionInfo", "name", RocStr, createBigRocStr(func.name, writer.roc_ops));
+        writer.writeField(elem_base, allocated.elem_layout, "FunctionInfo", "type_str", RocStr, createBigRocStr(func.type_str, writer.roc_ops));
+    }
+    return allocated.list;
+}
+
+fn buildHostedFunctionInfoList(
+    writer: *const GlueRocValueWriter,
+    hosted_functions: []const CollectedModuleTypeInfo.CollectedHostedFunctionInfo,
+    list_layout: layout.Idx,
+) RocList {
+    const allocated = writer.allocateList(list_layout, hosted_functions.len, true);
+    if (allocated.bytes == null) return allocated.list;
+    for (hosted_functions, 0..) |hosted, index| {
+        const elem_base = allocated.bytes.? + index * allocated.elem_size;
+        writer.zeroValue(elem_base, allocated.elem_layout);
+
+        const arg_fields_slot = writer.recordField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_fields");
+        const arg_type_ids_slot = writer.recordField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_type_ids");
+        const ret_fields_slot = writer.recordField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ret_fields");
+
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_fields", RocList, buildRecordFieldsRocList(writer, hosted.arg_fields, arg_fields_slot.layout_idx));
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_type_ids", RocList, buildU64RocList(writer, hosted.arg_type_ids, arg_type_ids_slot.layout_idx));
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "index", u64, hosted.index);
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "name", RocStr, createBigRocStr(hosted.name, writer.roc_ops));
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ret_fields", RocList, buildRecordFieldsRocList(writer, hosted.ret_fields, ret_fields_slot.layout_idx));
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ret_type_id", u64, hosted.ret_type_id);
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "type_str", RocStr, createBigRocStr(hosted.type_str, writer.roc_ops));
+    }
+    return allocated.list;
+}
+
+fn buildModuleTypeInfoList(
+    writer: *const GlueRocValueWriter,
+    modules: []const CollectedModuleTypeInfo,
+    list_layout: layout.Idx,
+) RocList {
+    const allocated = writer.allocateList(list_layout, modules.len, true);
+    if (allocated.bytes == null) return allocated.list;
+    for (modules, 0..) |module, index| {
+        const elem_base = allocated.bytes.? + index * allocated.elem_size;
+        writer.zeroValue(elem_base, allocated.elem_layout);
+
+        const functions_slot = writer.recordField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "functions");
+        const hosted_functions_slot = writer.recordField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "hosted_functions");
+
+        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "functions", RocList, buildFunctionInfoList(writer, module.functions.items, functions_slot.layout_idx));
+        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "hosted_functions", RocList, buildHostedFunctionInfoList(writer, module.hosted_functions.items, hosted_functions_slot.layout_idx));
+        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "main_type", RocStr, createBigRocStr(module.main_type, writer.roc_ops));
+        writer.writeField(elem_base, allocated.elem_layout, "ModuleTypeInfo", "name", RocStr, createBigRocStr(module.name, writer.roc_ops));
+    }
+    return allocated.list;
+}
+
+fn buildEntryPointList(
+    writer: *const GlueRocValueWriter,
+    platform_info: *const PlatformHeaderInfo,
+    entrypoint_type_ids: *const std.StringHashMap(u64),
+    list_layout: layout.Idx,
+) RocList {
+    const allocated = writer.allocateList(list_layout, platform_info.requires_entries.len, true);
+    if (allocated.bytes == null) return allocated.list;
+    for (platform_info.requires_entries, 0..) |entry, index| {
+        const elem_base = allocated.bytes.? + index * allocated.elem_size;
+        writer.zeroValue(elem_base, allocated.elem_layout);
+        writer.writeField(elem_base, allocated.elem_layout, "EntryPoint", "name", RocStr, createBigRocStr(entry.name, writer.roc_ops));
+        writer.writeField(elem_base, allocated.elem_layout, "EntryPoint", "type_id", u64, entrypoint_type_ids.get(entry.name) orelse 0);
+    }
+    return allocated.list;
+}
+
+fn buildProvidesEntryList(
+    writer: *const GlueRocValueWriter,
+    provides_entries: []const PlatformHeaderInfo.ProvidesEntry,
+    provides_type_ids: *const std.StringHashMap(u64),
+    list_layout: layout.Idx,
+) RocList {
+    const allocated = writer.allocateList(list_layout, provides_entries.len, true);
+    if (allocated.bytes == null) return allocated.list;
+    for (provides_entries, 0..) |entry, index| {
+        const elem_base = allocated.bytes.? + index * allocated.elem_size;
+        writer.zeroValue(elem_base, allocated.elem_layout);
+        writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "ffi_symbol", RocStr, createBigRocStr(entry.ffi_symbol, writer.roc_ops));
+        writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "name", RocStr, createBigRocStr(entry.name, writer.roc_ops));
+        writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "type_id", u64, provides_type_ids.get(entry.ffi_symbol) orelse 0);
+    }
+    return allocated.list;
 }
 
 /// Construct the List(Types) Roc value from collected module type info.
 fn constructTypesRocList(
+    writer: *const GlueRocValueWriter,
     collected_modules: []const CollectedModuleTypeInfo,
     platform_info: *const PlatformHeaderInfo,
     provides_entries: []const PlatformHeaderInfo.ProvidesEntry,
     type_table: *const TypeTable,
     entrypoint_type_ids: *const std.StringHashMap(u64),
     provides_type_ids: *const std.StringHashMap(u64),
-    roc_ops: *builtins.host_abi.RocOps,
+    list_layout: layout.Idx,
 ) RocList {
-    // Build modules list
-    const modules_list = if (collected_modules.len > 0) blk: {
-        const modules_data_size = collected_modules.len * @sizeOf(ModuleTypeInfoRoc);
-        const modules_bytes = builtins.utils.allocateWithRefcount(
-            modules_data_size,
-            @alignOf(ModuleTypeInfoRoc),
-            true,
-            roc_ops,
-        );
-        const modules_ptr: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(modules_bytes));
+    const allocated = writer.allocateList(list_layout, 1, true);
+    const bytes = allocated.bytes orelse glueInvariant("List(Types) layout unexpectedly had no element bytes", .{});
+    const types_base = bytes;
+    writer.zeroValue(types_base, allocated.elem_layout);
 
-        for (collected_modules, 0..) |mod, mod_idx| {
-            // Build functions list
-            const functions_list = if (mod.functions.items.len > 0) fblk: {
-                const funcs_data_size = mod.functions.items.len * @sizeOf(FunctionInfoRoc);
-                const funcs_bytes = builtins.utils.allocateWithRefcount(
-                    funcs_data_size,
-                    @alignOf(FunctionInfoRoc),
-                    true,
-                    roc_ops,
-                );
-                const funcs_ptr: [*]FunctionInfoRoc = @ptrCast(@alignCast(funcs_bytes));
+    const entrypoints_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "entrypoints");
+    const modules_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "modules");
+    const provides_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "provides_entries");
+    const type_table_slot = writer.recordField(types_base, allocated.elem_layout, "Types", "type_table");
 
-                for (mod.functions.items, 0..) |func, func_idx| {
-                    funcs_ptr[func_idx] = FunctionInfoRoc{
-                        .name = createBigRocStr(func.name, roc_ops),
-                        .type_str = createBigRocStr(func.type_str, roc_ops),
-                    };
-                }
+    writer.writeField(types_base, allocated.elem_layout, "Types", "entrypoints", RocList, buildEntryPointList(writer, platform_info, entrypoint_type_ids, entrypoints_slot.layout_idx));
+    writer.writeField(types_base, allocated.elem_layout, "Types", "modules", RocList, buildModuleTypeInfoList(writer, collected_modules, modules_slot.layout_idx));
+    writer.writeField(types_base, allocated.elem_layout, "Types", "provides_entries", RocList, buildProvidesEntryList(writer, provides_entries, provides_type_ids, provides_slot.layout_idx));
+    writer.writeField(types_base, allocated.elem_layout, "Types", "type_table", RocList, buildTypeTableRocList(writer, type_table, type_table_slot.layout_idx));
 
-                break :fblk RocList{
-                    .bytes = funcs_bytes,
-                    .length = mod.functions.items.len,
-                    .capacity_or_alloc_ptr = mod.functions.items.len,
-                };
-            } else RocList.empty();
-
-            // Build hosted_functions list
-            const hosted_functions_list = if (mod.hosted_functions.items.len > 0) hblk: {
-                const hosted_data_size = mod.hosted_functions.items.len * @sizeOf(HostedFunctionInfoRoc);
-                const hosted_bytes = builtins.utils.allocateWithRefcount(
-                    hosted_data_size,
-                    @alignOf(HostedFunctionInfoRoc),
-                    true,
-                    roc_ops,
-                );
-                const hosted_ptr: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes));
-
-                for (mod.hosted_functions.items, 0..) |hosted, hosted_idx| {
-                    hosted_ptr[hosted_idx] = HostedFunctionInfoRoc{
-                        .arg_fields = buildRecordFieldsRocList(hosted.arg_fields, roc_ops),
-                        .arg_type_ids = buildU64RocList(hosted.arg_type_ids, roc_ops),
-                        .index = hosted.index,
-                        .name = createBigRocStr(hosted.name, roc_ops),
-                        .ret_fields = buildRecordFieldsRocList(hosted.ret_fields, roc_ops),
-                        .ret_type_id = hosted.ret_type_id,
-                        .type_str = createBigRocStr(hosted.type_str, roc_ops),
-                    };
-                }
-
-                break :hblk RocList{
-                    .bytes = hosted_bytes,
-                    .length = mod.hosted_functions.items.len,
-                    .capacity_or_alloc_ptr = mod.hosted_functions.items.len,
-                };
-            } else RocList.empty();
-
-            modules_ptr[mod_idx] = ModuleTypeInfoRoc{
-                .functions = functions_list,
-                .hosted_functions = hosted_functions_list,
-                .main_type = createBigRocStr(mod.main_type, roc_ops),
-                .name = createBigRocStr(mod.name, roc_ops),
-            };
-        }
-
-        break :blk RocList{
-            .bytes = modules_bytes,
-            .length = collected_modules.len,
-            .capacity_or_alloc_ptr = collected_modules.len,
-        };
-    } else RocList.empty();
-
-    // Build entrypoints list
-    const EntryPointRoc = extern struct {
-        name: RocStr,
-        type_id: u64,
-    };
-
-    const entrypoints_list = if (platform_info.requires_entries.len > 0) eblk: {
-        const ep_data_size = platform_info.requires_entries.len * @sizeOf(EntryPointRoc);
-        const ep_bytes = builtins.utils.allocateWithRefcount(
-            ep_data_size,
-            @alignOf(EntryPointRoc),
-            true,
-            roc_ops,
-        );
-        const ep_ptr: [*]EntryPointRoc = @ptrCast(@alignCast(ep_bytes));
-
-        for (platform_info.requires_entries, 0..) |entry, idx| {
-            const tid = entrypoint_type_ids.get(entry.name) orelse 0;
-            ep_ptr[idx] = EntryPointRoc{
-                .name = createBigRocStr(entry.name, roc_ops),
-                .type_id = tid,
-            };
-        }
-
-        break :eblk RocList{
-            .bytes = ep_bytes,
-            .length = platform_info.requires_entries.len,
-            .capacity_or_alloc_ptr = platform_info.requires_entries.len,
-        };
-    } else RocList.empty();
-
-    // Build provides list
-    const provides_list = if (provides_entries.len > 0) pblk: {
-        const prov_data_size = provides_entries.len * @sizeOf(ProvidesEntryRoc);
-        const prov_bytes = builtins.utils.allocateWithRefcount(
-            prov_data_size,
-            @alignOf(ProvidesEntryRoc),
-            true,
-            roc_ops,
-        );
-        const prov_ptr: [*]ProvidesEntryRoc = @ptrCast(@alignCast(prov_bytes));
-
-        for (provides_entries, 0..) |entry, idx| {
-            prov_ptr[idx] = ProvidesEntryRoc{
-                .ffi_symbol = createBigRocStr(entry.ffi_symbol, roc_ops),
-                .name = createBigRocStr(entry.name, roc_ops),
-                .type_id = provides_type_ids.get(entry.ffi_symbol) orelse 0,
-            };
-        }
-
-        break :pblk RocList{
-            .bytes = prov_bytes,
-            .length = provides_entries.len,
-            .capacity_or_alloc_ptr = provides_entries.len,
-        };
-    } else RocList.empty();
-
-    // Build TypesInner and wrap in a List(Types) with one element
-    const types_inner_bytes = builtins.utils.allocateWithRefcount(
-        @sizeOf(TypesInnerRoc),
-        @alignOf(TypesInnerRoc),
-        true,
-        roc_ops,
-    );
-    const types_inner_ptr: *TypesInnerRoc = @ptrCast(@alignCast(types_inner_bytes));
-    types_inner_ptr.* = TypesInnerRoc{
-        .entrypoints = entrypoints_list,
-        .modules = modules_list,
-        .provides_entries = provides_list,
-        .type_table = buildTypeTableRocList(type_table, roc_ops),
-    };
-
-    return RocList{
-        .bytes = types_inner_bytes,
-        .length = 1,
-        .capacity_or_alloc_ptr = 1,
-    };
+    return allocated.list;
 }
 
 /// Extract files from a Try(List(File), Str) result buffer.
 /// Returns the file list on Ok, or an error message on Err.
-const GlueResultFiles = struct {
-    files: []const FileRoc,
-    err_msg: ?[]const u8,
+const GlueResultFile = struct {
+    name: []const u8,
+    content: []const u8,
 };
 
-fn extractGlueResult(result: *const ResultListFileStr) GlueResultFiles {
-    switch (result.tag) {
-        .Ok => {
-            const files = result.payload.ok;
-            if (files.bytes) |file_bytes| {
-                const file_slice: [*]const FileRoc = @ptrCast(@alignCast(file_bytes));
-                return .{ .files = file_slice[0..files.length], .err_msg = null };
-            }
-            return .{ .files = &[_]FileRoc{}, .err_msg = null };
-        },
-        .Err => {
-            return .{ .files = &[_]FileRoc{}, .err_msg = result.payload.err.asSlice() };
-        },
+const GlueResultFiles = struct {
+    allocator: Allocator,
+    files: []const GlueResultFile,
+    err_msg: ?[]const u8,
+
+    fn deinit(self: GlueResultFiles) void {
+        for (self.files) |file| {
+            self.allocator.free(file.name);
+            self.allocator.free(file.content);
+        }
+        if (self.files.len > 0) self.allocator.free(self.files);
+        if (self.err_msg) |err_msg| self.allocator.free(err_msg);
+    }
+};
+
+fn copyRocStrSlice(allocator: Allocator, str: RocStr) []const u8 {
+    return allocator.dupe(u8, str.asSlice()) catch glueInvariant("could not copy glue result string", .{});
+}
+
+fn extractGlueResult(
+    allocator: Allocator,
+    writer: *const GlueRocValueWriter,
+    result_base: [*]const u8,
+    result_layout: layout.Idx,
+) GlueResultFiles {
+    const ok_index = writer.tagIndex("Builtin.Try", "Ok");
+    const err_index = writer.tagIndex("Builtin.Try", "Err");
+    const discriminant = writer.readTagDiscriminant(result_base, result_layout);
+
+    if (discriminant == ok_index) {
+        const files_list_layout = writer.variantPayloadLayout(result_layout, ok_index);
+        const files = writer.readValue(result_base, RocList);
+        if (files.len() == 0 or files.bytes == null) {
+            return .{ .allocator = allocator, .files = &.{}, .err_msg = null };
+        }
+
+        const file_layout = writer.listElementLayout(files_list_layout);
+        const file_size = writer.sizeOf(file_layout);
+        const out = allocator.alloc(GlueResultFile, files.len()) catch {
+            glueInvariant("could not allocate glue result file slice", .{});
+        };
+        const file_bytes = files.bytes.?;
+        for (out, 0..) |*file, index| {
+            const file_base = file_bytes + index * file_size;
+            const name_slot = writer.recordField(file_base, file_layout, "File", "name");
+            const content_slot = writer.recordField(file_base, file_layout, "File", "content");
+            const name = writer.readValue(name_slot.ptr, RocStr);
+            const content = writer.readValue(content_slot.ptr, RocStr);
+            file.* = .{
+                .name = copyRocStrSlice(allocator, name),
+                .content = copyRocStrSlice(allocator, content),
+            };
+        }
+        return .{ .allocator = allocator, .files = out, .err_msg = null };
+    }
+
+    if (discriminant == err_index) {
+        _ = writer.variantPayloadLayout(result_layout, err_index);
+        const err = writer.readValue(result_base, RocStr);
+        return .{ .allocator = allocator, .files = &.{}, .err_msg = copyRocStrSlice(allocator, err) };
+    }
+
+    glueInvariant("glue result Try discriminant {d} was neither Ok nor Err", .{discriminant});
+}
+
+fn checkedTypePayload(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) CheckedArtifact.CheckedTypePayload {
+    const idx = @intFromEnum(checked_type);
+    if (idx >= artifact.checked_types.payloads.len) {
+        glueInvariant("checked type id {d} out of bounds", .{idx});
+    }
+    return artifact.checked_types.payloads[idx];
+}
+
+fn checkedTypeRootForScheme(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    scheme_key: check.CanonicalNames.CanonicalTypeSchemeKey,
+) CheckedArtifact.CheckedTypeId {
+    return (artifact.checked_types.schemeForKey(scheme_key) orelse
+        glueInvariant("checked type scheme missing from artifact", .{})).root;
+}
+
+fn appendRecordRowFields(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    head: []const CheckedArtifact.CheckedRecordField,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+) Allocator.Error!void {
+    try fields.appendSlice(gpa, head);
+
+    var current = ext;
+    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer seen.deinit();
+
+    while (current) |current_id| {
+        if (seen.contains(current_id)) break;
+        try seen.put(current_id, {});
+
+        switch (checkedTypePayload(artifact, current_id)) {
+            .alias => |alias| current = alias.backing,
+            .empty_record => break,
+            .flex, .rigid => |variable| {
+                if (variable.row_default == .empty_record) break;
+                glueInvariant("open non-record checked row reached glue record conversion", .{});
+            },
+            .record => |record| {
+                try fields.appendSlice(gpa, record.fields);
+                current = record.ext;
+            },
+            .record_unbound => |tail_fields| {
+                try fields.appendSlice(gpa, tail_fields);
+                break;
+            },
+            else => glueInvariant("non-record checked row reached glue record conversion", .{}),
+        }
     }
 }
 
-/// Extract record fields from a type variable, returning field names and type strings.
-/// If the type is a nominal wrapping a record, unwraps the nominal first.
-/// Returns an empty slice for non-record types.
-fn extractRecordFields(
+fn appendTagRowTags(
     gpa: std.mem.Allocator,
-    env: *ModuleEnv,
-    type_var: @import("types").Var,
-) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
-    const resolved = env.types.resolveVar(type_var);
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    head: []const CheckedArtifact.CheckedTag,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    tags: *std.ArrayList(CheckedArtifact.CheckedTag),
+) Allocator.Error!void {
+    try tags.appendSlice(gpa, head);
 
-    // Check for nominal type wrapping a record
-    const content = switch (resolved.desc.content) {
-        .structure => |flat_type| switch (flat_type) {
-            .nominal_type => |nominal| blk: {
-                if (nominal.vars.nonempty.count > 0) {
-                    const backing_var = env.types.getNominalBackingVar(nominal);
-                    const backing_resolved = env.types.resolveVar(backing_var);
-                    break :blk backing_resolved.desc.content;
-                }
-                break :blk resolved.desc.content;
+    var current = ext;
+    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer seen.deinit();
+
+    while (current) |current_id| {
+        if (seen.contains(current_id)) break;
+        try seen.put(current_id, {});
+
+        switch (checkedTypePayload(artifact, current_id)) {
+            .alias => |alias| current = alias.backing,
+            .empty_tag_union => break,
+            .flex, .rigid => |variable| {
+                if (variable.row_default == .empty_tag_union) break;
+                glueInvariant("open non-tag checked row reached glue tag-union conversion", .{});
             },
-            else => resolved.desc.content,
-        },
-        else => resolved.desc.content,
+            .tag_union => |tag_union| {
+                try tags.appendSlice(gpa, tag_union.tags);
+                current = tag_union.ext;
+            },
+            else => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
+        }
+    }
+}
+
+fn typeStringAlloc(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) []const u8 {
+    var buf = std.ArrayList(u8).empty;
+    var active = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer active.deinit();
+    writeTypeString(gpa, artifact, checked_type, &buf, &active) catch {
+        buf.deinit(gpa);
+        return gpa.dupe(u8, "") catch "";
     };
+    return buf.toOwnedSlice(gpa) catch "";
+}
 
-    // Check if the (possibly unwrapped) content is a record
-    const record = content.unwrapRecord() orelse return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+fn writeTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    if (active.contains(checked_type)) {
+        try buf.appendSlice(gpa, "<cycle>");
+        return;
+    }
+    try active.put(checked_type, {});
+    defer _ = active.remove(checked_type);
 
-    const fields_slice = env.types.getRecordFieldsSlice(record.fields);
-    const field_names = fields_slice.items(.name);
-    const field_vars = fields_slice.items(.var_);
+    switch (checkedTypePayload(artifact, checked_type)) {
+        .pending => glueInvariant("pending checked type reached glue type string", .{}),
+        .flex => try buf.appendSlice(gpa, "flex"),
+        .rigid => try buf.appendSlice(gpa, "rigid"),
+        .alias => |alias| try writeTypeString(gpa, artifact, alias.backing, buf, active),
+        .record => |record| try writeRecordTypeString(gpa, artifact, record.fields, record.ext, buf, active),
+        .record_unbound => |fields| try writeRecordTypeString(gpa, artifact, fields, null, buf, active),
+        .tuple => |items| try writeTupleTypeString(gpa, artifact, items, buf, active),
+        .nominal => |nominal| try writeNominalTypeString(gpa, artifact, nominal, buf, active),
+        .function => |func| try writeFunctionTypeString(gpa, artifact, func, buf, active),
+        .empty_record => try buf.appendSlice(gpa, "{}"),
+        .tag_union => |tag_union| try writeTagUnionTypeString(gpa, artifact, tag_union.tags, tag_union.ext, buf, active),
+        .empty_tag_union => try buf.appendSlice(gpa, "[]"),
+    }
+}
 
-    var result_list = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+fn writeNominalTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    nominal: CheckedArtifact.CheckedNominalType,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+    try buf.appendSlice(gpa, name);
+    if (nominal.args.len == 0) return;
+    try buf.append(gpa, '(');
+    for (nominal.args, 0..) |arg, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        try writeTypeString(gpa, artifact, arg, buf, active);
+    }
+    try buf.append(gpa, ')');
+}
 
-    // Collect fields sorted by name (Roc's C ABI uses alphabetical order)
-    const ident_store = env.getIdentStoreConst();
+fn writeFunctionTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    func: CheckedArtifact.CheckedFunctionType,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    if (func.args.len == 0) {
+        try buf.appendSlice(gpa, "{}");
+    } else {
+        for (func.args, 0..) |arg, i| {
+            if (i > 0) try buf.appendSlice(gpa, ", ");
+            try writeTypeString(gpa, artifact, arg, buf, active);
+        }
+    }
+    try buf.appendSlice(gpa, if (func.kind == .effectful) " => " else " -> ");
+    try writeTypeString(gpa, artifact, func.ret, buf, active);
+}
 
-    // Build sortable array of field indices
-    var field_indices = gpa.alloc(usize, field_names.len) catch return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
-    defer gpa.free(field_indices);
-    for (0..field_names.len) |i| {
-        field_indices[i] = i;
+fn writeRecordTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    fields: []const CheckedArtifact.CheckedRecordField,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
+    defer all_fields.deinit(gpa);
+    try appendRecordRowFields(gpa, artifact, fields, ext, &all_fields);
+
+    if (all_fields.items.len == 0) {
+        try buf.appendSlice(gpa, "{}");
+        return;
     }
 
-    // Sort by name text
+    var indices = try gpa.alloc(usize, all_fields.items.len);
+    defer gpa.free(indices);
+    for (0..all_fields.items.len) |i| indices[i] = i;
     const SortCtx = struct {
-        names: []const base.Ident.Idx,
-        idents: *const base.Ident.Store,
+        fields: []const CheckedArtifact.CheckedRecordField,
+        names: *const CanonicalNameStore,
 
         pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-            const a_text = ctx.idents.getText(ctx.names[a]);
-            const b_text = ctx.idents.getText(ctx.names[b]);
-            return std.mem.order(u8, a_text, b_text) == .lt;
+            return std.mem.lessThan(
+                u8,
+                ctx.names.recordFieldLabelText(ctx.fields[a].name),
+                ctx.names.recordFieldLabelText(ctx.fields[b].name),
+            );
         }
     };
-    std.mem.sort(usize, field_indices, SortCtx{ .names = field_names, .idents = ident_store }, SortCtx.lessThan);
+    std.mem.sort(usize, indices, SortCtx{ .fields = all_fields.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
 
-    for (field_indices) |idx| {
-        const name_text = ident_store.getText(field_names[idx]);
-        const field_var = field_vars[idx];
+    try buf.appendSlice(gpa, "{ ");
+    for (indices, 0..) |src_idx, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        const field = all_fields.items[src_idx];
+        try buf.appendSlice(gpa, artifact.canonical_names.recordFieldLabelText(field.name));
+        try buf.appendSlice(gpa, " : ");
+        try writeTypeString(gpa, artifact, field.ty, buf, active);
+    }
+    try buf.appendSlice(gpa, " }");
+}
 
-        // Write field type to string
-        var type_writer = env.initTypeWriter() catch continue;
-        defer type_writer.deinit();
+fn writeTupleTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    items: []const CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    try buf.append(gpa, '(');
+    for (items, 0..) |item, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        try writeTypeString(gpa, artifact, item, buf, active);
+    }
+    try buf.append(gpa, ')');
+}
 
-        type_writer.write(field_var, .one_line) catch continue;
-        const field_type_str = type_writer.get();
+fn writeTagUnionTypeString(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    tags: []const CheckedArtifact.CheckedTag,
+    ext: CheckedArtifact.CheckedTypeId,
+    buf: *std.ArrayList(u8),
+    active: *std.AutoHashMap(CheckedArtifact.CheckedTypeId, void),
+) Allocator.Error!void {
+    var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
+    defer all_tags.deinit(gpa);
+    try appendTagRowTags(gpa, artifact, tags, ext, &all_tags);
 
-        result_list.append(gpa, .{
-            .name = gpa.dupe(u8, name_text) catch continue,
-            .type_str = gpa.dupe(u8, field_type_str) catch continue,
-        }) catch continue;
+    try buf.append(gpa, '[');
+    for (all_tags.items, 0..) |tag, i| {
+        if (i > 0) try buf.appendSlice(gpa, ", ");
+        try buf.appendSlice(gpa, artifact.canonical_names.tagLabelText(tag.name));
+        if (tag.args.len > 0) {
+            try buf.append(gpa, '(');
+            for (tag.args, 0..) |arg, arg_i| {
+                if (arg_i > 0) try buf.appendSlice(gpa, ", ");
+                try writeTypeString(gpa, artifact, arg, buf, active);
+            }
+            try buf.append(gpa, ')');
+        }
+    }
+    try buf.append(gpa, ']');
+}
+
+fn functionPayloadForRoot(
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) ?CheckedArtifact.CheckedFunctionType {
+    return switch (checkedTypePayload(artifact, checked_type)) {
+        .function => |func| func,
+        .alias => |alias| functionPayloadForRoot(artifact, alias.backing),
+        .nominal => |nominal| functionPayloadForRoot(artifact, nominal.backing),
+        else => null,
+    };
+}
+
+/// Extract record fields from artifact-owned checked type payloads.
+fn extractRecordFields(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
+    var fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
+    defer fields.deinit(gpa);
+    if (!(collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields) catch {
+        return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    })) {
+        return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
     }
 
+    var indices = gpa.alloc(usize, fields.items.len) catch return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    defer gpa.free(indices);
+    for (0..fields.items.len) |i| indices[i] = i;
+
+    const SortCtx = struct {
+        fields: []const CheckedArtifact.CheckedRecordField,
+        names: *const CanonicalNameStore,
+
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            return std.mem.lessThan(
+                u8,
+                ctx.names.recordFieldLabelText(ctx.fields[a].name),
+                ctx.names.recordFieldLabelText(ctx.fields[b].name),
+            );
+        }
+    };
+    std.mem.sort(usize, indices, SortCtx{ .fields = fields.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
+
+    var result_list = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+    for (indices) |idx| {
+        const field = fields.items[idx];
+        result_list.append(gpa, .{
+            .name = gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(field.name)) catch continue,
+            .type_str = typeStringAlloc(gpa, artifact, field.ty),
+        }) catch continue;
+    }
     return result_list.toOwnedSlice(gpa) catch &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
 }
 
-/// Collect type information from a compiled module (same logic as printCompiledModuleTypes).
+fn collectRecordFieldsForRoot(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_type: CheckedArtifact.CheckedTypeId,
+    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+) Allocator.Error!bool {
+    switch (checkedTypePayload(artifact, checked_type)) {
+        .alias => |alias| return try collectRecordFieldsForRoot(gpa, artifact, alias.backing, fields),
+        .nominal => |nominal| return try collectRecordFieldsForRoot(gpa, artifact, nominal.backing, fields),
+        .record => |record| {
+            try appendRecordRowFields(gpa, artifact, record.fields, record.ext, fields);
+            return true;
+        },
+        .record_unbound => |unbound| {
+            try fields.appendSlice(gpa, unbound);
+            return true;
+        },
+        .empty_record => return true,
+        else => return false,
+    }
+}
+
+/// Collect type information from a published checked artifact.
 fn collectModuleTypeInfo(
     gpa: Allocator,
-    compiled_module: *const BuildEnv.CompiledModuleInfo,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
     module_name: []const u8,
-    all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
+    hosted_indices: []const HostedProcGlobalIndex,
     type_table: *TypeTable,
 ) ?CollectedModuleTypeInfo {
-    const env = compiled_module.env;
-
-    // Find main type
-    var main_type_str: []const u8 = "";
-    const all_stmts = env.store.sliceStatements(env.all_statements);
-
-    for (all_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_nominal_decl) {
-            const nominal = stmt.s_nominal_decl;
-            const type_header = env.store.getTypeHeader(nominal.header);
-            const type_name = env.getIdent(type_header.relative_name);
-
-            if (std.mem.eql(u8, type_name, module_name)) {
-                var type_writer = env.initTypeWriter() catch continue;
-                defer type_writer.deinit();
-
-                const anno_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(nominal.anno));
-                const type_var = ModuleEnv.varFrom(anno_node_idx);
-
-                type_writer.write(type_var, .one_line) catch continue;
-                const type_str = type_writer.get();
-
-                main_type_str = gpa.dupe(u8, type_str) catch "";
-                break;
-            }
+    var main_type_str: []const u8 = gpa.dupe(u8, "") catch "";
+    for (artifact.checked_types.nominal_declarations) |declaration| {
+        const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(declaration.nominal.type_name));
+        if (std.mem.eql(u8, type_name, module_name)) {
+            if (main_type_str.len > 0) gpa.free(main_type_str);
+            main_type_str = typeStringAlloc(gpa, artifact, declaration.declaration_root);
+            break;
         }
     }
 
     // Collect functions
-    const all_defs = env.store.sliceDefs(env.all_defs);
     var functions = std.ArrayList(CollectedModuleTypeInfo.CollectedFunctionInfo).empty;
     var hosted_functions = std.ArrayList(CollectedModuleTypeInfo.CollectedHostedFunctionInfo).empty;
 
     const module_prefix = std.fmt.allocPrint(gpa, "{s}.", .{module_name}) catch return null;
     defer gpa.free(module_prefix);
 
-    for (all_defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
+    for (artifact.top_level_values.entries) |entry| {
+        const def_idx = entry.def;
 
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-
-        const def_name = env.getIdent(pattern.assign.ident);
+        const def_name = artifact.canonical_names.exportNameText(entry.source_name);
 
         if (std.mem.eql(u8, def_name, module_name)) continue;
 
@@ -2046,118 +2370,56 @@ fn collectModuleTypeInfo(
         else
             continue;
 
-        if (expr == .e_hosted_lambda) {
-            const qualified_name = if (std.mem.endsWith(u8, def_name, "!"))
-                def_name[0 .. def_name.len - 1]
-            else
-                def_name;
+        const checked_type = checkedTypeRootForScheme(artifact, entry.source_scheme);
+        const type_str = typeStringAlloc(gpa, artifact, checked_type);
 
-            for (all_hosted_fns.items, 0..) |fn_info, global_idx| {
-                if (std.mem.eql(u8, fn_info.name_text, qualified_name)) {
-                    var type_writer = env.initTypeWriter() catch continue;
-                    defer type_writer.deinit();
+        if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |_| {
+            // Extract record fields from function arg and return types.
+            var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+            var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+            var arg_type_ids: []const u64 = &.{};
+            var ret_type_id: u64 = 0;
 
-                    const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-                    const type_var = ModuleEnv.varFrom(def_node_idx);
-
-                    type_writer.write(type_var, .one_line) catch continue;
-                    const type_str = type_writer.get();
-
-                    // Extract record fields from function arg and return types
-                    const resolved = env.types.resolveVar(type_var);
-                    var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
-                    var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
-
-                    if (resolved.desc.content.unwrapFunc()) |func| {
-                        // Extract return type record fields
-                        ret_fields = extractRecordFields(gpa, env, func.ret);
-
-                        // Extract arg type record fields (from the first arg if it's a record)
-                        const arg_vars = env.types.sliceVars(func.args);
-                        if (arg_vars.len == 1) {
-                            arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
-                        }
-                    } else {
-                        // May be a nominal wrapping a function
-                        switch (resolved.desc.content) {
-                            .structure => |flat_type| {
-                                switch (flat_type) {
-                                    .nominal_type => |nom| {
-                                        if (nom.vars.nonempty.count > 0) {
-                                            const backing_var = env.types.getNominalBackingVar(nom);
-                                            const backing_resolved = env.types.resolveVar(backing_var);
-                                            if (backing_resolved.desc.content.unwrapFunc()) |func| {
-                                                ret_fields = extractRecordFields(gpa, env, func.ret);
-                                                const arg_vars = env.types.sliceVars(func.args);
-                                                if (arg_vars.len == 1) {
-                                                    arg_fields = extractRecordFields(gpa, env, arg_vars[0]);
-                                                }
-                                            }
-                                        }
-                                    },
-                                    else => {},
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                    // Build type IDs for args and return type
-                    var arg_type_ids: []const u64 = &.{};
-                    var ret_type_id: u64 = 0;
-
-                    const func_content = blk: {
-                        if (resolved.desc.content.unwrapFunc()) |func| break :blk func;
-                        // Check for nominal wrapping a function
-                        if (resolved.desc.content.unwrapNominalType()) |nom| {
-                            if (nom.vars.nonempty.count > 0) {
-                                const bv = env.types.getNominalBackingVar(nom);
-                                const br = env.types.resolveVar(bv);
-                                if (br.desc.content.unwrapFunc()) |func| break :blk func;
-                            }
-                        }
-                        break :blk null;
-                    };
-
-                    if (func_content) |func| {
-                        ret_type_id = type_table.getOrInsert(env, func.ret);
-                        const arg_vars_for_ids = env.types.sliceVars(func.args);
-                        if (arg_vars_for_ids.len > 0) {
-                            const ids = gpa.alloc(u64, arg_vars_for_ids.len) catch continue;
-                            for (arg_vars_for_ids, 0..) |av, i| {
-                                ids[i] = type_table.getOrInsert(env, av);
-                            }
-                            arg_type_ids = ids;
-                        }
-                    } else {
-                        ret_type_id = type_table.insertUnit();
-                    }
-
-                    hosted_functions.append(gpa, .{
-                        .index = global_idx,
-                        .name = gpa.dupe(u8, local_name) catch continue,
-                        .type_str = gpa.dupe(u8, type_str) catch continue,
-                        .arg_fields = arg_fields,
-                        .ret_fields = ret_fields,
-                        .arg_type_ids = arg_type_ids,
-                        .ret_type_id = ret_type_id,
-                    }) catch continue;
-                    break;
+            if (functionPayloadForRoot(artifact, checked_type)) |func| {
+                ret_fields = extractRecordFields(gpa, artifact, func.ret);
+                if (func.args.len == 1) {
+                    arg_fields = extractRecordFields(gpa, artifact, func.args[0]);
                 }
+                ret_type_id = type_table.getOrInsert(artifact, func.ret);
+                if (func.args.len > 0) {
+                    const ids = gpa.alloc(u64, func.args.len) catch continue;
+                    for (func.args, 0..) |arg, i| {
+                        ids[i] = type_table.getOrInsert(artifact, arg);
+                    }
+                    arg_type_ids = ids;
+                }
+            } else {
+                ret_type_id = type_table.insertUnit();
             }
-        } else if (expr == .e_lambda or def.annotation != null) {
-            var type_writer = env.initTypeWriter() catch continue;
-            defer type_writer.deinit();
 
-            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-            const type_var = ModuleEnv.varFrom(def_node_idx);
-
-            type_writer.write(type_var, .one_line) catch continue;
-            const type_str = type_writer.get();
-
-            functions.append(gpa, .{
+            hosted_functions.append(gpa, .{
+                .index = hostedGlobalIndexForDef(hosted_indices, artifact.key, def_idx),
                 .name = gpa.dupe(u8, local_name) catch continue,
-                .type_str = gpa.dupe(u8, type_str) catch continue,
-            }) catch continue;
+                .type_str = type_str,
+                .arg_fields = arg_fields,
+                .ret_fields = ret_fields,
+                .arg_type_ids = arg_type_ids,
+                .ret_type_id = ret_type_id,
+            }) catch {
+                gpa.free(type_str);
+                continue;
+            };
+        } else switch (entry.value) {
+            .procedure_binding => {
+                functions.append(gpa, .{
+                    .name = gpa.dupe(u8, local_name) catch continue,
+                    .type_str = type_str,
+                }) catch {
+                    gpa.free(type_str);
+                    continue;
+                };
+            },
+            .const_ref => gpa.free(type_str),
         }
     }
 
@@ -2345,93 +2607,4 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
             buf.appendSlice(gpa, "{ ... }") catch {};
         },
     }
-}
-
-/// Run a compiled Roc entrypoint through the dev backend (native code generation).
-fn runViaDev(
-    gpa: Allocator,
-    platform_env: *ModuleEnv,
-    all_module_envs: []*ModuleEnv,
-    app_module_env: ?*ModuleEnv,
-    entrypoint_expr: can.CIR.Expr.Idx,
-    roc_ops: *builtins.host_abi.RocOps,
-    args_ptr: ?*anyopaque,
-    result_ptr: *anyopaque,
-) !void {
-    const eval_mod = @import("eval");
-    const types_mod = @import("types");
-    const DevEvaluator = eval_mod.DevEvaluator;
-    const ExecutableMemory = eval_mod.ExecutableMemory;
-
-    var dev_eval = DevEvaluator.init(gpa, null) catch {
-        return error.CompilationFailed;
-    };
-    defer dev_eval.deinit();
-
-    // Resolve entrypoint layouts from the CIR expression's type
-    const layout_store_ptr = dev_eval.ensureGlobalLayoutStore(all_module_envs) catch return error.CompilationFailed;
-    const module_idx: u32 = for (all_module_envs, 0..) |env, i| {
-        if (env == platform_env) break @intCast(i);
-    } else return error.CompilationFailed;
-
-    const expr_type_var = ModuleEnv.varFrom(entrypoint_expr);
-    const resolved_type = platform_env.types.resolveVar(expr_type_var);
-    const maybe_func = resolved_type.desc.content.unwrapFunc();
-
-    var arg_layouts_buf: [16]layout.Idx = undefined;
-    var arg_layouts_len: usize = 0;
-    var ret_layout: layout.Idx = undefined;
-
-    if (maybe_func) |func| {
-        const arg_vars = platform_env.types.sliceVars(func.args);
-        var type_scope = types_mod.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        for (arg_vars, 0..) |arg_var, i| {
-            arg_layouts_buf[i] = layout_store_ptr.fromTypeVar(module_idx, arg_var, &type_scope, null) catch return error.CompilationFailed;
-        }
-        arg_layouts_len = arg_vars.len;
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, func.ret, &type_scope, null) catch return error.CompilationFailed;
-    } else {
-        var type_scope = types_mod.TypeScope.init(gpa);
-        defer type_scope.deinit();
-        ret_layout = layout_store_ptr.fromTypeVar(module_idx, expr_type_var, &type_scope, null) catch return error.CompilationFailed;
-    }
-
-    const arg_layouts: []const layout.Idx = arg_layouts_buf[0..arg_layouts_len];
-
-    var code_result = dev_eval.generateEntrypointCode(
-        platform_env,
-        entrypoint_expr,
-        all_module_envs,
-        app_module_env,
-        arg_layouts,
-        ret_layout,
-    ) catch {
-        return error.CompilationFailed;
-    };
-    defer code_result.deinit();
-
-    if (code_result.code.len == 0) {
-        return error.CompilationFailed;
-    }
-
-    var executable = ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
-        return error.CompilationFailed;
-    };
-    defer executable.deinit();
-
-    // Use the DevEvaluator's RocOps (which has setjmp/longjmp crash protection)
-    // instead of the caller's RocOps, so roc_crashed returns an error rather
-    // than calling std.process.exit(1).
-    // Splice in the caller's hosted functions so the generated code can call them.
-    dev_eval.roc_ops.hosted_fns = roc_ops.hosted_fns;
-
-    dev_eval.callRocABIWithCrashProtection(&executable, result_ptr, args_ptr) catch |err| switch (err) {
-        error.RocCrashed => {
-            return error.CompilationFailed;
-        },
-        error.Segfault => {
-            return error.CompilationFailed;
-        },
-    };
 }

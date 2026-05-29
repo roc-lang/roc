@@ -2,18 +2,11 @@
 //! This module contains type definitions and utilities used across the canonicalization IR.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const build_options = @import("build_options");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
-
-// Module tracing flag - enabled via `zig build -Dtrace-modules`
-// On native platforms, uses std.debug.print. On WASM, tracing in CIR is disabled
-// since we don't have roc_ops here (tracing is enabled in the interpreter/shim instead).
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
@@ -42,6 +35,7 @@ pub const BuiltinIndices = struct {
     dict_type: Statement.Idx,
     set_type: Statement.Idx,
     str_type: Statement.Idx,
+    iter_type: Statement.Idx,
     list_type: Statement.Idx,
     box_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
@@ -66,6 +60,7 @@ pub const BuiltinIndices = struct {
     dict_ident: Ident.Idx,
     set_ident: Ident.Idx,
     str_ident: Ident.Idx,
+    iter_ident: Ident.Idx,
     list_ident: Ident.Idx,
     box_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
@@ -630,11 +625,13 @@ pub const NumKind = enum {
 /// - is_negative: Bool (whether there was a minus sign)
 /// - digits_before_pt: List(U8) (base-256 digits before decimal point)
 /// - digits_after_pt: List(U8) (base-256 digits after decimal point)
+/// - digits_after_pt_count: U64 (how many decimal digits appeared after the point)
 ///
-/// Example: "356.517" becomes:
+/// Example: "356.5170" becomes:
 /// - is_negative = false
 /// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
-/// - digits_after_pt = [2, 5] (because 517 = 2*256 + 5)
+/// - digits_after_pt = [20, 50] (because 5170 = 20*256 + 50)
+/// - digits_after_pt_count = 4
 pub const NumeralDigits = struct {
     /// Index into the shared digit byte array in ModuleEnv
     digits_start: u32,
@@ -642,6 +639,8 @@ pub const NumeralDigits = struct {
     before_pt_len: u16,
     /// Number of bytes for digits_after_pt
     after_pt_len: u16,
+    /// Number of decimal digits after the point before base-256 encoding
+    after_pt_digit_count: u32,
     /// Whether the literal had a minus sign
     is_negative: bool,
 
@@ -660,80 +659,7 @@ pub const NumeralDigits = struct {
         const after_start = self.digits_start + self.before_pt_len;
         return digit_bytes[after_start..][0..self.after_pt_len];
     }
-
-    /// Format the base-256 encoded numeral back to a human-readable decimal string.
-    /// Writes to the provided buffer and returns a slice of the written content.
-    /// Buffer should be at least 128 bytes to handle most numbers.
-    pub fn formatDecimal(self: NumeralDigits, digit_bytes: []const u8, buf: []u8) []const u8 {
-        return formatBase256ToDecimal(
-            self.is_negative,
-            self.getDigitsBeforePt(digit_bytes),
-            self.getDigitsAfterPt(digit_bytes),
-            buf,
-        );
-    }
 };
-
-/// Format base-256 encoded digits to a human-readable decimal string.
-/// This is useful for error messages where we need to show the user what number
-/// was invalid (e.g., "The number 999999999 is not a valid U8").
-///
-/// Parameters:
-/// - is_negative: whether the number had a minus sign
-/// - digits_before_pt: base-256 encoded integer part
-/// - digits_after_pt: base-256 encoded fractional part
-/// - buf: output buffer (should be at least 128 bytes)
-///
-/// Returns a slice of buf containing the formatted decimal string.
-pub fn formatBase256ToDecimal(
-    is_negative: bool,
-    digits_before_pt: []const u8,
-    digits_after_pt: []const u8,
-    buf: []u8,
-) []const u8 {
-    var writer = std.io.fixedBufferStream(buf);
-    const w = writer.writer();
-
-    // Write sign if negative
-    if (is_negative) w.writeAll("-") catch {};
-
-    // Convert base-256 integer part to decimal
-    var value: u128 = 0;
-    for (digits_before_pt) |digit| {
-        value = value * 256 + digit;
-    }
-    var int_buf: [40]u8 = undefined;
-    w.writeAll(builtins.compiler_rt_128.u128_to_str(&int_buf, value).str) catch {};
-
-    // Format fractional part if present and non-zero
-    if (digits_after_pt.len > 0) {
-        var has_nonzero = false;
-        for (digits_after_pt) |d| {
-            if (d != 0) {
-                has_nonzero = true;
-                break;
-            }
-        }
-        if (has_nonzero) {
-            w.writeAll(".") catch {};
-            // Convert base-256 fractional digits to decimal
-            var frac: f64 = 0;
-            var frac_mult: f64 = 1.0 / 256.0;
-            for (digits_after_pt) |digit| {
-                frac += @as(f64, @floatFromInt(digit)) * frac_mult;
-                frac_mult /= 256.0;
-            }
-            // Print fractional part (removing leading "0.")
-            var frac_buf: [400]u8 = undefined;
-            const frac_str = builtins.compiler_rt_128.f64_to_str(&frac_buf, frac);
-            if (frac_str.len > 2 and std.mem.startsWith(u8, frac_str, "0.")) {
-                w.writeAll(frac_str[2..]) catch {};
-            }
-        }
-    }
-
-    return buf[0..writer.pos];
-}
 
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
@@ -759,11 +685,20 @@ pub const Import = struct {
     };
 
     pub const ResolvedModuleIdx = enum(u32) {
+        failed_before_checking = std.math.maxInt(u32) - 1,
         none = std.math.maxInt(u32),
         _,
 
         pub fn isNone(self: ResolvedModuleIdx) bool {
             return self == .none;
+        }
+
+        pub fn isFailedBeforeChecking(self: ResolvedModuleIdx) bool {
+            return self == .failed_before_checking;
+        }
+
+        pub fn isResolved(self: ResolvedModuleIdx) bool {
+            return !self.isNone() and !self.isFailedBeforeChecking();
         }
     };
 
@@ -788,6 +723,23 @@ pub const Import = struct {
             self.imports.deinit(allocator);
             self.import_idents.deinit(allocator);
             self.resolved_modules.deinit(allocator);
+        }
+
+        pub fn clone(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+            var result = Store{
+                .map = .{},
+                .imports = try self.imports.clone(allocator),
+                .import_idents = try self.import_idents.clone(allocator),
+                .resolved_modules = try self.resolved_modules.clone(allocator),
+            };
+            errdefer result.deinit(allocator);
+
+            for (result.imports.items.items, 0..) |string_idx, i| {
+                const import_idx = @as(Import.Idx, @enumFromInt(i));
+                try result.map.put(allocator, string_idx, import_idx);
+            }
+
+            return result;
         }
 
         /// Deinit only the hash map, not the SafeLists.
@@ -833,9 +785,12 @@ pub const Import = struct {
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially
-            _ = try self.imports.append(allocator, string_idx);
-            _ = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            _ = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            const imports_idx = try self.imports.append(allocator, string_idx);
+            std.debug.assert(@intFromEnum(imports_idx) == @intFromEnum(idx));
+            const ident_idx_added = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
+            std.debug.assert(@intFromEnum(ident_idx_added) == @intFromEnum(idx));
+            const resolved_idx = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
+            std.debug.assert(@intFromEnum(resolved_idx) == @intFromEnum(idx));
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
@@ -855,8 +810,17 @@ pub const Import = struct {
             const idx = @intFromEnum(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
-            if (resolved.isNone()) return null;
+            if (!resolved.isResolved()) return null;
             return @intFromEnum(resolved);
+        }
+
+        /// Return true when import resolution has already reported a user-facing
+        /// diagnostic before type checking. Type checking may continue for source
+        /// tooling, but post-check lowering must never consume this import.
+        pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
+            const idx = @intFromEnum(import_idx);
+            if (idx >= self.resolved_modules.len()) return false;
+            return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
@@ -867,19 +831,47 @@ pub const Import = struct {
             }
         }
 
-        /// Resolve all imports by matching import names to module names in the provided array.
-        /// This sets the resolved_modules index for each import that matches a module.
+        /// Mark one import as intentionally unavailable because an earlier stage
+        /// already owns the user-facing diagnostic.
+        pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
+            const idx = @intFromEnum(import_idx);
+            if (idx < self.resolved_modules.len()) {
+                self.resolved_modules.items.items[idx] = .failed_before_checking;
+            }
+        }
+
+        /// Diagnostics-only tooling can continue type inspection after unresolved
+        /// imports have been reported. This makes that state explicit instead of
+        /// leaving imports in the pre-resolution state.
+        pub fn markUnresolvedImportsFailedBeforeChecking(self: *Store) void {
+            for (self.resolved_modules.items.items) |*resolved| {
+                if (resolved.isNone()) resolved.* = .failed_before_checking;
+            }
+        }
+
+        /// Clear all resolved module indices.
+        pub fn clearResolvedModules(self: *Store) void {
+            for (self.resolved_modules.items.items) |*resolved| {
+                resolved.* = .none;
+            }
+        }
+
+        /// Resolve any still-unresolved imports by exact module-name match against
+        /// the provided array.
+        /// Existing `resolved_modules` entries are preserved.
         ///
         /// Parameters:
         /// - env: The module environment containing the string store for import names
         /// - available_modules: Array of module environments to match against
         ///
-        /// For each import, this finds the module in available_modules whose module_name
-        /// matches the import name and sets the resolved index accordingly.
-        ///
-        /// For package-qualified imports like "pf.Stdout", this also tries to match the
-        /// base module name ("Stdout") if the full qualified name doesn't match.
-        pub fn resolveImports(self: *Store, env: anytype, available_modules: []const *const @import("ModuleEnv.zig")) void {
+        /// For each unresolved import, this finds the module in available_modules whose
+        /// module_name exactly matches the import name and sets the resolved index
+        /// accordingly.
+        pub fn resolveImportsByExactModuleName(
+            self: *Store,
+            env: anytype,
+            available_modules: []const *const @import("ModuleEnv.zig"),
+        ) void {
             const import_count: usize = @intCast(self.imports.len());
             if (import_count == 0) return;
 
@@ -895,26 +887,12 @@ pub const Import = struct {
 
             for (0..import_count) |i| {
                 const import_idx: Import.Idx = @enumFromInt(i);
+                const current = self.resolved_modules.items.items[i];
+                if (!current.isNone()) continue;
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
-                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
-                    import_name[dot_pos + 1 ..]
-                else
-                    import_name;
-
-                // Match by full import_name or by base_name (the part after the last
-                // dot). When both match different modules, pick the one declared first.
-                const exact = name_to_idx.get(import_name);
-                const base_match = if (base_name.ptr == import_name.ptr) exact else name_to_idx.get(base_name);
-                const resolved = if (exact == null)
-                    base_match
-                else if (base_match == null)
-                    exact
-                else
-                    @min(exact.?, base_match.?);
-
-                if (resolved) |module_idx| {
+                if (name_to_idx.get(import_name)) |module_idx| {
                     self.setResolvedModule(import_idx, module_idx);
 
                     if (comptime trace_modules) {

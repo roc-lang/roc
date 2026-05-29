@@ -36,8 +36,10 @@ test "infers type for small nums" {
     }
 }
 
-test "fail to infer num literals outside supported range" {
-    // Test integer literals that are too big to be represented
+test "exact num literals outside compact range still default to Dec" {
+    // Exact integer literals that are too big for the compact payload still
+    // participate in `from_numeral`; without stronger evidence, they default
+    // to Dec like other unannotated numeric literals.
     const test_cases = [_][]const u8{
         // Negative number slightly lower than i128 min
         "-170141183460469231731687303715884105729",
@@ -55,8 +57,7 @@ test "fail to infer num literals outside supported range" {
         var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
-        const typ = (try test_env.getLastExprType()).content;
-        try testing.expect(typ == .err);
+        try test_env.assertLastDefType("Dec");
     }
 }
 
@@ -169,19 +170,23 @@ test "numeric literal in comparison unifies with typed operand" {
             const def_name = test_env.module_env.getIdentStoreConst().getText(ptrn.assign.ident);
             if (std.mem.eql(u8, def_name, "result")) {
                 found_result = true;
-                // Get the expression - should be a binop
+                // After static-dispatch constraint finalization, `==` is
+                // represented as the explicit equality dispatch expression
+                // that post-check lowering consumes. The source operands are
+                // still the original comparison operands and must both resolve
+                // to I64.
                 const expr = test_env.module_env.store.getExpr(def.expr);
-                try testing.expect(expr == .e_binop);
-                const binop = expr.e_binop;
+                try testing.expect(expr == .e_method_eq);
+                const eq = expr.e_method_eq;
 
                 // Check LHS type (should be I64)
-                const lhs_var = ModuleEnv.varFrom(binop.lhs);
+                const lhs_var = ModuleEnv.varFrom(eq.lhs);
                 try test_env.type_writer.write(lhs_var, .wrap);
                 const lhs_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("I64", lhs_type);
 
                 // Check RHS type (the literal 42 - should also be I64 after unification)
-                const rhs_var = ModuleEnv.varFrom(binop.rhs);
+                const rhs_var = ModuleEnv.varFrom(eq.rhs);
                 try test_env.type_writer.write(rhs_var, .wrap);
                 const rhs_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("I64", rhs_type);

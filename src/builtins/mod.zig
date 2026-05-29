@@ -5,7 +5,7 @@ pub const compiler_rt_128 = @import("compiler_rt_128.zig");
 pub const host_abi = @import("host_abi.zig");
 pub const dec = @import("dec.zig");
 pub const dev_wrappers = @import("dev_wrappers.zig");
-pub const handlers = @import("handlers.zig");
+pub const erased_callable = @import("erased_callable.zig");
 pub const hash = @import("hash.zig");
 pub const list = @import("list.zig");
 pub const num = @import("num.zig");
@@ -15,7 +15,7 @@ pub const utils = @import("utils.zig");
 
 test "builtins tests" {
     std.testing.refAllDecls(@import("dec.zig"));
-    std.testing.refAllDecls(@import("handlers.zig"));
+    std.testing.refAllDecls(@import("erased_callable.zig"));
     std.testing.refAllDecls(@import("hash.zig"));
     std.testing.refAllDecls(@import("host_abi.zig"));
     std.testing.refAllDecls(@import("list.zig"));

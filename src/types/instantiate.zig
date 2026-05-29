@@ -71,6 +71,10 @@ pub const Instantiator = struct {
 
     const Self = @This();
 
+    fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
+        return self.idents.getText(idx);
+    }
+
     // instantiation //
 
     /// Instantiate a variable
@@ -87,8 +91,10 @@ pub const Instantiator = struct {
         }
 
         // Check if we've already instantiated this variable
-        if (self.var_map.get(resolved_var)) |fresh_var| {
-            return fresh_var;
+        if (self.var_map.count() > 0) {
+            if (self.var_map.get(resolved_var)) |fresh_var| {
+                return fresh_var;
+            }
         }
 
         switch (resolved.desc.content) {
@@ -141,12 +147,17 @@ pub const Instantiator = struct {
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
+                    else => false,
+                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -162,12 +173,17 @@ pub const Instantiator = struct {
 
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
+                const from_numeral_origin = switch (resolved.desc.content) {
+                    .flex => resolved.desc.from_numeral_origin,
+                    else => false,
+                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
+                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -204,13 +220,16 @@ pub const Instantiator = struct {
     }
 
     fn instantiateAlias(self: *Self, alias: Alias) std.mem.Allocator.Error!Content {
-        var fresh_vars = std.ArrayList(Var).empty;
+        var arg_span = alias.vars.nonempty;
+        arg_span.dropFirstElem();
+
+        var fresh_vars = try std.ArrayList(Var).initCapacity(self.store.gpa, arg_span.count);
         defer fresh_vars.deinit(self.store.gpa);
 
-        var iter = self.store.iterAliasArgs(alias);
-        while (iter.next()) |arg_var| {
-            const fresh_elem = try self.instantiateVar(arg_var);
-            try fresh_vars.append(self.store.gpa, fresh_elem);
+        const args_start: usize = @intFromEnum(arg_span.start);
+        for (0..arg_span.count) |i| {
+            const arg_var = self.store.vars.items.items[args_start + i];
+            fresh_vars.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
 
         const backing_var = self.store.getAliasBackingVar(alias);
@@ -238,13 +257,14 @@ pub const Instantiator = struct {
         const backing_var = self.store.getNominalBackingVar(nominal);
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
-        var fresh_vars = std.ArrayList(Var).empty;
+        const arg_span = TypesStore.getNominalArgsRange(nominal);
+        var fresh_vars = try std.ArrayList(Var).initCapacity(self.store.gpa, arg_span.count);
         defer fresh_vars.deinit(self.store.gpa);
 
-        var iter = self.store.iterNominalArgs(nominal);
-        while (iter.next()) |arg_var| {
-            const fresh_elem = try self.instantiateVar(arg_var);
-            try fresh_vars.append(self.store.gpa, fresh_elem);
+        const args_start: usize = @intFromEnum(arg_span.start);
+        for (0..arg_span.count) |i| {
+            const arg_var = self.store.vars.items.items[args_start + i];
+            fresh_vars.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
 
         return (try self.store.mkNominal(nominal.ident, fresh_backing_var, fresh_vars.items, nominal.origin_module, nominal.is_opaque)).structure.nominal_type;
@@ -253,14 +273,13 @@ pub const Instantiator = struct {
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
         // Use index-based iteration to avoid iterator invalidation
         // (see comment in instantiateFunc for details)
-        var fresh_elems = std.ArrayList(Var).empty;
+        var fresh_elems = try std.ArrayList(Var).initCapacity(self.store.gpa, tuple.elems.count);
         defer fresh_elems.deinit(self.store.gpa);
 
         const elems_start: usize = @intFromEnum(tuple.elems.start);
         for (0..tuple.elems.count) |i| {
             const elem_var = self.store.vars.items.items[elems_start + i];
-            const fresh_elem = try self.instantiateVar(elem_var);
-            try fresh_elems.append(self.store.gpa, fresh_elem);
+            fresh_elems.appendAssumeCapacity(try self.instantiateVar(elem_var));
         }
 
         const fresh_elems_range = try self.store.appendVars(fresh_elems.items);
@@ -271,15 +290,14 @@ pub const Instantiator = struct {
         // The slice would point into the backing ArrayList, but instantiateVar
         // can recursively call appendVars which may reallocate the array,
         // invalidating the slice pointer.
-        var fresh_args = std.ArrayList(Var).empty;
+        var fresh_args = try std.ArrayList(Var).initCapacity(self.store.gpa, func.args.count);
         defer fresh_args.deinit(self.store.gpa);
 
         const args_start: usize = @intFromEnum(func.args.start);
         for (0..func.args.count) |i| {
             // Re-fetch the var on each iteration since the backing array may have moved
             const arg_var = self.store.vars.items.items[args_start + i];
-            const fresh_arg = try self.instantiateVar(arg_var);
-            try fresh_args.append(self.store.gpa, fresh_arg);
+            fresh_args.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
 
         const fresh_ret = try self.instantiateVar(func.ret);
@@ -300,7 +318,7 @@ pub const Instantiator = struct {
             return try self.store.appendRecordFields(&.{});
         }
 
-        var fresh_fields = std.ArrayList(RecordField).empty;
+        var fresh_fields = try std.ArrayList(RecordField).initCapacity(self.store.gpa, fields.count);
         defer fresh_fields.deinit(self.store.gpa);
 
         const fields_start: usize = @intFromEnum(fields.start);
@@ -308,7 +326,7 @@ pub const Instantiator = struct {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            _ = try fresh_fields.append(self.store.gpa, RecordField{
+            fresh_fields.appendAssumeCapacity(RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -329,7 +347,7 @@ pub const Instantiator = struct {
             };
         }
 
-        var fresh_fields = std.ArrayList(RecordField).empty;
+        var fresh_fields = try std.ArrayList(RecordField).initCapacity(self.store.gpa, record.fields.count);
         defer fresh_fields.deinit(self.store.gpa);
 
         const fields_start: usize = @intFromEnum(record.fields.start);
@@ -337,7 +355,7 @@ pub const Instantiator = struct {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
             const fresh_type = try self.instantiateVar(field.var_);
-            _ = try fresh_fields.append(self.store.gpa, RecordField{
+            fresh_fields.appendAssumeCapacity(RecordField{
                 .name = field.name,
                 .var_ = fresh_type,
             });
@@ -362,7 +380,7 @@ pub const Instantiator = struct {
             };
         }
 
-        var fresh_tags = std.ArrayList(Tag).empty;
+        var fresh_tags = try std.ArrayList(Tag).initCapacity(self.store.gpa, tag_union.tags.count);
         defer fresh_tags.deinit(self.store.gpa);
 
         const tags_start: usize = @intFromEnum(tag_union.tags.start);
@@ -372,7 +390,7 @@ pub const Instantiator = struct {
             const tag_name = tag.name;
             const tag_args = tag.args;
 
-            var fresh_args = std.ArrayList(Var).empty;
+            var fresh_args = try std.ArrayList(Var).initCapacity(self.store.gpa, tag_args.count);
             defer fresh_args.deinit(self.store.gpa);
 
             // Skip the loop entirely for tags with no arguments.
@@ -383,14 +401,13 @@ pub const Instantiator = struct {
                 const args_start: usize = @intFromEnum(tag_args.start);
                 for (0..tag_args.count) |i| {
                     const arg_var = self.store.vars.items.items[args_start + i];
-                    const fresh_arg = try self.instantiateVar(arg_var);
-                    try fresh_args.append(self.store.gpa, fresh_arg);
+                    fresh_args.appendAssumeCapacity(try self.instantiateVar(arg_var));
                 }
             }
 
             const fresh_args_range = try self.store.appendVars(fresh_args.items);
 
-            _ = try fresh_tags.append(self.store.gpa, Tag{
+            fresh_tags.appendAssumeCapacity(Tag{
                 .name = tag_name,
                 .args = fresh_args_range,
             });
@@ -398,7 +415,11 @@ pub const Instantiator = struct {
 
         // Sort the fresh tags alphabetically by name before appending.
         // This ensures tag discriminants are consistent after instantiation.
-        std.mem.sort(Tag, fresh_tags.items, self.idents, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, fresh_tags.items, self, struct {
+            fn less(instantiator: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, instantiator.getIdentText(a.name), instantiator.getIdentText(b.name)) == .lt;
+            }
+        }.less);
 
         const tags_range = try self.store.appendTags(fresh_tags.items);
         return TagUnion{
@@ -408,7 +429,7 @@ pub const Instantiator = struct {
     }
 
     pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
-        return self.idents.getText(idx);
+        return self.getIdentText(idx);
     }
 
     fn instantiateStaticDispatchConstraints(self: *Self, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
@@ -428,8 +449,7 @@ pub const Instantiator = struct {
             for (0..constraints_len) |i| {
                 // Re-fetch the constraint on each iteration since the backing array may have moved
                 const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
-                const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
-                try fresh_constraints.append(self.store.gpa, fresh_constraint);
+                fresh_constraints.appendAssumeCapacity(try self.instantiateStaticDispatchConstraint(constraint));
             }
 
             const fresh_constraints_range = try self.store.appendStaticDispatchConstraints(fresh_constraints.items);

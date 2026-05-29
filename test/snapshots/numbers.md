@@ -25,6 +25,10 @@ type=expr
 UPPERCASE BASE - :0:0:0:0
 UPPERCASE BASE - :0:0:0:0
 UPPERCASE BASE - :0:0:0:0
+INVALID NUMBER - numbers.md:8:5:8:11
+INVALID NUMBER - numbers.md:9:5:9:11
+INVALID NUMBER - numbers.md:10:5:10:10
+INVALID NUMBER - numbers.md:11:5:11:10
 # PROBLEMS
 **UPPERCASE BASE**
 Number base prefixes must be lowercase (0x, 0o, 0b).
@@ -40,6 +44,54 @@ Number base prefixes must be lowercase (0x, 0o, 0b).
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
 
+
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**numbers.md:8:5:8:11:**
+```roc
+    0.1e42,
+```
+    ^^^^^^
+
+The inferred type is:
+
+    Dec
+
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**numbers.md:9:5:9:11:**
+```roc
+    0.1E42,
+```
+    ^^^^^^
+
+The inferred type is:
+
+    Dec
+
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**numbers.md:10:5:10:10:**
+```roc
+    1.e42,
+```
+    ^^^^^
+
+The inferred type is:
+
+    Dec
+
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**numbers.md:11:5:11:10:**
+```roc
+    1.E42,
+```
+    ^^^^^
+
+The inferred type is:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -105,15 +157,15 @@ EndOfFile,
 		(e-num (value "1"))
 		(e-num (value "34"))
 		(e-num (value "34"))
-		(e-frac-f64 (value "1e41"))
-		(e-frac-f64 (value "1e41"))
-		(e-frac-f64 (value "1e42"))
-		(e-frac-f64 (value "1e42"))
+		(e-num-from-numeral)
+		(e-num-from-numeral)
+		(e-num-from-numeral)
+		(e-num-from-numeral)
 		(e-num (value "3735928559"))
 		(e-num (value "3735928559"))
 		(e-num (value "3735928559"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Dec, Dec, Dec, Dec, Dec, Dec, Dec, Dec, Dec, Dec, Dec, Dec, Dec)"))
+(expr (type "(Dec, Dec, Dec, Dec, Dec, Dec, Error, Error, Error, Error, Dec, Dec, Dec)"))
 ~~~

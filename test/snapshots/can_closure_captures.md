@@ -176,11 +176,13 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-lookup-local
-					(p-assign (ident "y"))))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 159)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "y")))))))
 	(d-let
 		(p-assign (ident "level1"))
 		(e-num (value "10")))
@@ -201,11 +203,13 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 						(e-lambda
 							(args
 								(p-underscore))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "level1")))
-								(e-lookup-local
-									(p-assign (ident "level2")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 221)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "level1"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "level2"))))))))
 				(e-lookup-local
 					(p-assign (ident "innerFn"))))))
 	(d-let
@@ -223,7 +227,7 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 						(p-assign (ident "n")))))))
 	(d-let
 		(p-assign (ident "useClosure"))
-		(e-call
+		(e-call (constraint-fn-var 259)
 			(e-lookup-local
 				(p-assign (ident "makeClosure")))
 			(e-num (value "100"))))

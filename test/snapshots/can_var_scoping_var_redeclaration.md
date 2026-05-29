@@ -99,7 +99,7 @@ NO CHANGE
 					(p-assign (ident "x_"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
+		(e-call (constraint-fn-var 122)
 			(e-lookup-local
 				(p-assign (ident "redeclareTest")))
 			(e-empty_record))))
@@ -108,9 +108,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Dec"))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "_arg -> Dec"))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~

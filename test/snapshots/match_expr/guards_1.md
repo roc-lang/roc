@@ -51,10 +51,10 @@ EndOfFile,
 									(e-int (raw "0"))))
 							(e-string
 								(e-string-part (raw "positive: "))
-								(e-field-access
-									(e-ident (raw "x"))
-									(e-apply
-										(e-ident (raw "to_str"))))
+								(e-method-call (method ".to_str")
+									(receiver
+										(e-ident (raw "x")))
+									(args))
 								(e-string-part (raw ""))))
 						(branch
 							(p-ident (raw "x"))
@@ -64,10 +64,10 @@ EndOfFile,
 									(e-int (raw "0"))))
 							(e-string
 								(e-string-part (raw "negative: "))
-								(e-field-access
-									(e-ident (raw "x"))
-									(e-apply
-										(e-ident (raw "to_str"))))
+								(e-method-call (method ".to_str")
+									(receiver
+										(e-ident (raw "x")))
+									(args))
 								(e-string-part (raw ""))))
 						(branch
 							(p-underscore)
@@ -104,17 +104,19 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "positive: "))
-									(e-dot-access (field "to_str")
+									(e-dispatch-call (method "to_str") (constraint-fn-var 190)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-binop (op "gt")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "0")))))
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 96)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "0"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -122,17 +124,19 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "negative: "))
-									(e-dot-access (field "to_str")
+									(e-dispatch-call (method "to_str") (constraint-fn-var 340)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-binop (op "lt")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "0")))))
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 248)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "x"))))
+									(args
+										(e-num (value "0"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)

@@ -18,13 +18,6 @@ const RocDec = builtins.dec.RocDec;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const Ident = base.Ident;
-const FunctionArgs = base.FunctionArgs;
-
-/// When storing optional indices/values where 0 is a valid value, we add this offset
-/// to distinguish "value is 0" from "value is null". This is a common pattern when
-/// packing optional data into u32 fields where 0 would otherwise be ambiguous.
-const OPTIONAL_VALUE_OFFSET: u32 = 1;
-
 const NodeStore = @This();
 
 gpa: Allocator,
@@ -33,6 +26,7 @@ regions: Region.List,
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span pairs
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
+method_call_data: collections.SafeList(MethodCallData), // Typed storage for method args plus method-token source region
 match_data: collections.SafeList(MatchData), // Typed storage for match expression data
 match_branch_data: collections.SafeList(MatchBranchData), // Typed storage for match branch data
 closure_data: collections.SafeList(ClosureData), // Typed storage for closure expressions
@@ -43,11 +37,6 @@ type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type 
 pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
-/// Expressions whose type doesn't match the expected return type in their context.
-/// Populated by the type checker for match/if branch bodies, read by the interpreter
-/// to crash at runtime when an erroneous branch is actually taken.
-/// Key: @intFromEnum(CIR.Expr.Idx) of the branch body expression.
-erroneous_exprs: std.AutoHashMapUnmanaged(u32, void) = .{},
 
 /// A pair of u32 values representing a span (start index and length).
 /// Used for storing argument lists, field lists, branch lists, etc.
@@ -62,6 +51,15 @@ pub const SpanWithNode = extern struct {
     start: u32,
     len: u32,
     node: u32,
+};
+
+/// Method-call side data.
+/// Stores argument span plus the exact method-token source region.
+pub const MethodCallData = extern struct {
+    args_start: u32,
+    args_len: u32,
+    method_region_start: u32,
+    method_region_end: u32,
 };
 
 /// Match expression data.
@@ -219,6 +217,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8),
         .span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4),
         .span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4),
+        .method_call_data = try collections.SafeList(MethodCallData).initCapacity(gpa, capacity / 8),
         .match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8),
         .match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8),
         .closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16),
@@ -232,6 +231,31 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     };
 }
 
+/// Public function `clone`.
+pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
+    var cloned = NodeStore{
+        .gpa = gpa,
+        .nodes = try self.nodes.clone(gpa),
+        .regions = try self.regions.clone(gpa),
+        .int128_values = try self.int128_values.clone(gpa),
+        .span2_data = try self.span2_data.clone(gpa),
+        .span_with_node_data = try self.span_with_node_data.clone(gpa),
+        .method_call_data = try self.method_call_data.clone(gpa),
+        .match_data = try self.match_data.clone(gpa),
+        .match_branch_data = try self.match_branch_data.clone(gpa),
+        .closure_data = try self.closure_data.clone(gpa),
+        .zero_arg_tag_data = try self.zero_arg_tag_data.clone(gpa),
+        .def_data = try self.def_data.clone(gpa),
+        .import_data = try self.import_data.clone(gpa),
+        .type_apply_data = try self.type_apply_data.clone(gpa),
+        .pattern_list_data = try self.pattern_list_data.clone(gpa),
+        .index_data = try self.index_data.clone(gpa),
+        .scratch = null,
+    };
+    errdefer cloned.deinit();
+    return cloned;
+}
+
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
@@ -239,6 +263,7 @@ pub fn deinit(store: *NodeStore) void {
     store.int128_values.deinit(store.gpa);
     store.span2_data.deinit(store.gpa);
     store.span_with_node_data.deinit(store.gpa);
+    store.method_call_data.deinit(store.gpa);
     store.match_data.deinit(store.gpa);
     store.match_branch_data.deinit(store.gpa);
     store.closure_data.deinit(store.gpa);
@@ -248,7 +273,6 @@ pub fn deinit(store: *NodeStore) void {
     store.type_apply_data.deinit(store.gpa);
     store.pattern_list_data.deinit(store.gpa);
     store.index_data.deinit(store.gpa);
-    store.erroneous_exprs.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -262,6 +286,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.int128_values.relocate(offset);
     store.span2_data.relocate(offset);
     store.span_with_node_data.relocate(offset);
+    store.method_call_data.relocate(offset);
     store.match_data.relocate(offset);
     store.match_branch_data.relocate(offset);
     store.closure_data.relocate(offset);
@@ -278,9 +303,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 70;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 45;
+pub const MODULEENV_EXPR_NODE_COUNT = 51;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -357,6 +382,33 @@ pub fn getAnnotationRegion(store: *const NodeStore, anno_idx: CIR.Annotation.Idx
 /// Retrieves a region from node from the store.
 pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
     return store.getRegionAt(node_idx);
+}
+
+fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region: Region) Allocator.Error!u32 {
+    const data_idx: u32 = @intCast(store.method_call_data.len());
+    _ = try store.method_call_data.append(store.gpa, .{
+        .args_start = args.span.start,
+        .args_len = args.span.len,
+        .method_region_start = method_name_region.start.offset,
+        .method_region_end = method_name_region.end.offset,
+    });
+    return data_idx;
+}
+
+fn getMethodCallArgs(store: *const NodeStore, data_idx: u32) CIR.Expr.Span {
+    const data = store.method_call_data.items.items[data_idx];
+    return .{ .span = .{
+        .start = data.args_start,
+        .len = data.args_len,
+    } };
+}
+
+fn getMethodNameRegion(store: *const NodeStore, data_idx: u32) Region {
+    const data = store.method_call_data.items.items[data_idx];
+    return .{
+        .start = .{ .offset = data.method_region_start },
+        .end = .{ .offset = data.method_region_end },
+    };
 }
 
 /// Retrieves a statement node from the store.
@@ -548,15 +600,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .expr_pending_lookup => {
-            const p = payload.expr_pending_lookup;
-            // Handle pending lookups (deferred external)
-            return CIR.Expr{ .e_lookup_pending = .{
-                .module_idx = @enumFromInt(p.module_idx),
-                .ident_idx = @bitCast(p.ident_idx),
-                .region = store.getRegionAt(node_idx),
-            } };
-        },
         .expr_required_lookup => {
             const p = payload.expr_required_lookup;
             // Handle required lookups (platform requires clause)
@@ -612,6 +655,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .func = @enumFromInt(p.func),
                     .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
                     .called_via = @enumFromInt(p.called_via),
+                    .constraint_fn_var = if (p.constraint_fn_var_plus_one == 0)
+                        null
+                    else
+                        @enumFromInt(p.constraint_fn_var_plus_one - 1),
                 },
             };
         },
@@ -658,6 +705,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_num_from_numeral => {
+            return CIR.Expr{ .e_num_from_numeral = .{} };
+        },
         .expr_typed_int => {
             const p = payload.expr_typed_int;
             const value = store.int128_values.items.items[p.int128_idx];
@@ -683,6 +733,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .type_name = @bitCast(p.type_name),
                 },
             };
+        },
+        .expr_typed_num_from_numeral => {
+            const p = payload.expr_typed_num_from_numeral;
+            return CIR.Expr{ .e_typed_num_from_numeral = .{
+                .type_name = @bitCast(p.type_name),
+            } };
         },
         .expr_string_segment => {
             const p = payload.expr_string_segment;
@@ -870,29 +926,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .context = @enumFromInt(p.context),
             } };
         },
-        .expr_type_var_dispatch => {
-            const p = payload.expr_type_var_dispatch;
-            // Retrieve type var dispatch data from node and span2_data
-            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(p.type_var_alias_stmt);
-            const method_name: base.Ident.Idx = @bitCast(p.method_name);
-            const args_span = store.span2_data.items.items[p.args_span2_idx];
-
-            return CIR.Expr{ .e_type_var_dispatch = .{
-                .type_var_alias_stmt = type_var_alias_stmt,
-                .method_name = method_name,
-                .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
-            } };
-        },
         .expr_hosted_lambda => {
             const p = payload.expr_hosted_lambda;
-            // Retrieve hosted lambda data from node and span_with_node_data
-            const args_body = store.span_with_node_data.items.items[p.args_body_idx];
+            const args_span = store.span2_data.items.items[p.args_span2_idx];
 
             return CIR.Expr{ .e_hosted_lambda = .{
                 .symbol_name = @bitCast(p.symbol_name),
-                .index = p.index,
-                .args = .{ .span = .{ .start = args_body.start, .len = args_body.len } },
-                .body = @enumFromInt(args_body.node),
+                .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
             } };
         },
         .expr_run_low_level => {
@@ -928,25 +968,72 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .final_else = @enumFromInt(branches_else.node),
             } };
         },
-        .expr_dot_access => {
-            const p = payload.expr_dot_access;
-            // Read region + args from span_with_node_data
-            const region_args = store.span_with_node_data.items.items[p.region_args_idx];
+        .expr_field_access => {
+            const p = payload.expr_field_access;
+            const region_span = store.span2_data.items.items[p.field_name_region_span2_idx];
             const field_name_region = base.Region{
-                .start = .{ .offset = region_args.start },
-                .end = .{ .offset = region_args.len },
+                .start = .{ .offset = region_span.start },
+                .end = .{ .offset = region_span.len },
             };
-            const args_span = if (region_args.node != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(region_args.node - OPTIONAL_VALUE_OFFSET);
-                const data_span = packed_span.toDataSpan();
-                break :blk CIR.Expr.Span{ .span = data_span };
-            } else null;
-
-            return CIR.Expr{ .e_dot_access = .{
+            return CIR.Expr{ .e_field_access = .{
                 .receiver = @enumFromInt(p.receiver),
                 .field_name = @bitCast(p.field_name),
                 .field_name_region = field_name_region,
-                .args = args_span,
+            } };
+        },
+        .expr_method_call => {
+            const p = payload.expr_method_call;
+            return CIR.Expr{ .e_method_call = .{
+                .receiver = @enumFromInt(p.receiver),
+                .method_name = @bitCast(p.method_name),
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
+            } };
+        },
+        .expr_dispatch_call => {
+            const p = payload.expr_dispatch_call;
+            return CIR.Expr{ .e_dispatch_call = .{
+                .receiver = @enumFromInt(p.receiver),
+                .method_name = @bitCast(p.method_name),
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+            } };
+        },
+        .expr_structural_eq => {
+            const p = payload.expr_structural_eq;
+            return CIR.Expr{ .e_structural_eq = .{
+                .lhs = @enumFromInt(p.lhs),
+                .rhs = @enumFromInt(p.rhs),
+                .negated = p.negated != 0,
+            } };
+        },
+        .expr_method_eq => {
+            const p = payload.expr_method_eq;
+            return CIR.Expr{ .e_method_eq = .{
+                .lhs = @enumFromInt(p.lhs),
+                .rhs = @enumFromInt(p.rhs),
+                .negated = p.negated != 0,
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+            } };
+        },
+        .expr_type_method_call => {
+            const p = payload.expr_type_method_call;
+            return CIR.Expr{ .e_type_method_call = .{
+                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .method_name = @bitCast(p.method_name),
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
+            } };
+        },
+        .expr_type_dispatch_call => {
+            const p = payload.expr_type_dispatch_call;
+            return CIR.Expr{ .e_type_dispatch_call = .{
+                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .method_name = @bitCast(p.method_name),
+                .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
+                .args = store.getMethodCallArgs(p.method_call_data_idx),
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
             } };
         },
         .malformed => {
@@ -964,24 +1051,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
         },
     }
-}
-
-/// Replaces an existing expression with an e_num expression in-place.
-/// This is used for constant folding during compile-time evaluation.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const int128_idx: u32 = @intCast(store.int128_values.len());
-    _ = try store.int128_values.append(store.gpa, @bitCast(value.bytes));
-
-    var node = Node.init(.expr_num);
-    node.setPayload(.{ .expr_num = .{
-        .kind = @intFromEnum(num_kind),
-        .val_kind = @intFromEnum(value.kind),
-        .int128_idx = int128_idx,
-    } });
-    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_zero_argument_tag expression in-place.
@@ -1039,6 +1108,116 @@ pub fn replaceExprWithTuple(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with an explicit structural equality node.
+/// This is used when the checker has already decided that equality is structural
+/// rather than an attached method dispatch.
+pub fn replaceExprWithStructuralEq(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    lhs: CIR.Expr.Idx,
+    rhs: CIR.Expr.Idx,
+    negated: bool,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_structural_eq);
+    node.setPayload(.{ .expr_structural_eq = .{
+        .lhs = @intFromEnum(lhs),
+        .rhs = @intFromEnum(rhs),
+        .negated = @intFromBool(negated),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with a call node carrying its checker relation.
+pub fn replaceExprWithCallConstraint(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    func: CIR.Expr.Idx,
+    args: CIR.Expr.Span,
+    called_via: base.CalledVia,
+    constraint_fn_var: types.Var,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const args_span2_idx: u32 = @intCast(store.span2_data.len());
+    _ = store.span2_data.append(store.gpa, .{
+        .start = args.span.start,
+        .len = args.span.len,
+    }) catch unreachable;
+    var node = Node.init(.expr_call);
+    node.setPayload(.{ .expr_call = .{
+        .func = @intFromEnum(func),
+        .args_span2_idx = args_span2_idx,
+        .called_via = @intFromEnum(called_via),
+        .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with explicit method-equality metadata.
+pub fn replaceExprWithMethodEq(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    lhs: CIR.Expr.Idx,
+    rhs: CIR.Expr.Idx,
+    negated: bool,
+    constraint_fn_var: types.Var,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_method_eq);
+    node.setPayload(.{ .expr_method_eq = .{
+        .lhs = @intFromEnum(lhs),
+        .rhs = @intFromEnum(rhs),
+        .negated = @intFromBool(negated),
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with unresolved receiver dispatch metadata.
+pub fn replaceExprWithDispatchCall(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    method_name: base.Ident.Idx,
+    method_name_region: Region,
+    args: CIR.Expr.Span,
+    constraint_fn_var: types.Var,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const method_call_data_idx = store.addMethodCallData(args, method_name_region) catch unreachable;
+    var node = Node.init(.expr_dispatch_call);
+    node.setPayload(.{ .expr_dispatch_call = .{
+        .receiver = @intFromEnum(receiver),
+        .method_name = @bitCast(method_name),
+        .method_call_data_idx = method_call_data_idx,
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with unresolved type dispatch metadata.
+pub fn replaceExprWithTypeDispatchCall(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    type_var_alias_stmt: CIR.Statement.Idx,
+    method_name: base.Ident.Idx,
+    method_name_region: Region,
+    args: CIR.Expr.Span,
+    constraint_fn_var: types.Var,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const method_call_data_idx = store.addMethodCallData(args, method_name_region) catch unreachable;
+    var node = Node.init(.expr_type_dispatch_call);
+    node.setPayload(.{ .expr_type_dispatch_call = .{
+        .type_var_alias_stmt = @intFromEnum(type_var_alias_stmt),
+        .method_name = @bitCast(method_name),
+        .method_call_data_idx = method_call_data_idx,
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with an if expression in-place.
 /// Replaces an existing expression with an e_tag expression in-place.
 /// This is used for constant folding tag unions with payloads during compile-time evaluation.
 /// The arg_indices slice contains the indices of the tag argument expressions.
@@ -1063,6 +1242,22 @@ pub fn replaceExprWithTag(
         .name = @bitCast(name),
         .args_start = @intCast(index_data_start),
         .args_len = @intCast(arg_indices.len),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with an in-place runtime error node.
+/// Used when an earlier compilation stage has already determined that the
+/// expression is erroneous and later stages must observe an explicit crash.
+pub fn replaceExprWithRuntimeError(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .diag_single_value = .{
+        .value = @intFromEnum(diagnostic_idx),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -1458,7 +1653,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             const p = payload.ty_tag_union;
             return CIR.TypeAnno{ .tag_union = .{
                 .tags = .{ .span = .{ .start = p.tags_start, .len = p.tags_len } },
-                .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - OPTIONAL_VALUE_OFFSET) else null,
+                .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - 1) else null,
             } };
         },
         .ty_tag => {
@@ -1479,7 +1674,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             return CIR.TypeAnno{
                 .record = .{
                     .fields = .{ .span = .{ .start = p.fields_start, .len = p.fields_len } },
-                    .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - OPTIONAL_VALUE_OFFSET) else null,
+                    .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - 1) else null,
                 },
             };
         },
@@ -1804,14 +1999,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .ident_idx = @bitCast(e.ident_idx),
             } });
         },
-        .e_lookup_pending => |e| {
-            // For pending lookups (deferred external), store the module index and ident
-            node.tag = .expr_pending_lookup;
-            node.setPayload(.{ .expr_pending_lookup = .{
-                .module_idx = @intFromEnum(e.module_idx),
-                .ident_idx = @bitCast(e.ident_idx),
-            } });
-        },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
             node.tag = .expr_required_lookup;
@@ -1888,6 +2075,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .has_suffix = e.has_suffix,
             } });
         },
+        .e_num_from_numeral => |_| {
+            node.tag = .expr_num_from_numeral;
+            node.setPayload(.{ .expr_num_from_numeral = .{} });
+        },
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
             const int128_idx: u32 = @intCast(store.int128_values.len());
@@ -1906,6 +2097,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
                 .int128_idx = int128_idx,
+            } });
+        },
+        .e_typed_num_from_numeral => |e| {
+            node.tag = .expr_typed_num_from_numeral;
+            node.setPayload(.{ .expr_typed_num_from_numeral = .{
+                .type_name = @bitCast(e.type_name),
             } });
         },
         .e_str_segment => |e| {
@@ -1956,24 +2153,72 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .backing_span2_idx = backing_span2_idx,
             } });
         },
-        .e_dot_access => |e| {
-            node.tag = .expr_dot_access;
-            // Store region + optional args in span_with_node_data
-            const region_args_idx: u32 = @intCast(store.span_with_node_data.len());
-            const packed_args: u32 = if (e.args) |args| blk: {
-                std.debug.assert(FunctionArgs.canFit(args.span));
-                const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                break :blk packed_span.toU32() + OPTIONAL_VALUE_OFFSET;
-            } else 0;
-            _ = try store.span_with_node_data.append(store.gpa, .{
+        .e_field_access => |e| {
+            node.tag = .expr_field_access;
+            const span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = e.field_name_region.start.offset,
                 .len = e.field_name_region.end.offset,
-                .node = packed_args,
             });
-            node.setPayload(.{ .expr_dot_access = .{
+            node.setPayload(.{ .expr_field_access = .{
                 .receiver = @intFromEnum(e.receiver),
                 .field_name = @bitCast(e.field_name),
-                .region_args_idx = region_args_idx,
+                .field_name_region_span2_idx = span2_idx,
+            } });
+        },
+        .e_method_call => |e| {
+            node.tag = .expr_method_call;
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            node.setPayload(.{ .expr_method_call = .{
+                .receiver = @intFromEnum(e.receiver),
+                .method_name = @bitCast(e.method_name),
+                .method_call_data_idx = method_call_data_idx,
+            } });
+        },
+        .e_dispatch_call => |e| {
+            node.tag = .expr_dispatch_call;
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            node.setPayload(.{ .expr_dispatch_call = .{
+                .receiver = @intFromEnum(e.receiver),
+                .method_name = @bitCast(e.method_name),
+                .method_call_data_idx = method_call_data_idx,
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+            } });
+        },
+        .e_structural_eq => |e| {
+            node.tag = .expr_structural_eq;
+            node.setPayload(.{ .expr_structural_eq = .{
+                .lhs = @intFromEnum(e.lhs),
+                .rhs = @intFromEnum(e.rhs),
+                .negated = @intFromBool(e.negated),
+            } });
+        },
+        .e_method_eq => |e| {
+            node.tag = .expr_method_eq;
+            node.setPayload(.{ .expr_method_eq = .{
+                .lhs = @intFromEnum(e.lhs),
+                .rhs = @intFromEnum(e.rhs),
+                .negated = @intFromBool(e.negated),
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+            } });
+        },
+        .e_type_method_call => |e| {
+            node.tag = .expr_type_method_call;
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            node.setPayload(.{ .expr_type_method_call = .{
+                .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
+                .method_name = @bitCast(e.method_name),
+                .method_call_data_idx = method_call_data_idx,
+            } });
+        },
+        .e_type_dispatch_call => |e| {
+            node.tag = .expr_type_dispatch_call;
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            node.setPayload(.{ .expr_type_dispatch_call = .{
+                .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
+                .method_name = @bitCast(e.method_name),
+                .method_call_data_idx = method_call_data_idx,
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
             } });
         },
         .e_runtime_error => |e| {
@@ -2011,31 +2256,17 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .context = @intFromEnum(ret.context),
             } });
         },
-        .e_type_var_dispatch => |tvd| {
-            node.tag = .expr_type_var_dispatch;
-            // Store args span in span2_data
-            const span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{ .start = tvd.args.span.start, .len = tvd.args.span.len });
-
-            node.setPayload(.{ .expr_type_var_dispatch = .{
-                .type_var_alias_stmt = @intFromEnum(tvd.type_var_alias_stmt),
-                .method_name = @bitCast(tvd.method_name),
-                .args_span2_idx = span2_idx,
-            } });
-        },
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted_lambda;
-            const args_body_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
+            const args_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
                 .start = hosted.args.span.start,
                 .len = hosted.args.span.len,
-                .node = @intFromEnum(hosted.body),
             });
 
             node.setPayload(.{ .expr_hosted_lambda = .{
                 .symbol_name = @bitCast(hosted.symbol_name),
-                .index = hosted.index,
-                .args_body_idx = args_body_idx,
+                .args_span2_idx = args_span2_idx,
             } });
         },
         .e_run_low_level => |run_ll| {
@@ -2085,6 +2316,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .func = @intFromEnum(e.func),
                 .args_span2_idx = span2_idx,
                 .called_via = @intFromEnum(e.called_via),
+                .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_|
+                    @intFromEnum(var_) + 1
+                else
+                    0,
             } });
         },
         .e_record => |e| {
@@ -2185,10 +2420,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);
-    // For e_lookup_external and e_lookup_pending, use the region from the expression itself
+    // External lookups carry their source region explicitly.
     const actual_region = switch (expr) {
         .e_lookup_external => |e| e.region,
-        .e_lookup_pending => |e| e.region,
         else => region,
     };
     _ = try store.regions.append(store.gpa, actual_region);
@@ -2580,7 +2814,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.setPayload(.{ .ty_tag_union = .{
                 .tags_start = tu.tags.span.start,
                 .tags_len = tu.tags.span.len,
-                .ext_plus_one = if (tu.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0,
+                .ext_plus_one = if (tu.ext) |ext| @intFromEnum(ext) + 1 else 0,
             } });
         },
         .tag => |t| {
@@ -2603,7 +2837,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.setPayload(.{ .ty_record = .{
                 .fields_start = r.fields.span.start,
                 .fields_len = r.fields.span.len,
-                .ext_plus_one = if (r.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0,
+                .ext_plus_one = if (r.ext) |ext| @intFromEnum(ext) + 1 else 0,
             } });
         },
         .@"fn" => |f| {
@@ -2860,6 +3094,13 @@ pub fn isDefNode(store: *const NodeStore, node_idx: u32) bool {
     return node.tag == .def;
 }
 
+/// Initialize scratch buffers if they are null (e.g. after deserialization).
+pub fn ensureScratch(store: *NodeStore) Allocator.Error!void {
+    if (store.scratch == null) {
+        store.scratch = try Scratch.init(store.gpa);
+    }
+}
+
 /// Generic function to get the top of any scratch buffer
 pub fn scratchTop(store: *NodeStore, comptime field_name: []const u8) u32 {
     return @field(store.scratch.?, field_name).top();
@@ -2898,6 +3139,15 @@ pub fn scratchExprTop(store: *NodeStore) u32 {
 /// Adds a scratch expression to temporary storage.
 pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) Allocator.Error!void {
     try store.addScratch("exprs", idx);
+}
+
+/// Appends a persistent expression span directly to index storage.
+pub fn appendExprSpan(store: *NodeStore, exprs: []const CIR.Expr.Idx) Allocator.Error!CIR.Expr.Span {
+    const index_start = store.index_data.len();
+    for (exprs) |expr| {
+        _ = try store.index_data.append(store.gpa, @intFromEnum(expr));
+    }
+    return .{ .span = .{ .start = @intCast(index_start), .len = @intCast(exprs.len) } };
 }
 
 /// Adds a capture index to the scratch captures list for building spans.
@@ -3082,9 +3332,20 @@ pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataS
     return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
 }
 
+/// Retrieve one item from a span without borrowing the backing index storage.
+pub fn getFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan, offset: usize) T {
+    std.debug.assert(offset < span.len);
+    return @as(T, @enumFromInt(store.index_data.items.items[span.start + offset]));
+}
+
 /// Returns a slice of definitions from the store.
 pub fn sliceDefs(store: *const NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
     return store.sliceFromSpan(CIR.Def.Idx, span.span);
+}
+
+/// Returns a single definition index from a span.
+pub fn defAt(store: *const NodeStore, span: CIR.Def.Span, offset: usize) CIR.Def.Idx {
+    return store.getFromSpan(CIR.Def.Idx, span.span, offset);
 }
 
 /// Returns a slice of expressions from the store.
@@ -3092,9 +3353,19 @@ pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
 }
 
+/// Returns a single expression index from a span.
+pub fn exprAt(store: *const NodeStore, span: CIR.Expr.Span, offset: usize) CIR.Expr.Idx {
+    return store.getFromSpan(CIR.Expr.Idx, span.span, offset);
+}
+
 /// Returns a slice of `CanIR.Pattern.Idx`
 pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
     return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
+}
+
+/// Returns a single pattern index from a span.
+pub fn patternAt(store: *const NodeStore, span: CIR.Pattern.Span, offset: usize) CIR.Pattern.Idx {
+    return store.getFromSpan(CIR.Pattern.Idx, span.span, offset);
 }
 
 /// Returns a slice of `CIR.Expr.Capture.Idx`
@@ -3105,6 +3376,11 @@ pub fn sliceCaptures(store: *const NodeStore, span: CIR.Expr.Capture.Span) []CIR
 /// Returns a slice of statements from the store.
 pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
     return store.sliceFromSpan(CIR.Statement.Idx, span.span);
+}
+
+/// Returns a single statement index from a span.
+pub fn statementAt(store: *const NodeStore, span: CIR.Statement.Span, offset: usize) CIR.Statement.Idx {
+    return store.getFromSpan(CIR.Statement.Idx, span.span, offset);
 }
 
 /// Returns a slice of record fields from the store.
@@ -3266,6 +3542,20 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_self_referential_definition;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
+        .circular_value_definition => |r| {
+            node.tag = .diag_circular_value_definition;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
+        .erroneous_value_use => |r| {
+            node.tag = .diag_erroneous_value_use;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
+        .erroneous_value_expr => |r| {
+            node.tag = .diag_erroneous_value_expr;
+            region = r.region;
         },
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
@@ -3654,6 +3944,17 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_circular_value_definition => return CIR.Diagnostic{ .circular_value_definition = .{
+            .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
+            .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_erroneous_value_expr => return CIR.Diagnostic{ .erroneous_value_expr = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
@@ -4088,6 +4389,7 @@ pub const Serialized = extern struct {
     regions: Region.List.Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
+    method_call_data: collections.SafeList(MethodCallData).Serialized,
     match_data: collections.SafeList(MatchData).Serialized,
     match_branch_data: collections.SafeList(MatchBranchData).Serialized,
     closure_data: collections.SafeList(ClosureData).Serialized,
@@ -4116,6 +4418,8 @@ pub const Serialized = extern struct {
         try self.span2_data.serialize(&store.span2_data, allocator, writer);
         // Serialize span_with_node_data
         try self.span_with_node_data.serialize(&store.span_with_node_data, allocator, writer);
+        // Serialize method_call_data
+        try self.method_call_data.serialize(&store.method_call_data, allocator, writer);
         // Serialize match_data
         try self.match_data.serialize(&store.match_data, allocator, writer);
         // Serialize match_branch_data
@@ -4148,6 +4452,7 @@ pub const Serialized = extern struct {
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),
@@ -4172,6 +4477,7 @@ pub const Serialized = extern struct {
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),
@@ -4185,277 +4491,6 @@ pub const Serialized = extern struct {
         };
     }
 };
-
-/// Resolve all pending lookups in this store.
-/// Called before type-checking, when all dependencies are canonicalized.
-/// This converts expr_pending_lookup to expr_external_lookup (or leaves as-is for error).
-pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *const @TypeOf(env.*)) void {
-    const trace_pending = @import("build_options").trace_build;
-
-    const nodes_len = store.nodes.len();
-
-    if (comptime trace_pending) {
-        std.debug.print("[PENDING] resolvePendingLookups: module={s} nodes_len={} imported_envs.len={}\n", .{ env.module_name, nodes_len, imported_envs.len });
-        for (imported_envs) |ie| {
-            std.debug.print("[PENDING]   imported: {s}\n", .{ie.module_name});
-        }
-    }
-
-    if (nodes_len == 0) return;
-
-    // Index imported envs by module name once. First occurrence wins.
-    var name_to_env = std.StringHashMap(*const @TypeOf(env.*)).init(env.gpa);
-    defer name_to_env.deinit();
-    name_to_env.ensureTotalCapacity(@intCast(imported_envs.len)) catch return;
-    for (imported_envs) |ie| {
-        const gop = name_to_env.getOrPutAssumeCapacity(ie.module_name);
-        if (!gop.found_existing) gop.value_ptr.* = ie;
-    }
-
-    // Iterate through all nodes to find pending lookups
-    var i: usize = 0;
-    while (i < nodes_len) : (i += 1) {
-        const node_idx: Node.Idx = @enumFromInt(@as(u32, @intCast(i)));
-        const node = store.nodes.get(node_idx);
-
-        if (node.tag == .expr_pending_lookup) {
-            const payload = node.getPayload().expr_pending_lookup;
-            const ident_idx: Ident.Idx = @bitCast(payload.ident_idx);
-
-            // Get the import name from the module index
-            const module_idx_int = payload.module_idx;
-            if (module_idx_int < env.imports.imports.items.items.len) {
-                const import_str_idx = env.imports.imports.items.items[module_idx_int];
-                const import_name = env.getString(import_str_idx);
-                const member_name = env.getIdent(ident_idx);
-
-                if (comptime trace_pending) {
-                    std.debug.print("[PENDING] Found pending lookup: import={s} member={s}\n", .{ import_name, member_name });
-                }
-
-                // Extract base module name for qualified imports (e.g., "pf.Stdout" -> "Stdout")
-                const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
-                    import_name[dot_idx + 1 ..]
-                else
-                    import_name;
-
-                // Extract base member name (e.g., "pf.Stdout.line!" -> "line!")
-                // The member_name may be fully qualified, so we take everything after the last dot
-                const base_member_name = if (std.mem.lastIndexOfScalar(u8, member_name, '.')) |dot_idx|
-                    member_name[dot_idx + 1 ..]
-                else
-                    member_name;
-
-                if (comptime trace_pending) {
-                    std.debug.print("[PENDING]   base_import_name={s} base_member_name={s}\n", .{ base_import_name, base_member_name });
-                }
-
-                const target_env = name_to_env.get(base_import_name);
-
-                if (target_env) |tenv| {
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING]   Found target env: {s}\n", .{tenv.module_name});
-                    }
-
-                    // For methods on opaque types, the exposed name is qualified like "Stdout.line!"
-                    // Build the qualified name: {module_name}.{member_name}
-                    var qualified_buf: [512]u8 = undefined;
-                    const qualified_member_name = std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ base_import_name, base_member_name }) catch base_member_name;
-
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING]   Looking for qualified name: {s}\n", .{qualified_member_name});
-                    }
-
-                    // Try to resolve the pending lookup in order of preference:
-                    // 1. Full member_name directly (for nested module access like "Outer.Inner.inner")
-                    // 2. Qualified name (for methods on opaque types like "Outer.method")
-                    // 3. Base member name only (for simple exports)
-                    const target_node_idx_opt: ?u32 = blk: {
-                        // First try the full member_name (for nested module access)
-                        if (tenv.common.findIdent(member_name)) |full_ident| {
-                            if (tenv.getExposedNodeIndexById(full_ident)) |idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Found via full member name: {}\n", .{idx});
-                                }
-                                break :blk idx;
-                            }
-                        }
-                        // Try the qualified name (for methods on opaque types)
-                        if (tenv.common.findIdent(qualified_member_name)) |qident| {
-                            if (tenv.getExposedNodeIndexById(qident)) |idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Found via qualified name: {}\n", .{idx});
-                                }
-                                break :blk idx;
-                            }
-                        }
-                        // Fall back to base member name (for regular exports)
-                        if (tenv.common.findIdent(base_member_name)) |member_ident| {
-                            if (comptime trace_pending) {
-                                std.debug.print("[PENDING]   Found member ident: {}\n", .{@as(u32, @bitCast(member_ident))});
-                            }
-                            if (tenv.getExposedNodeIndexById(member_ident)) |idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Found via base name: {}\n", .{idx});
-                                }
-                                break :blk idx;
-                            }
-                        }
-                        break :blk null;
-                    };
-
-                    if (target_node_idx_opt) |target_node_idx| {
-                        // Successfully resolved - update to external lookup
-                        var new_node = Node.init(.expr_external_lookup);
-                        new_node.setPayload(.{ .expr_external_lookup = .{
-                            .module_idx = payload.module_idx,
-                            .target_node_idx = target_node_idx,
-                            .ident_idx = payload.ident_idx,
-                        } });
-                        store.nodes.set(node_idx, new_node);
-                    }
-                } else {
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING]   Target env not found\n", .{});
-                    }
-                }
-            }
-        } else if (node.tag == .ty_apply) {
-            // Check if this type apply has a pending base
-            const payload = node.getPayload().ty_apply;
-            const apply_data = store.type_apply_data.items.items[payload.type_apply_data_idx];
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(apply_data.base_tag);
-
-            if (base_enum == .pending) {
-                const module_idx: CIR.Import.Idx = @enumFromInt(apply_data.value1);
-                const type_name_ident: Ident.Idx = @bitCast(apply_data.value2);
-
-                // Get the import name from the module index
-                const module_idx_int = @intFromEnum(module_idx);
-                if (module_idx_int < env.imports.imports.items.items.len) {
-                    const import_str_idx = env.imports.imports.items.items[module_idx_int];
-                    const import_name = env.getString(import_str_idx);
-                    const type_name = env.getIdent(type_name_ident);
-
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING] Found pending ty_apply: import={s} type={s}\n", .{ import_name, type_name });
-                    }
-
-                    // Extract base module name for qualified imports (e.g., "pf.Simple" -> "Simple")
-                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
-                        import_name[dot_idx + 1 ..]
-                    else
-                        import_name;
-
-                    const target_env = name_to_env.get(base_import_name);
-
-                    if (target_env) |tenv| {
-                        if (comptime trace_pending) {
-                            std.debug.print("[PENDING]   Found target env for ty_apply: {s}\n", .{tenv.module_name});
-                        }
-
-                        // Find the type by name
-                        if (tenv.common.findIdent(type_name)) |type_ident| {
-                            if (tenv.getExposedNodeIndexById(type_ident)) |target_node_idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Resolved ty_apply to node: {}\n", .{target_node_idx});
-                                }
-                                // Update type_apply_data to external
-                                store.type_apply_data.items.items[payload.type_apply_data_idx] = .{
-                                    .args_len = apply_data.args_len,
-                                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external),
-                                    .value1 = apply_data.value1, // Keep module_idx
-                                    .value2 = target_node_idx, // Set target_node_idx
-                                };
-                            } else {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Type not exposed in ty_apply\n", .{});
-                                }
-                            }
-                        } else {
-                            if (comptime trace_pending) {
-                                std.debug.print("[PENDING]   Type ident not found in ty_apply\n", .{});
-                            }
-                        }
-                    } else {
-                        if (comptime trace_pending) {
-                            std.debug.print("[PENDING]   Target env not found for ty_apply\n", .{});
-                        }
-                    }
-                }
-            }
-        } else if (node.tag == .ty_lookup) {
-            // Check if this type lookup has a pending base
-            const payload = node.getPayload().ty_lookup;
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(payload.base);
-
-            if (base_enum == .pending) {
-                const base_data = store.span2_data.items.items[payload.base_span2_idx];
-                const module_idx: CIR.Import.Idx = @enumFromInt(base_data.start);
-                const type_name_ident: Ident.Idx = @bitCast(base_data.len);
-
-                // Get the import name from the module index
-                const module_idx_int = @intFromEnum(module_idx);
-                if (module_idx_int < env.imports.imports.items.items.len) {
-                    const import_str_idx = env.imports.imports.items.items[module_idx_int];
-                    const import_name = env.getString(import_str_idx);
-                    const type_name = env.getIdent(type_name_ident);
-
-                    if (comptime trace_pending) {
-                        std.debug.print("[PENDING] Found pending ty_lookup: import={s} type={s}\n", .{ import_name, type_name });
-                    }
-
-                    // Extract base module name for qualified imports
-                    const base_import_name = if (std.mem.lastIndexOfScalar(u8, import_name, '.')) |dot_idx|
-                        import_name[dot_idx + 1 ..]
-                    else
-                        import_name;
-
-                    const target_env = name_to_env.get(base_import_name);
-
-                    if (target_env) |tenv| {
-                        if (comptime trace_pending) {
-                            std.debug.print("[PENDING]   Found target env for ty_lookup: {s}\n", .{tenv.module_name});
-                        }
-
-                        // Find the type by name
-                        if (tenv.common.findIdent(type_name)) |type_ident| {
-                            if (tenv.getExposedNodeIndexById(type_ident)) |target_node_idx| {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Resolved ty_lookup to node: {}\n", .{target_node_idx});
-                                }
-                                // Update the node payload's base tag and span2_data
-                                var new_payload = payload;
-                                new_payload.base = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external);
-                                var new_node = node;
-                                new_node.setPayload(.{ .ty_lookup = new_payload });
-                                store.nodes.set(node_idx, new_node);
-
-                                // Update span2_data to store (module_idx, target_node_idx)
-                                store.span2_data.items.items[payload.base_span2_idx] = .{
-                                    .start = base_data.start, // Keep module_idx
-                                    .len = target_node_idx, // Set target_node_idx
-                                };
-                            } else {
-                                if (comptime trace_pending) {
-                                    std.debug.print("[PENDING]   Type not exposed in ty_lookup\n", .{});
-                                }
-                            }
-                        } else {
-                            if (comptime trace_pending) {
-                                std.debug.print("[PENDING]   Type ident not found in ty_lookup\n", .{});
-                            }
-                        }
-                    } else {
-                        if (comptime trace_pending) {
-                            std.debug.print("[PENDING]   Target env not found for ty_lookup\n", .{});
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
@@ -4488,7 +4523,8 @@ test "NodeStore empty CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4553,7 +4589,8 @@ test "NodeStore basic CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4644,7 +4681,8 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    const read_len = try file.readAll(buffer);
+    try testing.expectEqual(buffer.len, read_len);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));

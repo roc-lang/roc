@@ -40,7 +40,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call
+(e-call (constraint-fn-var 85)
 	(e-lambda
 		(args
 			(p-record-destructure
@@ -51,11 +51,13 @@ NO CHANGE
 					(record-destruct (label "y") (ident "y")
 						(required
 							(p-assign (ident "y")))))))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "x")))
-			(e-lookup-local
-				(p-assign (ident "y")))))
+		(e-dispatch-call (method "times") (constraint-fn-var 21)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "x"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "y"))))))
 	(e-record
 		(fields
 			(field (name "x")

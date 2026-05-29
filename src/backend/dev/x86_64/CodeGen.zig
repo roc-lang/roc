@@ -738,6 +738,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.movsdMemReg(.RBP, offset, src);
         }
 
+        /// Store float32 to stack slot.
+        pub fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) !void {
+            try self.emit.movssMemReg(.RBP, offset, src);
+        }
+
         // Immediate loading
 
         /// Load immediate value into register
@@ -747,6 +752,18 @@ pub fn CodeGen(comptime target: RocTarget) type {
             } else {
                 try self.emit.movRegImm64(dst, value);
             }
+        }
+
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) !void {
+            const start = self.currentOffset();
+            try self.emit.leaRegRipRel(dst, 0);
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(start + 3),
+                    .name = symbol_name,
+                    .kind = .rel32,
+                },
+            });
         }
 
         // Control flow

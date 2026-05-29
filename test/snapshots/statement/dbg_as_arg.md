@@ -57,7 +57,7 @@ bar = |f| f(dbg (42))
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call
+			(e-call (constraint-fn-var 54)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-dbg
@@ -67,7 +67,7 @@ bar = |f| f(dbg (42))
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call
+			(e-call (constraint-fn-var 87)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-dbg
@@ -77,9 +77,9 @@ bar = |f| f(dbg (42))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({} -> a) => a"))
-		(patt (type "({} -> a) => a")))
+		(patt (type "({} -> a) -> a"))
+		(patt (type "({} -> a) -> a")))
 	(expressions
-		(expr (type "({} -> a) => a"))
-		(expr (type "({} -> a) => a"))))
+		(expr (type "({} -> a) -> a"))
+		(expr (type "({} -> a) -> a"))))
 ~~~

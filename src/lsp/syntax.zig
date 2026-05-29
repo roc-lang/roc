@@ -93,9 +93,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
-    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
-        _ = workspace_root; // Reserved for future use
-
+    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, _: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -244,6 +242,7 @@ pub const SyntaxChecker = struct {
         defer self.allocator.free(cwd);
         var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd);
         env.compiler_version = build_options.compiler_version;
+        env.setFinalizeExecutableArtifacts(false);
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
@@ -365,7 +364,7 @@ pub const SyntaxChecker = struct {
             // Iterate through all modules in this package
             for (sched.modules.items) |*module_state| {
                 if (std.mem.eql(u8, module_state.path, path)) {
-                    if (module_state.env) |*mod_env| {
+                    if (module_state.moduleEnv()) |mod_env| {
                         return mod_env;
                     }
                 }
@@ -407,7 +406,7 @@ pub const SyntaxChecker = struct {
         for (imports) |import_id| {
             if (import_id < sched.modules.items.len) {
                 const imported_module = &sched.modules.items[import_id];
-                if (imported_module.env) |*imp_env| {
+                if (imported_module.moduleEnv()) |imp_env| {
                     try imported_envs.append(self.allocator, imp_env);
                 }
             }
@@ -467,7 +466,7 @@ pub const SyntaxChecker = struct {
             for (sched.modules.items) |*module_state| {
                 total_modules += 1;
 
-                if (module_state.env) |*module_env| {
+                if (module_state.moduleEnv()) |module_env| {
                     const new_exports_hash = DependencyGraph.computeExportsHash(self.allocator, module_env) catch |err| {
                         self.logDebug(.build, "[DEPS] Failed to compute exports hash for {s}: {s}", .{ module_state.path, @errorName(err) });
                         continue;
@@ -721,6 +720,32 @@ pub const SyntaxChecker = struct {
         // resolve an explicit annotation for a symbol, prefer that exact text.
         var hover_type_text_opt: ?[]const u8 = null;
 
+        if (lookup_expr_idx_opt) |lookup_expr_idx| {
+            switch (module_env.store.getExpr(lookup_expr_idx)) {
+                .e_method_call => |method_call| {
+                    const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                    if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
+                        if (findMethodQualifiedIdent(module_env, type_ident, method_call.method_name)) |qualified_ident| {
+                            if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
+                                hover_type_var = method_type_var;
+                            }
+                        }
+                    }
+                },
+                .e_dispatch_call => |method_call| {
+                    const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                    if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
+                        if (findMethodQualifiedIdent(module_env, type_ident, method_call.method_name)) |qualified_ident| {
+                            if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
+                                hover_type_var = method_type_var;
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
         // Format the type as a string
         var type_writer = try module_env.initTypeWriter();
         defer type_writer.deinit();
@@ -921,34 +946,15 @@ pub const SyntaxChecker = struct {
                     }
                 }
             },
-            .e_lookup_pending => {
-                // Pending lookups can still be resolved for hover by symbol text.
-                const lookup_region = store.getExprRegion(expr_idx);
-                const region_text = module_env.getSource(lookup_region);
-
-                // Try local resolution first (covers local functions/values).
-                if (findDocInModule(self.allocator, module_env, region_text)) |doc| {
-                    return doc;
-                }
-
-                // If the pending lookup is qualified, try external module docs.
-                if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
-                    const module_name = region_text[0..dot_pos];
-                    const function_name = region_text[dot_pos + 1 ..];
-                    if (findExternalModuleEnv(env, module_name)) |external_env| {
-                        return findDocInModule(self.allocator, external_env, function_name);
-                    }
-                }
-            },
-            .e_dot_access => |dot| {
-                // Method call - resolve receiver type to find the providing module
-                const field_name = module_env.getSource(dot.field_name_region);
-                const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
+            .e_method_call => |method_call| {
+                // Attached method call - resolve receiver type to find the providing module
+                const method_name = module_env.getIdentText(method_call.method_name);
+                const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
                 if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
                     // Prefer local method docs first (e.g. static-dispatch methods
                     // defined in the current module), then fall back to external
                     // module lookup for builtin/qualified providers.
-                    if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, field_name)) |local_doc| {
+                    if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, method_name)) |local_doc| {
                         return local_doc;
                     }
 
@@ -957,7 +963,27 @@ pub const SyntaxChecker = struct {
                         const qualified_name = std.fmt.allocPrint(
                             self.allocator,
                             "{s}.{s}",
-                            .{ type_name, field_name },
+                            .{ type_name, method_name },
+                        ) catch return null;
+                        defer self.allocator.free(qualified_name);
+                        return findDocInModule(self.allocator, external_env, qualified_name);
+                    }
+                }
+            },
+            .e_dispatch_call => |method_call| {
+                const method_name = module_env.getIdentText(method_call.method_name);
+                const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
+                    if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, method_name)) |local_doc| {
+                        return local_doc;
+                    }
+
+                    const type_name = module_env.getIdentText(type_ident);
+                    if (findExternalModuleEnv(env, type_name)) |external_env| {
+                        const qualified_name = std.fmt.allocPrint(
+                            self.allocator,
+                            "{s}.{s}",
+                            .{ type_name, method_name },
                         ) catch return null;
                         defer self.allocator.free(qualified_name);
                         return findDocInModule(self.allocator, external_env, qualified_name);
@@ -987,6 +1013,62 @@ pub const SyntaxChecker = struct {
             },
             else => return null,
         }
+    }
+
+    fn findMethodQualifiedIdent(
+        module_env: *ModuleEnv,
+        type_ident: base.Ident.Idx,
+        method_ident: base.Ident.Idx,
+    ) ?base.Ident.Idx {
+        const entries = module_env.method_idents.entries.items;
+        for (entries) |entry| {
+            if (entry.key.type_ident.eql(type_ident) and entry.key.method_ident.eql(method_ident)) {
+                return entry.value;
+            }
+        }
+
+        return null;
+    }
+
+    fn findTypeForQualifiedIdent(module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx.eql(qualified_ident)) {
+                return ModuleEnv.varFrom(def.pattern);
+            }
+        }
+
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                .s_var => |var_stmt| var_stmt.pattern_idx,
+                else => continue,
+            };
+
+            const pattern = module_env.store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx.eql(qualified_ident)) {
+                return ModuleEnv.varFrom(pattern_idx);
+            }
+        }
+
+        return null;
     }
 
     /// Find local method documentation by `(type_ident, method_name)`.
@@ -1282,33 +1364,32 @@ pub const SyntaxChecker = struct {
                     self.logDebug(.build, "[DEF] e_lookup_external: could not extract module name from '{s}'", .{region_text});
                     return null;
                 },
-                .e_lookup_pending => {
-                    // Resolve pending lookup by source text. This keeps
-                    // go-to-definition/hover robust in partially-resolved states.
-                    const lookup_region = module_env.store.getExprRegion(expr_idx);
-                    const region_text = module_env.getSource(lookup_region);
-
-                    if (module_lookup.findDefinitionByUnqualifiedName(module_env, region_text)) |def_info| {
-                        const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_info.pattern_idx));
-                        const def_region = module_env.store.getRegionAt(pattern_node_idx);
-                        const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
-                        return DefinitionResult{
-                            .uri = current_uri,
-                            .range = range,
-                        };
-                    }
-
-                    if (std.mem.indexOfScalar(u8, region_text, '.')) |dot_pos| {
-                        const module_name = region_text[0..dot_pos];
-                        return self.findModuleByName(module_name);
-                    }
-
-                    return null;
-                },
-                .e_dot_access => |dot| {
-                    // Static dispatch - cursor is on method name
+                .e_method_call => |method_call| {
+                    // Attached method call - navigate to the provider module for the receiver type
                     // Get the type of the receiver to find which module provides the method
-                    const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
+                    const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                    var type_writer = module_env.initTypeWriter() catch |err| {
+                        self.logDebug(.build, "[DEF] initTypeWriter failed: {s}", .{@errorName(err)});
+                        return null;
+                    };
+                    defer type_writer.deinit();
+
+                    type_writer.write(receiver_type_var, .one_line) catch |err| {
+                        self.logDebug(.build, "[DEF] type_writer.write failed: {s}", .{@errorName(err)});
+                        return null;
+                    };
+                    const type_str = type_writer.get();
+
+                    const base_type = extractBaseTypeName(type_str);
+
+                    self.logDebug(.build, "[DEF] e_method_call type_str='{s}', base_type='{s}'", .{ type_str, base_type });
+
+                    return self.findModuleByName(base_type);
+                },
+                .e_dispatch_call => |method_call| {
+                    // Attached method call - navigate to the provider module for the receiver type
+                    // Get the type of the receiver to find which module provides the method
+                    const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
                     var type_writer = module_env.initTypeWriter() catch |err| {
                         self.logDebug(.build, "[DEF] initTypeWriter failed: {s}", .{@errorName(err)});
                         return null;
@@ -1324,7 +1405,7 @@ pub const SyntaxChecker = struct {
                     // Extract the base type name (e.g., "Str" from complex type)
                     const base_type = extractBaseTypeName(type_str);
 
-                    self.logDebug(.build, "[DEF] e_dot_access type_str='{s}', base_type='{s}'", .{ type_str, base_type });
+                    self.logDebug(.build, "[DEF] e_field_access type_str='{s}', base_type='{s}'", .{ type_str, base_type });
 
                     // Find the module for this type
                     // TODO: Also navigate to the specific method definition within the module
@@ -1358,7 +1439,7 @@ pub const SyntaxChecker = struct {
             self.logDebug(.build, "[DEF] '{s}' is a builtin type", .{base_name});
 
             // Write embedded builtin source to roc cache
-            const cache_dir = self.cache_config.getCacheEntriesDir(self.allocator) catch return null;
+            const cache_dir = self.cache_config.getModuleCacheDir(self.allocator) catch return null;
             const builtin_cache_path = std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" }) catch {
                 self.allocator.free(cache_dir);
                 return null;
@@ -1794,7 +1875,7 @@ pub const SyntaxChecker = struct {
             // Try "app" scheduler first
             if (env.schedulers.get("app")) |sched| {
                 if (sched.getRootModule()) |rm| {
-                    if (rm.env) |*e| {
+                    if (rm.moduleEnv()) |e| {
                         break :blk e;
                     }
                 }
@@ -1804,7 +1885,7 @@ pub const SyntaxChecker = struct {
             while (sched_it.next()) |entry| {
                 const sched = entry.value_ptr.*;
                 if (sched.getRootModule()) |rm| {
-                    if (rm.env) |*e| {
+                    if (rm.moduleEnv()) |e| {
                         break :blk e;
                     }
                 }
@@ -1931,7 +2012,7 @@ pub const SyntaxChecker = struct {
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
             if (sched.getModuleState(module_name)) |mod_state| {
-                if (mod_state.env) |*mod_env| return mod_env;
+                if (mod_state.moduleEnv()) |mod_env| return mod_env;
             }
         }
 
@@ -2203,7 +2284,8 @@ pub const SyntaxChecker = struct {
                 // Always add tag completions for nominal types, not just as fallback.
                 // This handles e.g. `Record.` where Record is both a module and a nominal type.
                 if (module_env_opt) |module_env| {
-                    _ = try builder.addTagCompletionsForNominalType(module_env, module_name, null);
+                    const added = try builder.addTagCompletionsForNominalType(module_env, module_name, null);
+                    if (added) {} else {}
                 }
             },
             .after_value_dot => |record_access| {
@@ -2230,7 +2312,7 @@ pub const SyntaxChecker = struct {
                         const variable_start = record_access.member_start;
 
                         // Try the precise CIR-based lookup first: findDotReceiverTypeVar
-                        // specifically looks for e_dot_access nodes and returns the
+                        // specifically looks for e_field_access nodes and returns the
                         // receiver's type, which is semantically correct for dot
                         // completions. Fall back to findExprEndingAt for cases where
                         // the CIR lacks a dot access node (e.g., incomplete code).
@@ -2360,12 +2442,10 @@ fn extractSymbolFromDecl(
     module_env: *ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
     expr_idx: CIR.Expr.Idx,
-    source: []const u8,
+    _: []const u8,
     uri: []const u8,
     line_offsets: *const pos.LineOffsets,
 ) ?document_symbol_handler.SymbolInformation {
-    _ = source; // We use getIdentText instead of extracting from source
-
     // Check if RHS is a function
     const expr = module_env.store.getExpr(expr_idx);
     const is_function = switch (expr) {

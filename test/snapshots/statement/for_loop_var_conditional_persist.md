@@ -132,12 +132,16 @@ NO CHANGE
 					(e-if
 						(if-branches
 							(if-branch
-								(e-binop (op "eq")
-									(e-binop (op "rem")
-										(e-lookup-local
-											(p-assign (ident "n")))
-										(e-num (value "2")))
-									(e-num (value "0")))
+								(e-method-eq (negated "false")
+									(lhs
+										(e-dispatch-call (method "rem_by") (constraint-fn-var 548)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "n"))))
+											(args
+												(e-num (value "2")))))
+									(rhs
+										(e-num (value "0"))))
 								(e-block
 									(s-reassign
 										(p-assign (ident "lastEven_"))
@@ -145,26 +149,32 @@ NO CHANGE
 											(p-assign (ident "n"))))
 									(s-reassign
 										(p-assign (ident "evenCount_"))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "evenCount_")))
-											(e-num (value "1"))))
+										(e-dispatch-call (method "plus") (constraint-fn-var 618)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "evenCount_"))))
+											(args
+												(e-num (value "1")))))
 									(e-empty_record))))
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "lastEven_")))
-				(e-lookup-local
-					(p-assign (ident "evenCount_")))))
+			(e-dispatch-call (method "times") (constraint-fn-var 628)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "lastEven_"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "evenCount_"))))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "result")))
-			(e-num (value "32")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-num (value "32"))))))
 ~~~
 # TYPES
 ~~~clojure

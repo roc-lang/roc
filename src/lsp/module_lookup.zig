@@ -249,7 +249,7 @@ pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleIn
     while (sched_it.next()) |entry| {
         const sched = entry.value_ptr.*;
         if (sched.getModuleState(base_name)) |mod_state| {
-            if (mod_state.env) |*module_env_ptr| {
+            if (mod_state.moduleEnv()) |module_env_ptr| {
                 return ModuleInfo{
                     .module_env = module_env_ptr,
                     .path = mod_state.path,

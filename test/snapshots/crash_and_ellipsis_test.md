@@ -31,10 +31,23 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
+NOT IMPLEMENTED - crash_and_ellipsis_test.md:1:1:1:1
 UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 # PROBLEMS
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**crash_and_ellipsis_test.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
 
@@ -204,7 +217,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-not-implemented))
+			(e-runtime-error (tag "not_implemented")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -239,19 +252,19 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call
+					(e-call (constraint-fn-var 135)
 						(e-lookup-local
 							(p-assign (ident "testEllipsis")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call
+					(e-call (constraint-fn-var 236)
 						(e-lookup-local
 							(p-assign (ident "testCrash")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call
+					(e-call (constraint-fn-var 337)
 						(e-lookup-local
 							(p-assign (ident "testCrashSimple")))
 						(e-num (value "42"))))

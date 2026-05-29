@@ -8,21 +8,23 @@
 //!
 //! The compilation pipeline:
 //! ```
-//! Roc Source → CIR → MIR → LIR → Machine Code → Object File
+//! Roc Source → checked modules → post-check IRs → LIR → Machine Code → Object File
 //! ```
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
 const lir = @import("lir");
-const LirExprStore = lir.LirExprStore;
+const LirStore = lir.LirStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
-const StaticDataInterner = @import("StaticDataInterner.zig");
+const static_data_export = @import("StaticDataExport.zig");
+const StaticStringData = @import("StaticStringData.zig");
 
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
@@ -35,6 +37,9 @@ pub const Entrypoint = struct {
     /// Layout of the return value
     ret_layout: layout.Idx,
 };
+
+pub const StaticDataExport = static_data_export.StaticDataExport;
+pub const StaticDataRelocation = static_data_export.StaticDataRelocation;
 
 /// Result of compilation
 pub const CompilationResult = struct {
@@ -75,21 +80,23 @@ pub const ObjectFileCompiler = struct {
     /// Returns CompilationError.UnsupportedTarget for arm32 and wasm32 targets.
     pub fn compileToObjectFile(
         self: *ObjectFileCompiler,
-        lir_store: *const LirExprStore,
+        lir_store: *const LirStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
+        static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, proc_specs, target);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target);
     }
 
     /// Compile to an object file and write it to a path.
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
-        lir_store: *const LirExprStore,
+        lir_store: *const LirStore,
         layout_store: *const layout.Store,
         entrypoints: []const Entrypoint,
+        static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
@@ -98,50 +105,69 @@ pub const ObjectFileCompiler = struct {
             lir_store,
             layout_store,
             entrypoints,
+            static_data_exports,
             proc_specs,
             target,
         );
         defer result.deinit();
 
-        // Write to file
-        std.fs.cwd().writeFile(.{
-            .sub_path = output_path,
-            .data = result.object_bytes,
-        }) catch |err| {
+        writeFileWindowsAvSafe(output_path, result.object_bytes) catch |err| {
             std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };
     }
 };
 
+/// On Windows, filter drivers (Defender, EDR agents) can transiently hold a
+/// just-created file open and return AccessDenied on a follow-up write from a
+/// sibling process. Retry a few times with exponential backoff. Other OSes
+/// pass through to a single writeFile call.
+pub fn writeFileWindowsAvSafe(sub_path: []const u8, data: []const u8) !void {
+    if (comptime builtin.os.tag != .windows) {
+        return std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data });
+    }
+    var attempt: u32 = 0;
+    const max_attempts: u32 = 6;
+    while (true) : (attempt += 1) {
+        std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data }) catch |err| switch (err) {
+            error.AccessDenied => {
+                if (attempt + 1 >= max_attempts) return err;
+                const delay_ns: u64 = @as(u64, 10) * std.time.ns_per_ms * (@as(u64, 1) << @intCast(attempt));
+                std.Thread.sleep(delay_ns);
+                continue;
+            },
+            else => return err,
+        };
+        return;
+    }
+}
+
 /// Generic compilation function parameterized by code generator type.
 fn compileWithCodeGen(
     comptime CodeGen: type,
     allocator: Allocator,
-    lir_store: *const LirExprStore,
+    lir_store: *const LirStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
+    static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
 ) CompilationError!CompilationResult {
-    if (entrypoints.len == 0) {
+    if (entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
     }
 
-    // Create memory backend for static data allocation
-    var memory_backend = StaticDataInterner.MemoryBackend.init(allocator);
-    defer memory_backend.deinit();
-
-    // Create static data interner for string literals
-    var static_interner = StaticDataInterner.init(allocator, memory_backend.backend());
-    defer static_interner.deinit();
+    var static_strings = StaticStringData.build(allocator, lir_store, target) catch {
+        return CompilationError.OutOfMemory;
+    };
+    defer static_strings.deinit();
 
     // Initialize the code generator
     var codegen = CodeGen.init(
         allocator,
         lir_store,
         layout_store,
-        &static_interner,
+        static_strings.entries,
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
@@ -156,6 +182,69 @@ fn compileWithCodeGen(
     // Track symbols for object file generation
     var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
     defer symbols.deinit(allocator);
+
+    var rodata = std.ArrayList(u8).empty;
+    defer rodata.deinit(allocator);
+
+    var rodata_relocations = std.ArrayList(ObjectWriter.DataRelocation).empty;
+    defer rodata_relocations.deinit(allocator);
+
+    var static_data_symbols = std.ArrayList(ObjectWriter.Symbol).empty;
+    defer static_data_symbols.deinit(allocator);
+
+    var owned_proc_symbol_names = std.ArrayList([]u8).empty;
+    defer {
+        for (owned_proc_symbol_names.items) |name| allocator.free(name);
+        owned_proc_symbol_names.deinit(allocator);
+    }
+
+    for (static_data_exports) |data_export| {
+        try appendStaticDataExport(allocator, data_export, &rodata, &rodata_relocations, &static_data_symbols);
+    }
+    for (static_strings.exports) |data_export| {
+        try appendStaticDataExport(allocator, data_export, &rodata, &rodata_relocations, &static_data_symbols);
+    }
+
+    // ELF requires all local symbols to appear before global symbols. Keep that
+    // invariant in the shared symbol list while preserving each symbol's section
+    // offset and name-based relocation target.
+    for (static_data_symbols.items) |sym| {
+        if (sym.is_global) continue;
+        symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
+    }
+    for (proc_specs, 0..) |_, i| {
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
+        const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
+            }
+            unreachable;
+        };
+        const symbol_name = static_data_export.procSymbolName(allocator, proc_symbol.name) catch return CompilationError.OutOfMemory;
+        owned_proc_symbol_names.append(allocator, symbol_name) catch {
+            allocator.free(symbol_name);
+            return CompilationError.OutOfMemory;
+        };
+        symbols.append(allocator, .{
+            .name = symbol_name,
+            .offset = proc_symbol.code_start,
+            .size = proc_symbol.code_end - proc_symbol.code_start,
+            .is_global = false,
+            .is_function = true,
+            .is_external = false,
+            .section = .text,
+            .prologue_size = proc_symbol.prologue_size,
+            .stack_alloc = proc_symbol.stack_alloc,
+            .frame_size = proc_symbol.frame_size,
+            .callee_saved_mask = proc_symbol.callee_saved_mask,
+            .epilogue_offset = proc_symbol.epilogue_offset,
+            .uses_frame_pointer = proc_symbol.uses_frame_pointer,
+        }) catch return CompilationError.OutOfMemory;
+    }
+    for (static_data_symbols.items) |sym| {
+        if (!sym.is_global) continue;
+        symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
+    }
 
     // Generate entrypoint wrappers
     for (entrypoints) |entrypoint| {
@@ -173,9 +262,13 @@ fn compileWithCodeGen(
             .is_global = true,
             .is_function = true,
             .is_external = false,
-            // Unwind info for Windows x64
+            .section = .text,
+            // Unwind metadata for Windows object files.
             .prologue_size = export_info.prologue_size,
             .stack_alloc = export_info.stack_alloc,
+            .frame_size = export_info.frame_size,
+            .callee_saved_mask = export_info.callee_saved_mask,
+            .epilogue_offset = export_info.epilogue_offset,
             .uses_frame_pointer = export_info.uses_frame_pointer,
         }) catch {
             return CompilationError.OutOfMemory;
@@ -206,6 +299,7 @@ fn compileWithCodeGen(
                         .is_global = false,
                         .is_function = true,
                         .is_external = true,
+                        .section = .undef,
                     }) catch {
                         return CompilationError.OutOfMemory;
                     };
@@ -227,12 +321,36 @@ fn compileWithCodeGen(
                         .is_global = false,
                         .is_function = false,
                         .is_external = true,
+                        .section = .undef,
                     }) catch {
                         return CompilationError.OutOfMemory;
                     };
                 }
             },
             .local_data, .jmp_to_return => {},
+        }
+    }
+
+    for (rodata_relocations.items) |reloc| {
+        var found = false;
+        for (symbols.items) |sym| {
+            if (std.mem.eql(u8, sym.name, reloc.target_symbol_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            symbols.append(allocator, .{
+                .name = reloc.target_symbol_name,
+                .offset = 0,
+                .size = 0,
+                .is_global = false,
+                .is_function = false,
+                .is_external = true,
+                .section = .undef,
+            }) catch {
+                return CompilationError.OutOfMemory;
+            };
         }
     }
 
@@ -244,8 +362,10 @@ fn compileWithCodeGen(
         allocator,
         target,
         code,
+        rodata.items,
         symbols.items,
         relocations,
+        rodata_relocations.items,
         &output,
     ) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
@@ -260,13 +380,61 @@ fn compileWithCodeGen(
     };
 }
 
+fn appendStaticDataExport(
+    allocator: Allocator,
+    data_export: StaticDataExport,
+    rodata: *std.ArrayList(u8),
+    rodata_relocations: *std.ArrayList(ObjectWriter.DataRelocation),
+    static_data_symbols: *std.ArrayList(ObjectWriter.Symbol),
+) CompilationError!void {
+    const alignment = @as(usize, @intCast(data_export.alignment));
+    const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
+    rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
+        return CompilationError.OutOfMemory;
+    };
+    rodata.appendSlice(allocator, data_export.bytes) catch {
+        return CompilationError.OutOfMemory;
+    };
+
+    const symbol_offset: usize = @intCast(data_export.symbol_offset);
+    if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
+        std.debug.panic(
+            "ObjectFileCompiler invariant violated: static data symbol offset {d} exceeds byte length {d}",
+            .{ data_export.symbol_offset, data_export.bytes.len },
+        );
+    }
+
+    static_data_symbols.append(allocator, .{
+        .name = data_export.symbol_name,
+        .offset = aligned_offset + symbol_offset,
+        .size = data_export.bytes.len - symbol_offset,
+        .is_global = data_export.is_global,
+        .is_function = false,
+        .is_external = false,
+        .section = .rodata,
+    }) catch {
+        return CompilationError.OutOfMemory;
+    };
+
+    for (data_export.relocations) |relocation| {
+        rodata_relocations.append(allocator, .{
+            .offset = @as(u64, @intCast(aligned_offset)) + relocation.offset,
+            .target_symbol_name = relocation.target_symbol_name,
+            .addend = relocation.addend,
+        }) catch {
+            return CompilationError.OutOfMemory;
+        };
+    }
+}
+
 /// Runtime-to-comptime dispatch for compilation.
 /// Uses inline for over RocTarget enum fields to select the correct LirCodeGen instantiation.
 fn crossCompileDispatch(
     allocator: Allocator,
-    lir_store: *const LirExprStore,
+    lir_store: *const LirStore,
     layout_store: *const layout.Store,
     entrypoints: []const Entrypoint,
+    static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
     target: RocTarget,
 ) CompilationError!CompilationResult {
@@ -282,6 +450,7 @@ fn crossCompileDispatch(
                     lir_store,
                     layout_store,
                     entrypoints,
+                    static_data_exports,
                     proc_specs,
                     comptime_target,
                 );

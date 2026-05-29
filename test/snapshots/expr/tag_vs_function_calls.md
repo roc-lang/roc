@@ -17,19 +17,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_vs_function_calls.md:7:13:7:19
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `addOne` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tag_vs_function_calls.md:7:13:7:19:**
-```roc
-    result: addOne(5),
-```
-            ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -132,10 +122,12 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-num (value "1")))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 121)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "x"))))
+					(args
+						(e-num (value "1"))))))
 		(field (name "result")
 			(e-call
 				(e-runtime-error (tag "ident_not_in_scope"))
@@ -164,5 +156,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ addOne: a -> a, errTag: [Err(Str), ..], nested: [Some([Ok([Just(Dec), ..]), ..]), ..], noneTag: [None, ..], okTag: [Ok(Str), ..], result: Error, someTag: [Some(Dec), ..], tagList: List([None, Some(Dec), ..]) } where [a.plus : a, Dec -> a]"))
+(expr (type "{ addOne: a -> a, errTag: [Err(Str), ..], nested: [Some([Ok([Just(Dec), ..]), ..]), ..], noneTag: [None, ..], okTag: [Ok(Str), ..], result: Error, someTag: [Some(Dec), ..], tagList: List([None, Some(Dec), ..]) } where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

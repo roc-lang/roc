@@ -107,11 +107,13 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-binop (op "mul")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-lookup-local
-					(p-assign (ident "y"))))))
+			(e-dispatch-call (method "times") (constraint-fn-var 38)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "y")))))))
 	(d-let
 		(p-assign (ident "print_number!"))
 		(e-lambda
@@ -126,10 +128,10 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call
+			(e-call (constraint-fn-var 78)
 				(e-lookup-local
 					(p-assign (ident "print_number!")))
-				(e-call
+				(e-call (constraint-fn-var 77)
 					(e-lookup-local
 						(p-assign (ident "multiply")))
 					(e-lookup-local
@@ -137,7 +139,7 @@ NO CHANGE
 					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call
+		(e-call (constraint-fn-var 117)
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))
@@ -150,11 +152,11 @@ NO CHANGE
 	(defs
 		(patt (type "a, b -> a where [a.times : a, b -> a]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.times : a, Dec -> a]"))
+		(patt (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "a, b -> a where [a.times : a, b -> a]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.times : a, Dec -> a]"))
+		(expr (type "a -> Error where [a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))))
 ~~~

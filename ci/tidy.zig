@@ -17,13 +17,14 @@ const mem = std.mem;
 const Ast = std.zig.Ast;
 
 const MiB = 1024 * 1024;
+const max_text_file_size = 4 * MiB;
 
 /// Binary file extensions that should be skipped entirely (not read into the buffer).
 /// These are compiled artifacts, images, and other non-text files.
 const binary_extensions: []const []const u8 = &.{
-    ".ico", ".png", ".webp", ".jpg", ".jpeg", ".gif", ".bin",
-    ".o", ".a", ".lib", ".dll", ".so", ".dylib", ".wasm",
-    ".rlib", ".rmeta",
+    ".ico",  ".png",   ".webp", ".jpg",  ".jpeg",  ".gif", ".bin",
+    ".o",    ".obj",   ".bc",   ".a",    ".lib",   ".dll", ".so",
+    ".so.6", ".dylib", ".wasm", ".rlib", ".rmeta",
 };
 
 const TermColor = struct {
@@ -37,20 +38,46 @@ pub fn main() !void {
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
+
+    const mode = parseMode(args);
+    switch (mode) {
+        .tidy => try runTidy(gpa),
+        .git_lints => try runGitLints(gpa),
+    }
+}
+
+const Mode = enum {
+    tidy,
+    git_lints,
+};
+
+fn parseMode(args: []const []const u8) Mode {
+    if (args.len == 1) return .tidy;
+    if (args.len == 2 and std.mem.eql(u8, args[1], "--git-lints")) return .git_lints;
+
+    std.debug.print(
+        \\usage:
+        \\  zig run ci/tidy.zig
+        \\  zig run ci/tidy.zig -- --git-lints
+        \\
+    , .{});
+    std.process.exit(2);
+}
+
+fn runTidy(gpa: Allocator) !void {
     var errors: Errors = .{};
 
     var counter: IdentifierCounter = try .init(gpa);
     defer counter.deinit(gpa);
 
-    var dead_files_detector = DeadFilesDetector.init(gpa);
-    defer dead_files_detector.deinit(gpa);
-
     // NB: all checks are intentionally implemented in a streaming fashion,
     // such that we only need to read the files once.
-    const file_buffer = try gpa.alloc(u8, MiB + MiB / 2); // 1.5 MiB
+    const file_buffer = try gpa.alloc(u8, max_text_file_size);
     defer gpa.free(file_buffer);
 
-    const paths = try listFilePaths(gpa);
+    const paths = try listTidyFilePaths(gpa);
     defer {
         for (paths) |path| {
             gpa.free(path);
@@ -65,17 +92,67 @@ pub fn main() !void {
         }).len;
         if (bytes_read >= file_buffer.len - 1) {
             std.debug.panic(
-                \\File exceeds 1.5 MiB buffer limit: {s}
+                \\File exceeds {d} MiB buffer limit: {s}
                 \\
                 \\If this is a binary file, add its extension to `binary_extensions` in ci/tidy.zig
                 \\to exclude it from tidy checks.
-            , .{file_path});
+            , .{ max_text_file_size / MiB, file_path });
+        }
+        file_buffer[bytes_read] = 0;
+
+        // Skip binary files without a recognized extension (e.g. gitignored
+        // compiled executables left in the working tree). A NUL byte in the
+        // first chunk is a strong indicator of binary content.
+        const sniff_len = @min(bytes_read, 1024);
+        if (std.mem.indexOfScalar(u8, file_buffer[0..sniff_len], 0) != null) continue;
+
+        const source_file = SourceFile{ .path = file_path, .text = file_buffer[0..bytes_read :0] };
+        try tidyFile(gpa, &counter, source_file, &errors);
+    }
+
+    if (errors.count > 0) {
+        std.debug.print("\n{s}[FAIL]{s} Found {d} tidy violations\n", .{ TermColor.red, TermColor.reset, errors.count });
+        std.process.exit(1);
+    }
+
+    std.debug.print("{s}[OK]{s} All tidy checks passed!\n", .{ TermColor.green, TermColor.reset });
+}
+
+fn runGitLints(gpa: Allocator) !void {
+    var errors: Errors = .{};
+
+    var dead_files_detector = DeadFilesDetector.init(gpa);
+    defer dead_files_detector.deinit(gpa);
+
+    const file_buffer = try gpa.alloc(u8, max_text_file_size);
+    defer gpa.free(file_buffer);
+
+    const paths = try listGitFilePaths(gpa);
+    defer {
+        for (paths) |path| {
+            gpa.free(path);
+        }
+        gpa.free(paths);
+    }
+
+    for (paths) |file_path| {
+        if (!std.mem.endsWith(u8, file_path, ".zig")) continue;
+
+        const bytes_read = (std.fs.cwd().readFile(file_path, file_buffer) catch |err| {
+            std.debug.print("Error reading {s}: {}\n", .{ file_path, err });
+            continue;
+        }).len;
+        if (bytes_read >= file_buffer.len - 1) {
+            std.debug.panic(
+                \\File exceeds {d} MiB buffer limit: {s}
+                \\
+                \\If this is a binary file, add its extension to `binary_extensions` in ci/tidy.zig
+                \\to exclude it from tidy checks.
+            , .{ max_text_file_size / MiB, file_path });
         }
         file_buffer[bytes_read] = 0;
 
         const source_file = SourceFile{ .path = file_path, .text = file_buffer[0..bytes_read :0] };
-        try tidyFile(gpa, &counter, source_file, &errors);
-
         if (source_file.hasExtension(".zig")) {
             try dead_files_detector.visit(source_file);
         }
@@ -84,11 +161,11 @@ pub fn main() !void {
     dead_files_detector.finish(&errors);
 
     if (errors.count > 0) {
-        std.debug.print("\n{s}[FAIL]{s} Found {d} tidy violations\n", .{ TermColor.red, TermColor.reset, errors.count });
+        std.debug.print("\n{s}[FAIL]{s} Found {d} Git lint violations\n", .{ TermColor.red, TermColor.reset, errors.count });
         std.process.exit(1);
     }
 
-    std.debug.print("{s}[OK]{s} All tidy checks passed!\n", .{ TermColor.green, TermColor.reset });
+    std.debug.print("{s}[OK]{s} All Git lints passed!\n", .{ TermColor.green, TermColor.reset });
 }
 
 const Errors = struct {
@@ -256,7 +333,6 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
         }
     }
 }
-
 
 const IdentifierCounter = struct {
     const file_identifier_count_max = 100_000;
@@ -480,9 +556,9 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
     // Skip directories with different conventions
     const skip_paths: []const []const u8 = &.{
         "test/snapshots/", // Snapshot files are generated
-        "crates/",         // Old Rust crate code
-        "design/",         // Design docs may have different structure
-        "www/",            // Website content
+        "crates/", // Old Rust crate code
+        "design/", // Design docs may have different structure
+        "www/", // Website content
     };
     for (skip_paths) |skip_path| {
         if (std.mem.indexOf(u8, file.path, skip_path) != null) return;
@@ -509,13 +585,17 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
 // Zig's lazy compilation model makes it too easy to forget to include a file into the build --- if
 // nothing imports a file, compiler just doesn't see it and can't flag it as unused.
 //
-// DeadFilesDetector implements heuristic detection of unused files, by "grepping" for import
-// statements and flagging file which are never imported. This gives false negatives for unreachable
-// cycles of files, as well as for identically-named files, but it should be good enough in
-// practice.
+// DeadFilesDetector implements textual detection of unused files by scanning for
+// import statements and build-registered Zig roots. This gives false negatives
+// for unreachable cycles of files, as well as for identically-named files, but
+// it should be good enough in practice.
 const DeadFilesDetector = struct {
     const FileName = [64]u8;
-    const FileState = struct { import_count: u32, definition_count: u32 };
+    const FileState = struct {
+        import_count: u32,
+        definition_count: u32,
+        is_src: bool,
+    };
     const FileMap = std.AutoArrayHashMap(FileName, FileState);
 
     files: FileMap,
@@ -531,32 +611,27 @@ const DeadFilesDetector = struct {
     fn visit(detector: *DeadFilesDetector, file: SourceFile) Allocator.Error!void {
         assert(file.hasExtension(".zig"));
 
-        // Only track src/ files as needing to be imported somewhere
+        const is_test_file = std.mem.startsWith(u8, file.path, "test/");
+
+        // Track src/ and test/ definitions so imported test helpers are
+        // recognized as tracked files. Only src/ files are later checked for
+        // dead-file status.
         const is_src_file = std.mem.startsWith(u8, file.path, "src/");
-        if (is_src_file) {
-            (try detector.fileState(file.path)).definition_count += 1;
+        if (is_src_file or is_test_file) {
+            const state = try detector.fileState(file.path);
+            state.definition_count += 1;
+            state.is_src = is_src_file;
         }
 
         // Only scan src/, test/, and build files for imports
         const should_scan = is_src_file or
-            std.mem.startsWith(u8, file.path, "test/") or
+            is_test_file or
             std.mem.eql(u8, file.path, "build.zig") or
             std.mem.startsWith(u8, file.path, "ci/");
         if (!should_scan) return;
 
-        var rest: []const u8 = file.text;
-        for (0..1024) |_| {
-            const result = cut(rest, "@import(\"") orelse break;
-            rest = result[1];
-            const result2 = cut(rest, "\")") orelse break;
-            const import_path = result2[0];
-            rest = result2[1];
-            if (std.mem.endsWith(u8, import_path, ".zig")) {
-                (try detector.fileState(import_path)).import_count += 1;
-            }
-        } else {
-            std.debug.panic("file with more than 1024 imports: {s}", .{file.path});
-        }
+        try detector.recordQuotedZigPaths(file.path, file.text, "@import(\"", false);
+        try detector.recordQuotedZigPaths(file.path, file.text, "b.path(\"", true);
     }
 
     fn finish(detector: *DeadFilesDetector, errors: *Errors) void {
@@ -566,7 +641,7 @@ const DeadFilesDetector = struct {
             if (state.definition_count == 0) {
                 errors.addFileUntracked(&name);
             }
-            if (state.import_count == 0 and !isEntryPoint(name)) {
+            if (state.is_src and state.import_count == 0 and !isEntryPoint(name)) {
                 errors.addFileDead(&name);
             }
         }
@@ -574,8 +649,41 @@ const DeadFilesDetector = struct {
 
     fn fileState(detector: *DeadFilesDetector, path: []const u8) !*FileState {
         const gop = try detector.files.getOrPut(pathToName(path));
-        if (!gop.found_existing) gop.value_ptr.* = .{ .import_count = 0, .definition_count = 0 };
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{
+                .import_count = 0,
+                .definition_count = 0,
+                .is_src = false,
+            };
+        }
         return gop.value_ptr;
+    }
+
+    fn recordQuotedZigPaths(
+        detector: *DeadFilesDetector,
+        file_path: []const u8,
+        text: []const u8,
+        marker: []const u8,
+        require_repo_path: bool,
+    ) Allocator.Error!void {
+        var rest: []const u8 = text;
+        for (0..4096) |_| {
+            const result = cut(rest, marker) orelse break;
+            rest = result[1];
+            const result2 = cut(rest, "\")") orelse break;
+            const path = result2[0];
+            rest = result2[1];
+            if (!std.mem.endsWith(u8, path, ".zig")) continue;
+            if (require_repo_path and
+                !std.mem.startsWith(u8, path, "src/") and
+                !std.mem.startsWith(u8, path, "test/"))
+            {
+                continue;
+            }
+            (try detector.fileState(path)).import_count += 1;
+        } else {
+            std.debug.panic("file with too many quoted Zig paths: {s}", .{file_path});
+        }
     }
 
     fn pathToName(path: []const u8) FileName {
@@ -600,10 +708,18 @@ const DeadFilesDetector = struct {
             "glue_test.zig", // Glue generation tests
             "host.zig", // Glue platform host
             "roc_subcommands.zig", // CLI subcommand tests
+            "echo_tests.zig", // Echo platform (headerless app) tests
             "test_runner.zig", // Test runner executable
             "llvm_evaluator.zig", // LLVM evaluator executable
             "darwin_compat.zig", // Compiled to .o by build.zig for macOS linking
             "echo.zig", // Echo platform WASM entry point
+            "echo_native.zig", // Echo platform native debug binary (zig build run-echo)
+            "parallel_cli_runner.zig", // Parallel CLI test runner executable
+            "test_harness.zig", // Shared test harness (added via b.addModule)
+            "test_env_pkg.zig", // Typed CIR package root used via build root_source_file
+            "module_env_serialization_test_root.zig", // Serialization suite root used via build root_source_file
+            "mono_emit_test_root.zig", // Mono emit suite root used via build root_source_file
+            "builtin_doc_tests.zig", // Builtin.roc doc code-block tests (added via b.path in build.zig)
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;
@@ -612,8 +728,63 @@ const DeadFilesDetector = struct {
     }
 };
 
-/// Lists all files in the repository using git ls-files.
-fn listFilePaths(allocator: Allocator) ![][]const u8 {
+/// Lists files for local tidiness checks without requiring a Git checkout.
+fn listTidyFilePaths(allocator: Allocator) ![][]const u8 {
+    var result = std.ArrayList([]const u8){};
+    errdefer {
+        for (result.items) |path| {
+            allocator.free(path);
+        }
+        result.deinit(allocator);
+    }
+
+    var dir = try fs.cwd().openDir(".", .{ .iterate = true });
+    defer dir.close();
+
+    try appendTidyFilePaths(allocator, &result, dir, "");
+
+    return result.toOwnedSlice(allocator);
+}
+
+fn appendTidyFilePaths(
+    allocator: Allocator,
+    result: *std.ArrayList([]const u8),
+    dir: fs.Dir,
+    prefix: []const u8,
+) !void {
+    var iterator = dir.iterate();
+    while (try iterator.next()) |entry| {
+        const path = try joinPath(allocator, prefix, entry.name);
+        errdefer allocator.free(path);
+
+        switch (entry.kind) {
+            .directory => {
+                if (!shouldSkipTopLevelDir(path)) {
+                    var child = try dir.openDir(entry.name, .{ .iterate = true });
+                    defer child.close();
+                    try appendTidyFilePaths(allocator, result, child, path);
+                }
+                allocator.free(path);
+            },
+            .file => {
+                if (shouldSkipListedFile(path)) {
+                    allocator.free(path);
+                    continue;
+                }
+                try result.append(allocator, path);
+            },
+            else => allocator.free(path),
+        }
+    }
+}
+
+fn joinPath(allocator: Allocator, prefix: []const u8, name: []const u8) ![]u8 {
+    if (prefix.len == 0) return allocator.dupe(u8, name);
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ prefix, name });
+}
+
+/// Lists all Git-tracked files in the repository.
+fn listGitFilePaths(allocator: Allocator) ![][]const u8 {
     var result = std.ArrayList([]const u8){};
     errdefer {
         for (result.items) |path| {
@@ -624,7 +795,7 @@ fn listFilePaths(allocator: Allocator) ![][]const u8 {
 
     var child = std.process.Child.init(&.{ "git", "ls-files", "-z" }, allocator);
     child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
+    child.stderr_behavior = .Inherit;
 
     _ = try child.spawn();
 
@@ -639,16 +810,47 @@ fn listFilePaths(allocator: Allocator) ![][]const u8 {
 
     // git ls-files -z outputs null-separated paths
     var lines = std.mem.splitScalar(u8, files, 0);
-    outer: while (lines.next()) |line| {
+    while (lines.next()) |line| {
         if (line.len == 0) continue;
-        // Skip binary files entirely - they shouldn't be read into the buffer
-        for (binary_extensions) |ext| {
-            if (std.mem.endsWith(u8, line, ext)) continue :outer;
-        }
+        if (shouldSkipListedFile(line)) continue;
         try result.append(allocator, try allocator.dupe(u8, line));
     }
 
     return result.toOwnedSlice(allocator);
+}
+
+fn shouldSkipTopLevelDir(path: []const u8) bool {
+    const skip_dirs: []const []const u8 = &.{
+        ".git",
+        ".tmp",
+        ".zig-cache",
+        "kcov-output",
+        "target",
+        "vendor",
+        "zig-out",
+    };
+    for (skip_dirs) |dir| {
+        if (isPathInTopLevelDir(path, dir)) return true;
+    }
+    return false;
+}
+
+fn shouldSkipListedFile(path: []const u8) bool {
+    if (std.mem.eql(u8, path, ".git")) return true;
+    if (shouldSkipTopLevelDir(path)) return true;
+
+    // Skip binary files entirely - they shouldn't be read into the buffer.
+    for (binary_extensions) |ext| {
+        if (std.mem.endsWith(u8, path, ext)) return true;
+    }
+    return false;
+}
+
+fn isPathInTopLevelDir(path: []const u8, dir: []const u8) bool {
+    if (std.mem.eql(u8, path, dir)) return true;
+    return std.mem.startsWith(u8, path, dir) and
+        path.len > dir.len and
+        path[dir.len] == '/';
 }
 
 /// Splits a string at the first occurrence of a delimiter.

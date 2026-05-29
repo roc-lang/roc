@@ -20,23 +20,32 @@ const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
 const eval = @import("eval");
+const messages = @import("messages.zig");
 const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
 const build_options = @import("build_options");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
-const BuiltinTypes = eval.BuiltinTypes;
 const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
 const roc_target = @import("roc_target");
 
 const Check = check.Check;
+const CheckedArtifact = check.CheckedArtifact;
+const CheckedModules = check.TypedCIR.Modules;
+const CheckedModuleSource = CheckedModules.SourceModule;
 const Can = can.Can;
 const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
 const ReportBuilder = check.ReportBuilder;
 const AST = parse.AST;
+const CanonicalizeImport = messages.CanonicalizeImport;
+
+const OwnedSemanticState = struct {
+    module_env: ?*ModuleEnv,
+    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+};
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
 /// Timing information for different phases
@@ -57,6 +66,20 @@ const AtomicUsize = std.atomic.Value(usize);
 
 const Mutex = threading.Mutex;
 const Condition = threading.Condition;
+
+const stage_timers_supported = !threading.is_freestanding;
+const StageTimer = if (stage_timers_supported) std.time.Timer else void;
+
+fn startStageTimer() ?StageTimer {
+    if (comptime !stage_timers_supported) return null;
+    return std.time.Timer.start() catch null;
+}
+
+fn readStageTimer(timer: *?StageTimer) u64 {
+    if (comptime !stage_timers_supported) return 0;
+    if (timer.*) |*active| return active.read();
+    return 0;
+}
 
 // FileProvider was removed in favour of the unified Io abstraction (src/io/Io.zig).
 // Callers that previously used FileProvider now use Io.readFile / Io.fileExists directly.
@@ -96,6 +119,8 @@ pub const ImportResolver = struct {
     isReady: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) bool,
     /// Get a pointer to the external ModuleEnv once ready (null if not ready)
     getEnv: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnv,
+    /// Get the published checked artifact for the external import once ready (null if not ready)
+    getArtifact: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*const CheckedArtifact.CheckedModuleArtifact,
     /// Resolve a local module import to a filesystem path within the current package
     resolveLocalPath: *const fn (ctx: ?*anyopaque, current_package: []const u8, root_dir: []const u8, import_name: []const u8) []const u8,
 };
@@ -110,7 +135,7 @@ const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 const ModuleState = struct {
     name: []const u8, // Module name is needed for error reporting and the schedule hook
     path: []const u8,
-    env: ?ModuleEnv = null,
+    semantic: ?OwnedSemanticState = null,
     phase: Phase = .Parse,
     imports: std.ArrayList(ModuleId),
     /// External imports qualified via package shorthand (e.g. "cli.Stdout") - still strings as they reference other packages
@@ -124,11 +149,55 @@ const ModuleState = struct {
     working: if (!threading.is_freestanding) std.atomic.Value(u8) else u8 = if (!threading.is_freestanding) std.atomic.Value(u8).init(0) else 0,
     /// Cached AST from parsing phase - heap-allocated to avoid copy issues with ArrayLists
     cached_ast: ?*parse.AST = null,
-    /// True if this module was loaded from cache. Cached modules have their env memory
-    /// owned by the cache buffer, so we must NOT call env.deinit() for them.
-    was_from_cache: bool = false,
+
+    pub fn moduleEnv(self: *ModuleState) ?*ModuleEnv {
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*artifact| return artifact.moduleEnv();
+            return semantic.module_env;
+        }
+        return null;
+    }
+
+    pub fn checkedArtifact(self: *ModuleState) ?*CheckedArtifact.CheckedModuleArtifact {
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*artifact| return artifact;
+        }
+        return null;
+    }
+
+    pub fn semanticData(self: *ModuleState) ?SemanticModuleData {
+        const env = self.moduleEnv() orelse return null;
+        return .{
+            .env = env,
+            .checked_artifact = self.checkedArtifact(),
+        };
+    }
+
+    fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
+        if (self.semantic) |*semantic| {
+            semantic.module_env = env;
+        } else {
+            self.semantic = .{
+                .module_env = env,
+                .checked_artifact = null,
+            };
+        }
+    }
+
+    fn replaceCheckedArtifact(self: *ModuleState, artifact: CheckedArtifact.CheckedModuleArtifact) void {
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
+            semantic.module_env = null;
+            semantic.checked_artifact = artifact;
+            return;
+        }
+        std.debug.panic("compile_package.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
+    }
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+        }
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: checking cached_ast\n", .{self.name});
         }
@@ -136,49 +205,23 @@ const ModuleState = struct {
         if (self.cached_ast) |ast| {
             ast.deinit();
         }
-        if (comptime trace_build) {
-            std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr (was_from_cache={})\n", .{ self.name, self.was_from_cache });
-        }
-
-        // For cached modules:
-        // - Call deinitCachedModule() to free only heap-allocated hash maps
-        // - The cache buffer is freed separately via cache_buffers cleanup
-        // - STILL free the source - it's heap-allocated separately, not part of the cache buffer
-        //
-        // For non-cached modules:
-        // - Call full env.deinit() to free all allocations
-        // - Free the source which was heap-allocated
-        if (!self.was_from_cache) {
-            if (self.env) |*e| {
-                // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                // with e.gpa (page_allocator in multi-threaded mode).
-                const env_alloc = e.gpa;
-                const source = e.common.source;
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
+        if (self.semantic) |*semantic| {
+            if (semantic.checked_artifact == null) {
+                if (semantic.module_env) |e| {
+                    // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
+                    // with e.gpa (smp_allocator in multi-threaded mode).
+                    const env_alloc = e.gpa;
+                    const source = e.common.source;
+                    if (comptime trace_build) {
+                        std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
+                    }
+                    e.deinit();
+                    if (comptime trace_build) {
+                        std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
+                    }
+                    if (source.len > 0) env_alloc.free(@constCast(source));
+                    env_alloc.destroy(e);
                 }
-                e.deinit();
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
-                }
-                if (source.len > 0) env_alloc.free(source);
-            }
-        } else {
-            if (self.env) |*e| {
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: calling env.deinitCachedModule (heap-allocated hash maps only)\n", .{self.name});
-                }
-                // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
-                // with e.gpa (page_allocator in multi-threaded mode).
-                const env_alloc = e.gpa;
-                // The source is heap-allocated separately (read from file), not part of the cache buffer.
-                // We need to free it even for cached modules.
-                const source = e.common.source;
-                e.deinitCachedModule();
-                if (comptime trace_build) {
-                    std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source for cached module\n", .{self.name});
-                }
-                if (source.len > 0) env_alloc.free(source);
             }
         }
         if (comptime trace_build) {
@@ -187,6 +230,9 @@ const ModuleState = struct {
         self.imports.deinit(gpa);
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing external_imports (len={})\n", .{ self.name, self.external_imports.items.len });
+        }
+        for (self.external_imports.items) |import_name| {
+            gpa.free(import_name);
         }
         self.external_imports.deinit(gpa);
         if (comptime trace_build) {
@@ -244,6 +290,184 @@ const ModuleState = struct {
     }
 };
 
+/// Semantic facts retained for a checked module.
+pub const SemanticModuleData = struct {
+    env: *ModuleEnv,
+    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
+};
+
+/// Owned output from type checking before module state takes retained facts.
+pub const TypeCheckOutput = struct {
+    checker: Check,
+    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+
+    pub fn deinit(self: *TypeCheckOutput) void {
+        if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+        self.checker.deinit();
+    }
+
+    pub fn takeCheckedArtifact(self: *TypeCheckOutput) CheckedArtifact.CheckedModuleArtifact {
+        const artifact = self.checked_artifact orelse
+            std.debug.panic("compile.typeCheckOutput missing checked artifact", .{});
+        self.checked_artifact = null;
+        return artifact;
+    }
+};
+
+/// Public `ArtifactPublicationInputs` declaration.
+pub const ArtifactPublicationInputs = struct {
+    available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
+    relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
+    platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
+    platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
+    explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
+    problem_store: ?*check.problem.Store = null,
+};
+
+fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
+    return switch (problem) {
+        .redundant_pattern, .unmatchable_pattern => false,
+        else => true,
+    };
+}
+
+fn checkerHasArtifactBlockingProblems(checker: *const Check) bool {
+    for (checker.problems.problems.items) |problem| {
+        if (problemBlocksCheckedArtifact(problem)) return true;
+    }
+    return false;
+}
+
+fn moduleHasArtifactBlockingCanonicalizeDiagnostics(env: *const ModuleEnv) bool {
+    const diagnostics = env.store.sliceDiagnostics(env.diagnostics);
+    for (diagnostics) |diagnostic_idx| {
+        const diagnostic = env.store.getDiagnostic(diagnostic_idx);
+        switch (diagnostic) {
+            .shadowing_warning,
+            .unused_variable,
+            .used_underscore_variable,
+            .type_shadowed_warning,
+            .unused_type_var_name,
+            .type_var_marked_unused,
+            .underscore_in_type_declaration,
+            .module_header_deprecated,
+            .deprecated_number_suffix,
+            => {},
+            else => return true,
+        }
+    }
+    return false;
+}
+
+fn moduleHasDuplicateTopLevelValueDefs(gpa: Allocator, env: *const ModuleEnv) Allocator.Error!bool {
+    var seen = std.AutoHashMapUnmanaged(base.Ident.Idx, void){};
+    defer seen.deinit(gpa);
+
+    for (env.store.sliceDefs(env.global_value_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        const ident = switch (pattern) {
+            .assign => |assign| assign.ident,
+            .as => |as_pattern| as_pattern.ident,
+            else => continue,
+        };
+
+        const entry = try seen.getOrPut(gpa, ident);
+        if (entry.found_existing) return true;
+        entry.value_ptr.* = {};
+    }
+
+    return false;
+}
+
+fn importedArtifactsCoverImportedEnvs(
+    imported_envs: []const *ModuleEnv,
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+) bool {
+    for (imported_envs, 0..) |_, module_idx| {
+        var found = false;
+        for (imported_artifacts) |artifact| {
+            if (artifact.module_idx == module_idx) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+fn buildCheckOwnerEnvs(
+    allocator: Allocator,
+    imported_envs: []const *ModuleEnv,
+    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+) Allocator.Error![]const *const ModuleEnv {
+    var owner_envs = std.ArrayList(*const ModuleEnv).empty;
+    errdefer owner_envs.deinit(allocator);
+
+    for (imported_envs) |env| {
+        try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, env);
+    }
+
+    for (imported_artifacts) |imported_artifact| {
+        for (imported_artifact.view.public_api_dependencies.artifacts) |dependency_key| {
+            const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
+                std.debug.panic("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
+            };
+            try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, dependency.module_env);
+        }
+    }
+
+    return try owner_envs.toOwnedSlice(allocator);
+}
+
+fn appendCheckOwnerEnvIfMissing(
+    allocator: Allocator,
+    owner_envs: *std.ArrayList(*const ModuleEnv),
+    module_env: *const ModuleEnv,
+) Allocator.Error!void {
+    for (owner_envs.items) |existing| {
+        if (moduleEnvNamesMatch(existing, module_env)) return;
+    }
+    try owner_envs.append(allocator, module_env);
+}
+
+fn moduleEnvNamesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
+    if (@intFromPtr(a) == @intFromPtr(b)) return true;
+    if (!a.qualified_module_ident.isNone() and !b.qualified_module_ident.isNone()) {
+        return std.mem.eql(u8, a.getIdent(a.qualified_module_ident), b.getIdent(b.qualified_module_ident));
+    }
+    if (!a.display_module_name_idx.isNone() and !b.display_module_name_idx.isNone()) {
+        return std.mem.eql(u8, a.getIdent(a.display_module_name_idx), b.getIdent(b.display_module_name_idx));
+    }
+    if (a.qualified_module_ident.isNone() or b.qualified_module_ident.isNone()) {
+        if (std.mem.eql(u8, a.module_name, b.module_name)) return true;
+    }
+    return false;
+}
+
+fn availableArtifactByKey(
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    key: CheckedArtifact.CheckedModuleArtifactKey,
+) ?CheckedArtifact.ImportedModuleView {
+    for (available_artifacts) |artifact| {
+        if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
+    }
+    return null;
+}
+
+fn appendAvailableArtifactViewIfMissing(
+    allocator: Allocator,
+    views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
+    view: CheckedArtifact.ImportedModuleView,
+) Allocator.Error!void {
+    for (views.items) |existing| {
+        if (std.mem.eql(u8, &existing.key.bytes, &view.key.bytes)) return;
+    }
+    try views.append(allocator, view);
+}
+
 /// Per-package module build orchestrator
 pub const PackageEnv = struct {
     gpa: Allocator,
@@ -280,6 +504,8 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
     /// ID of the root module (the module passed to buildRoot)
     root_module_id: ?ModuleId = null,
+    /// First error reported by worker threads during multi-threaded processing
+    worker_error: ?anyerror = null,
 
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
@@ -308,6 +534,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -346,6 +574,8 @@ pub const PackageEnv = struct {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
+            // This is only a performance hint; failing to reserve this much up front
+            // is not fatal because later appends still report allocation failures.
             modules.ensureTotalCapacity(gpa, 256) catch {};
         }
         return .{
@@ -396,7 +626,7 @@ pub const PackageEnv = struct {
                     self.package_name,
                     idx,
                     ms.name,
-                    @intFromPtr(if (ms.env) |*e| e else null),
+                    @intFromPtr(ms.moduleEnv()),
                     @intFromPtr(ms.cached_ast),
                 });
             }
@@ -426,11 +656,12 @@ pub const PackageEnv = struct {
         self.additional_known_modules.deinit(self.gpa);
     }
 
-    /// Get the root module's env (the module passed to buildRoot)
-    pub fn getRootEnv(self: *PackageEnv) ?*ModuleEnv {
+    /// Get the root module's semantic data (the module passed to buildRoot)
+    pub fn getRootSemanticData(self: *PackageEnv) ?SemanticModuleData {
         const root_id = self.root_module_id orelse return null;
         if (root_id >= self.modules.items.len) return null;
-        return if (self.modules.items[root_id].env) |*env| env else null;
+        const module = &self.modules.items[root_id];
+        return module.semanticData();
     }
 
     /// Get the root module state (the module passed to buildRoot)
@@ -438,6 +669,13 @@ pub const PackageEnv = struct {
         const root_id = self.root_module_id orelse return null;
         if (root_id >= self.modules.items.len) return null;
         return &self.modules.items[root_id];
+    }
+
+    pub fn getSemanticDataIfDone(self: *PackageEnv, name: []const u8) ?SemanticModuleData {
+        const id = self.module_names.get(name) orelse return null;
+        const module = &self.modules.items[id];
+        if (module.phase != .Done) return null;
+        return module.semanticData();
     }
 
     fn internModuleName(self: *PackageEnv, name: []const u8) !ModuleId {
@@ -523,13 +761,17 @@ pub const PackageEnv = struct {
                 self.lock.lock();
                 defer self.lock.unlock();
                 if (self.remaining_modules == 0 and self.injector.items.len == 0) break;
-                _ = self.cond.timedWait(&self.lock, 1_000_000) catch {};
+                self.cond.timedWait(&self.lock, 1_000_000) catch |err| switch (err) {
+                    error.Timeout => {},
+                    else => return err,
+                };
                 continue;
             }
 
             index.store(0, .monotonic);
             var ctx = WorkerCtx{ .sched = self, .index = &index, .work_len = work_len };
             try parallel.process(WorkerCtx, &ctx, workerFn, self.gpa, work_len, options);
+            if (self.worker_error) |err| return err;
             try self.tryEmitReady();
         }
     }
@@ -541,7 +783,14 @@ pub const PackageEnv = struct {
             const i = ctx.index.fetchAdd(1, .monotonic);
             if (i >= ctx.work_len) break;
             const task = ctx.sched.injector.items[i];
-            _ = ctx.sched.process(task) catch {};
+            ctx.sched.process(task) catch |err| {
+                ctx.sched.lock.lock();
+                if (ctx.sched.worker_error == null) {
+                    ctx.sched.worker_error = err;
+                }
+                ctx.sched.lock.unlock();
+                return;
+            };
         }
         // Compact processed prefix once under lock
         ctx.sched.lock.lock();
@@ -618,19 +867,6 @@ pub const PackageEnv = struct {
         }
     }
 
-    /// Public API to obtain a module's environment if it has completed type-checking
-    pub fn getEnvIfDone(self: *PackageEnv, name: []const u8) ?*ModuleEnv {
-        if (self.module_names.get(name)) |module_id| {
-            const st = &self.modules.items[module_id];
-            if (st.phase == .Done) {
-                if (st.env) |*e| {
-                    return e;
-                }
-            }
-        }
-        return null;
-    }
-
     /// Get accumulated timing information
     pub fn getTimingInfo(self: *PackageEnv) TimingInfo {
         return TimingInfo{
@@ -655,12 +891,12 @@ pub const PackageEnv = struct {
         return self.module_names.contains(module_name);
     }
 
-    /// Public API to iterate over module names (for BuildEnv compatibility)
+    /// Iterate over module names.
     pub fn moduleNamesIterator(self: *PackageEnv) std.StringHashMapUnmanaged(ModuleId).Iterator {
         return self.module_names.iterator();
     }
 
-    /// Public API to get module state by name (for BuildEnv compatibility)
+    /// Get module state by name.
     pub fn getModuleState(self: *PackageEnv, module_name: []const u8) ?*ModuleState {
         if (self.module_names.get(module_name)) |module_id| {
             return &self.modules.items[module_id];
@@ -721,7 +957,7 @@ pub const PackageEnv = struct {
             if (!threading.is_freestanding) {
                 self.lock.lock();
                 if (task.module_id < self.modules.items.len) {
-                    _ = self.modules.items[task.module_id].working.store(0, .seq_cst);
+                    self.modules.items[task.module_id].working.store(0, .seq_cst);
                 }
                 self.lock.unlock();
             } else {
@@ -763,29 +999,39 @@ pub const PackageEnv = struct {
 
         // line starts for diagnostics and consistent positions
 
-        var env = try ModuleEnv.init(self.gpa, src);
+        const env = try self.gpa.create(ModuleEnv);
+        errdefer self.gpa.destroy(env);
+        env.* = try ModuleEnv.init(self.gpa, src);
+        var env_owned_by_state = false;
+        errdefer {
+            if (!env_owned_by_state) {
+                env.deinit();
+                if (src.len > 0) self.gpa.free(src);
+            }
+        }
         // init CIR fields
         try env.initCIRFields(st.name);
 
         try env.common.calcLineStarts(self.gpa);
 
         // replace env - save old source to free it after deinit
-        const old_source = if (st.env) |*old| old.common.source else null;
-        if (st.env) |*old| old.deinit();
-        if (old_source) |s| self.gpa.free(s);
-        st.env = env;
+        const old_source = if (st.moduleEnv()) |old| old.common.source else null;
+        if (st.moduleEnv()) |old| {
+            old.deinit();
+            old.gpa.destroy(old);
+        }
+        if (old_source) |s| self.gpa.free(@constCast(s));
+        st.replaceModuleEnv(env);
+        env_owned_by_state = true;
 
         // Parse AST and cache for reuse in doCanonicalize (avoids double parsing)
-        // IMPORTANT: Use st.env.?.common (not local env.common) so the AST's pointer
+        // IMPORTANT: Use st.moduleEnv().?.common (not local env.common) so the AST's pointer
         // to CommonEnv remains valid after this function returns.
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(self.gpa);
-        // NOTE: allocators is not freed here - cleanup happens in doCanonicalize
-        const parse_ast = parse.parse(&allocators, &st.env.?.common) catch {
+        defer allocators.deinit();
+        const parse_ast = parse.parse(&allocators, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
-            if (comptime trace_build) {
-                std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize (parse error)\n", .{st.name});
-            }
             st.phase = .Canonicalize;
             try self.enqueue(module_id);
             return;
@@ -795,12 +1041,112 @@ pub const PackageEnv = struct {
         // parse_ast is already heap-allocated by parse.parse
         st.cached_ast = parse_ast;
 
-        // Go directly to Canonicalize - sibling discovery happens after canonicalization
-        // based on ModuleEnv.imports
-        if (comptime trace_build) {
-            std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize\n", .{st.name});
+        const local_imports = try module_discovery.extractImportsFromAST(parse_ast, self.gpa);
+        defer {
+            for (local_imports) |imp| self.gpa.free(imp);
+            self.gpa.free(local_imports);
         }
-        st.phase = .Canonicalize;
+        const external_imports = try module_discovery.extractQualifiedImportsFromAST(parse_ast, self.gpa);
+        defer {
+            for (external_imports) |imp| self.gpa.free(imp);
+            self.gpa.free(external_imports);
+        }
+
+        var any_new: bool = false;
+        for (local_imports) |mod_name| {
+            const import_path = try self.resolveModulePath(mod_name);
+            defer self.gpa.free(import_path);
+            const prev_module_count = self.modules.items.len;
+            const child_id = try self.ensureModule(mod_name, import_path);
+            st = &self.modules.items[module_id];
+            const is_new_import = child_id >= prev_module_count;
+            try st.imports.append(self.gpa, child_id);
+            try self.setDepthIfSmaller(child_id, st.depth + 1);
+
+            var child = &self.modules.items[child_id];
+            try child.dependents.append(self.gpa, module_id);
+
+            if (child_id == module_id or (try self.findPath(child_id, module_id)) != null) {
+                var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
+                const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
+                try rep.addErrorMessage(msg);
+
+                if (try self.findPath(child_id, module_id)) |path| {
+                    defer self.gpa.free(path);
+                    const hdr = try rep.addOwnedString("Cycle: ");
+                    try rep.document.addText(hdr);
+                    var i: usize = 0;
+                    while (i < path.len) : (i += 1) {
+                        if (i > 0) try rep.document.addText(" -> ");
+                        try rep.document.addAnnotated(self.modules.items[path[i]].name, .emphasized);
+                    }
+                    try rep.document.addText(" -> ");
+                    try rep.document.addAnnotated(self.modules.items[path[0]].name, .emphasized);
+                    try rep.document.addLineBreak();
+                } else {
+                    const edge_msg = try rep.addOwnedString("Cycle edge: ");
+                    try rep.document.addText(edge_msg);
+                    try rep.document.addAnnotated(st.name, .emphasized);
+                    try rep.document.addText(" -> ");
+                    try rep.document.addAnnotated(mod_name, .emphasized);
+                    try rep.document.addLineBreak();
+                }
+
+                try st.reports.append(self.gpa, rep);
+                var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
+                const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
+                try rep_child.addErrorMessage(child_msg);
+                const edge_msg2 = try rep_child.addOwnedString("Cycle edge: ");
+                try rep_child.document.addText(edge_msg2);
+                try rep_child.document.addAnnotated(st.name, .emphasized);
+                try rep_child.document.addText(" -> ");
+                try rep_child.document.addAnnotated(mod_name, .emphasized);
+                try rep_child.document.addLineBreak();
+                try child.reports.append(self.gpa, rep_child);
+
+                if (st.phase != .Done) {
+                    st.phase = .Done;
+                    self.remaining_modules -= 1;
+                }
+                if (child.phase != .Done) {
+                    child.phase = .Done;
+                    if (self.remaining_modules > 0) self.remaining_modules -= 1;
+                }
+
+                for (st.dependents.items) |dep| try self.enqueue(dep);
+                for (child.dependents.items) |dep| try self.enqueue(dep);
+                if (!threading.is_freestanding) self.cond.broadcast();
+                return;
+            }
+
+            if (is_new_import) {
+                self.remaining_modules += 1;
+                any_new = true;
+            }
+        }
+
+        for (external_imports) |import_name| {
+            try st.external_imports.append(self.gpa, try self.gpa.dupe(u8, import_name));
+            if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, import_name);
+        }
+        for (self.additional_known_modules.items) |km| {
+            var exists = false;
+            for (st.external_imports.items) |existing| {
+                if (std.mem.eql(u8, existing, km.import_name)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                try st.external_imports.append(self.gpa, try self.gpa.dupe(u8, km.import_name));
+                if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, km.import_name);
+            }
+        }
+
+        st.phase = .WaitingOnImports;
+        if (any_new) {
+            for (st.imports.items) |imp| try self.enqueue(imp);
+        }
         try self.enqueue(module_id);
     }
 
@@ -819,7 +1165,7 @@ pub const PackageEnv = struct {
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
-        var env = &st.env.?;
+        var env = st.moduleEnv().?;
 
         // Use cached AST from doParse - it should always be available
         const parse_ast: *parse.AST = st.cached_ast orelse
@@ -838,180 +1184,62 @@ pub const PackageEnv = struct {
         }
 
         // canonicalize using the AST
-        const canon_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var canonicalize_timer = startStageTimer();
 
-        // Use shared canonicalization function to ensure consistency with snapshot tool
-        // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
-        // reported prematurely for modules that exist but haven't been loaded yet.
-        // Use the MODULE's directory (not package root) for sibling lookup - this is
-        // important for platform modules where siblings are in the same subdir.
-        const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
+        var imported_modules = std.ArrayList(CanonicalizeImport).empty;
+        defer imported_modules.deinit(self.gpa);
+        for (st.imports.items) |imp| {
+            const child = &self.modules.items[imp];
+            const child_env = child.moduleEnv() orelse
+                std.debug.panic("compile.doCanonicalize missing local env for ready import '{s}'", .{child.name});
+            try imported_modules.append(self.gpa, .{
+                .import_name = child.name,
+                .module_env = child_env,
+            });
+        }
+        for (st.external_imports.items) |import_name| {
+            const resolver = self.resolver orelse
+                std.debug.panic("compile.doCanonicalize missing resolver for external import '{s}'", .{import_name});
+            const ext_env = resolver.getEnv(resolver.ctx, self.package_name, import_name) orelse
+                std.debug.panic("compile.doCanonicalize missing ready external env for '{s}'", .{import_name});
+            try imported_modules.append(self.gpa, .{
+                .import_name = import_name,
+                .module_env = ext_env,
+            });
+        }
+
         var allocators: base.Allocators = undefined;
         allocators.initInPlace(self.gpa);
         defer allocators.deinit();
-        try canonicalizeModuleWithSiblings(
+        try canonicalizeModuleWithImports(
             &allocators,
             env,
             parse_ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            module_dir,
-            self.package_name,
-            self.resolver,
-            self.additional_known_modules.items,
-            null, // Use filesystem access check
+            imported_modules.items,
+            std.fs.path.dirname(st.path) orelse self.root_dir,
         );
 
-        const canon_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_canonicalize_ns += @intCast(canon_end - canon_start);
-        }
+        self.total_canonicalize_ns += readStageTimer(&canonicalize_timer);
 
         // Collect canonicalization diagnostics
-        const canon_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
+        var canonicalize_diagnostics_timer = startStageTimer();
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
-        const canon_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_canonicalize_diagnostics_ns += @intCast(canon_diag_end - canon_diag_start);
-        }
+        self.total_canonicalize_diagnostics_ns += readStageTimer(&canonicalize_diagnostics_timer);
 
-        // Discover imports from env.imports
-        const import_count = env.imports.imports.items.items.len;
-        var any_new: bool = false;
-        // Mark current node as visiting (gray) before exploring imports
-        st.visit_color = 1;
-        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-            const mod_name = env.getString(str_idx);
-
-            // Skip "Builtin" - it's handled via the precompiled module in module_envs_map
-            if (std.mem.eql(u8, mod_name, "Builtin")) {
-                continue;
-            }
-
-            // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
-            const qualified = hadQualifiedImport(env, mod_name);
-
-            if (qualified) {
-                // Qualified imports refer to external packages; track and schedule externally
-                try st.external_imports.append(self.gpa, mod_name);
-                if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, mod_name);
-                // External dependencies are resolved by the workspace; skip local scheduling/cycle detection
-                continue;
-            }
-
-            // Local import - schedule in this package
-            const import_path = try self.resolveModulePath(mod_name);
-            defer self.gpa.free(import_path);
-            const prev_module_count = self.modules.items.len;
-            const child_id = try self.ensureModule(mod_name, import_path);
-            // Refresh st and env pointers in case ensureModule grew the modules array
-            st = &self.modules.items[module_id];
-            env = &st.env.?;
-            const is_new_import = child_id >= prev_module_count;
-            try st.imports.append(self.gpa, child_id);
-            // parent depth + 1
-            try self.setDepthIfSmaller(child_id, st.depth + 1);
-
-            // Cycle detection for local deps
-            var child = &self.modules.items[child_id];
-            try child.dependents.append(self.gpa, module_id);
-
-            if (child.visit_color == 1 or child_id == module_id) {
-                // Build a report on the current module describing the cycle
-                var rep = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const msg = try rep.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep.addErrorMessage(msg);
-
-                // Build full cycle path lazily (rare path): child_id ... module_id -> child_id
-                if (try self.findPath(child_id, module_id)) |path| {
-                    defer self.gpa.free(path);
-                    const hdr = try rep.addOwnedString("Cycle: ");
-                    try rep.document.addText(hdr);
-                    var i: usize = 0;
-                    while (i < path.len) : (i += 1) {
-                        if (i > 0) try rep.document.addText(" -> ");
-                        try rep.document.addAnnotated(self.modules.items[path[i]].name, .emphasized);
-                    }
-                    try rep.document.addText(" -> ");
-                    try rep.document.addAnnotated(self.modules.items[path[0]].name, .emphasized);
-                    try rep.document.addLineBreak();
-                } else {
-                    // Fallback: show the detected back-edge
-                    const edge_msg = try rep.addOwnedString("Cycle edge: ");
-                    try rep.document.addText(edge_msg);
-                    try rep.document.addAnnotated(st.name, .emphasized);
-                    try rep.document.addText(" -> ");
-                    try rep.document.addAnnotated(mod_name, .emphasized);
-                    try rep.document.addLineBreak();
-                }
-
-                // Store the report on both modules for clarity
-                try st.reports.append(self.gpa, rep);
-                // Duplicate for child as well so it gets emitted too
-                var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
-                const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
-                try rep_child.addErrorMessage(child_msg);
-                const edge_msg2 = try rep_child.addOwnedString("Cycle edge: ");
-                try rep_child.document.addText(edge_msg2);
-                try rep_child.document.addAnnotated(st.name, .emphasized);
-                try rep_child.document.addText(" -> ");
-                try rep_child.document.addAnnotated(mod_name, .emphasized);
-                try rep_child.document.addLineBreak();
-                try child.reports.append(self.gpa, rep_child);
-
-                // Mark both Done and adjust counters
-                if (st.phase != .Done) {
-                    if (comptime trace_build) {
-                        std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ st.name, mod_name });
-                    }
-                    st.phase = .Done;
-                    self.remaining_modules -= 1;
-                }
-                if (child.phase != .Done) {
-                    if (comptime trace_build) {
-                        std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ mod_name, st.name });
-                    }
-                    child.phase = .Done;
-                    if (self.remaining_modules > 0) self.remaining_modules -= 1;
-                }
-
-                // Wake dependents and stop
-                for (st.dependents.items) |dep| try self.enqueue(dep);
-                for (child.dependents.items) |dep| try self.enqueue(dep);
-                if (!threading.is_freestanding) self.cond.broadcast();
-                return;
-            }
-
-            if (is_new_import) {
-                self.remaining_modules += 1;
-                any_new = true;
-            }
-        }
-
-        if (comptime trace_build) {
-            std.debug.print("[TRACE-CACHE] PHASE: {s} Canonicalize->WaitingOnImports (imports={d}, external={d})\n", .{
-                st.name,
-                st.imports.items.len,
-                st.external_imports.items.len,
-            });
-        }
-        st.phase = .WaitingOnImports;
-        // Kick off imports if any (locals only)
-        if (any_new) {
-            for (st.imports.items) |imp| try self.enqueue(imp);
-        }
-        // Also re-enqueue self to check for unblocking
+        st.phase = .TypeCheck;
         try self.enqueue(module_id);
     }
 
     fn tryUnblock(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
-        // If all imports are Done, move to TypeCheck
+        // If all imports are Done, move to Canonicalize
         var ready = true;
 
         // Local imports must be done
@@ -1040,19 +1268,22 @@ pub const PackageEnv = struct {
         }
 
         if (ready) {
-            if (comptime trace_build) {
-                std.debug.print("[TRACE-CACHE] PHASE: {s} WaitingOnImports->TypeCheck\n", .{st.name});
-            }
-            st.phase = .TypeCheck;
+            st.phase = .Canonicalize;
             // Mark as finished (black) when all children done
             st.visit_color = 2;
             try self.enqueue(module_id);
         }
     }
 
+    pub const SnapshotValidationMode = enum {
+        none,
+        checking,
+    };
+
     /// Combined canonicalization and type checking function for snapshot tool
     /// This ensures the SAME module_envs map is used for both phases
-    /// Note: Does NOT run compile-time evaluation - caller should do that separately if needed
+    /// Snapshot-only type inspection must not publish post-check lowering input.
+    /// Checked-artifact publication owns compile-time evaluation for real builds.
     /// IMPORTANT: The returned checker holds a pointer to module_envs_out, so caller must keep
     /// module_envs_out alive until they're done using the checker (e.g., for type printing)
     pub fn canonicalizeAndTypeCheckModule(
@@ -1065,6 +1296,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
         source_dir: ?[]const u8,
+        validation_mode: SnapshotValidationMode,
     ) !Check {
         // Canonicalize
         var czer = try Can.initModule(allocators, env, parse_ast, .{
@@ -1076,8 +1308,15 @@ pub const PackageEnv = struct {
         });
         czer.source_dir = source_dir;
         try czer.canonicalizeFile();
-        try czer.validateForChecking();
+        switch (validation_mode) {
+            .none => {},
+            .checking => try czer.validateForChecking(),
+        }
         czer.deinit();
+
+        env.imports.clearResolvedModules();
+        env.imports.resolveImportsByExactModuleName(env, imported_envs);
+        env.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Type check using the SAME module_envs_map
         const module_builtin_ctx: Check.BuiltinContext = .{
@@ -1098,155 +1337,83 @@ pub const PackageEnv = struct {
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
-        // For app modules with platform requirements, defer finalizing numeric defaults
-        // until after platform requirements are checked, so numeric literals can be
-        // constrained by platform types (e.g., I64) before defaulting to Dec.
-        if (env.defer_numeric_defaults) {
-            try checker.checkFileSkipNumericDefaults();
-        } else {
-            try checker.checkFile();
-        }
+        try checker.checkFile();
 
         return checker;
     }
 
-    /// Canonicalization function that also discovers sibling .roc files in the same directory
-    /// and includes additional known modules (e.g., from platform exposes).
-    /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
-    pub fn canonicalizeModuleWithSiblings(
+    const ImportedTypeModuleInfo = struct {
+        type_ident_text: []const u8,
+        statement_idx: can.CIR.Statement.Idx,
+    };
+
+    fn typeModuleInfoForImportedModule(module_env: *const ModuleEnv) ?ImportedTypeModuleInfo {
+        const type_ident = switch (module_env.module_kind) {
+            .type_module => |ident| ident,
+            else => return null,
+        };
+        const type_node_idx = module_env.getExposedNodeIndexById(type_ident) orelse return null;
+        return .{
+            .type_ident_text = module_env.getIdent(type_ident),
+            .statement_idx = @enumFromInt(type_node_idx),
+        };
+    }
+
+    fn populateCanonicalizeImports(
+        env: *ModuleEnv,
+        imported_modules: []const CanonicalizeImport,
+        module_envs_map: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
+    ) !void {
+        for (imported_modules) |imported| {
+            const import_name = imported.import_name;
+            const module_env = imported.module_env;
+            const type_module_info = typeModuleInfoForImportedModule(module_env);
+            const qualified_type_ident_text = if (type_module_info) |info| info.type_ident_text else import_name;
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(qualified_type_ident_text));
+            const statement_idx = if (type_module_info) |info| info.statement_idx else null;
+
+            if (std.mem.indexOfScalar(u8, import_name, '.')) |_| {
+                const import_ident = try env.insertIdent(base.Ident.for_text(import_name));
+                const entry: Can.AutoImportedType = .{
+                    .env = module_env,
+                    .statement_idx = statement_idx,
+                    .qualified_type_ident = qualified_ident,
+                    .is_package_qualified = true,
+                };
+                if (!module_envs_map.contains(import_ident)) {
+                    try module_envs_map.put(import_ident, entry);
+                }
+                continue;
+            }
+
+            const module_ident = try env.insertIdent(base.Ident.for_text(import_name));
+            if (!module_envs_map.contains(module_ident)) {
+                try module_envs_map.put(module_ident, .{
+                    .env = module_env,
+                    .statement_idx = statement_idx,
+                    .qualified_type_ident = qualified_ident,
+                });
+            }
+        }
+    }
+
+    pub fn canonicalizeModuleWithImports(
         allocators: *base.Allocators,
         env: *ModuleEnv,
         parse_ast: *AST,
         builtin_module_env: *const ModuleEnv,
         builtin_indices: can.CIR.BuiltinIndices,
-        root_dir: []const u8,
-        package_name: []const u8,
-        resolver: ?ImportResolver,
-        additional_known_modules: []const KnownModule,
-        io: ?Io,
+        imported_modules: []const CanonicalizeImport,
+        source_dir: ?[]const u8,
     ) !void {
         const gpa = allocators.gpa;
 
-        // Create module_envs map for explicit imported modules used during canonicalization
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         defer module_envs_map.deinit();
-
-        // Add sibling modules - use placeholder-based approach for all paths.
-        // In canonicalize-first mode, modules use placeholders during canonicalization.
-        // Actual module envs are resolved during type-checking after topological sort.
-        // The resolver's getEnv may return null for siblings not yet processed, so we
-        // always add placeholders first. If the resolver has the actual env, we use it.
-        const sibling_imports = try module_discovery.extractImportsFromAST(parse_ast, gpa);
-        defer {
-            for (sibling_imports) |imp| gpa.free(imp);
-            gpa.free(sibling_imports);
-        }
-
-        for (sibling_imports) |sibling_name| {
-            // Skip Builtin and self
-            if (std.mem.eql(u8, sibling_name, "Builtin")) continue;
-            if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
-
-            const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
-            const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
-
-            // Check if sibling file exists (via Io abstraction)
-            const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{sibling_name});
-            defer gpa.free(file_name);
-            const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
-            defer gpa.free(file_path);
-            const exists = if (io) |io_val|
-                io_val.fileExists(file_path)
-            else if (comptime threading.is_freestanding)
-                false
-            else blk: {
-                std.fs.cwd().access(file_path, .{}) catch break :blk false;
-                break :blk true;
-            };
-            if (!exists) continue;
-
-            // Try to get actual env from resolver if available
-            if (resolver) |res| {
-                if (res.getEnv(res.ctx, package_name, sibling_name)) |sibling_env| {
-                    // Resolver has actual env - use it
-                    const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
-                        const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse break :stmt_blk null;
-                        const type_node_idx = sibling_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
-                        break :stmt_blk @enumFromInt(type_node_idx);
-                    };
-
-                    try module_envs_map.put(sibling_ident, .{
-                        .env = sibling_env,
-                        .statement_idx = statement_idx,
-                        .qualified_type_ident = qualified_ident,
-                    });
-                    continue;
-                }
-            }
-
-            // Resolver doesn't have env yet (or no resolver) - add placeholder
-            // Canonicalization will proceed with placeholder, actual env resolved later
-            if (!module_envs_map.contains(sibling_ident)) {
-                try module_envs_map.put(sibling_ident, .{
-                    .env = builtin_module_env, // Placeholder
-                    .qualified_type_ident = qualified_ident,
-                    .is_placeholder = true, // Mark as placeholder
-                });
-            }
-        }
-
-        // Add additional known modules (e.g., from platform exposes for URL platforms)
-        // Use the resolver to get the ACTUAL module env if available
-        for (additional_known_modules) |km| {
-            // Extract base module name (e.g., "Stdout" from "pf.Stdout")
-            const base_module_name = if (std.mem.lastIndexOfScalar(u8, km.qualified_name, '.')) |dot_idx|
-                km.qualified_name[dot_idx + 1 ..]
-            else
-                km.qualified_name;
-
-            // Create identifiers for both the unqualified name and the qualified name
-            const base_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
-            const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
-
-            // Try to get the actual module env using the resolver
-            const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
-                if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
-                    break :blk mod_env;
-                }
-                break :blk builtin_module_env;
-            } else builtin_module_env;
-
-            // For platform type modules, set statement_idx so method lookups work correctly
-            const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
-                // Look up the type in the module's exposed_items to get the actual node index
-                const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
-                const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
-                break :stmt_blk @enumFromInt(type_node_idx);
-            } else null;
-
-            const entry = Can.AutoImportedType{
-                .env = actual_env,
-                .statement_idx = statement_idx,
-                .qualified_type_ident = base_ident,
-                .is_package_qualified = true,
-                // Mark as placeholder if using builtin env as fallback (actual env not available yet)
-                .is_placeholder = (actual_env == builtin_module_env),
-            };
-
-            // Add entry for the UNQUALIFIED name (e.g., "Stdout", "Builder")
-            // This is used for type annotations like `my_var : Builder`
-            if (!module_envs_map.contains(base_ident)) {
-                try module_envs_map.put(base_ident, entry);
-            }
-
-            // Also add entry for the QUALIFIED name (e.g., "pf.Stdout", "pf.Builder")
-            // This is used when scopeLookupModule returns the qualified module name
-            if (!module_envs_map.contains(qualified_ident)) {
-                try module_envs_map.put(qualified_ident, entry);
-            }
-        }
+        try populateCanonicalizeImports(env, imported_modules, &module_envs_map);
 
         var czer = try Can.initModule(allocators, env, parse_ast, .{
             .builtin_types = .{
@@ -1255,7 +1422,7 @@ pub const PackageEnv = struct {
             },
             .imported_modules = &module_envs_map,
         });
-        czer.source_dir = root_dir;
+        czer.source_dir = source_dir;
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -1263,16 +1430,22 @@ pub const PackageEnv = struct {
 
     /// Standalone type checking function that can be called from other tools (e.g., snapshot tool)
     /// This ensures all tools use the exact same type checking logic as production builds
+    ///
+    /// `check_alloc` owns checker/session data that dies with `TypeCheckOutput.deinit`.
+    /// `artifact_alloc` owns any published checked artifact returned in `TypeCheckOutput`.
     pub fn typeCheckModule(
-        gpa: Allocator,
+        check_alloc: Allocator,
+        artifact_alloc: Allocator,
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
-        target: roc_target.RocTarget,
-        io: ?Io,
-    ) !Check {
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        available_artifacts: []const CheckedArtifact.ImportedModuleView,
+        _: roc_target.RocTarget,
+        _: ?Io,
+    ) !TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
-        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
             .module_name = env.qualified_module_ident,
@@ -1284,58 +1457,160 @@ pub const PackageEnv = struct {
         };
 
         // Create module_envs map for explicit imported modules used during canonicalization
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
         errdefer module_envs_map.deinit();
 
-        var checker = try Check.init(
-            gpa,
+        const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts);
+        defer check_alloc.free(owner_envs);
+
+        var checker = try Check.initWithOwnerModules(
+            check_alloc,
             &env.types,
             env,
             imported_envs,
+            owner_envs,
             &module_envs_map,
             &env.store.regions,
             module_builtin_ctx,
         );
+        checker.fixupTypeWriter();
         errdefer checker.deinit();
 
-        // For app modules with platform requirements, defer finalizing numeric defaults
-        // until after platform requirements are checked, so numeric literals can be
-        // constrained by platform types (e.g., I64) before defaulting to Dec.
-        if (env.defer_numeric_defaults) {
-            try checker.checkFileSkipNumericDefaults();
-        } else {
-            try checker.checkFile();
-        }
-
-        // After type checking, evaluate top-level declarations at compile time
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target, io);
-        defer comptime_evaluator.deinit();
-        _ = try comptime_evaluator.evalAll();
+        try checker.checkFile();
 
         module_envs_map.deinit();
 
-        return checker;
+        if (moduleHasArtifactBlockingCanonicalizeDiagnostics(env) or
+            try moduleHasDuplicateTopLevelValueDefs(check_alloc, env) or
+            checkerHasArtifactBlockingProblems(&checker) or
+            env.types.containsErrContent() or
+            !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
+        {
+            return .{
+                .checker = checker,
+                .checked_artifact = null,
+            };
+        }
+
+        var checked_artifact = publishCheckedArtifactFromCheckedModule(
+            artifact_alloc,
+            env,
+            imported_envs,
+            imported_artifacts,
+            .{
+                .platform_requirement_context = null,
+                .platform_app_relation = null,
+                .explicit_roots = &.{},
+                .available_artifacts = available_artifacts,
+                .problem_store = &checker.problems,
+            },
+        ) catch |err| switch (err) {
+            error.CompileTimeProblem => return .{
+                .checker = checker,
+                .checked_artifact = null,
+            },
+            else => |other| return other,
+        };
+        errdefer checked_artifact.deinit(artifact_alloc);
+
+        return .{
+            .checker = checker,
+            .checked_artifact = checked_artifact,
+        };
+    }
+
+    pub fn publishCheckedArtifactFromCheckedModule(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        publication: ArtifactPublicationInputs,
+    ) !CheckedArtifact.CheckedModuleArtifact {
+        return publishCheckedArtifactFromCheckedModuleWithStorage(
+            gpa,
+            env,
+            .{ .checked_source = env },
+            imported_envs,
+            imported_artifacts,
+            publication,
+        );
+    }
+
+    pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
+        gpa: Allocator,
+        env: *ModuleEnv,
+        module_env_storage: CheckedArtifact.ModuleEnvStorage,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        publication: ArtifactPublicationInputs,
+    ) !CheckedArtifact.CheckedModuleArtifact {
+        var imported_source_count: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (std.mem.eql(u8, env.module_name, "Builtin") and
+                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            imported_source_count += 1;
+        }
+
+        var source_modules = try gpa.alloc(CheckedModuleSource, imported_source_count + 1);
+        defer gpa.free(source_modules);
+        var source_index: usize = 0;
+        for (imported_envs) |imported_env| {
+            if (std.mem.eql(u8, env.module_name, "Builtin") and
+                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            source_modules[source_index] = .{ .precompiled = @constCast(imported_env) };
+            source_index += 1;
+        }
+
+        const checked_module_idx_usize = imported_source_count;
+        const checked_module_idx: u32 = @intCast(checked_module_idx_usize);
+        source_modules[checked_module_idx_usize] = .{ .precompiled = env };
+
+        var typed_modules = try CheckedModules.init(gpa, source_modules);
+        defer typed_modules.deinit();
+
+        return try CheckedArtifact.publishFromTypedModule(
+            gpa,
+            &typed_modules,
+            checked_module_idx,
+            .{
+                .module_env_storage = module_env_storage,
+                .imports = imported_artifacts,
+                .available_artifacts = publication.available_artifacts,
+                .relation_artifacts = publication.relation_artifacts,
+                .platform_requirement_context = publication.platform_requirement_context,
+                .platform_app_relation = publication.platform_app_relation,
+                .explicit_roots = publication.explicit_roots,
+                .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+                .problem_store = publication.problem_store,
+            },
+        );
     }
 
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
-        var env = &st.env.?;
+        var env = st.moduleEnv().?;
 
         // Build the array of all available modules for this module's imports
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
-        // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
-
+        var imported_artifacts = std.ArrayList(CheckedArtifact.PublishImportArtifact).empty;
         // Always include Builtin first
         try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+        try imported_artifacts.append(self.gpa, .{
+            .module_idx = 0,
+            .key = self.builtin_modules.checked_artifact.key,
+            .view = CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
+        });
+        env.imports.clearResolvedModules();
 
         // Add external and local modules
-        for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+        for (env.imports.imports.items.items[0..import_count], 0..) |str_idx, i| {
+            const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
             const import_name = env.getString(str_idx);
 
             // Skip Builtin - already added above
             if (std.mem.eql(u8, import_name, "Builtin")) {
+                env.imports.setResolvedModule(import_idx, 0);
                 continue;
             }
 
@@ -1345,64 +1620,104 @@ pub const PackageEnv = struct {
             if (is_ext) {
                 if (self.resolver) |r| {
                     if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
+                        const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                         try imported_envs.append(self.gpa, ext_env_ptr);
+                        env.imports.setResolvedModule(import_idx, resolved_module_idx);
+                        if (r.getArtifact(r.ctx, self.package_name, import_name)) |artifact| {
+                            try imported_artifacts.append(self.gpa, .{
+                                .module_idx = resolved_module_idx,
+                                .key = artifact.key,
+                                .view = CheckedArtifact.importedView(artifact),
+                            });
+                        }
                     }
                     // External env not ready; skip (tryUnblock should have prevented this)
                 }
             } else {
                 const child_id = self.module_names.get(import_name).?;
                 const child = &self.modules.items[child_id];
-                // Get a pointer to the child's env (stored in the modules ArrayList)
-                // This is safe because we don't modify the modules ArrayList during type checking
-                const child_env_ptr = &child.env.?;
+                const child_env_ptr = child.moduleEnv() orelse
+                    std.debug.panic("compile.doTypeCheck missing local env for ready import '{s}'", .{child.name});
+                const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
                 try imported_envs.append(self.gpa, child_env_ptr);
+                env.imports.setResolvedModule(import_idx, resolved_module_idx);
+                if (child.checkedArtifact()) |artifact| {
+                    try imported_artifacts.append(self.gpa, .{
+                        .module_idx = resolved_module_idx,
+                        .key = artifact.key,
+                        .view = CheckedArtifact.importedView(artifact),
+                    });
+                }
             }
         }
 
-        // Resolve all imports using the shared function
-        // This matches import names to module names in imported_envs
-        env.imports.resolveImports(env, imported_envs.items);
-
-        // Resolve pending lookups that were deferred during canonicalization
-        // This converts e_lookup_pending to e_lookup_external now that all dependencies are available
-        env.store.resolvePendingLookups(env, imported_envs.items);
-
-        const check_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target, self.io);
-        defer checker.deinit();
-        const check_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_type_checking_ns += @intCast(check_end - check_start);
+        var available_artifact_views = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        errdefer available_artifact_views.deinit(self.gpa);
+        try appendAvailableArtifactViewIfMissing(
+            self.gpa,
+            &available_artifact_views,
+            CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
+        );
+        for (self.modules.items) |*module_state| {
+            if (module_state.checkedArtifact()) |artifact| {
+                try appendAvailableArtifactViewIfMissing(self.gpa, &available_artifact_views, CheckedArtifact.importedView(artifact));
+            }
         }
+        for (imported_artifacts.items) |imported| {
+            try appendAvailableArtifactViewIfMissing(self.gpa, &available_artifact_views, imported.view);
+        }
+        const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
+        defer self.gpa.free(available_artifacts);
+
+        var check_timer = startStageTimer();
+        var typecheck_output = try typeCheckModule(
+            self.gpa,
+            self.gpa,
+            env,
+            self.builtin_modules.builtin_module.env,
+            imported_envs.items,
+            imported_artifacts.items,
+            available_artifacts,
+            self.target,
+            self.io,
+        );
+        defer typecheck_output.deinit();
+        if (typecheck_output.checked_artifact != null) {
+            st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
+        }
+        self.total_type_checking_ns += readStageTimer(&check_timer);
 
         // Build reports from problems
-        const check_diag_start = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        var rb = try ReportBuilder.init(self.gpa, env, env, &checker.snapshots, &checker.problems, st.path, imported_envs.items, &checker.import_mapping, &checker.regions);
+        var check_diagnostics_timer = startStageTimer();
+        var rb = try ReportBuilder.init(
+            self.gpa,
+            env,
+            env,
+            &typecheck_output.checker.snapshots,
+            &typecheck_output.checker.problems,
+            st.path,
+            imported_envs.items,
+            &typecheck_output.checker.import_mapping,
+            &typecheck_output.checker.regions,
+        );
         defer rb.deinit();
-        for (checker.problems.problems.items) |prob| {
-            const rep = rb.build(prob) catch continue;
+        for (typecheck_output.checker.problems.problems.items) |prob| {
+            var rep = try rb.build(prob);
+            errdefer rep.deinit();
             try st.reports.append(self.gpa, rep);
         }
-        const check_diag_end = if (!threading.is_freestanding) std.time.nanoTimestamp() else 0;
-        if (!threading.is_freestanding) {
-            self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
-        }
+        self.total_check_diagnostics_ns += readStageTimer(&check_diagnostics_timer);
 
         // Comptime evaluator is managed inside typeCheckModule, no need to deinit here
 
         // Now we can safely deinit the 'imported_envs' ArrayList
         imported_envs.deinit(self.gpa);
+        imported_artifacts.deinit(self.gpa);
 
         // Note: We no longer need to free the 'imported_envs' items because they now point directly
         // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
 
         // Done
-        if (comptime trace_build) {
-            std.debug.print("[TRACE-CACHE] PHASE: {s} TypeCheck->Done (dependents={d})\n", .{
-                st.name,
-                st.dependents.items.len,
-            });
-        }
         st.phase = .Done;
         self.remaining_modules -= 1;
 

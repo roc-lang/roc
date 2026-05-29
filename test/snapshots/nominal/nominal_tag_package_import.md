@@ -13,9 +13,31 @@ blue : CC.Color
 blue = CC.Color.RGB(0,0,255)
 ~~~
 # EXPECTED
-NIL
+MODULE NOT FOUND - nominal_tag_package_import.md:5:10:5:16
+MODULE NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 # PROBLEMS
-NIL
+**MODULE NOT FOUND**
+The type `Color` is qualified by the module `styles.Color`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**nominal_tag_package_import.md:5:10:5:16:**
+```roc
+blue : CC.Color
+```
+         ^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Color` is qualified by the module `styles.Color`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**nominal_tag_package_import.md:6:10:6:16:**
+```roc
+blue = CC.Color.RGB(0,0,255)
+```
+         ^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,
@@ -53,15 +75,9 @@ blue = CC.Color.RGB(0, 0, 255)
 (can-ir
 	(d-let
 		(p-assign (ident "blue"))
-		(e-nominal-external
-			(external-module "styles.Color")
-			(e-tag (name "RGB")
-				(args
-					(e-num (value "0"))
-					(e-num (value "0"))
-					(e-num (value "255")))))
+		(e-runtime-error (tag "type_from_missing_module"))
 		(annotation
-			(ty-lookup (name "Color") (external-module "styles.Color"))))
+			(ty-malformed)))
 	(s-import (module "styles.Color")
 		(exposes)))
 ~~~

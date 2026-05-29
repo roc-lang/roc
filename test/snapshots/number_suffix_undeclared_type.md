@@ -8,19 +8,9 @@ type=expr
 0.F
 ~~~
 # EXPECTED
-UNDECLARED TYPE - number_suffix_undeclared_type.md:1:1:1:4
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _F_ is not declared in this scope.
-
-This type is referenced here:
-**number_suffix_undeclared_type.md:1:1:1:4:**
-```roc
-0.F
-```
-^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 Int,NoSpaceDotUpperIdent,
@@ -28,7 +18,7 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-typed-int (raw "0") (type ".F"))
+(e-typed-int (raw "0") (type "F"))
 ~~~
 # FORMATTED
 ~~~roc

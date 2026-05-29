@@ -8,22 +8,9 @@ type=file
 helper = |x| x + 1
 ~~~
 # EXPECTED
-MISSING MAIN! FUNCTION - default_app_no_main.md:1:1:1:19
+NIL
 # PROBLEMS
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**default_app_no_main.md:1:1:1:19:**
-```roc
-helper = |x| x + 1
-```
-^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
@@ -55,16 +42,18 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-num (value "1"))))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 43)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-num (value "1")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.plus : a, Dec -> a]")))
+		(patt (type "a -> a where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.plus : a, Dec -> a]"))))
+		(expr (type "a -> a where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
 ~~~

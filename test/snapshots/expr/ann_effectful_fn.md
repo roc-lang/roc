@@ -13,27 +13,20 @@ type=expr
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - ann_effectful_fn.md:3:5:3:19
+DECLARATION HAS NO VALUE - ann_effectful_fn.md:2:5:2:31
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `launchTheNukes` is being redeclared in this scope.
-
-The redeclaration is here:
-**ann_effectful_fn.md:3:5:3:19:**
-```roc
-    launchTheNukes = |{}| ...
-```
-    ^^^^^^^^^^^^^^
-
-But `launchTheNukes` was already defined here:
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
 **ann_effectful_fn.md:2:5:2:31:**
 ```roc
     launchTheNukes : {} => Try Bool LaunchNukeErr
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
@@ -121,13 +114,13 @@ EndOfFile,
 			(args
 				(p-record-destructure
 					(destructs)))
-			(e-not-implemented)))
-	(e-call
+			(e-runtime-error (tag "not_implemented"))))
+	(e-call (constraint-fn-var 57)
 		(e-lookup-local
 			(p-assign (ident "launchTheNukes")))
 		(e-empty_record)))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

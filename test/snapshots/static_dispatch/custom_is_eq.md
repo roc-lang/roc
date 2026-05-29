@@ -143,25 +143,35 @@ main2 = p1 != p2
 			(args
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
-			(e-binop (op "and")
-				(e-binop (op "eq")
-					(e-dot-access (field "x")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "a")))))
-					(e-dot-access (field "x")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "b"))))))
-				(e-binop (op "eq")
-					(e-dot-access (field "y")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "a")))))
-					(e-dot-access (field "y")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "b"))))))))
+			(e-if
+				(if-branches
+					(if-branch
+						(e-method-eq (negated "false")
+							(lhs
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(rhs
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b")))))))
+						(e-method-eq (negated "false")
+							(lhs
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(rhs
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b")))))))))
+				(if-else
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "False"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Point") (local))
@@ -189,20 +199,24 @@ main2 = p1 != p2
 			(ty-lookup (name "Point") (local))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "p1")))
-			(e-lookup-local
-				(p-assign (ident "p2"))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "p1"))))
+			(rhs
+				(e-lookup-local
+					(p-assign (ident "p2")))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(d-let
 		(p-assign (ident "main2"))
-		(e-binop (op "ne")
-			(e-lookup-local
-				(p-assign (ident "p1")))
-			(e-lookup-local
-				(p-assign (ident "p2"))))
+		(e-method-eq (negated "true")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "p1"))))
+			(rhs
+				(e-lookup-local
+					(p-assign (ident "p2")))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-nominal-decl

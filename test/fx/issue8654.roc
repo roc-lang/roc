@@ -2,7 +2,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
 
-# Minimal reproduction of is_eq method lookup failure
+# Minimal regression for equality dispatch on nominal tags.
 
 # Define a nominal type with a custom is_eq method
 Animal := [Dog(Str), Cat(Str)].{
@@ -19,7 +19,6 @@ main! = || {
 	cat : Animal
 	cat = Cat("Whiskers")
 
-	# This line crashes with: Error evaluating: MethodLookupFailed
 	result = dog == cat
 
 	Stdout.line!(Str.inspect(result))

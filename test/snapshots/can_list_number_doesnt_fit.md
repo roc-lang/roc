@@ -8,9 +8,20 @@ type=expr
 [1.U8, 2.U8, 300]
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - can_list_number_doesnt_fit.md:1:14:1:17
 # PROBLEMS
-NIL
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**can_list_number_doesnt_fit.md:1:14:1:17:**
+```roc
+[1.U8, 2.U8, 300]
+```
+             ^^^
+
+The inferred type is:
+
+    U8
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,CloseSquare,
@@ -19,8 +30,8 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (e-list
-	(e-typed-int (raw "1") (type ".U8"))
-	(e-typed-int (raw "2") (type ".U8"))
+	(e-typed-int (raw "1") (type "U8"))
+	(e-typed-int (raw "2") (type "U8"))
 	(e-int (raw "300")))
 ~~~
 # FORMATTED
@@ -37,5 +48,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(U8)"))
+(expr (type "List(Error)"))
 ~~~

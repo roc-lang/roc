@@ -30,7 +30,6 @@ pub const ImportExtractor = *const fn (context: ImportContext, module_name: []co
 /// Parameters:
 ///   gpa: Allocator for result and temporary allocations
 ///   module_names: List of module names to sort
-///   module_dir: Directory containing the modules
 ///   extractor: Function to extract imports from a module
 ///   extractor_ctx: Context pointer passed to extractor
 ///
@@ -39,7 +38,6 @@ pub const ImportExtractor = *const fn (context: ImportContext, module_name: []co
 pub fn sortByDependency(
     gpa: Allocator,
     module_names: []const []const u8,
-    module_dir: []const u8,
     extractor: ImportExtractor,
     extractor_ctx: *anyopaque,
 ) ![][]const u8 {
@@ -82,8 +80,6 @@ pub fn sortByDependency(
         .gpa = gpa,
         .available_modules = module_names,
     };
-    _ = module_dir; // Will be used when we integrate with file-based extraction
-
     for (module_names, 0..) |name, i| {
         const imports = try extractor(context, name);
         defer {

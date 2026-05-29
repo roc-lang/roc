@@ -10,7 +10,7 @@ sum = 1 + 2
 # MONO
 ~~~roc
 sum : Dec
-sum = 3
+sum = 1.plus(2)
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,7 +41,11 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "sum"))
-		(e-num (value "3"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 71)
+			(receiver
+				(e-num (value "1")))
+			(args
+				(e-num (value "2"))))))
 ~~~
 # TYPES
 ~~~clojure

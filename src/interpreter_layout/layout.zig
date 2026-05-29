@@ -110,11 +110,6 @@ pub const Idx = enum(@Type(.{
     /// Used by ArrayListMap as the empty slot marker.
     pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
 
-    /// Sentinel for call expressions where the function is resolved by name
-    /// (e.g., external method calls like `List.map`), not by closure dispatch.
-    /// The dev backend resolves these via symbol lookup, so no closure layout is needed.
-    pub const named_fn: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type) - 1);
-
     /// Default numeric type for unbound/polymorphic numbers.
     /// Dec is the default in the new Roc compiler.
     pub const default_num: Idx = .dec;
@@ -148,6 +143,13 @@ pub const LayoutUnion = packed union {
     tag_union: TagUnionLayout,
 };
 
+/// Field name plus the module that owns the Ident.Idx.
+/// This is explicit provenance so later stages never guess which ident store to use.
+pub const FieldName = struct {
+    module_idx: u32,
+    ident: Ident.Idx,
+};
+
 /// Unified struct field layout — used for both records and tuples at the layout level.
 /// At the LIR level, records and tuples are both just contiguous fields sorted by alignment.
 /// The `index` field stores the original source-level index:
@@ -160,12 +162,8 @@ pub const StructField = struct {
     layout: Idx,
     /// DEPRECATED: Optional field name (set for records, unset for tuples).
     ///
-    /// This field is incorrect by construction. `Ident.Idx` is module-local, but
-    /// by the time we have lowered to layouts the notion of "which module this
-    /// came from" has intentionally been erased. There is no principled way to
-    /// recover the correct `Ident.Store` from layout data alone, so looking this
-    /// up can only work by accident in the special case where the caller both has
-    /// access to the right ident store and happens to choose it.
+    /// This field is deprecated but now includes explicit module provenance so
+    /// lookups can be correct without heuristics.
     ///
     /// The long-term direction is to delete this field entirely.
     ///
@@ -181,7 +179,7 @@ pub const StructField = struct {
     /// go away. Once the remaining transitional lowering/layout consumers are
     /// removed or rewritten to use a non-name-based mechanism, this field should go
     /// from deprecated to deleted.
-    name: Ident.Idx = Ident.Idx.NONE,
+    name: FieldName = .{ .module_idx = std.math.maxInt(u32), .ident = Ident.Idx.NONE },
 
     /// A SafeMultiList for storing struct fields
     pub const SafeMultiList = collections.SafeMultiList(StructField);

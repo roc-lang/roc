@@ -254,25 +254,29 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-binop (op "add")
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "a")))))
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "b")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 209)
+							(receiver
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(args
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-binop (op "add")
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "a")))))
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "b"))))))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 227)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(args
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Vec") (local))
@@ -287,25 +291,29 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-binop (op "sub")
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "a")))))
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "b")))))))
+						(e-dispatch-call (method "minus") (constraint-fn-var 302)
+							(receiver
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(args
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-binop (op "sub")
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "a")))))
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "b"))))))))))
+						(e-dispatch-call (method "minus") (constraint-fn-var 320)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(args
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Vec") (local))
@@ -320,25 +328,29 @@ main = (added, subtracted, multiplied)
 			(e-record
 				(fields
 					(field (name "x")
-						(e-binop (op "mul")
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "a")))))
-							(e-dot-access (field "x")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "b")))))))
+						(e-dispatch-call (method "times") (constraint-fn-var 395)
+							(receiver
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(args
+								(e-field-access (field "x")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b"))))))))
 					(field (name "y")
-						(e-binop (op "mul")
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "a")))))
-							(e-dot-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "b"))))))))))
+						(e-dispatch-call (method "times") (constraint-fn-var 413)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "a"))))))
+							(args
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "b")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Vec") (local))
@@ -366,29 +378,35 @@ main = (added, subtracted, multiplied)
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "added"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "v1")))
-			(e-lookup-local
-				(p-assign (ident "v2"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 883)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "v1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "v2")))))
 		(annotation
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "subtracted"))
-		(e-binop (op "sub")
-			(e-lookup-local
-				(p-assign (ident "v1")))
-			(e-lookup-local
-				(p-assign (ident "v2"))))
+		(e-dispatch-call (method "minus") (constraint-fn-var 904)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "v1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "v2")))))
 		(annotation
 			(ty-lookup (name "Vec") (local))))
 	(d-let
 		(p-assign (ident "multiplied"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "v1")))
-			(e-lookup-local
-				(p-assign (ident "v2"))))
+		(e-dispatch-call (method "times") (constraint-fn-var 925)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "v1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "v2")))))
 		(annotation
 			(ty-lookup (name "Vec") (local))))
 	(d-let

@@ -90,6 +90,7 @@ pub const UnbundleError = error{
     DecompressionFailed,
     InvalidTarHeader,
     UnexpectedEndOfStream,
+    ReadFailed,
     FileCreateFailed,
     DirectoryCreateFailed,
     FileWriteFailed,
@@ -632,6 +633,7 @@ pub fn unbundleStream(
                 extract_writer.streamFile(tar_file.name, &tar_file_reader.interface, tar_file_size) catch |err| {
                     switch (err) {
                         error.UnexpectedEndOfStream => return error.UnexpectedEndOfStream,
+                        error.ReadFailed => return error.ReadFailed,
                         else => return error.FileWriteFailed,
                     }
                 };
@@ -652,6 +654,7 @@ pub fn unbundleStream(
     decompress_reader.verifyComplete() catch |err| {
         switch (err) {
             error.HashMismatch => return error.HashMismatch,
+            error.ReadFailed => return error.ReadFailed,
         }
     };
 }

@@ -274,6 +274,16 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     frac_patt,
+    /// Integer pattern with explicit type annotation.
+    /// * main_token - Token index of the integer literal
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
+    typed_int_patt,
+    /// Fractional pattern with explicit type annotation.
+    /// * main_token - Token index of the fractional literal
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
+    typed_frac_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -340,13 +350,13 @@ pub const Tag = enum {
     frac,
     /// An integer with explicit type annotation: 123.U64
     /// * main_token - Token index of the integer literal
-    /// * lhs - Token index of the type (e.g., .U64)
-    /// * rhs - Unused
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
     typed_int,
     /// A fractional with explicit type annotation: 3.14.Dec
     /// * main_token - Token index of the fractional literal
-    /// * lhs - Token index of the type (e.g., .Dec)
-    /// * rhs - Unused
+    /// * lhs - Ident index of the type
+    /// * rhs - NumericLiteral.Idx
     typed_frac,
     /// A character literal enclosed in single quotes
     /// Example: 'a'
@@ -410,11 +420,15 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     record_update,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// Record field access.
+    /// * lhs - receiver expr
+    /// * rhs - field ident expr
     field_access,
+    /// Method call syntax `a.foo(...)`.
+    /// * main_token - dotted method token
+    /// * lhs - receiver expr
+    /// * rhs - extra_data index storing [args_start, args_len]
+    method_call,
     /// Tuple element access: tuple.0, tuple.1, etc.
     /// * lhs - node index of tuple expression
     /// * main_token - the element index token (NoSpaceDotInt or DotInt)
@@ -423,7 +437,7 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    local_dispatch,
+    arrow_call,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - node index of left expression

@@ -8,19 +8,9 @@ type=expr
 if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_expression.md:1:4:1:5
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**if_expression.md:1:4:1:5:**
-```roc
-if x > 5 "big" else "small"
-```
-   ^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwIf,LowerIdent,OpGreaterThan,Int,StringStart,StringPart,StringEnd,KwElse,StringStart,StringPart,StringEnd,
@@ -46,9 +36,11 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-binop (op "gt")
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-num (value "5")))
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 49)
+				(receiver
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(args
+					(e-num (value "5"))))
 			(e-string
 				(e-literal (string "big")))))
 	(if-else

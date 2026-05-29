@@ -39,11 +39,17 @@ pub const Problem = union(enum) {
     unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    polymorphic_value: VarWithSnapshot,
+    effectful_top_level: EffectfulTopLevel,
+    effectful_expect: EffectfulExpect,
+    annotation_only_value: AnnotationOnlyValue,
+    hosted_unboxed_function: HostedUnboxedFunction,
     platform_def_not_found: PlatformDefNotFound,
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
+    invalid_numeric_literal: InvalidNumericLiteral,
     non_exhaustive_match: NonExhaustiveMatch,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
@@ -64,6 +70,26 @@ pub const PlatformAliasNotFound = struct {
 pub const PlatformDefNotFound = struct {
     expected_def_ident: Ident.Idx,
     ctx: enum { not_found, found_but_not_exported },
+};
+
+/// Hosted functions cannot accept or return unboxed functions.
+pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// A standalone type annotation without an implementation cannot be used as a runtime value.
+pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A top-level value definition performs effects while initializing.
+pub const EffectfulTopLevel = struct {
+    region: base.Region,
+};
+
+/// An expect expression performs effects while evaluating its condition.
+pub const EffectfulExpect = struct {
+    region: base.Region,
 };
 
 // comptime errors //

@@ -53,7 +53,7 @@ NO CHANGE
 		(e-lookup-local
 			(p-assign (ident "first_name")))
 		(e-literal (string " "))
-		(e-dot-access (field "last_name")
+		(e-field-access (field "last_name")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "rest")))))

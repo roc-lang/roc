@@ -70,32 +70,38 @@ NO CHANGE
 			(args
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "a")))
-				(e-lookup-local
-					(p-assign (ident "b")))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 56)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "a"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "b"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "U8") (builtin)))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "addU8")))
-				(e-num (value "1"))
-				(e-num (value "2")))
-			(e-num (value "3"))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 126)
+					(e-lookup-local
+						(p-assign (ident "addU8")))
+					(e-num (value "1"))
+					(e-num (value "2"))))
+			(rhs
+				(e-num (value "3")))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call
-				(e-lookup-local
-					(p-assign (ident "addU8")))
-				(e-num (value "0"))
-				(e-num (value "10")))
-			(e-num (value "10")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 449)
+					(e-lookup-local
+						(p-assign (ident "addU8")))
+					(e-num (value "0"))
+					(e-num (value "10"))))
+			(rhs
+				(e-num (value "10"))))))
 ~~~
 # TYPES
 ~~~clojure

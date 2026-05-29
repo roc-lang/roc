@@ -11,18 +11,24 @@ match list {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_destructure_scoping.md:1:7:1:11
+POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_destructure_scoping.md:1:7:1:11:**
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**list_destructure_scoping.md:1:1:4:2:**
 ```roc
 match list {
+    [first] => first
+    [first, second] => first + second
+}
 ```
-      ^^^^
 
+
+Its type is:
+```roc
+a where [a.plus : a, a -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -80,11 +86,13 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "first")))
-						(e-lookup-local
-							(p-assign (ident "second")))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 26)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "second"))))))))))
 ~~~
 # TYPES
 ~~~clojure

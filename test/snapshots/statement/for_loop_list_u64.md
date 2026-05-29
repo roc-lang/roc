@@ -92,21 +92,25 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-assign (ident "total_"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "total_")))
-							(e-lookup-local
-								(p-assign (ident "n")))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 378)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "total_"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "n"))))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "total_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "sum")))
-			(e-num (value "15")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "sum"))))
+			(rhs
+				(e-num (value "15"))))))
 ~~~
 # TYPES
 ~~~clojure

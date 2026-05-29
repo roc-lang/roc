@@ -130,6 +130,6 @@ test "decode invalid" {
         "JEKNVnkbo3jma5nREBBJCDoXFVeKkD56V3xKrvRmWxFH", // first that doesn't fit in u256
     };
     for (invalid) |c| {
-        _ = try std.testing.expectError(error.InvalidBase58, decode(c));
+        try std.testing.expectError(error.InvalidBase58, decode(c));
     }
 }

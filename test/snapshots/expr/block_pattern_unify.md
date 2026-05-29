@@ -13,20 +13,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - block_pattern_unify.md:3:5:3:8
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `str` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
-The unused variable is declared here:
-**block_pattern_unify.md:3:5:3:8:**
-```roc
-    str = "hello"
-```
-    ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -76,10 +65,12 @@ EndOfFile,
 			(e-literal (string "hello"))))
 	(s-let
 		(p-assign (ident "result"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "x")))
-			(e-num (value "5"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 87)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "x"))))
+			(args
+				(e-num (value "5")))))
 	(e-lookup-local
 		(p-assign (ident "result"))))
 ~~~

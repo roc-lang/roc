@@ -13,32 +13,9 @@ match items {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - middle_rest.md:1:7:1:12
-UNUSED VARIABLE - middle_rest.md:1:1:1:1
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**middle_rest.md:1:7:1:12:**
-```roc
-match items {
-```
-      ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `middle` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
-The unused variable is declared here:
-**middle_rest.md:1:1:1:1:**
-```roc
-match items {
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -109,11 +86,13 @@ match items {
 								(p-assign (ident "last")))
 							(rest-at (index 1)))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "first")))
-						(e-lookup-local
-							(p-assign (ident "last"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 44)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "last")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -126,17 +105,23 @@ match items {
 							(rest-at (index 2)
 								(p-assign (ident "middle"))))))
 				(value
-					(e-binop (op "add")
-						(e-binop (op "add")
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "a")))
-								(e-lookup-local
-									(p-assign (ident "b"))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 52)
+						(receiver
+							(e-dispatch-call (method "plus") (constraint-fn-var 50)
+								(receiver
+									(e-dispatch-call (method "plus") (constraint-fn-var 48)
+										(receiver
+											(e-lookup-local
+												(p-assign (ident "a"))))
+										(args
+											(e-lookup-local
+												(p-assign (ident "b"))))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "x"))))))
+						(args
 							(e-lookup-local
-								(p-assign (ident "x"))))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

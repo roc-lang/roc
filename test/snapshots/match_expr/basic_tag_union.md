@@ -12,20 +12,8 @@ match color {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
 TYPE MISMATCH - basic_tag_union.md:3:10:3:11
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `color` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**basic_tag_union.md:1:7:1:12:**
-```roc
-match color {
-```
-      ^^^^^
-
-
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
 **basic_tag_union.md:3:10:3:11:**

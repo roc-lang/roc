@@ -58,16 +58,31 @@ pub const BuiltinIdents = struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    /// Unqualified numeric type identifiers (U8, I8, etc)
+    u8: Ident.Idx,
+    i8: Ident.Idx,
+    u16: Ident.Idx,
+    i16: Ident.Idx,
+    u32: Ident.Idx,
+    i32: Ident.Idx,
+    u64: Ident.Idx,
+    i64: Ident.Idx,
+    u128: Ident.Idx,
+    i128: Ident.Idx,
+    f32: Ident.Idx,
+    f64: Ident.Idx,
+    dec: Ident.Idx,
 
     /// Check if a nominal type is a builtin numeric type.
     /// Numeric types have [] as backing but are inhabited primitives.
     pub fn isBuiltinNumericType(self: BuiltinIdents, nominal: types.NominalType) bool {
-        // First check if it's from the Builtin module
-        if (!nominal.origin_module.eql(self.builtin_module)) {
-            return false;
-        }
-        // Then check if it's one of the numeric types
-        const ident = nominal.ident.ident_idx;
+        return self.isBuiltinNumericIdent(nominal.ident.ident_idx);
+    }
+
+    /// Check if an ident refers to a builtin numeric type.
+    pub fn isBuiltinNumericIdent(self: BuiltinIdents, ident: Ident.Idx) bool {
+        // Numeric types are builtin and have reserved names; treat them as builtin
+        // regardless of origin module to avoid false "uninhabited" errors.
         return ident.eql(self.u8_type) or
             ident.eql(self.i8_type) or
             ident.eql(self.u16_type) or
@@ -80,7 +95,20 @@ pub const BuiltinIdents = struct {
             ident.eql(self.i128_type) or
             ident.eql(self.f32_type) or
             ident.eql(self.f64_type) or
-            ident.eql(self.dec_type);
+            ident.eql(self.dec_type) or
+            ident.eql(self.u8) or
+            ident.eql(self.i8) or
+            ident.eql(self.u16) or
+            ident.eql(self.i16) or
+            ident.eql(self.u32) or
+            ident.eql(self.i32) or
+            ident.eql(self.u64) or
+            ident.eql(self.i64) or
+            ident.eql(self.u128) or
+            ident.eql(self.i128) or
+            ident.eql(self.f32) or
+            ident.eql(self.f64) or
+            ident.eql(self.dec);
     }
 };
 
@@ -690,15 +718,15 @@ pub fn convertMatchBranches(
     };
 }
 
-// Pattern Reification
+// Pattern Resolution
 //
 // These functions resolve unresolved patterns to concrete patterns using type information.
-// In the 1-phase design, reification happens on-demand during usefulness checking,
+// In the 1-phase design, resolution happens on-demand during usefulness checking,
 // and type errors are propagated immediately rather than silently skipped.
 
-/// Errors that can occur during pattern reification.
+/// Errors that can occur during pattern resolution.
 /// These indicate type mismatches that prevent exhaustiveness checking.
-pub const ReifyError = error{
+pub const PatternResolveError = error{
     OutOfMemory,
     /// Type couldn't be resolved (e.g., polymorphic type with unknown structure)
     TypeError,
@@ -992,6 +1020,10 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
 
                     // Aliases - check the backing type
                     .alias => |alias| {
+                        if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
+                            try results.append(gpa, true);
+                            continue;
+                        }
                         const backing_var = type_store.getAliasBackingVar(alias);
                         try work_list.append(gpa, .{ .check_type = backing_var });
                     },
@@ -1175,7 +1207,7 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
 
     if (num_tags == 0) {
         // No tags - result depends only on whether extension is open
-        // Push false, then check_open_extension will override if extension is open
+        // Push false, then check_open_extension records true when the extension is open
         try work_list.append(gpa, .{ .check_open_extension = final_ext });
         try work_list.append(gpa, .{ .or_combine = 0 }); // Empty OR = false
     } else {
@@ -1269,7 +1301,7 @@ fn isSketchedPatternInhabited(
     builtin_idents: BuiltinIdents,
     patterns: []const UnresolvedPattern,
     column_types: ColumnTypes,
-) ReifyError!bool {
+) PatternResolveError!bool {
     if (patterns.len == 0) return true;
     if (column_types.types.len == 0) return true;
 
@@ -1785,7 +1817,7 @@ pub const ColumnTypes = struct {
     ///
     /// Returns error.TypeError if the payload types don't match the expected arity.
     /// This can happen for records where the pattern destructures fewer fields
-    /// than the actual record type has. This is a known limitation of the reified
+    /// than the actual record type has. This is a known limitation of the resolved
     /// pattern algorithm that treats record fields positionally instead of by name.
     ///
     /// When this happens, exhaustiveness checking is skipped for the match expression.
@@ -1845,6 +1877,23 @@ pub const ColumnTypes = struct {
         @memcpy(new_types[0..field_types.len], field_types);
         if (self.types.len > 1) {
             @memcpy(new_types[field_types.len..], self.types[1..]);
+        }
+
+        return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
+    }
+
+    /// Specialize a synthetic guard constructor.
+    ///
+    /// Guard wrappers are not real scrutinee constructors. They add one column
+    /// for the guard condition and one column for the original pattern.
+    pub fn specializeByGuard(self: ColumnTypes, allocator: std.mem.Allocator) error{OutOfMemory}!ColumnTypes {
+        std.debug.assert(self.types.len > 0);
+
+        const new_types = try allocator.alloc(Var, self.types.len + 1);
+        new_types[0] = self.types[0];
+        new_types[1] = self.types[0];
+        if (self.types.len > 1) {
+            @memcpy(new_types[2..], self.types[1..]);
         }
 
         return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
@@ -1941,7 +1990,7 @@ fn buildListCtorsForChecking(
 // be properly compared even though they list fields in different orders.
 
 /// A matrix of sketched (unresolved) patterns for exhaustiveness checking.
-/// Patterns are reified on-demand when type information is needed.
+/// Patterns are resolved on-demand when type information is needed.
 pub const SketchedMatrix = struct {
     rows: []const []const UnresolvedPattern,
     allocator: std.mem.Allocator,
@@ -1966,7 +2015,7 @@ pub const SketchedMatrix = struct {
 };
 
 /// Result of collecting constructors from the first column of a sketched matrix.
-/// When reifying fails, returns an error.
+/// When resolving fails, returns an error.
 const CollectedCtorsSketched = union(enum) {
     /// Only wildcards/anything - pattern is not exhaustive by itself
     non_exhaustive_wildcards,
@@ -1983,14 +2032,14 @@ const CollectedCtorsSketched = union(enum) {
 };
 
 /// Collect constructors from the first column of a sketched matrix.
-/// Reifies constructor patterns on-demand to get union information.
+/// Resolves constructor patterns on-demand to get union information.
 fn collectCtorsSketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
     matrix: SketchedMatrix,
     first_col_type: Var,
-) ReifyError!CollectedCtorsSketched {
+) PatternResolveError!CollectedCtorsSketched {
     if (matrix.isEmpty()) return .non_exhaustive_wildcards;
 
     const first_col = try matrix.firstColumn();
@@ -2345,7 +2394,7 @@ fn recurseIntoAllCtors(
     alternatives: []const CtorInfo,
     union_info: Union,
     first_col_type: Var,
-) ReifyError![]const Pattern {
+) PatternResolveError![]const Pattern {
     for (alternatives) |alt| {
         // Skip uninhabited constructors
         const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
@@ -2364,6 +2413,7 @@ fn recurseIntoAllCtors(
         // Use field-name-based lookup for records, positional for everything else
         const specialized_types = switch (union_info.render_as) {
             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+            .guard => try column_types.specializeByGuard(allocator),
             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
         };
         const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open);
@@ -2397,8 +2447,8 @@ fn recurseIntoAllCtors(
 }
 
 /// Check if a sketched pattern matrix is exhaustive.
-/// Reifies patterns on-demand when type information is needed.
-/// Returns missing patterns as reified Pattern for error messages.
+/// Resolves patterns on-demand when type information is needed.
+/// Returns missing patterns as resolved Pattern for error messages.
 pub fn checkExhaustiveSketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
@@ -2407,7 +2457,7 @@ pub fn checkExhaustiveSketched(
     column_types: ColumnTypes,
     ext_vars_to_close: *std.ArrayList(Var),
     ext_vars_to_keep_open: *std.ArrayList(Var),
-) ReifyError![]const Pattern {
+) PatternResolveError![]const Pattern {
     const n = column_types.len();
 
     // Base case: empty matrix with columns to fill = not exhaustive
@@ -2516,6 +2566,7 @@ pub fn checkExhaustiveSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            .guard => try column_types.specializeByGuard(allocator),
                             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types, ext_vars_to_close, ext_vars_to_keep_open);
@@ -2624,7 +2675,7 @@ pub fn checkExhaustiveSketched(
 }
 
 /// Check if a new sketched pattern row is "useful" given existing sketched rows.
-/// Reifies patterns on-demand when type information is needed.
+/// Resolves patterns on-demand when type information is needed.
 pub fn isUsefulSketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
@@ -2632,7 +2683,7 @@ pub fn isUsefulSketched(
     existing_matrix: SketchedMatrix,
     new_row: []const UnresolvedPattern,
     column_types: ColumnTypes,
-) ReifyError!bool {
+) PatternResolveError!bool {
     // Empty matrix = new row is definitely useful, UNLESS the pattern is uninhabited
     if (existing_matrix.isEmpty()) {
         // Check if the pattern is on an uninhabited type
@@ -2748,6 +2799,7 @@ pub fn isUsefulSketched(
             // Use field-name-based lookup for records, positional for everything else
             const specialized_types = switch (merged_union_info.render_as) {
                 .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                .guard => try column_types.specializeByGuard(allocator),
                 else => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
             };
 
@@ -2866,6 +2918,7 @@ pub fn isUsefulSketched(
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            .guard => try column_types.specializeByGuard(allocator),
                             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
 
@@ -3039,7 +3092,7 @@ pub const RedundancyResultSketched = struct {
 };
 
 /// Process sketched pattern rows and identify redundant and unmatchable patterns.
-/// Uses on-demand reification for type checking.
+/// Uses on-demand resolution for type checking.
 ///
 /// A pattern is **unmatchable** if it's on an uninhabited type (e.g., `Err(_)` on `Try(I64, [])`).
 /// A pattern is **redundant** if it's covered by previous patterns (e.g., `_` after `Ok(_)` and `Err(_)`).
@@ -3049,7 +3102,7 @@ pub fn checkRedundancySketched(
     builtin_idents: BuiltinIdents,
     rows: []const UnresolvedRow,
     column_types: ColumnTypes,
-) ReifyError!RedundancyResultSketched {
+) PatternResolveError!RedundancyResultSketched {
     var non_redundant: std.ArrayList([]const UnresolvedPattern) = .empty;
     var redundant_indices: std.ArrayList(u32) = .empty;
     var redundant_regions: std.ArrayList(Region) = .empty;
@@ -3155,8 +3208,8 @@ pub const CheckResult = struct {
 /// Perform full exhaustiveness and redundancy checking on a match expression.
 ///
 /// This is the main entry point for the type checker.
-/// Uses 1-phase on-demand reification: patterns are converted to UnresolvedPattern
-/// and reified on-demand during checking when type information is needed.
+/// Uses 1-phase on-demand resolution: patterns are converted to UnresolvedPattern
+/// and resolved on-demand during checking when type information is needed.
 ///
 /// Returns `error.TypeError` when a pattern cannot be resolved due to type issues
 /// (e.g., polymorphic types, type mismatches). The caller should handle this by
@@ -3169,19 +3222,11 @@ pub fn checkMatch(
     branches_span: CIR.Expr.Match.Branch.Span,
     scrutinee_type: Var,
     overall_region: Region,
-) ReifyError!CheckResult {
+) PatternResolveError!CheckResult {
     // Use an arena for all intermediate allocations to avoid leaks
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
-
-    // The scrutinee type must be fully resolved for exhaustiveness checking.
-    // If it's still a flex/rigid var, we can't determine what constructors exist.
-    const resolved_scrutinee = type_store.resolveVar(scrutinee_type);
-    switch (resolved_scrutinee.desc.content) {
-        .flex, .rigid => return error.TypeError,
-        else => {},
-    }
 
     // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
     const sketched = try convertMatchBranches(
@@ -3191,7 +3236,7 @@ pub fn checkMatch(
         overall_region,
     );
 
-    // Create initial column types for on-demand reification
+    // Create initial column types for on-demand resolution
     const initial_types = try arena_alloc.alloc(Var, 1);
     initial_types[0] = scrutinee_type;
     const column_types = ColumnTypes{
@@ -3200,8 +3245,8 @@ pub fn checkMatch(
         .builtin_idents = builtin_idents,
     };
 
-    // Phase 2: Check redundancy with on-demand reification
-    // Patterns are reified as needed when type information is required
+    // Phase 2: Check redundancy with on-demand resolution
+    // Patterns are resolved as needed when type information is required
     const redundancy = try checkRedundancySketched(
         arena_alloc,
         type_store,

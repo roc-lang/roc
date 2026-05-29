@@ -96,7 +96,6 @@ PARSE ERROR - fuzz_hang_002.md:1:85:1:86
 PARSE ERROR - fuzz_hang_002.md:1:86:1:87
 PARSE ERROR - fuzz_hang_002.md:1:87:1:88
 PARSE ERROR - fuzz_hang_002.md:1:88:1:89
-MISSING MAIN! FUNCTION - fuzz_hang_002.md:1:1:1:89
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -1064,20 +1063,6 @@ This is an unexpected parsing error. Please check your syntax.
 {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
 ```
                                                                                        ^
-
-
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_hang_002.md:1:1:1:89:**
-```roc
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS

@@ -9,6 +9,8 @@
 //! This module uses Zig's std.compress.zstandard for decompression,
 //! making it compatible with WebAssembly targets.
 
+const std = @import("std");
+
 pub const unbundle = @import("unbundle.zig");
 pub const download = @import("download.zig");
 
@@ -35,5 +37,6 @@ pub const downloadAndExtractToBuffer = download.downloadAndExtractToBuffer;
 
 // Include tests
 test {
-    _ = @import("test_unbundle.zig");
+    const tests = @import("test_unbundle.zig");
+    std.testing.refAllDecls(tests);
 }

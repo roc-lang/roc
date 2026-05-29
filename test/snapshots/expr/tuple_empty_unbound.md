@@ -8,18 +8,9 @@ type=expr
 ()
 ~~~
 # EXPECTED
-EMPTY TUPLE NOT ALLOWED - tuple_empty_unbound.md:1:1:1:3
+NIL
 # PROBLEMS
-**EMPTY TUPLE NOT ALLOWED**
-I am part way through parsing this tuple, but it is empty:
-**tuple_empty_unbound.md:1:1:1:3:**
-```roc
-()
-```
-^^
-
-If you want to represent nothing, try using an empty record: `{}`.
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound,CloseRound,

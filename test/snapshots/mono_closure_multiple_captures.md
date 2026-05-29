@@ -14,8 +14,13 @@ result = func(1, 2)
 ~~~
 # MONO
 ~~~roc
+func = |a, b| {
+	add_ab = |x| a.plus(b).plus(x)
+	add_ab(10)
+}
+
 result : Dec
-result = 13
+result = func(1, 2)
 ~~~
 # FORMATTED
 ~~~roc
@@ -86,29 +91,37 @@ EndOfFile,
 						(e-lambda
 							(args
 								(p-assign (ident "x")))
-							(e-binop (op "add")
-								(e-binop (op "add")
+							(e-dispatch-call (method "plus") (constraint-fn-var 35)
+								(receiver
+									(e-dispatch-call (method "plus") (constraint-fn-var 33)
+										(receiver
+											(e-lookup-local
+												(p-assign (ident "a"))))
+										(args
+											(e-lookup-local
+												(p-assign (ident "b"))))))
+								(args
 									(e-lookup-local
-										(p-assign (ident "a")))
-									(e-lookup-local
-										(p-assign (ident "b"))))
-								(e-lookup-local
-									(p-assign (ident "x")))))))
-				(e-call
+										(p-assign (ident "x"))))))))
+				(e-call (constraint-fn-var 67)
 					(e-lookup-local
 						(p-assign (ident "add_ab")))
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "13"))))
+		(e-call (constraint-fn-var 135)
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "1"))
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, Dec -> c where [c.plus : c, Dec -> c]"))
+		(patt (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "c, Dec -> c where [c.plus : c, Dec -> c]"))
+		(expr (type "c, d -> c where [c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~

@@ -109,14 +109,18 @@ NO CHANGE
 						(e-block
 							(s-reassign
 								(p-assign (ident "result_"))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "result_")))
-									(e-binop (op "mul")
+								(e-dispatch-call (method "plus") (constraint-fn-var 542)
+									(receiver
 										(e-lookup-local
-											(p-assign (ident "i")))
-										(e-lookup-local
-											(p-assign (ident "j"))))))
+											(p-assign (ident "result_"))))
+									(args
+										(e-dispatch-call (method "times") (constraint-fn-var 540)
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "i"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "j"))))))))
 							(e-empty_record)))
 					(e-empty_record)))
 			(e-lookup-local
@@ -124,10 +128,12 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "product")))
-			(e-num (value "180")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "product"))))
+			(rhs
+				(e-num (value "180"))))))
 ~~~
 # TYPES
 ~~~clojure

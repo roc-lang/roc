@@ -1,8 +1,8 @@
-//! Shared canonical primitive-op vocabulary for CIR, MIR, and LIR.
+//! Shared canonical primitive-op vocabulary for canonicalization and LIR.
 //!
-//! This is the single source of truth for primitive names and their ownership
-//! contracts. Backends may still reject specific ops that should have been
-//! lowered away earlier, but there is no separate semantic/backend enum pair.
+//! This is the single source of truth for primitive names. Backends may still
+//! reject specific ops that should have been lowered away earlier, but there is
+//! no separate semantic/backend enum pair.
 
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum {
@@ -53,7 +53,6 @@ pub const LowLevel = enum {
     list_append_unsafe,
     list_concat,
     list_with_capacity,
-    list_sort_with,
     list_drop_at,
     list_sublist,
     list_set,
@@ -64,7 +63,6 @@ pub const LowLevel = enum {
     list_drop_last,
     list_take_first,
     list_take_last,
-    list_contains,
     list_reverse,
     list_reserve,
     list_release_excess_capacity,
@@ -107,7 +105,19 @@ pub const LowLevel = enum {
 
     // Numeric parsing operations
     num_from_numeral,
-    num_from_str,
+    u8_from_str,
+    i8_from_str,
+    u16_from_str,
+    i16_from_str,
+    u32_from_str,
+    i32_from_str,
+    u64_from_str,
+    i64_from_str,
+    u128_from_str,
+    i128_from_str,
+    dec_from_str,
+    f32_from_str,
+    f64_from_str,
 
     // Numeric conversion operations (U8)
     u8_to_i8_wrap,
@@ -384,6 +394,7 @@ pub const LowLevel = enum {
     // Box operations
     box_box,
     box_unbox,
+    erased_capture_load,
 
     // Comparison
     compare,
@@ -391,60 +402,220 @@ pub const LowLevel = enum {
     // Crash/panic
     crash,
 
-    pub const ArgOwnership = enum {
-        borrow,
-        consume,
+    /// Reference-counting behavior exposed by this primitive before LIR ARC
+    /// insertion. This is explicit primitive metadata, not backend policy.
+    pub const RcEffect = struct {
+        may_allocate: bool = false,
+        may_retain_or_release: bool = false,
+        may_runtime_uniqueness_check_args: u64 = 0,
+        consume_args: u64 = 0,
+        result_aliases_consumed_args: u64 = 0,
+        retain_args: u64 = 0,
+        retain_result: bool = false,
+
+        pub fn none() RcEffect {
+            return .{};
+        }
+
+        pub fn allocates() RcEffect {
+            return .{ .may_allocate = true };
+        }
+
+        pub fn allocatesRetainingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = mask != 0,
+                .retain_args = mask,
+            };
+        }
+
+        pub fn allocatesConsumingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = mask != 0,
+                .consume_args = mask,
+            };
+        }
+
+        pub fn retainsOrReleases() RcEffect {
+            return .{ .may_retain_or_release = true };
+        }
+
+        pub fn retainsResult() RcEffect {
+            return .{
+                .may_retain_or_release = true,
+                .retain_result = true,
+            };
+        }
+
+        pub fn allocatesAndRetainsOrReleases() RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+            };
+        }
+
+        pub fn runtimeUniqueness(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .may_runtime_uniqueness_check_args = mask,
+                .consume_args = mask,
+                .result_aliases_consumed_args = mask,
+            };
+        }
+
+        pub fn runtimeUniquenessRetainingArgs(runtime_mask: u64, retain_mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .may_runtime_uniqueness_check_args = runtime_mask,
+                .consume_args = runtime_mask,
+                .result_aliases_consumed_args = runtime_mask,
+                .retain_args = retain_mask,
+            };
+        }
+
+        pub fn consumesArgsRetainingArgs(consume_mask: u64, retain_mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = consume_mask != 0 or retain_mask != 0,
+                .consume_args = consume_mask,
+                .retain_args = retain_mask,
+            };
+        }
+
+        pub fn consumesArgsReturningConsumedArgsRetainingArgs(consume_mask: u64, retain_mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = consume_mask != 0 or retain_mask != 0,
+                .consume_args = consume_mask,
+                .result_aliases_consumed_args = consume_mask,
+                .retain_args = retain_mask,
+            };
+        }
     };
 
-    /// Some borrow-mode low-levels still need the source owner to remain live
-    /// until the result has been fully materialized. This is separate from
-    /// argument ownership: the source is still borrowed, but RC insertion must
-    /// not drop the owner before the low-level finishes reading from it.
-    pub fn borrowedArgNeededForResult(self: LowLevel, arg_index: usize) bool {
+    /// Return the explicit RC metadata for this primitive. The masks identify
+    /// argument positions whose refcount may be inspected for copy-on-write.
+    pub fn rcEffect(self: LowLevel) RcEffect {
         return switch (self) {
-            .list_get_unsafe => arg_index == 0,
-            else => false,
-        };
-    }
+            .str_concat => RcEffect.runtimeUniqueness(argMask(&.{0})),
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_reserve,
+            .str_release_excess_capacity,
+            => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
-    pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
-        return switch (self) {
-            .str_count_utf8_bytes => &.{.borrow},
-            .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
-            .str_concat => &.{ .consume, .borrow },
-            .str_trim, .str_trim_start, .str_trim_end => &.{.consume},
-            .str_with_ascii_lowercased, .str_with_ascii_uppercased => &.{.consume},
-            .str_repeat => &.{ .borrow, .borrow },
-            .str_with_capacity => &.{.borrow},
-            .str_reserve => &.{ .consume, .borrow },
-            .str_release_excess_capacity => &.{.consume},
-            .str_join_with => &.{ .consume, .borrow },
-            .str_split_on => &.{ .borrow, .borrow },
-            .str_to_utf8 => &.{.borrow},
-            .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
-            .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
-            .str_inspect => &.{.borrow},
+            .str_drop_prefix,
+            .str_drop_suffix,
+            .str_from_utf8,
+            => RcEffect.retainsOrReleases(),
 
-            .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
+            .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleases(),
 
-            .list_len, .list_first, .list_last, .list_split_first, .list_split_last => &.{.borrow},
-            .list_get_unsafe, .list_contains => &.{ .borrow, .borrow },
-            .list_concat => &.{ .consume, .consume },
-            .list_with_capacity => &.{.borrow},
-            .list_sort_with => &.{ .consume, .borrow },
-            .list_append_unsafe => &.{ .consume, .consume },
-            .list_drop_at, .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reserve => &.{ .consume, .borrow },
-            .list_set => &.{ .consume, .borrow, .borrow },
-            .list_prepend => &.{ .consume, .borrow },
-            .list_reverse, .list_release_excess_capacity => &.{.consume},
+            .list_drop_at,
+            .list_sublist,
+            .list_prepend,
+            .list_drop_first,
+            .list_drop_last,
+            .list_take_first,
+            .list_take_last,
+            .list_reverse,
+            .list_reserve,
+            .list_release_excess_capacity,
+            .list_split_first,
+            .list_split_last,
+            => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
-            .bool_not => &.{.borrow},
+            .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
-            .num_negate, .num_abs, .num_sqrt, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str => &.{.borrow},
-            .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_pow => &.{ .borrow, .borrow },
-            .num_from_numeral => &.{.borrow},
-            .num_from_str => &.{.borrow},
+            .list_set => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
+            .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
+
+            .list_first,
+            .list_last,
+            .list_get_unsafe,
+            => RcEffect.retainsResult(),
+
+            .str_repeat,
+            .str_from_utf8_lossy,
+            .str_split_on,
+            .str_with_capacity,
+            .str_inspect,
+            .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .i64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            .num_to_str,
+            .list_with_capacity,
+            => RcEffect.allocates(),
+
+            .str_join_with => RcEffect.allocatesConsumingArgs(argMask(&.{0})),
+
+            .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
+
+            .box_unbox,
+            .erased_capture_load,
+            => RcEffect.retainsResult(),
+
+            .str_is_eq,
+            .str_contains,
+            .str_caseless_ascii_equals,
+            .str_starts_with,
+            .str_ends_with,
+            .str_count_utf8_bytes,
+            .list_len,
+            .bool_not,
+            .num_is_eq,
+            .num_is_gt,
+            .num_is_gte,
+            .num_is_lt,
+            .num_is_lte,
+            .num_negate,
+            .num_abs,
+            .num_abs_diff,
+            .num_plus,
+            .num_minus,
+            .num_times,
+            .num_div_by,
+            .num_div_trunc_by,
+            .num_rem_by,
+            .num_mod_by,
+            .num_pow,
+            .num_sqrt,
+            .num_log,
+            .num_round,
+            .num_floor,
+            .num_ceiling,
+            .num_shift_left_by,
+            .num_shift_right_by,
+            .num_shift_right_zf_by,
+            .num_from_numeral,
+            .u8_from_str,
+            .i8_from_str,
+            .u16_from_str,
+            .i16_from_str,
+            .u32_from_str,
+            .i32_from_str,
+            .u64_from_str,
+            .i64_from_str,
+            .u128_from_str,
+            .i128_from_str,
+            .dec_from_str,
+            .f32_from_str,
+            .f64_from_str,
             .u8_to_i8_wrap,
             .u8_to_i8_try,
             .u8_to_i16,
@@ -691,10 +862,47 @@ pub const LowLevel = enum {
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            => &.{.borrow},
+            .compare,
+            .crash,
+            => RcEffect.none(),
+        };
+    }
 
-            .box_box, .box_unbox, .crash => &.{.consume},
-            .compare => &.{ .borrow, .borrow },
+    fn argMask(comptime args: []const u6) u64 {
+        comptime var mask: u64 = 0;
+        inline for (args) |arg| {
+            mask |= @as(u64, 1) << arg;
+        }
+        return mask;
+    }
+
+    pub const NumericParseSpec = union(enum) {
+        int: struct {
+            width_bytes: u8,
+            signed: bool,
+        },
+        float: struct {
+            width_bytes: u8,
+        },
+        dec,
+    };
+
+    pub fn numericParseSpec(self: LowLevel) ?NumericParseSpec {
+        return switch (self) {
+            .u8_from_str => .{ .int = .{ .width_bytes = 1, .signed = false } },
+            .i8_from_str => .{ .int = .{ .width_bytes = 1, .signed = true } },
+            .u16_from_str => .{ .int = .{ .width_bytes = 2, .signed = false } },
+            .i16_from_str => .{ .int = .{ .width_bytes = 2, .signed = true } },
+            .u32_from_str => .{ .int = .{ .width_bytes = 4, .signed = false } },
+            .i32_from_str => .{ .int = .{ .width_bytes = 4, .signed = true } },
+            .u64_from_str => .{ .int = .{ .width_bytes = 8, .signed = false } },
+            .i64_from_str => .{ .int = .{ .width_bytes = 8, .signed = true } },
+            .u128_from_str => .{ .int = .{ .width_bytes = 16, .signed = false } },
+            .i128_from_str => .{ .int = .{ .width_bytes = 16, .signed = true } },
+            .f32_from_str => .{ .float = .{ .width_bytes = 4 } },
+            .f64_from_str => .{ .float = .{ .width_bytes = 8 } },
+            .dec_from_str => .dec,
+            else => null,
         };
     }
 };

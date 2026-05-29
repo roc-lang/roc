@@ -80,15 +80,7 @@ foo = if 1 A
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-if
-			(if-branches
-				(if-branch
-					(e-num (value "1"))
-					(e-tag (name "A"))))
-			(if-else
-				(e-block
-					(e-string
-						(e-literal (string "hello"))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

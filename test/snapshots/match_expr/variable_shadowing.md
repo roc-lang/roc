@@ -11,31 +11,9 @@ match (value, other) {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - variable_shadowing.md:1:8:1:13
-UNDEFINED VARIABLE - variable_shadowing.md:1:15:1:20
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**variable_shadowing.md:1:8:1:13:**
-```roc
-match (value, other) {
-```
-       ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `other` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**variable_shadowing.md:1:15:1:20:**
-```roc
-match (value, other) {
-```
-              ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpenCurly,
@@ -92,11 +70,13 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "y"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 30)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -105,10 +85,12 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "x"))))))
 				(value
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-num (value "2"))))))))
+					(e-dispatch-call (method "times") (constraint-fn-var 63)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-num (value "2")))))))))
 ~~~
 # TYPES
 ~~~clojure

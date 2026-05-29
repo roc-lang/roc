@@ -36,7 +36,7 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
-    try std.testing.expectEqual(56, @sizeOf(StaticDispatchConstraint)); // Includes source expr + resolved dispatch target metadata
+    try std.testing.expectEqual(48, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -90,6 +90,7 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
+    from_numeral_origin: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -524,53 +525,6 @@ pub const FracRequirements = struct {
     }
 };
 
-/// Parse a number literal with an optional type suffix (e.g., "123u8", "45.67f64")
-/// Used by Can.zig for canonicalization
-pub fn parseNumeralWithSuffix(text: []const u8) struct { num_text: []const u8, suffix: ?[]const u8 } {
-    var split_index: usize = text.len;
-    var is_hex_or_bin = false;
-    var start_index: usize = 0;
-
-    // Check for negative prefix
-    var prefix_offset: usize = 0;
-    if (text.len > 0 and text[0] == '-') {
-        prefix_offset = 1;
-    }
-
-    if (text.len > prefix_offset + 2 and text[prefix_offset] == '0') {
-        switch (text[prefix_offset + 1]) {
-            'x', 'X', 'b', 'B', 'o', 'O' => {
-                is_hex_or_bin = true;
-                start_index = prefix_offset + 2; // Skip the "0x", "0b", or "0o" prefix
-            },
-            else => {},
-        }
-    }
-
-    for (text[start_index..], start_index..) |char, i| {
-        if (char >= 'a' and char <= 'z') {
-            // If we find a letter, check if it's a valid hex digit in a hex literal.
-            if (is_hex_or_bin and (char >= 'a' and char <= 'f')) {
-                // This is part of the hex number, continue.
-                continue;
-            }
-
-            // This is the start of a suffix.
-            split_index = i;
-            break;
-        }
-    }
-
-    if (split_index == text.len) {
-        return .{ .num_text = text, .suffix = null };
-    } else {
-        return .{
-            .num_text = text[0..split_index],
-            .suffix = text[split_index..],
-        };
-    }
-}
-
 // nominal types //
 
 /// A nominal user-defined type
@@ -724,6 +678,14 @@ pub const NumeralInfo = struct {
     /// Whether the literal had a decimal point
     is_fractional: bool,
 
+    /// Whether exact source digits can be represented by Dec.
+    /// Null means the literal was stored in a compact representation, or the
+    /// checker did not need exact Dec range facts for it.
+    fits_dec: ?bool,
+
+    /// Representation requirements for fractional literals.
+    frac_requirements: ?FracRequirements = null,
+
     /// Source region for error reporting
     region: base.Region,
 
@@ -744,6 +706,8 @@ pub const NumeralInfo = struct {
             .is_u128 = false,
             .is_negative = is_negative,
             .is_fractional = is_fractional,
+            .fits_dec = null,
+            .frac_requirements = null,
             .region = region,
         };
     }
@@ -755,6 +719,26 @@ pub const NumeralInfo = struct {
             .is_u128 = true,
             .is_negative = false, // u128 values are never negative
             .is_fractional = is_fractional,
+            .fits_dec = null,
+            .frac_requirements = null,
+            .region = region,
+        };
+    }
+
+    /// Create metadata for a literal whose exact digits are stored outside the
+    /// type store. Type checking only needs sign, fractional-ness, and region;
+    /// lowering consumes the recorded digit bytes.
+    pub fn fromExact(is_negative: bool, is_fractional: bool, fits_dec: ?bool, region: base.Region) NumeralInfo {
+        return .{
+            .bytes = [_]u8{0} ** 16,
+            .is_u128 = false,
+            .is_negative = is_negative,
+            .is_fractional = is_fractional,
+            .fits_dec = fits_dec,
+            .frac_requirements = if (is_fractional and fits_dec != null)
+                .{ .fits_in_f32 = true, .fits_in_dec = fits_dec.? }
+            else
+                null,
             .region = region,
         };
     }
@@ -767,36 +751,17 @@ pub const NumeralInfo = struct {
 pub const StaticDispatchConstraint = struct {
     const Self = @This();
 
-    pub const no_source_expr: u32 = std.math.maxInt(u32);
-
-    pub const ResolvedTarget = struct {
-        origin_module: Ident.Idx,
-        method_ident: Ident.Idx,
-
-        pub const none: ResolvedTarget = .{
-            .origin_module = Ident.Idx.NONE,
-            .method_ident = Ident.Idx.NONE,
-        };
-
-        pub fn isNone(self: ResolvedTarget) bool {
-            return self.origin_module.isNone() and self.method_ident.isNone();
-        }
-    };
-
     /// the dispatch fn name
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
     fn_var: Var,
     /// the origin of this constraint (operator, method call, or where clause)
     origin: Origin,
+    /// For `desugared_binop` equality constraints, whether the original source
+    /// operator was `!=` rather than `==`.
+    binop_negated: bool = false,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?NumeralInfo = null,
-    /// Expression that introduced this dispatch constraint, if known.
-    /// Used to wire resolved static dispatch targets into MIR lowering.
-    source_expr_idx: u32 = no_source_expr,
-    /// Resolved method target after constraint solving.
-    /// `.none` means unresolved or non-nominal dispatch.
-    resolved_target: ResolvedTarget = .none,
 
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = enum(u4) {

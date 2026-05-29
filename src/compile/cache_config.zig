@@ -46,7 +46,7 @@ pub const CacheConfig = struct {
     /// - Falls back to ~/.cache/roc on Unix and %APPDATA%\Roc on Windows
     /// - Uses "roc" on Unix and "Roc" on Windows as the cache dir name
     pub fn getDefaultCacheDir(self: Self, allocator: Allocator) ![]u8 {
-        // ROC_CACHE_DIR overrides all platform defaults.
+        // ROC_CACHE_DIR selects the cache root ahead of platform defaults.
         // Useful for test isolation and CI on any OS.
         if (self.io.getEnvVar("ROC_CACHE_DIR", allocator)) |roc_dir| {
             return roc_dir;
@@ -101,12 +101,20 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ base_dir, version_dir });
     }
 
-    /// Get the module cache directory (for cached ModuleEnvs).
-    pub fn getModuleCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    /// Get the checked-artifact cache directory.
+    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) ![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
+    }
+
+    /// Get the module source cache directory for tooling-owned materialized sources.
+    pub fn getModuleCacheDir(self: Self, allocator: Allocator) ![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "src" });
     }
 
     /// Get the executable cache directory (for cached linked executables).
@@ -123,11 +131,6 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
-    }
-
-    /// Alias for getModuleCacheDir for backwards compatibility.
-    pub fn getCacheEntriesDir(self: Self, allocator: Allocator) ![]u8 {
-        return self.getModuleCacheDir(allocator);
     }
 
     /// Get maximum cache size in bytes.

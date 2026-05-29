@@ -280,14 +280,7 @@ pub const CliContext = struct {
     pub fn exitCode(self: *const Self) u8 {
         return self.exit_code;
     }
-
-    // Backward compatibility aliases
-    pub const suggestedExitCode = exitCode;
-    pub const renderAll = renderProblemsTo;
 };
-
-/// Backward compatibility alias
-pub const CliErrorContext = CliContext;
 
 // Helper Functions
 

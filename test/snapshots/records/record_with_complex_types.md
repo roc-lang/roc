@@ -198,10 +198,12 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-num (value "1")))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 282)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "x"))))
+					(args
+						(e-num (value "1"))))))
 		(field (name "nested")
 			(e-record
 				(fields
@@ -234,5 +236,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ callback: a -> a, metadata: [Ok({ permissions: List([Admin, Read, Write, ..]), tags: List(Str) }), ..], name: Str, nested: { items: List([None, Some(Str), ..]), result: [Success({ data: List(Dec), timestamp: Str }), ..] }, preferences: { notifications: [Email(Str), ..], theme: [Dark, ..] }, scores: List(Dec), status: [Active({ since: Str }), ..] } where [a.plus : a, Dec -> a]"))
+(expr (type "{ callback: a -> a, metadata: [Ok({ permissions: List([Admin, Read, Write, ..]), tags: List(Str) }), ..], name: Str, nested: { items: List([None, Some(Str), ..]), result: [Success({ data: List(Dec), timestamp: Str }), ..] }, preferences: { notifications: [Email(Str), ..], theme: [Dark, ..] }, scores: List(Dec), status: [Active({ since: Str }), ..] } where [a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

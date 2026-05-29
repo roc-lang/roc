@@ -8,18 +8,22 @@ type=expr
 -rec1.field
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
+POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `rec1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unary_negation_access.md:1:2:1:6:**
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
+**unary_negation_access.md:1:1:1:12:**
 ```roc
 -rec1.field
 ```
- ^^^^
+^^^^^^^^^^^
 
+
+Its type is:
+```roc
+a where [a.negate : a -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -39,10 +43,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus
-	(e-dot-access (field "field")
-		(receiver
-			(e-runtime-error (tag "ident_not_in_scope")))))
+(e-dispatch-call (method "negate") (constraint-fn-var 13)
+	(receiver
+		(e-field-access (field "field")
+			(receiver
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(args))
 ~~~
 # TYPES
 ~~~clojure

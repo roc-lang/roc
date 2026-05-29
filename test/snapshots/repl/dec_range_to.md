@@ -1,13 +1,13 @@
 # META
 ~~~ini
-description=Dec.to - creates a list of decimals from start to end (inclusive)
+description=Dec.to - creates an iterator of decimals from start to end (inclusive)
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» 0.5.Dec.to(2.5)
-» 1.25.Dec.to(1.25)
-» 3.5.Dec.to(2.5)
+» Iter.fold(0.5.Dec.to(2.5), [], |acc, item| acc.append(item))
+» Iter.fold(1.25.Dec.to(1.25), [], |acc, item| acc.append(item))
+» Iter.fold(3.5.Dec.to(2.5), [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [0.5, 1.5, 2.5]

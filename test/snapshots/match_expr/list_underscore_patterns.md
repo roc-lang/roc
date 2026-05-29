@@ -15,19 +15,9 @@ match items {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_underscore_patterns.md:1:7:1:12
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**list_underscore_patterns.md:1:7:1:12:**
-```roc
-match items {
-```
-      ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -145,11 +135,13 @@ match items {
 								(p-underscore)
 								(p-assign (ident "y"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 85)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

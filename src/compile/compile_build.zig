@@ -17,20 +17,18 @@ const build_options = @import("build_options");
 const reporting = @import("reporting");
 const eval = @import("eval");
 const check = @import("check");
-const unbundle = @import("unbundle");
+const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const Io = @import("io").Io;
 
 const Report = reporting.Report;
-const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
 const compile_package = @import("compile_package.zig");
 const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
-const Can = can.Can;
-const Check = check.Check;
 const PackageEnv = compile_package.PackageEnv;
+const SemanticModuleData = compile_package.SemanticModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
 const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
@@ -53,6 +51,14 @@ const is_freestanding = threading.is_freestanding;
 const Mutex = threading.Mutex;
 const ThreadCondition = threading.Condition;
 
+/// Which checked-artifact publication work a build should do after ordinary
+/// checking has produced typed modules.
+pub const PostCheckPublicationMode = enum {
+    none,
+    platform_relations,
+    executable_artifacts,
+};
+
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
@@ -62,10 +68,14 @@ else
     null;
 
 fn nativeFetchUrlImpl(_: ?*anyopaque, allocator: Allocator, url: []const u8, dest_path: []const u8) Io.FetchUrlError!void {
-    var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+    if (comptime is_freestanding) {
         return error.DownloadFailed;
-    };
+    } else {
+        var alloc = allocator;
+        unbundle.download.downloadAndExtract(&alloc, url, dest_path) catch {
+            return error.DownloadFailed;
+        };
+    }
 }
 
 fn freeSlice(gpa: Allocator, s: []u8) void {
@@ -142,6 +152,16 @@ pub const BuildEnv = struct {
     filesystem: Io = Io.default(),
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
+
+    /// Controls which checked-artifact publication work runs after ordinary
+    /// checking has completed.
+    ///
+    /// Executable builds need the full platform/app relation because post-check
+    /// lowering consumes it as input. `roc check` needs the type-level
+    /// platform/app validation, but must not republish runnable platform roots;
+    /// diagnostic-only checking must not force post-check lowering of
+    /// declarations that are not part of a valid executable program.
+    post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -338,6 +358,14 @@ pub const BuildEnv = struct {
         self.target = target;
     }
 
+    pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
+        self.post_check_publication_mode = if (enabled) .executable_artifacts else .none;
+    }
+
+    pub fn setPostCheckPublicationMode(self: *BuildEnv, mode: PostCheckPublicationMode) void {
+        self.post_check_publication_mode = mode;
+    }
+
     /// Build an app file specifically (validates it's an app)
     pub fn buildApp(self: *BuildEnv, app_file: []const u8) !void {
         // Build and let the main function handle everything
@@ -423,13 +451,16 @@ pub const BuildEnv = struct {
             .root_dir = pkg_root_dir,
         });
 
-        // Transfer provides entries and targets_config from header to package for platform roots
-        if (header_info.kind == .platform) {
+        // Transfer provides entries from header to package for app or platform roots.
+        // For platforms, also transfer targets_config.
+        if (header_info.kind == .platform or header_info.kind == .app or header_info.kind == .default_app) {
             if (self.packages.getPtr(pkg_name)) |pkg| {
                 pkg.provides_entries = header_info.provides_entries;
                 header_info.provides_entries = .{}; // Prevent double-free in deinit
-                pkg.targets_config = header_info.targets_config;
-                header_info.targets_config = null; // Prevent double-free in deinit
+                if (header_info.kind == .platform) {
+                    pkg.targets_config = header_info.targets_config;
+                    header_info.targets_config = null; // Prevent double-free in deinit
+                }
             }
         }
 
@@ -506,7 +537,7 @@ pub const BuildEnv = struct {
             }
         }
 
-        // Create schedulers for compatibility with existing code paths
+        // Create schedulers used by package-level build state.
         try self.createSchedulers();
         try self.processPendingKnownModules();
 
@@ -553,32 +584,20 @@ pub const BuildEnv = struct {
 
         // Run coordinator loop
         try coord.coordinatorLoop();
-
-        if (comptime trace_build) {
-            std.debug.print("[BUILD] Coordinator loop complete, processing hosted functions...\n", .{});
+        if (!coord.hasUserErrors()) {
+            switch (self.post_check_publication_mode) {
+                .none => {},
+                .platform_relations => try coord.validatePlatformAppRelationsForCheck(),
+                .executable_artifacts => try coord.finalizeExecutableArtifacts(),
+            }
         }
 
-        // Process hosted functions and assign global indices
-        // This must happen before lowering so the CIR has correct indices
-        try self.processHostedFunctions();
-
         if (comptime trace_build) {
-            std.debug.print("[BUILD] Hosted functions processed, transferring results...\n", .{});
+            std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
         }
 
-        // Transfer results back to PackageEnv for compatibility
+        // Transfer results back to PackageEnv before platform validation and emission.
         try self.transferCoordinatorResults();
-
-        if (comptime trace_build) {
-            std.debug.print("[BUILD] Results transferred, checking platform requirements...\n", .{});
-        }
-
-        // Check platform requirements
-        try self.checkPlatformRequirements();
-
-        if (comptime trace_build) {
-            std.debug.print("[BUILD] Platform requirements checked, emitting...\n", .{});
-        }
 
         // Deterministic emission
         try self.emitDeterministic();
@@ -588,7 +607,7 @@ pub const BuildEnv = struct {
         }
     }
 
-    /// Transfer compilation results from Coordinator to PackageEnv (for compatibility)
+    /// Transfer compilation results from Coordinator to PackageEnv.
     fn transferCoordinatorResults(self: *BuildEnv) !void {
         const coord = self.coordinator orelse return;
 
@@ -634,24 +653,29 @@ pub const BuildEnv = struct {
                     std.debug.print("[TRANSFER]   Before transfer: sched_mod.reports.len={} cap={}\n", .{ sched_mod.reports.items.len, sched_mod.reports.capacity });
                 }
 
-                // Transfer env ownership - move from coordinator to scheduler
-                if (coord_mod.env) |env| {
-                    if (sched_mod.env == null) {
-                        if (comptime trace_build) {
-                            std.debug.print("[TRANSFER]   Transferring env for {s} (was_cache_hit={})\n", .{ coord_mod.name, coord_mod.was_cache_hit });
-                        }
-                        // Copy env content to scheduler (scheduler owns inline, not pointer)
-                        sched_mod.env = env.*;
-                        // Transfer the cache flag so scheduler knows not to deinit cached envs
-                        sched_mod.was_from_cache = coord_mod.was_cache_hit;
+                // Transfer semantic ownership - move from coordinator to scheduler.
+                if (coord_mod.semantic) |*coord_semantic| {
+                    std.debug.assert(sched_mod.semantic == null);
 
-                        // Free the heap-allocated struct wrapper.
-                        // IMPORTANT: Use env.gpa, not self.gpa, because the env was
-                        // allocated with env.gpa (page_allocator in multi-threaded mode).
-                        env.gpa.destroy(env);
-                        // Clear coordinator's pointer to prevent double-free during deinit
-                        coord_mod.env = null;
+                    if (comptime trace_build) {
+                        std.debug.print("[TRANSFER]   Transferring semantic data for {s}\n", .{coord_mod.name});
                     }
+
+                    const env = coord_semantic.module_env;
+                    const checked_artifact_ptr = coord_semantic.checked_artifact;
+                    sched_mod.semantic = .{
+                        .module_env = if (checked_artifact_ptr == null) env else null,
+                        .checked_artifact = if (checked_artifact_ptr) |artifact| artifact.* else null,
+                    };
+
+                    if (checked_artifact_ptr) |artifact| {
+                        const artifact_allocator = artifact.canonical_names.allocator;
+                        artifact_allocator.destroy(artifact);
+                        coord_semantic.checked_artifact = null;
+                    }
+
+                    // Clear coordinator ownership to prevent double-free during deinit.
+                    coord_mod.semantic = null;
                 }
 
                 if (comptime trace_build) {
@@ -718,326 +742,6 @@ pub const BuildEnv = struct {
         }
     }
 
-    /// Process hosted functions from all platform modules and assign global indices.
-    /// This must be called after compilation but before lowering/code generation.
-    /// The indices are used at runtime to call the correct function from RocOps.hosted_fns.
-    pub fn processHostedFunctions(self: *BuildEnv) !void {
-        if (comptime trace_build) {
-            std.debug.print("[BUILD] processHostedFunctions: starting\n", .{});
-        }
-        const coord = self.coordinator orelse return;
-        const HostedCompiler = can.HostedCompiler;
-
-        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-        defer all_hosted_fns.deinit(self.gpa);
-
-        // Find the platform package
-        var platform_pkg: ?*coordinator_mod.PackageState = null;
-        var pkg_it = coord.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg_name = entry.key_ptr.*;
-            if (self.packages.get(pkg_name)) |pkg_info| {
-                if (pkg_info.kind == .platform) {
-                    platform_pkg = entry.value_ptr.*;
-                    break;
-                }
-            }
-        }
-        const pf_pkg = platform_pkg orelse return;
-
-        // Collect hosted functions from all platform modules (except main)
-        for (pf_pkg.modules.items, 0..) |*mod, mod_idx| {
-            // Skip platform main.roc
-            if (pf_pkg.root_module_id) |root_id| {
-                if (mod_idx == root_id) continue;
-            }
-
-            if (mod.env) |platform_env| {
-                var module_fns = HostedCompiler.collectAndSortHostedFunctions(platform_env) catch continue;
-                defer module_fns.deinit(platform_env.gpa);
-
-                for (module_fns.items) |fn_info| {
-                    // Copy the name_text with our gpa
-                    const name_copy = self.gpa.dupe(u8, fn_info.name_text) catch continue;
-                    // Free original
-                    platform_env.gpa.free(fn_info.name_text);
-                    all_hosted_fns.append(self.gpa, .{
-                        .symbol_name = fn_info.symbol_name,
-                        .expr_idx = fn_info.expr_idx,
-                        .name_text = name_copy,
-                    }) catch {
-                        self.gpa.free(name_copy);
-                        continue;
-                    };
-                }
-            }
-        }
-
-        if (all_hosted_fns.items.len == 0) return;
-
-        // Sort globally by qualified name
-        const SortContext = struct {
-            pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-                return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-            }
-        };
-        std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
-
-        // Deduplicate
-        var write_idx: usize = 0;
-        for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
-            if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
-                if (write_idx != read_idx) {
-                    all_hosted_fns.items[write_idx] = fn_info;
-                }
-                write_idx += 1;
-            } else {
-                self.gpa.free(fn_info.name_text);
-            }
-        }
-        all_hosted_fns.shrinkRetainingCapacity(write_idx);
-
-        if (comptime trace_build) {
-            std.debug.print("[BUILD] Hosted functions (sorted globally, count={d}):\n", .{all_hosted_fns.items.len});
-            for (all_hosted_fns.items, 0..) |fn_info, idx| {
-                std.debug.print("[BUILD]   [{d}] {s}\n", .{ idx, fn_info.name_text });
-            }
-        }
-
-        // Reassign global indices for all platform modules (except main)
-        for (pf_pkg.modules.items, 0..) |*mod, mod_idx| {
-            if (pf_pkg.root_module_id) |root_id| {
-                if (mod_idx == root_id) continue;
-            }
-
-            if (mod.env) |platform_env| {
-                const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
-                for (all_defs) |def_idx| {
-                    const def = platform_env.store.getDef(def_idx);
-                    const expr = platform_env.store.getExpr(def.expr);
-
-                    if (expr == .e_hosted_lambda) {
-                        const hosted = expr.e_hosted_lambda;
-                        const local_name = platform_env.getIdent(hosted.symbol_name);
-
-                        // Build qualified name
-                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
-                        const qualified_name = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
-                        defer self.gpa.free(qualified_name);
-
-                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
-                            qualified_name[0 .. qualified_name.len - 1]
-                        else
-                            qualified_name;
-
-                        // Find matching global index and assign
-                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
-                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
-                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
-                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                                var payload = expr_node.getPayload().expr_hosted_lambda;
-                                payload.index = @intCast(idx);
-                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
-                                platform_env.store.nodes.set(expr_node_idx, expr_node);
-                                if (comptime trace_build) {
-                                    std.debug.print("[BUILD] Assigned global index {d} to {s}\n", .{ idx, stripped_name });
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Free name_text strings
-        for (all_hosted_fns.items) |fn_info| {
-            self.gpa.free(fn_info.name_text);
-        }
-    }
-
-    /// Check that app exports match platform requirements.
-    /// This is called after all modules are compiled and type-checked.
-    fn checkPlatformRequirements(self: *BuildEnv) !void {
-        // Find the app and platform packages
-        var app_pkg_info: ?Package = null;
-        var platform_pkg_info: ?Package = null;
-        var app_pkg_name: ?[]const u8 = null;
-        var platform_pkg_name: ?[]const u8 = null;
-
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            if (pkg.kind == .app) {
-                app_pkg_info = pkg;
-                app_pkg_name = entry.key_ptr.*;
-            } else if (pkg.kind == .platform) {
-                platform_pkg_info = pkg;
-                platform_pkg_name = entry.key_ptr.*;
-            }
-        }
-
-        // If we don't have both an app and a platform, nothing to check
-        const app_name = app_pkg_name orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No app package found\n", .{});
-            return;
-        };
-        const platform_name = platform_pkg_name orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No platform package found\n", .{});
-            return;
-        };
-        const platform_pkg = platform_pkg_info orelse return;
-
-        if (comptime trace_build) {
-            std.debug.print("[PLAT-CHECK] Found app={s} platform={s}\n", .{ app_name, platform_name });
-        }
-
-        // Get the schedulers for both packages
-        const app_sched = self.schedulers.get(app_name) orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No app scheduler found\n", .{});
-            return;
-        };
-        const platform_sched = self.schedulers.get(platform_name) orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No platform scheduler found\n", .{});
-            return;
-        };
-
-        // Get the app's root module env
-        const app_root_env = app_sched.getRootEnv() orelse {
-            if (comptime trace_build) std.debug.print("[PLAT-CHECK] No app root env found\n", .{});
-            return;
-        };
-
-        // Get the platform's root module by finding the module that matches the root file
-        // Note: getRootEnv() returns modules.items[0], but that may not be the actual platform
-        // root file if other modules (like exposed imports) were scheduled first.
-        const platform_root_module_name = PackageEnv.moduleNameFromPath(platform_pkg.root_file);
-        if (comptime trace_build) {
-            std.debug.print("[PLAT-CHECK] Looking for platform root module: {s} (from path: {s})\n", .{ platform_root_module_name, platform_pkg.root_file });
-        }
-        const platform_module_state = platform_sched.getModuleState(platform_root_module_name) orelse {
-            if (comptime trace_build) {
-                std.debug.print("[PLAT-CHECK] Platform module state not found\n", .{});
-            }
-            return;
-        };
-        const platform_root_env = if (platform_module_state.env) |*env| env else {
-            if (comptime trace_build) {
-                std.debug.print("[PLAT-CHECK] Platform root env not found\n", .{});
-            }
-            return;
-        };
-
-        if (comptime trace_build) {
-            std.debug.print("[PLAT-CHECK] Platform root env found, requires_types.len={}\n", .{platform_root_env.requires_types.items.items.len});
-        }
-
-        // If the platform has no requires_types, nothing to check
-        if (platform_root_env.requires_types.items.items.len == 0) {
-            return;
-        }
-
-        // Get builtin indices and module
-        const builtin_indices = self.builtin_modules.builtin_indices;
-        const builtin_module_env = self.builtin_modules.builtin_module.env;
-
-        // Build module_envs_map for type resolution
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
-        defer module_envs_map.deinit();
-
-        // Use the shared populateModuleEnvs function to set up auto-imported types
-        try Can.populateModuleEnvs(&module_envs_map, app_root_env, builtin_module_env, builtin_indices);
-
-        // Build builtin context for the type checker
-        const builtin_ctx = Check.BuiltinContext{
-            .module_name = app_root_env.qualified_module_ident,
-            .bool_stmt = builtin_indices.bool_type,
-            .try_stmt = builtin_indices.try_type,
-            .str_stmt = builtin_indices.str_type,
-            .builtin_module = builtin_module_env,
-            .builtin_indices = builtin_indices,
-        };
-
-        // Create type checker for the app module
-        var checker = try Check.init(
-            self.gpa,
-            &app_root_env.types,
-            app_root_env,
-            &.{}, // No imported modules needed for checking exports
-            &module_envs_map,
-            &app_root_env.store.regions,
-            builtin_ctx,
-        );
-        defer checker.deinit();
-
-        // Build the platform-to-app ident translation map
-        // This translates platform requirement idents to app idents by name
-        var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(self.gpa);
-        defer platform_to_app_idents.deinit();
-
-        // Enable runtime inserts on the app's interner so we can add new idents from platform
-        // (the app's interner may be deserialized from cache and not support inserts by default)
-        // Use app_root_env.gpa so the memory is freed by the same allocator during ModuleEnv.deinit()
-        try app_root_env.common.idents.interner.enableRuntimeInserts(app_root_env.gpa);
-
-        for (platform_root_env.requires_types.items.items) |required_type| {
-            const platform_ident_text = platform_root_env.getIdent(required_type.ident);
-            if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
-                try platform_to_app_idents.put(required_type.ident, app_ident);
-            }
-
-            // Also add for-clause type alias names (Model, model) to the translation map
-            const all_aliases = platform_root_env.for_clause_aliases.items.items;
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-            for (type_aliases_slice) |alias| {
-                // Add alias name (e.g., "Model") - look up in app's ident store first,
-                // and only insert if not found (avoids error on deserialized interners).
-                const alias_name_text = platform_root_env.getIdent(alias.alias_name);
-                const alias_app_ident = app_root_env.common.findIdent(alias_name_text) orelse
-                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(alias_name_text));
-                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
-
-                // Add rigid name (e.g., "model") - look up first, only insert if not found.
-                const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
-                const rigid_app_ident = app_root_env.common.findIdent(rigid_name_text) orelse
-                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(rigid_name_text));
-                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
-            }
-        }
-
-        // Check platform requirements against app exports
-        try checker.checkPlatformRequirements(platform_root_env, &platform_to_app_idents);
-
-        // Now finalize numeric defaults for the app module. This must happen AFTER
-        // checkPlatformRequirements so that numeric literals can be constrained by
-        // platform types (e.g., I64) before defaulting to Dec.
-        try checker.finalizeNumericDefaults();
-
-        // If there are type problems, convert them to reports and emit via sink
-        if (checker.problems.problems.items.len > 0) {
-            const app_root_module = app_sched.getRootModule() orelse return;
-
-            var rb = try ReportBuilder.init(
-                self.gpa,
-                app_root_env,
-                app_root_env,
-                &checker.snapshots,
-                &checker.problems,
-                app_root_module.path,
-                &.{},
-                &checker.import_mapping,
-                &checker.regions,
-            );
-            defer rb.deinit();
-
-            for (checker.problems.problems.items) |prob| {
-                const rep = rb.build(prob) catch continue;
-                // Emit via sink with the module name (not path) to match other reports
-                self.sink.emitReport(app_name, app_root_module.name, rep);
-            }
-        }
-    }
-
     const ResolverCtx = struct { ws: *BuildEnv };
 
     const ScheduleCtx = struct {
@@ -1052,7 +756,9 @@ pub const BuildEnv = struct {
         }
     };
 
+    // External import classification now comes from CIR qualifier metadata.
     // ModuleBuild determines external vs local using CIR qualifier metadata (s_import.qualifier_tok).
+
     fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return;
@@ -1089,7 +795,7 @@ pub const BuildEnv = struct {
         const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse return false;
         const sched = self.ws.schedulers.get(ref.name) orelse return false;
 
-        return sched.*.getEnvIfDone(qualified.module) != null;
+        return sched.*.getSemanticDataIfDone(qualified.module) != null;
     }
 
     fn resolverGetEnv(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*ModuleEnv {
@@ -1100,7 +806,10 @@ pub const BuildEnv = struct {
         const qualified = base.module_path.parseQualifiedImport(import_name) orelse {
             // Local module - look it up in the current package's scheduler
             const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
-            return cur_sched.*.getEnvIfDone(import_name);
+            return if (cur_sched.*.getSemanticDataIfDone(import_name)) |semantic|
+                semantic.env
+            else
+                null;
         };
 
         // External module - look it up via shorthands
@@ -1111,7 +820,30 @@ pub const BuildEnv = struct {
             return null;
         };
 
-        return sched.*.getEnvIfDone(qualified.module);
+        return if (sched.*.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.env
+        else
+            null;
+    }
+
+    fn resolverGetArtifact(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
+        const cur_pkg = self.ws.packages.get(current_package) orelse return null;
+
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse {
+            const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
+            return if (cur_sched.*.getSemanticDataIfDone(import_name)) |semantic|
+                semantic.checked_artifact
+            else
+                null;
+        };
+
+        const ref = cur_pkg.shorthands.get(qualified.qualifier) orelse return null;
+        const sched = self.ws.schedulers.get(ref.name) orelse return null;
+        return if (sched.*.getSemanticDataIfDone(qualified.module)) |semantic|
+            semantic.checked_artifact
+        else
+            null;
     }
 
     fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
@@ -1129,6 +861,7 @@ pub const BuildEnv = struct {
             .scheduleExternal = resolverScheduleExternal,
             .isReady = resolverIsReady,
             .getEnv = resolverGetEnv,
+            .getArtifact = resolverGetArtifact,
             .resolveLocalPath = resolverResolveLocalPath,
         };
     }
@@ -1634,13 +1367,17 @@ pub const BuildEnv = struct {
 
         // Validate URL and extract hash
         const base58_hash = download.validateUrl(url) catch |err| {
-            std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            if (comptime !is_freestanding) {
+                std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+            }
             return error.InvalidUrl;
         };
 
         // Get cache directory
         const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
-            std.log.err("Could not determine cache directory", .{});
+            if (comptime !is_freestanding) {
+                std.log.err("Could not determine cache directory", .{});
+            }
             return error.NoCacheDir;
         };
         defer self.gpa.free(cache_dir_path);
@@ -1653,7 +1390,9 @@ pub const BuildEnv = struct {
             var d = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => break :blk false,
                 else => {
-                    std.log.err("Failed to access package directory: {}", .{err});
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to access package directory: {}", .{err});
+                    }
                     return error.FileError;
                 },
             };
@@ -1663,11 +1402,15 @@ pub const BuildEnv = struct {
 
         if (!already_cached) {
             // Not cached - need to download
-            std.log.info("Downloading package from {s}...", .{url});
+            if (comptime !is_freestanding) {
+                std.log.info("Downloading package from {s}...", .{url});
+            }
 
             // Create cache directory structure
             std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
-                std.log.err("Failed to create cache directory: {}", .{make_err});
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to create cache directory: {}", .{make_err});
+                }
                 return error.FileError;
             };
 
@@ -1675,7 +1418,9 @@ pub const BuildEnv = struct {
             std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.PathAlreadyExists => {}, // Race condition, another process created it
                 else => {
-                    std.log.err("Failed to create package directory: {}", .{make_err});
+                    if (comptime !is_freestanding) {
+                        std.log.err("Failed to create package directory: {}", .{make_err});
+                    }
                     return error.FileError;
                 },
             };
@@ -1683,11 +1428,15 @@ pub const BuildEnv = struct {
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
                 std.fs.cwd().deleteTree(package_dir_path) catch {};
-                std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                if (comptime !is_freestanding) {
+                    std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                }
                 return error.DownloadFailed;
             };
 
-            std.log.info("Package cached at {s}", .{package_dir_path});
+            if (comptime !is_freestanding) {
+                std.log.info("Package cached at {s}", .{package_dir_path});
+            }
         }
 
         // Packages must have a main.roc entry point
@@ -1696,7 +1445,9 @@ pub const BuildEnv = struct {
         };
         std.fs.cwd().access(source_path, .{}) catch {
             self.gpa.free(source_path);
-            std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            if (comptime !is_freestanding) {
+                std.log.err("No main.roc found in package at {s}", .{package_dir_path});
+            }
             return error.NoPackageSource;
         };
         self.gpa.free(package_dir_path);
@@ -2020,7 +1771,7 @@ pub const BuildEnv = struct {
         while (it.next()) |e| {
             const pkg_name = e.key_ptr.*;
             const sched = e.value_ptr.*;
-            _ = self.packages.get(pkg_name).?;
+            std.debug.assert(self.packages.get(pkg_name) != null);
             var mi = sched.moduleNamesIterator();
             while (mi.next()) |me| {
                 const mod = me.key_ptr.*;
@@ -2195,19 +1946,15 @@ pub const BuildEnv = struct {
         return .{};
     }
 
-    // Keep old name for backwards compatibility during transition
-    pub const BuildCacheStats = BuildStats;
-    pub fn getCacheStats(self: *BuildEnv) BuildStats {
-        return self.getBuildStats();
-    }
-
     /// Information about a compiled module, ready for serialization.
     /// All pointers reference data owned by the BuildEnv/Coordinator.
     pub const CompiledModuleInfo = struct {
         /// Module name (e.g., "Main", "Stdout")
         name: []const u8,
-        /// Pointer to the compiled ModuleEnv
-        env: *ModuleEnv,
+        /// Source file path for reporting and CLI diagnostics.
+        path: []const u8,
+        /// Paired semantic data retained after type checking
+        semantic: SemanticModuleData,
         /// Source code of the module
         source: []const u8,
         /// Package name this module belongs to
@@ -2249,31 +1996,38 @@ pub const BuildEnv = struct {
 
             for (sched.modules.items, 0..) |*sched_mod, mod_idx| {
                 // Skip modules without env (not compiled or failed)
-                if (sched_mod.env == null) continue;
-                const env_ptr: *ModuleEnv = &sched_mod.env.?;
-
-                const source = env_ptr.common.source;
-
-                // Determine if this is platform main or sibling
-                const is_root = sched.root_module_id != null and sched.root_module_id.? == mod_idx;
-                const is_platform_main = is_platform_pkg and is_root;
-                const is_platform_sibling = is_platform_pkg and !is_root;
-                const is_app = is_app_pkg and is_root;
-
-                try modules.append(allocator, .{
-                    .name = sched_mod.name,
-                    .env = env_ptr,
-                    .source = source,
-                    .package_name = pkg_name,
-                    .is_platform_main = is_platform_main,
-                    .is_app = is_app,
-                    .is_platform_sibling = is_platform_sibling,
-                    .depth = sched_mod.depth,
-                    .provides_entries = if (is_platform_main)
-                        if (pkg_ptr) |p| p.provides_entries.items else &.{}
+                if (sched_mod.semantic) |*semantic| {
+                    const env_ptr: *ModuleEnv = if (semantic.checked_artifact) |*artifact|
+                        artifact.moduleEnv()
                     else
-                        &.{},
-                });
+                        semantic.module_env orelse continue;
+                    const source = env_ptr.common.source;
+
+                    // Determine if this is platform main or sibling
+                    const is_root = sched.root_module_id != null and sched.root_module_id.? == mod_idx;
+                    const is_platform_main = is_platform_pkg and is_root;
+                    const is_platform_sibling = is_platform_pkg and !is_root;
+                    const is_app = is_app_pkg and is_root;
+
+                    try modules.append(allocator, .{
+                        .name = sched_mod.name,
+                        .path = sched_mod.path,
+                        .semantic = .{
+                            .env = env_ptr,
+                            .checked_artifact = if (semantic.checked_artifact) |*artifact| artifact else null,
+                        },
+                        .source = source,
+                        .package_name = pkg_name,
+                        .is_platform_main = is_platform_main,
+                        .is_app = is_app,
+                        .is_platform_sibling = is_platform_sibling,
+                        .depth = sched_mod.depth,
+                        .provides_entries = if (is_platform_main or is_app)
+                            if (pkg_ptr) |p| p.provides_entries.items else &.{}
+                        else
+                            &.{},
+                    });
+                }
             }
         }
 
@@ -2361,21 +2115,192 @@ pub const BuildEnv = struct {
         return null;
     }
 
-    /// Get the root module env for the app package (convenience method).
-    pub fn getAppEnv(self: *BuildEnv) ?*ModuleEnv {
+    /// Get the root semantic data for the app package (convenience method).
+    pub fn getAppSemanticData(self: *BuildEnv) ?SemanticModuleData {
         const sched = self.schedulers.get("app") orelse return null;
-        return sched.getRootEnv();
+        return sched.getRootSemanticData();
     }
 
-    /// Get the root module env for the platform package (convenience method).
-    pub fn getPlatformEnv(self: *BuildEnv) ?*ModuleEnv {
+    /// Get the root semantic data for the platform package (convenience method).
+    pub fn getPlatformSemanticData(self: *BuildEnv) ?SemanticModuleData {
         // Find platform package name
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             if (entry.value_ptr.kind == .platform) {
                 const sched = self.schedulers.get(entry.key_ptr.*) orelse continue;
-                return sched.getRootEnv();
+                return sched.getRootSemanticData();
             }
+        }
+        return null;
+    }
+
+    pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
+        if (self.getPlatformSemanticData()) |platform| {
+            if (platform.checked_artifact) |artifact| {
+                if (artifact.platform_required_bindings.bindings.len > 0 or
+                    artifact.root_requests.requests.len > 0 or
+                    artifact.provided_exports.exports.len > 0)
+                {
+                    return platform;
+                }
+            }
+        }
+        return self.getAppSemanticData();
+    }
+
+    pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
+        const semantic = self.getExecutableRootSemanticData() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("build env invariant violated: executable root semantic data is missing", .{});
+            }
+            unreachable;
+        };
+        return semantic.checked_artifact orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("build env invariant violated: executable root has no checked artifact", .{});
+            }
+            unreachable;
+        };
+    }
+
+    pub fn collectImportedArtifactViews(
+        self: *BuildEnv,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) ![]check.CheckedArtifact.ImportedModuleView {
+        const modules = try self.getCompiledModules(allocator);
+        defer allocator.free(modules);
+
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        try appendImportedArtifactViewIfMissing(
+            &views,
+            allocator,
+            root_artifact.key,
+            &self.builtin_modules.checked_artifact,
+        );
+
+        for (modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse continue;
+            if (rootRelationContainsArtifact(root_artifact, artifact.key)) continue;
+            try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
+        }
+        try self.appendRelationClosureDependencyViews(&views, allocator, modules, root_artifact);
+
+        return views.toOwnedSlice(allocator);
+    }
+
+    pub fn collectRelationArtifactViews(
+        self: *BuildEnv,
+        allocator: Allocator,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) ![]check.CheckedArtifact.ImportedModuleView {
+        const modules = try self.getCompiledModules(allocator);
+        defer allocator.free(modules);
+
+        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(allocator);
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const artifact = artifactByKey(modules, binding.app_value.artifact) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("build env invariant violated: missing relation artifact", .{});
+                }
+                unreachable;
+            };
+            var seen = false;
+            for (views.items) |view| {
+                if (checkedArtifactKeysEqual(view.key, artifact.key)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+        }
+
+        return views.toOwnedSlice(allocator);
+    }
+
+    fn checkedArtifactKeysEqual(
+        a: check.CheckedArtifact.CheckedModuleArtifactKey,
+        b: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        return std.mem.eql(u8, &a.bytes, &b.bytes);
+    }
+
+    fn appendImportedArtifactViewIfMissing(
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        root_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        if (checkedArtifactKeysEqual(artifact.key, root_key)) return;
+        for (views.items) |view| {
+            if (checkedArtifactKeysEqual(view.key, artifact.key)) return;
+        }
+        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
+    }
+
+    fn rootRelationContainsArtifact(
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            if (checkedArtifactKeysEqual(binding.app_value.artifact, key)) return true;
+        }
+        return false;
+    }
+
+    fn appendRelationClosureDependencyViews(
+        self: *BuildEnv,
+        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        allocator: Allocator,
+        modules: []const CompiledModuleInfo,
+        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    ) Allocator.Error!void {
+        var keys = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifactKey).empty;
+        defer keys.deinit(allocator);
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const relation_artifact = artifactByKey(modules, binding.app_value.artifact) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("build env invariant violated: platform relation references unavailable app artifact", .{});
+                }
+                unreachable;
+            };
+            try check.CheckedArtifact.appendPlatformRelationDependencyArtifactKeys(
+                allocator,
+                &keys,
+                relation_artifact,
+                binding,
+            );
+        }
+
+        for (keys.items) |key| {
+            if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
+            if (rootRelationContainsArtifact(root_artifact, key)) continue;
+            if (checkedArtifactKeysEqual(key, self.builtin_modules.checked_artifact.key)) {
+                try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, &self.builtin_modules.checked_artifact);
+                continue;
+            }
+            const artifact = artifactByKey(modules, key) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic("build env invariant violated: platform relation closure references unavailable checked artifact", .{});
+                }
+                unreachable;
+            };
+            try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, artifact);
+        }
+    }
+
+    fn artifactByKey(
+        modules: []const CompiledModuleInfo,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        for (modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse continue;
+            if (checkedArtifactKeysEqual(artifact.key, key)) return artifact;
         }
         return null;
     }
@@ -2423,12 +2348,21 @@ pub const BuildEnv = struct {
         var all_module_envs = try allocator.alloc(*ModuleEnv, modules.len + 1);
         all_module_envs[0] = builtin_env;
         for (modules, 0..) |mod, i| {
-            all_module_envs[i + 1] = mod.env;
+            all_module_envs[i + 1] = mod.semantic.env;
         }
 
-        // Re-resolve imports against the unified all_module_envs array
+        // Resolve imports directly from the assembled module env array.
         for (all_module_envs) |module| {
-            module.imports.resolveImports(module, all_module_envs);
+            module.imports.clearResolvedModules();
+            for (module.imports.imports.items.items, 0..) |str_idx, i| {
+                const import_name = module.getString(str_idx);
+                for (all_module_envs, 0..) |candidate_env, module_idx| {
+                    if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
+                        module.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                        break;
+                    }
+                }
+            }
         }
 
         return .{
@@ -2448,216 +2382,6 @@ pub const BuildEnv = struct {
         pub fn compiledModuleEnvs(self: *const ResolvedModules) []*ModuleEnv {
             return self.all_module_envs[1..];
         }
-
-        /// Find the platform module and validate it has provides entries.
-        /// Returns the platform module index, info, and app module env.
-        pub fn getPlatformModule(self: *const ResolvedModules) !PlatformModuleInfo {
-            const platform_idx = findPrimaryModuleIndex(self.compiled_modules) orelse
-                return error.NoPlatformModule;
-            const platform_module = self.compiled_modules[platform_idx];
-            const provides_entries = platform_module.provides_entries;
-            if (provides_entries.len == 0) return error.NoEntrypointFound;
-
-            var app_module_env: ?*ModuleEnv = null;
-            var app_module_idx: ?u32 = null;
-            for (self.compiled_modules, 0..) |mod, i| {
-                if (mod.is_app) {
-                    app_module_env = mod.env;
-                    app_module_idx = @intCast(i + 1); // +1 for Builtin at [0]
-                    break;
-                }
-            }
-
-            return .{
-                .platform_idx = platform_idx,
-                .module = platform_module,
-                .provides_entries = provides_entries,
-                .app_module_env = app_module_env,
-                .app_module_idx = app_module_idx,
-            };
-        }
-
-        pub const PlatformModuleInfo = struct {
-            platform_idx: usize,
-            module: CompiledModuleInfo,
-            provides_entries: []const ProvidesEntry,
-            app_module_env: ?*ModuleEnv,
-            /// App module index in all_module_envs (with Builtin at [0])
-            app_module_idx: ?u32,
-        };
-
-        /// A map from (module_idx, node_idx) packed as u64 to hosted function global index.
-        /// Compatible with mono.Lower.HostedFunctionMap.
-        pub const HostedFunctionMap = std.AutoHashMap(u64, u32);
-
-        /// Pack a module index and node index into a hosted function map key.
-        /// Compatible with mono.Lower.hostedFunctionKey.
-        pub fn hostedFunctionKey(global_module_idx: u32, node_idx: u32) u64 {
-            return @as(u64, global_module_idx) << 32 | node_idx;
-        }
-
-        /// Process hosted functions across platform sibling modules.
-        /// Collects, sorts, deduplicates, and assigns global CIR indices.
-        /// If `hosted_function_map` is non-null, also populates it for lowering lookups.
-        pub fn processHostedFunctions(
-            self: *const ResolvedModules,
-            gpa: Allocator,
-            hosted_function_map: ?*HostedFunctionMap,
-        ) !void {
-            const HostedCompiler = can.HostedCompiler;
-            var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-            defer all_hosted_fns.deinit(gpa);
-
-            // Collect from platform sibling modules
-            for (self.compiled_modules) |mod| {
-                if (!mod.is_platform_sibling) continue;
-
-                var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
-                defer module_fns.deinit(mod.env.gpa);
-
-                for (module_fns.items) |fn_info| {
-                    const name_copy = gpa.dupe(u8, fn_info.name_text) catch continue;
-                    mod.env.gpa.free(fn_info.name_text);
-                    all_hosted_fns.append(gpa, .{
-                        .symbol_name = fn_info.symbol_name,
-                        .expr_idx = fn_info.expr_idx,
-                        .name_text = name_copy,
-                    }) catch {
-                        gpa.free(name_copy);
-                        continue;
-                    };
-                }
-            }
-
-            if (all_hosted_fns.items.len == 0) return;
-
-            // Sort globally by qualified name
-            const SortContext = struct {
-                pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-                    return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-                }
-            };
-            std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
-
-            // Deduplicate
-            var write_idx: usize = 0;
-            for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
-                if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
-                    if (write_idx != read_idx) {
-                        all_hosted_fns.items[write_idx] = fn_info;
-                    }
-                    write_idx += 1;
-                } else {
-                    gpa.free(fn_info.name_text);
-                }
-            }
-            all_hosted_fns.shrinkRetainingCapacity(write_idx);
-
-            // Assign global indices in the CIR e_hosted_lambda nodes
-            for (self.compiled_modules, 0..) |mod, global_module_idx| {
-                if (!mod.is_platform_sibling) continue;
-                const platform_env = mod.env;
-
-                const mod_all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
-                for (mod_all_defs) |def_idx| {
-                    const def = platform_env.store.getDef(def_idx);
-                    const expr = platform_env.store.getExpr(def.expr);
-
-                    if (expr == .e_hosted_lambda) {
-                        const hosted = expr.e_hosted_lambda;
-                        const local_name = platform_env.getIdent(hosted.symbol_name);
-                        const plat_module_name = base.module_path.getModuleName(platform_env.module_name);
-                        const qualified_name = std.fmt.allocPrint(gpa, "{s}.{s}", .{ plat_module_name, local_name }) catch continue;
-                        defer gpa.free(qualified_name);
-
-                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
-                            qualified_name[0 .. qualified_name.len - 1]
-                        else
-                            qualified_name;
-
-                        for (all_hosted_fns.items, 0..) |fn_info, idx| {
-                            if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
-                                const hosted_index: u32 = @intCast(idx);
-
-                                // Update the CIR expression with the global index
-                                const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
-                                var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                                var payload = expr_node.getPayload().expr_hosted_lambda;
-                                payload.index = hosted_index;
-                                expr_node.setPayload(.{ .expr_hosted_lambda = payload });
-                                platform_env.store.nodes.set(expr_node_idx, expr_node);
-
-                                // Register in the hosted function map for lowering lookup
-                                if (hosted_function_map) |hfm| {
-                                    const mod_idx: u16 = @intCast(global_module_idx + 1);
-                                    hfm.put(hostedFunctionKey(mod_idx, @intFromEnum(def_idx)), hosted_index) catch {};
-                                    hfm.put(hostedFunctionKey(mod_idx, @intFromEnum(def.pattern)), hosted_index) catch {};
-                                    hfm.put(hostedFunctionKey(mod_idx, @intFromEnum(def.expr)), hosted_index) catch {};
-                                }
-
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Free name_text strings
-            for (all_hosted_fns.items) |fn_info| {
-                gpa.free(fn_info.name_text);
-            }
-        }
-
-        /// Find the entrypoint expression from platform provides entries.
-        /// Returns the platform module index, the entrypoint CIR expression, and the app module env.
-        pub fn findEntrypoint(self: *const ResolvedModules) !EntrypointInfo {
-            const platform_idx = findPrimaryModuleIndex(self.compiled_modules) orelse
-                return error.NoModulesCompiled;
-            const platform_module = self.compiled_modules[platform_idx];
-            const provides_entries = platform_module.provides_entries;
-            if (provides_entries.len == 0) return error.NoModulesCompiled;
-
-            // Find app module env
-            var app_module_env: ?*ModuleEnv = null;
-            for (self.compiled_modules) |mod| {
-                if (mod.is_app) {
-                    app_module_env = mod.env;
-                    break;
-                }
-            }
-
-            // Find main_for_host! CIR expression from platform provides entries
-            const platform_defs = platform_module.env.store.sliceDefs(platform_module.env.all_defs);
-
-            for (provides_entries) |entry| {
-                for (platform_defs) |def_idx| {
-                    const def = platform_module.env.store.getDef(def_idx);
-                    const pattern = platform_module.env.store.getPattern(def.pattern);
-                    if (pattern == .assign) {
-                        const ident_name = platform_module.env.getIdent(pattern.assign.ident);
-                        if (std.mem.eql(u8, ident_name, entry.roc_ident)) {
-                            return .{
-                                .platform_idx = platform_idx,
-                                .platform_env = platform_module.env,
-                                .entrypoint_expr = def.expr,
-                                .app_module_env = app_module_env,
-                                .provides_entries = provides_entries,
-                            };
-                        }
-                    }
-                }
-            }
-
-            return error.NoModulesCompiled;
-        }
-    };
-
-    pub const EntrypointInfo = struct {
-        platform_idx: usize,
-        platform_env: *ModuleEnv,
-        entrypoint_expr: can.CIR.Expr.Idx,
-        app_module_env: ?*ModuleEnv,
-        provides_entries: []const ProvidesEntry,
     };
 };
 
@@ -2754,7 +2478,7 @@ pub const OrderedSink = struct {
         try self.entries.ensureTotalCapacity(pkg_names.len);
         try self.index.ensureTotalCapacity(@as(u32, @intCast(pkg_names.len)));
 
-        // Rebuild order; allow pre-registered entries (from early emits) and update their metadata
+        // Refresh order; allow pre-registered entries (from early emits) and update their metadata
         self.order.items.len = 0;
 
         var i: usize = 0;
@@ -2853,7 +2577,7 @@ pub const OrderedSink = struct {
             if (self.index.put(key, entry_index) catch null == null) {
                 return;
             }
-            // Note: do not append to order here; buildOrder will rebuild and sort later
+            // Note: do not append to order here; buildOrder will populate and sort later
         }
 
         // Record report; take ownership by appending to per-module list

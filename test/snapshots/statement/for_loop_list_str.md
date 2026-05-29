@@ -94,20 +94,24 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-assign (ident "counter_"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "counter_")))
-							(e-num (value "1"))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 277)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "counter_"))))
+							(args
+								(e-num (value "1")))))
 					(e-empty_record)))
 			(e-lookup-local
 				(p-assign (ident "counter_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-lookup-local
-				(p-assign (ident "count")))
-			(e-num (value "3")))))
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "count"))))
+			(rhs
+				(e-num (value "3"))))))
 ~~~
 # TYPES
 ~~~clojure

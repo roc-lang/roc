@@ -3,7 +3,49 @@
 const std = @import("std");
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+/// Absolute cache directory paths reserved for a single CLI test subprocess.
+pub const IsolatedCacheDirs = struct {
+    roc_cache_dir: []u8,
+    zig_local_cache_dir: []u8,
+
+    pub fn deinit(self: IsolatedCacheDirs, allocator: std.mem.Allocator) void {
+        allocator.free(self.zig_local_cache_dir);
+        allocator.free(self.roc_cache_dir);
+    }
+};
+
 pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
+
+fn reserveTestCacheRoot(allocator: std.mem.Allocator) ![]u8 {
+    const cache_parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache" });
+    defer allocator.free(cache_parent_rel);
+
+    try std.fs.cwd().makePath(cache_parent_rel);
+
+    while (true) {
+        const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
+        const random = std.crypto.random.int(u64);
+        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x}-{d}", .{
+            @as(u64, @intCast(std.time.nanoTimestamp())),
+            random,
+            cache_dir_id,
+        });
+        defer allocator.free(cache_leaf);
+
+        const cache_root_rel = try std.fs.path.join(allocator, &.{ cache_parent_rel, cache_leaf });
+        errdefer allocator.free(cache_root_rel);
+
+        std.fs.cwd().makeDir(cache_root_rel) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(cache_root_rel);
+                continue;
+            },
+            else => return err,
+        };
+
+        return cache_root_rel;
+    }
+}
 
 /// Result of executing a Roc command during testing.
 /// Contains the captured output streams and process termination status.
@@ -13,31 +55,31 @@ pub const RocResult = struct {
     term: std.process.Child.Term,
 };
 
-fn createIsolatedTestCacheDir(allocator: std.mem.Allocator) ![]u8 {
-    const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
-    const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{d}", .{
-        @as(u64, @intCast(std.time.nanoTimestamp())),
-        cache_dir_id,
-    });
-    defer allocator.free(cache_leaf);
-
+/// Create unique Roc and Zig local cache directories for one CLI test subprocess.
+pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheDirs {
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
 
-    const cache_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache", cache_leaf });
-    defer allocator.free(cache_rel);
+    const cache_root_rel = try reserveTestCacheRoot(allocator);
+    defer allocator.free(cache_root_rel);
 
-    std.fs.cwd().makePath(cache_rel) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
+    const roc_cache_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "roc-cache" });
+    defer allocator.free(roc_cache_rel);
+    try std.fs.cwd().makePath(roc_cache_rel);
+
+    const zig_local_cache_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_rel);
+    try std.fs.cwd().makePath(zig_local_cache_rel);
+
+    return .{
+        .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
+        .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
     };
-
-    return std.fs.path.join(allocator, &.{ cwd_path, cache_rel });
 }
 
 /// Build an environment map for a test Roc subprocess.
-/// Unless the caller already set `ROC_CACHE_DIR`, this gives the subprocess a
-/// unique cache root so CLI tests do not share cache state accidentally.
+/// Unless the caller already set them, this gives the subprocess unique Roc and
+/// Zig local cache roots so concurrent CLI tests cannot share cache state.
 pub fn buildIsolatedTestEnvMap(
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.EnvMap,
@@ -52,10 +94,17 @@ pub fn buildIsolatedTestEnvMap(
         }
     }
 
-    if (env_map.get("ROC_CACHE_DIR") == null) {
-        const cache_dir = try createIsolatedTestCacheDir(allocator);
-        defer allocator.free(cache_dir);
-        try env_map.put("ROC_CACHE_DIR", cache_dir);
+    if (env_map.get("ROC_CACHE_DIR") == null or env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {
+        const cache_dirs = try createIsolatedTestCacheDirs(allocator);
+        defer cache_dirs.deinit(allocator);
+
+        if (env_map.get("ROC_CACHE_DIR") == null) {
+            try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+        }
+
+        if (env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {
+            try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
+        }
     }
 
     return env_map;
@@ -132,7 +181,10 @@ pub fn runRocWithEnv(
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
-    const test_file = try std.fs.path.join(allocator, &.{ cwd_path, test_file_path });
+    const test_file = if (std.fs.path.isAbsolute(test_file_path))
+        try allocator.dupe(u8, test_file_path)
+    else
+        try std.fs.path.join(allocator, &.{ cwd_path, test_file_path });
     defer allocator.free(test_file);
 
     // Build argv: [roc_path, ...args, test_file]

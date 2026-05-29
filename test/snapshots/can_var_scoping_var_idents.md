@@ -75,28 +75,34 @@ NO CHANGE
 						(p-assign (ident "input"))))
 				(s-var
 					(p-assign (ident "sum_"))
-					(e-binop (op "mul")
-						(e-lookup-local
-							(p-assign (ident "input")))
-						(e-num (value "2"))))
+					(e-dispatch-call (method "times") (constraint-fn-var 56)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "input"))))
+						(args
+							(e-num (value "2")))))
 				(s-reassign
 					(p-assign (ident "sum_"))
-					(e-binop (op "add")
+					(e-dispatch-call (method "plus") (constraint-fn-var 58)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "sum_"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "sum"))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 60)
+					(receiver
 						(e-lookup-local
-							(p-assign (ident "sum_")))
+							(p-assign (ident "sum"))))
+					(args
 						(e-lookup-local
-							(p-assign (ident "sum")))))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "sum")))
-					(e-lookup-local
-						(p-assign (ident "sum_"))))))))
+							(p-assign (ident "sum_")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.plus : a, a -> a, a.times : a, Dec -> a]")))
+		(patt (type "a -> a where [a.plus : a, a -> a, a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.plus : a, a -> a, a.times : a, Dec -> a]"))))
+		(expr (type "a -> a where [a.plus : a, a -> a, a.times : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
 ~~~

@@ -12,7 +12,7 @@ type=file
 PARSE ERROR - fuzz_crash_018.md:1:1:1:2
 PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
-MISSING MAIN! FUNCTION - fuzz_crash_018.md:1:1:2:3
+DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -47,19 +47,16 @@ This type is referenced here:
     ^
 
 
-**MISSING MAIN! FUNCTION**
-Default app modules must have a `main!` function.
-
-No `main!` function was found.
-
-Add a main! function like:
-`main! = |arg| { ... }`
-**fuzz_crash_018.md:1:1:2:3:**
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**fuzz_crash_018.md:1:3:1:6:**
 ```roc
 0 b:S
-.R
 ```
+  ^^^
 
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

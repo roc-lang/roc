@@ -17,13 +17,13 @@ result = func(10, 20)
 ~~~roc
 func : Dec, Dec -> Dec
 func = |x, y| {
-	add_x = |a| a + x
-	add_y = |b| b + y
-	add_x(5) + add_y(5)
+	add_x = |a| a.plus(x)
+	add_y = |b| b.plus(y)
+	add_x(5).plus(add_y(5))
 }
 
 result : Dec
-result = 40
+result = func(10, 20)
 ~~~
 # FORMATTED
 ~~~roc
@@ -104,11 +104,13 @@ EndOfFile,
 						(e-lambda
 							(args
 								(p-assign (ident "a")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "a")))
-								(e-lookup-local
-									(p-assign (ident "x")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 43)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "a"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "x"))))))))
 				(s-let
 					(p-assign (ident "add_y"))
 					(e-closure
@@ -117,31 +119,39 @@ EndOfFile,
 						(e-lambda
 							(args
 								(p-assign (ident "b")))
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "b")))
-								(e-lookup-local
-									(p-assign (ident "y")))))))
-				(e-binop (op "add")
-					(e-call
-						(e-lookup-local
-							(p-assign (ident "add_x")))
-						(e-num (value "5")))
-					(e-call
-						(e-lookup-local
-							(p-assign (ident "add_y")))
-						(e-num (value "5")))))))
+							(e-dispatch-call (method "plus") (constraint-fn-var 45)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "b"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "y"))))))))
+				(e-dispatch-call (method "plus") (constraint-fn-var 115)
+					(receiver
+						(e-call (constraint-fn-var 80)
+							(e-lookup-local
+								(p-assign (ident "add_x")))
+							(e-num (value "5"))))
+					(args
+						(e-call (constraint-fn-var 114)
+							(e-lookup-local
+								(p-assign (ident "add_y")))
+							(e-num (value "5"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "40"))))
+		(e-call (constraint-fn-var 183)
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "10"))
+			(e-num (value "20")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Dec, Dec -> Dec"))
+		(patt (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "Dec, Dec -> Dec"))
+		(expr (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
 		(expr (type "Dec"))))
 ~~~

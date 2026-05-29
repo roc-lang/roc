@@ -1,72 +1,57 @@
 # Interpreter Shim
 
-The interpreter shim is a key component for running Roc programs. It provides two operating modes depending on how the Roc application is built and executed.
+The interpreter shim runs already-lowered Roc programs. The compiler parent
+process owns checking and post-check compilation and publishes an ARC-inserted
+LIR image into shared memory. The child process maps that same memory, creates
+zero-copy views over the LIR/runtime-layout arrays, and evaluates them with the
+LIR interpreter.
+
+## Runtime Boundary
+
+```
+┌─────────────────┐   LIR image    ┌──────────────────┐
+│    roc CLI      │ ──────────────────────> │  Interpreter     │
+│  (parent proc)  │                         │  Host (child)    │
+└─────────────────┘                         └──────────────────┘
+```
+
+Parent responsibilities:
+
+1. Parse and canonicalize source.
+2. Type check and publish checked modules.
+3. Resolve roots, platform entrypoints, hosted procedures, static dispatch, and
+   compile-time constants before post-check lowering.
+4. Lower through the post-check IRs to LIR and insert ARC statements.
+5. Publish the target-specific LIR image into shared memory.
+
+Child responsibilities:
+
+1. Map shared memory.
+2. Validate the LIR image header and bounds.
+3. Create zero-copy views of the LIR store, committed layouts, literal pool,
+   root procedures, and hosted-function dispatch metadata.
+3. Initialize `LirInterpreter`.
+4. Invoke the explicit LIR root procedure requested by the host.
+
+The child must never receive `ModuleEnv`, CIR, checked modules, or post-check
+IRs. It must not perform compiler lowering, root discovery, static dispatch
+resolution, platform lookup, compile-time evaluation, or recovery of missing
+compiler data.
 
 ## Operating Modes
 
-### 1. IPC Mode (`roc path/to/app.roc`)
+### IPC Mode (`roc path/to/app.roc`)
 
-When running Roc programs during development with `roc`, the shim operates in **IPC (Inter-Process Communication) mode**:
+The parent publishes the LIR image into shared memory using the existing
+shared-memory coordination path. The child maps that memory and views the image
+in place.
 
-```
-┌─────────────────┐     Shared Memory      ┌──────────────────┐
-│    roc CLI      │ ──────────────────────>│  Interpreter     │
-│  (parent proc)  │   ModuleEnv + CIR      │  Host (child)    │
-└─────────────────┘                        └──────────────────┘
-```
+### Embedded Mode (`roc build --opt=interpreter path/to/app.roc`)
 
-**How it works:**
-1. The `roc` CLI compiles the Roc source code and creates a `ModuleEnv` containing the Canonical IR (CIR)
-2. This data is placed in shared memory (POSIX `shm_open` or Windows `CreateFileMapping`)
-3. The interpreter host is spawned as a child process
-4. The child maps the shared memory and directly accesses the `ModuleEnv` (pointer relocation is applied)
-5. The interpreter evaluates the CIR and executes the program
-
-**Characteristics:**
-- Fast startup (no serialization/deserialization)
-- Same-architecture only (pointers must match between parent and child)
-- Memory efficient (data is shared, not copied)
-- Used for development workflow
-
-### 2. Embedded Mode (`roc build path/to/app.roc`)
-
-When building standalone executables with `roc build`, the shim operates in **Embedded mode**:
-
-```
-┌─────────────────┐                     ┌──────────────────────────────┐
-│    roc CLI      │   serialize         │      Output Binary           │
-│   (compiler)    │ ─────────────────>  │  ┌──────────────────────┐   │
-└─────────────────┘                     │  │ Interpreter Shim     │   │
-                                        │  │ + Embedded CIR Data  │   │
-                                        │  └──────────────────────┘   │
-                                        └──────────────────────────────┘
-```
-
-**How it works:**
-1. The `roc` CLI compiles the Roc source and serializes the `ModuleEnv` to a portable format
-2. The serialized data is embedded directly into the output binary (via `@embedFile`)
-3. At runtime, the shim reads from `roc__serialized_base_ptr` (a symbol pointing to embedded data)
-4. The data is deserialized into a `ModuleEnv` and executed
-
-**Characteristics:**
-- Cross-architecture support (serialization is portable)
-- Standalone binaries (no external dependencies)
-- Slightly slower startup (deserialization required)
-- Used for distribution
+The parent embeds a viewable LIR image into the output binary. At runtime,
+the shim views that image without running semantic compiler stages.
 
 ## Key Symbols
 
-- `roc__serialized_base_ptr`: Points to embedded serialized data (embedded mode)
-- `roc__main`: Entry point called by the platform host
-- `roc_alloc`, `roc_dealloc`, `roc_realloc`: Memory allocation functions
-
-## Platform Support
-
-| Platform | IPC Mode | Embedded Mode |
-|----------|----------|---------------|
-| Linux    | Yes      | Yes           |
-| macOS    | Yes      | Yes           |
-| Windows  | Yes      | Yes           |
-| WASM32   | No       | Yes           |
-
-WASM targets only support embedded mode.
+- `roc__main`: Entry point called by the platform host.
+- `roc_alloc`, `roc_dealloc`, `roc_realloc`: Memory allocation functions.

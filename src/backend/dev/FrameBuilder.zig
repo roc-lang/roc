@@ -201,8 +201,8 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // mov rbp, rsp (3 bytes: 48 89 E5)
             size += 3;
 
-            // sub rsp, imm (7 bytes for 32-bit imm: 48 81 EC xx xx xx xx)
-            // Only if stack_alloc > 0
+            // Stack allocation. On Windows we must probe the stack page-by-page
+            // for any frame ≥ one page; see emitPrologueX86_64 for details.
             // Use full AREA_SIZE (not just actual callee-saved bytes) because
             // stack_offset is initialized to -CALLEE_SAVED_AREA_SIZE, so locals
             // are allocated after the full reserved area.
@@ -210,7 +210,12 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             const total_needed = self.stack_size + callee_saved_space;
             const aligned_size = CC.alignStackSize(total_needed);
             if (aligned_size > 0) {
-                size += 7;
+                if (windowsNeedsStackProbe(aligned_size)) {
+                    size += windows_probe_loop_size;
+                } else {
+                    // sub rsp, imm (7 bytes for 32-bit imm: 48 81 EC xx xx xx xx)
+                    size += 7;
+                }
             }
 
             // mov [rbp-offset], reg for each callee-saved (4-8 bytes each)
@@ -227,6 +232,35 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
 
             return size;
+        }
+
+        /// Exact byte count of the inline stack-probe loop emitted by
+        /// `emitWindowsStackProbe`. Must stay in sync with that emitter —
+        /// `calculatePrologueSize` reports it to deferred-prologue patching.
+        const windows_probe_loop_size: u32 =
+            // mov rax, imm32 (always REX.W + C7 + ModRM + imm32 = 7 bytes)
+            7 +
+            // sub rsp, 0x1000 (REX.W + 81 + ModRM + imm32 = 7 bytes)
+            7 +
+            // mov [rsp], eax (89 + ModRM disp32 + SIB + disp32 = 7 bytes)
+            7 +
+            // sub eax, 0x1000 (RAX short form: 2D + imm32 = 5 bytes)
+            5 +
+            // cmp eax, 0x1000 (RAX short form: 3D + imm32 = 5 bytes)
+            5 +
+            // ja rel32 (0F 87 + rel32 = 6 bytes)
+            6 +
+            // sub rsp, rax (REX.W + 29 + ModRM = 3 bytes)
+            3 +
+            // mov [rsp], eax (final probe, 7 bytes)
+            7;
+
+        /// True when this frame must probe the stack page-by-page on Windows.
+        /// Direct `sub rsp, N` with N ≥ one page skips guard pages with the
+        /// default stack commit, causing STATUS_ACCESS_VIOLATION on later
+        /// accesses to pages below the original commit boundary.
+        fn windowsNeedsStackProbe(aligned_size: u32) bool {
+            return is_windows and aligned_size >= 0x1000;
         }
 
         fn emitPrologueX86_64(self: *Self, emit: *EmitType) !i32 {
@@ -246,7 +280,11 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             self.actual_stack_alloc = CC.alignStackSize(total_needed);
 
             if (self.actual_stack_alloc > 0) {
-                try emit.subRegImm32(.w64, .RSP, @intCast(self.actual_stack_alloc));
+                if (windowsNeedsStackProbe(self.actual_stack_alloc)) {
+                    try emitWindowsStackProbe(emit, self.actual_stack_alloc);
+                } else {
+                    try emit.subRegImm32(.w64, .RSP, @intCast(self.actual_stack_alloc));
+                }
             }
 
             // 4. Save callee-saved registers at fixed RBP offsets
@@ -255,6 +293,43 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             // Return initial stack offset (0 for x86_64 since we use negative RBP offsets)
             // Callers use negative offsets from RBP for locals
             return 0;
+        }
+
+        /// Emit an inline stack-probe loop equivalent to calling MSVC's
+        /// `__chkstk`. Required on Windows for any frame ≥ one page so each
+        /// guard page is touched in order — a direct `sub rsp, N` skips
+        /// guard pages and yields a delayed STATUS_ACCESS_VIOLATION when the
+        /// uncommitted page is later accessed (test/fx record_builder_cli_parser
+        /// reproduced this on the default 4 KB stack commit).
+        ///
+        /// Layout (must remain byte-exact with `windows_probe_loop_size`):
+        ///   mov   rax, alloc_size       ; counter — caller-saved on Windows ABI
+        /// .loop:
+        ///   sub   rsp, 0x1000           ; lower one page
+        ///   mov   [rsp], eax            ; touch the new top to commit it
+        ///   sub   eax, 0x1000
+        ///   cmp   eax, 0x1000
+        ///   ja    .loop                 ; rel32 — sized in calculatePrologueSize
+        ///   sub   rsp, rax              ; allocate remaining bytes
+        ///   mov   [rsp], eax            ; probe the final page — MSVC's
+        ///                                ; __chkstk probes every page including
+        ///                                ; the partial one; without this probe
+        ///                                ; the remainder slips past the guard.
+        fn emitWindowsStackProbe(emit: *EmitType, alloc_size: u32) !void {
+            const buf_before_emit = emit.buf.items.len;
+            try emit.movRegImm32(.RAX, @intCast(alloc_size));
+            const loop_start = emit.buf.items.len;
+            try emit.subRegImm32(.w64, .RSP, 0x1000);
+            try emit.movMemReg(.w32, .RSP, 0, .RAX);
+            try emit.subRegImm32(.w32, .RAX, 0x1000);
+            try emit.cmpRegImm32(.w32, .RAX, 0x1000);
+            // ja loop_start: offset is from end-of-jcc to target.
+            const after_ja = emit.buf.items.len + 6; // jccRel32 emits 6 bytes
+            const rel: i32 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(after_ja)));
+            try emit.jccRel32(.above, rel);
+            try emit.subRegReg(.w64, .RSP, .RAX);
+            try emit.movMemReg(.w32, .RSP, 0, .RAX);
+            std.debug.assert(emit.buf.items.len - buf_before_emit == windows_probe_loop_size);
         }
 
         fn emitEpilogueX86_64(self: *Self, emit: *EmitType) !void {
@@ -306,6 +381,10 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             if (aligned_frame <= 504) {
                 // stp x29, x30, [sp, #-N]! (4 bytes)
                 size += 4;
+            } else if (windowsNeedsStackProbe(aligned_frame)) {
+                size += windowsStackProbeSizeAarch64(aligned_frame);
+                // stp x29, x30, [sp]
+                size += 4;
             } else {
                 // sub sp, sp, #N (4 bytes) + stp x29, x30, [sp] (4 bytes)
                 size += 8;
@@ -324,6 +403,52 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             return size;
         }
 
+        fn emitStackSubAarch64(emit: *EmitType, size: u32) !void {
+            std.debug.assert(size > 0);
+            std.debug.assert(size <= 0x1000);
+            if (size == 0x1000) {
+                try emit.subRegRegImm12Shifted(.w64, .ZRSP, .ZRSP, 1, true);
+            } else {
+                try emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(size));
+            }
+        }
+
+        fn emitStackAddAarch64(emit: *EmitType, size: u32) !void {
+            std.debug.assert(size > 0);
+            std.debug.assert(size <= 0x1000);
+            if (size == 0x1000) {
+                try emit.addRegRegImm12Shifted(.w64, .ZRSP, .ZRSP, 1, true);
+            } else {
+                try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(size));
+            }
+        }
+
+        fn windowsStackProbeSizeAarch64(alloc_size: u32) u32 {
+            std.debug.assert(alloc_size >= 0x1000);
+            return @intCast(((alloc_size + 0x0fff) / 0x1000) * 8);
+        }
+
+        fn emitWindowsStackProbeAarch64(emit: *EmitType, alloc_size: u32) !void {
+            std.debug.assert(alloc_size >= 0x1000);
+            var remaining = alloc_size;
+            while (remaining > 0) {
+                const chunk = @min(remaining, 0x1000);
+                try emitStackSubAarch64(emit, chunk);
+                try emit.ldrRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
+                remaining -= chunk;
+            }
+        }
+
+        fn emitWindowsStackReleaseAarch64(emit: *EmitType, alloc_size: u32) !void {
+            std.debug.assert(alloc_size >= 0x1000);
+            var remaining = alloc_size;
+            while (remaining > 0) {
+                const chunk = @min(remaining, 0x1000);
+                try emitStackAddAarch64(emit, chunk);
+                remaining -= chunk;
+            }
+        }
+
         fn emitPrologueAarch64(self: *Self, emit: *EmitType) !i32 {
             // Calculate total frame size.
             // Use the FULL callee-saved area size (not just used pairs) because
@@ -334,15 +459,20 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
 
             // 1. Allocate frame and save FP/LR
             if (aligned_frame <= 504) {
-                // Small frame: stp pre-index (scaled offset fits in i7)
+                // Small frame: stp pre-index (scaled offset fits in i7).
+                // No probe needed — frame is smaller than one page.
                 const scaled_offset: i7 = @intCast(@divExact(-@as(i32, @intCast(aligned_frame)), 8));
                 try emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+            } else if (windowsNeedsStackProbe(aligned_frame)) {
+                // Windows: probe each guard page before committing.
+                try emitWindowsStackProbeAarch64(emit, aligned_frame);
+                try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
             } else if (aligned_frame <= 4095) {
-                // Medium frame: sub sp with imm12, then store FP/LR at [sp]
+                // Medium frame (non-Windows, or Windows < one page is impossible here).
                 try emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(aligned_frame));
                 try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
             } else {
-                // Large frame: load size into scratch register, sub from sp
+                // Large frame (non-Windows): load size into scratch register, sub from sp.
                 try emit.movRegImm64(.IP0, aligned_frame);
                 try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
                 try emit.stpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
@@ -381,6 +511,9 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 // Medium frame: ldp without writeback, then add sp with imm12
                 try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
                 try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
+            } else if (is_windows) {
+                try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+                try emitWindowsStackReleaseAarch64(emit, self.actual_stack_alloc);
             } else {
                 // Large frame: ldp without writeback, then add sp via scratch register
                 try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
@@ -894,6 +1027,25 @@ test "DeferredFrameBuilder calculatePrologueSize x86_64" {
     const calculated_size = frame.calculatePrologueSize();
     // Basic prologue: push rbp (1) + mov rbp,rsp (3) + sub rsp,N (7) = 11 bytes
     try std.testing.expect(calculated_size >= 11);
+}
+
+test "DeferredFrameBuilder Windows aarch64 large frame prologue size matches emitted bytes" {
+    const Emit = aarch64.WinEmit;
+    const Builder = DeferredFrameBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Builder.init();
+    const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+    frame.setCalleeSavedMask(x19_bit);
+    frame.setStackSize(4096);
+
+    const calculated_size = frame.calculatePrologueSize();
+    _ = try frame.emitPrologue(&emit);
+
+    try std.testing.expect(frame.actual_stack_alloc >= 4096);
+    try std.testing.expectEqual(calculated_size, @as(u32, @intCast(emit.buf.items.len)));
 }
 
 // Windows-specific tests

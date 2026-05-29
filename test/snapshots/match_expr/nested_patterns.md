@@ -13,19 +13,9 @@ match data {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `data` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nested_patterns.md:1:7:1:11:**
-```roc
-match data {
-```
-      ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -96,14 +86,16 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-call
-							(e-lookup-external
-								(builtin))
+					(e-dispatch-call (method "plus") (constraint-fn-var 67)
+						(receiver
 							(e-lookup-local
-								(p-assign (ident "rest")))))))
+								(p-assign (ident "x"))))
+						(args
+							(e-call (constraint-fn-var 66)
+								(e-lookup-external
+									(builtin))
+								(e-lookup-local
+									(p-assign (ident "rest"))))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -115,11 +107,13 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "value")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 189)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "value"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

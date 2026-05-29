@@ -89,16 +89,69 @@ exit_code_is_benchmarkable() {
     return 1
 }
 
+is_intentional_error_fixture() {
+    local filename="$1"
+
+    # These files intentionally exercise diagnostics, --allow-errors, or
+    # runtime crash reporting. They are test fixtures, not successful execution
+    # benchmarks. Do not add compiler crash/regression repros here; those should
+    # fail if the PR binary cannot run them.
+    case "$filename" in
+        allow_errors_type_mismatch.roc|\
+        division_by_zero.roc|\
+        inspect_wrong_sig_test.roc|\
+        issue8433.roc|\
+        issue8517.roc|\
+        issue8826_full.roc|\
+        issue8826_minimal.roc|\
+        issue8943.roc|\
+        num_method_call.roc|\
+        parse_error.roc|\
+        run_allow_errors.roc|\
+        stack_overflow_runtime.roc|\
+        test_type_mismatch.roc|\
+        unused_state_var.roc)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+is_non_benchmark_fixture() {
+    local filename="$1"
+
+    # These files are tiny semantic/codegen regression fixtures. They should run
+    # in the FX test suite, but `roc <file> --no-cache` mostly measures fixed
+    # compiler/linker setup for them rather than program execution.
+    case "$filename" in
+        zst_nested_singleton_shapes.roc)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
 probe_command() {
     local roc_bin="$1"
     local fx_file="$2"
     local roc_extra_args="$3"
     local label="$4"
+    local roc_subcommand="${5:-}"
     local filename
     filename=$(basename "$fx_file")
-    local probe_log="/tmp/bench_probe_${filename%.roc}_${label}.log"
+    local subcommand_suffix=""
+    if [ -n "$roc_subcommand" ]; then
+        subcommand_suffix="_${roc_subcommand}"
+    fi
+    local probe_log="/tmp/bench_probe_${filename%.roc}_${label}${subcommand_suffix}.log"
 
-    local -a cmd=("$roc_bin" "$fx_file" "--no-cache")
+    local -a cmd=("$roc_bin")
+    if [ -n "$roc_subcommand" ]; then
+        cmd+=("$roc_subcommand")
+    fi
+    cmd+=("$fx_file" "--no-cache")
     if [ -n "$roc_extra_args" ]; then
         local -a extra_arg_array=()
         read -r -a extra_arg_array <<< "$roc_extra_args"
@@ -118,31 +171,43 @@ preflight_benchmark() {
     local pr_roc="$3"
     local fx_file="$4"
     local roc_extra_args="$5"
+    local roc_subcommand="${6:-}"
 
     local filename
     filename=$(basename "$fx_file")
 
-    probe_command "$main_roc" "$fx_file" "$roc_extra_args" "main"
+    probe_command "$main_roc" "$fx_file" "$roc_extra_args" "main" "$roc_subcommand"
     local main_exit_code="$PROBE_EXIT_CODE"
     local main_log="$PROBE_LOG"
 
-    probe_command "$pr_roc" "$fx_file" "$roc_extra_args" "pr"
+    probe_command "$pr_roc" "$fx_file" "$roc_extra_args" "pr" "$roc_subcommand"
     local pr_exit_code="$PROBE_EXIT_CODE"
     local pr_log="$PROBE_LOG"
 
+    # Note: when roc_subcommand is "check" or "build", the printed output may
+    # include execution-time metadata, so we only compare exit codes. For the
+    # interpret case (empty subcommand) we still compare stdout/stderr because
+    # diverging output usually means the two binaries are doing different work.
     if exit_code_is_benchmarkable "$main_exit_code" "$extra_args"; then
         if exit_code_is_benchmarkable "$pr_exit_code" "$extra_args"; then
-            if cmp -s "$main_log" "$pr_log"; then
-                return 0
+            if [ "$main_exit_code" -ne "$pr_exit_code" ]; then
+                echo "Skipping $filename (main exit code $main_exit_code differs from pr exit code $pr_exit_code)"
+                print_probe_log "main output" "$main_log"
+                print_probe_log "pr output" "$pr_log"
+                PRECHECK_SKIP_REASON="exit_code_diff"
+                return 2
             fi
 
-            echo "Skipping $filename (main and PR outputs differ, so this is not a comparable benchmark)"
-            echo "  main exit code: $main_exit_code"
-            echo "  pr exit code: $pr_exit_code"
-            print_probe_log "main output" "$main_log"
-            print_probe_log "pr output" "$pr_log"
-            PRECHECK_SKIP_REASON="output_diff"
-            return 2
+            if [ -z "$roc_subcommand" ] && ! cmp -s "$main_log" "$pr_log"; then
+                echo "Skipping $filename (main and PR outputs differ, so this is not a comparable benchmark)"
+                echo "  main exit code: $main_exit_code"
+                echo "  pr exit code: $pr_exit_code"
+                print_probe_log "main output" "$main_log"
+                print_probe_log "pr output" "$pr_log"
+                PRECHECK_SKIP_REASON="output_diff"
+                return 2
+            fi
+            return 0
         fi
 
         echo "ERROR: PR command is not benchmarkable for $filename"
@@ -173,6 +238,12 @@ run_benchmark() {
     local pr_roc="$4"
     local fx_file="$5"
     local roc_extra_args="$6"
+    local roc_subcommand="${7:-}"
+
+    local subcommand_arg=""
+    if [ -n "$roc_subcommand" ]; then
+        subcommand_arg=" $roc_subcommand"
+    fi
 
     local cmd=(
         hyperfine
@@ -182,8 +253,8 @@ run_benchmark() {
         --show-output
         --export-json "$json_file"
         $extra_args
-        -n "main" "$main_roc $fx_file --no-cache $roc_extra_args"
-        -n "pr" "$pr_roc $fx_file --no-cache $roc_extra_args"
+        -n "main" "$main_roc$subcommand_arg $fx_file --no-cache $roc_extra_args"
+        -n "pr" "$pr_roc$subcommand_arg $fx_file --no-cache $roc_extra_args"
     )
 
     echo "Running: ${cmd[*]}"
@@ -207,7 +278,7 @@ run_benchmark() {
 }
 
 echo "=== Building FX platform ==="
-zig build test-platforms -Dplatform=fx -Doptimize=ReleaseFast
+zig build build-test-hosts -Dplatform=fx -Doptimize=ReleaseFast
 
 echo ""
 echo "=== FX File Execution Benchmarks ==="
@@ -219,9 +290,12 @@ echo ""
 FX_FILES=""
 for fx_file in test/fx/*.roc; do
     filename=$(basename "$fx_file")
-    # Skip files that are flaky on CI
-    if [ "$filename" = "dbg_corrupts_recursive_tag_union.roc" ]; then
-        echo "Skipping $fx_file (flaky on CI)"
+    if is_intentional_error_fixture "$filename"; then
+        echo "Skipping $fx_file (intentional error fixture)"
+        continue
+    fi
+    if is_non_benchmark_fixture "$filename"; then
+        echo "Skipping $fx_file (semantic regression fixture, not an execution benchmark)"
         continue
     fi
     # Skip files that don't have a main! entry point (app [ main! ])
@@ -241,69 +315,84 @@ echo ""
 echo "=== Running benchmarks ==="
 
 SLOWER_DETECTED=0
-SLOWER_FILES=""
-CHANGED_FILES=""  # Files that differ between branches
-SKIPPED_BASELINE_FILES=""
-SKIPPED_OUTPUT_DIFF_FILES=""
+SLOWER_FILES=()
+CHANGED_FILES=()  # Files that differ between branches
+SKIPPED_BASELINE_FILES=()
+SKIPPED_EXIT_CODE_DIFF_FILES=()
+SKIPPED_OUTPUT_DIFF_FILES=()
 
-for fx_file in $FX_FILES; do
-    filename=$(basename "$fx_file")
-    echo "--- Benchmarking: $filename ---"
+# Files for which we additionally benchmark `roc check` and `roc build`.
+CHECK_BUILD_FILES=(
+    test/fx/issue8826_full.roc
+    test/fx/aoc_day2.roc
+    test/fx/host_boxed_fn_boundary.roc
+    test/fx/record_builder_cli_parser.roc
+    test/fx/zst_nested_singleton_shapes.roc
+    test/fx/index_oob_instantiate.roc
+    test/fx/wildcard_match_open_union_bug.roc
+    test/fx/repeating_pattern_segfault.roc
+    test/fx/primitive_encode.roc
+    test/fx/dbg_corrupts_recursive_tag_union.roc
+)
 
-    # Allow non-zero exit codes for files that are expected to fail
-    # (compilation errors, runtime errors, or expected test failures)
-    EXTRA_ARGS="--discard-failure=137"
-    ROC_EXTRA_ARGS=""
+# Pick hyperfine failure-handling args for a check/build benchmark on a given
+# file. issue8826_full.roc intentionally exits with a non-137 non-zero code, so
+# use --ignore-failure to keep its timings. Everything else only tolerates 137
+# (flaky OOM-killer style exits).
+check_build_extra_args_for() {
+    local filename="$1"
     case "$filename" in
-        division_by_zero.roc|\
-        issue8433.roc|\
-        test_type_mismatch.roc|\
-        run_allow_errors.roc|\
-        parse_error.roc|\
-        run_warning_only.roc|\
-        issue8517.roc|\
-        stack_overflow_runtime.roc|\
-        issue8826_full.roc|\
-        issue8826_minimal.roc|\
-        unused_state_var.roc|\
-        issue8943.roc)
-            EXTRA_ARGS+=" --ignore-failure=1,2"
+        issue8826_full.roc)
+            echo "--ignore-failure"
             ;;
-        num_method_call.roc)
-            ROC_EXTRA_ARGS="--allow-errors"
-            EXTRA_ARGS+=" --ignore-failure=134"
-            ;;
-        # Known dev backend crashes (exit 134 = SIGABRT from compiler panics).
-        # These files work with the interpreter but crash during dev backend
-        # monomorphization or code generation. Skip them for benchmarking
-        # since the outputs will differ between main (interpreter) and PR (dev).
-        all_syntax_test.roc|\
-        wildcard_match_open_union_bug.roc|\
-        dbg_missing_return.roc|\
-        index_oob_instantiate.roc|\
-        repeating_pattern_segfault.roc|\
-        var_interp_segfault.roc)
-            EXTRA_ARGS+=" --ignore-failure=134"
+        *)
+            echo "--discard-failure=137"
             ;;
     esac
+}
 
-    if preflight_benchmark "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
+# Run a full benchmark (preflight + hyperfine + slowdown confirmation) for one
+# file, optionally with a roc subcommand ("" for interpret, "check", "build").
+# Updates SLOWER_DETECTED / SLOWER_FILES / CHANGED_FILES / SKIPPED_* globals.
+benchmark_file() {
+    local fx_file="$1"
+    local roc_subcommand="$2"
+    local extra_args="$3"
+    local roc_extra_args="$4"
+
+    local filename
+    filename=$(basename "$fx_file")
+
+    local display_name="$filename"
+    local json_prefix="bench"
+    if [ -n "$roc_subcommand" ]; then
+        display_name="${roc_subcommand} ${filename}"
+        json_prefix="bench_${roc_subcommand}"
+    fi
+
+    echo "--- Benchmarking: $display_name ---"
+
+    local preflight_status=0
+    if preflight_benchmark "$extra_args" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$roc_extra_args" "$roc_subcommand"; then
         :
     else
         preflight_status=$?
         if [ "$preflight_status" -eq 2 ]; then
             case "${PRECHECK_SKIP_REASON:-}" in
+                exit_code_diff)
+                    SKIPPED_EXIT_CODE_DIFF_FILES+=("$display_name")
+                    ;;
                 output_diff)
-                    SKIPPED_OUTPUT_DIFF_FILES="$SKIPPED_OUTPUT_DIFF_FILES $filename"
+                    SKIPPED_OUTPUT_DIFF_FILES+=("$display_name")
                     ;;
                 *)
-                    SKIPPED_BASELINE_FILES="$SKIPPED_BASELINE_FILES $filename"
+                    SKIPPED_BASELINE_FILES+=("$display_name")
                     ;;
             esac
             echo ""
-            continue
+            return 0
         fi
-        echo "ERROR: Preflight failed for $filename"
+        echo "ERROR: Preflight failed for $display_name"
         exit 1
     fi
 
@@ -311,72 +400,108 @@ for fx_file in $FX_FILES; do
     # Using median for robustness against outliers.
     # Note: Our "Change" percentage may differ slightly from hyperfine's "X times faster"
     # summary because hyperfine uses mean while we use median.
-    if ! run_benchmark "/tmp/bench_${filename}.json" "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
-        echo "ERROR: Benchmark failed for $filename"
+    if ! run_benchmark "/tmp/${json_prefix}_${filename}.json" "$extra_args" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$roc_extra_args" "$roc_subcommand"; then
+        echo "ERROR: Benchmark failed for $display_name"
         exit 1
     fi
 
-    pct_change="$BENCH_PCT_CHANGE"
-    abs_delta_ms="$BENCH_ABS_DELTA_MS"
+    local pct_change="$BENCH_PCT_CHANGE"
+    local abs_delta_ms="$BENCH_ABS_DELTA_MS"
     echo "  Change: ${pct_change}% (${abs_delta_ms} ms)"
 
     # Check for meaningful slower execution - requires both relative and absolute slowdown.
+    local is_slower
     is_slower=$(awk "BEGIN {print ($pct_change > 4 && $abs_delta_ms > 5) ? 1 : 0}")
     if [ "$is_slower" = "1" ]; then
         echo "  Potential slowdown detected (${pct_change}%, ${abs_delta_ms} ms), running confirmation..."
 
-        if ! run_benchmark "/tmp/bench_${filename}_confirm.json" "$EXTRA_ARGS" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$ROC_EXTRA_ARGS"; then
-            echo "ERROR: Confirmation benchmark failed for $filename"
+        if ! run_benchmark "/tmp/${json_prefix}_${filename}_confirm.json" "$extra_args" "$MAIN_ROC" "$PR_ROC" "$fx_file" "$roc_extra_args" "$roc_subcommand"; then
+            echo "ERROR: Confirmation benchmark failed for $display_name"
             exit 1
         fi
 
-        confirm_pct_change="$BENCH_PCT_CHANGE"
-        confirm_abs_delta_ms="$BENCH_ABS_DELTA_MS"
+        local confirm_pct_change="$BENCH_PCT_CHANGE"
+        local confirm_abs_delta_ms="$BENCH_ABS_DELTA_MS"
         echo "  Confirmation change: ${confirm_pct_change}% (${confirm_abs_delta_ms} ms)"
 
         # Only report slowdown if both runs exceed both thresholds.
+        local confirm_is_slower
         confirm_is_slower=$(awk "BEGIN {print ($confirm_pct_change > 4 && $confirm_abs_delta_ms > 5) ? 1 : 0}")
         if [ "$confirm_is_slower" = "1" ]; then
-            echo "  SLOWER EXECUTION CONFIRMED in $filename (${pct_change}% / ${abs_delta_ms} ms then ${confirm_pct_change}% / ${confirm_abs_delta_ms} ms)"
+            echo "  SLOWER EXECUTION CONFIRMED in $display_name (${pct_change}% / ${abs_delta_ms} ms then ${confirm_pct_change}% / ${confirm_abs_delta_ms} ms)"
             SLOWER_DETECTED=1
-            SLOWER_FILES="$SLOWER_FILES $filename"
+            SLOWER_FILES+=("$display_name")
 
             # Check if file content changed between branches
+            local check_result=0
             check_file_changed "$fx_file" "$BASE_BRANCH" "$PR_BRANCH" || check_result=$?
-            if [ "${check_result:-0}" = "1" ]; then
+            if [ "$check_result" = "1" ]; then
                 echo "    NOTE: File content differs between branches - comparison may not be meaningful"
                 print_file_diff "$fx_file" "$BASE_BRANCH" "$PR_BRANCH"
-                CHANGED_FILES="$CHANGED_FILES $filename"
+                CHANGED_FILES+=("$display_name")
             fi
-            unset check_result
         else
             echo "  Slowdown NOT confirmed (first: ${pct_change}% / ${abs_delta_ms} ms, second: ${confirm_pct_change}% / ${confirm_abs_delta_ms} ms)"
         fi
     fi
     echo ""
+}
+
+for fx_file in $FX_FILES; do
+    benchmark_file "$fx_file" "" "--discard-failure=137" ""
+done
+
+echo ""
+echo "=== Running roc check benchmarks ==="
+for fx_file in "${CHECK_BUILD_FILES[@]}"; do
+    extra_args=$(check_build_extra_args_for "$(basename "$fx_file")")
+    benchmark_file "$fx_file" "check" "$extra_args" ""
+done
+
+echo ""
+echo "=== Running roc build benchmarks ==="
+for fx_file in "${CHECK_BUILD_FILES[@]}"; do
+    extra_args=$(check_build_extra_args_for "$(basename "$fx_file")")
+    benchmark_file "$fx_file" "build" "$extra_args" ""
 done
 
 # Summary
 echo "=== FX Benchmark Summary ==="
-if [ -n "$SKIPPED_BASELINE_FILES" ]; then
+if [ "${#SKIPPED_BASELINE_FILES[@]}" -gt 0 ]; then
     echo "Skipped benchmarks because the main baseline command was not benchmarkable:"
-    for f in $SKIPPED_BASELINE_FILES; do
+    for f in "${SKIPPED_BASELINE_FILES[@]}"; do
         echo "  - $f"
     done
     echo ""
 fi
-if [ -n "$SKIPPED_OUTPUT_DIFF_FILES" ]; then
+if [ "${#SKIPPED_EXIT_CODE_DIFF_FILES[@]}" -gt 0 ]; then
+    echo "Skipped benchmarks because the main and PR exit codes differed:"
+    for f in "${SKIPPED_EXIT_CODE_DIFF_FILES[@]}"; do
+        echo "  - $f"
+    done
+    echo ""
+fi
+if [ "${#SKIPPED_OUTPUT_DIFF_FILES[@]}" -gt 0 ]; then
     echo "Skipped benchmarks because the main and PR outputs differed:"
-    for f in $SKIPPED_OUTPUT_DIFF_FILES; do
+    for f in "${SKIPPED_OUTPUT_DIFF_FILES[@]}"; do
         echo "  - $f"
     done
     echo ""
 fi
 if [ "$SLOWER_DETECTED" = "1" ]; then
     echo "SLOWER EXECUTION detected in the following files:"
-    for f in $SLOWER_FILES; do
+    for f in "${SLOWER_FILES[@]}"; do
         # Check if this file is in the CHANGED_FILES list
-        if echo "$CHANGED_FILES" | grep -qw "$f"; then
+        found_changed=0
+        if [ "${#CHANGED_FILES[@]}" -gt 0 ]; then
+            for c in "${CHANGED_FILES[@]}"; do
+                if [ "$c" = "$f" ]; then
+                    found_changed=1
+                    break
+                fi
+            done
+        fi
+        if [ "$found_changed" = "1" ]; then
             echo "  - $f (file changed)"
         else
             echo "  - $f"

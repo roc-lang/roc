@@ -33,13 +33,13 @@ EndOfFile,
 	(statements
 		(s-decl
 			(p-ident (raw "a"))
-			(e-field-access
-				(e-local-dispatch
-					(e-int (raw "0"))
-					(e-apply
-						(e-ident (raw "b"))))
-				(e-apply
-					(e-ident (raw "c")))))))
+			(e-method-call (method ".c")
+				(receiver
+					(e-arrow-call
+						(e-int (raw "0"))
+						(e-apply
+							(e-ident (raw "b")))))
+				(args)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,7 +50,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-dot-access (field "c")
+		(e-method-call (method "c")
 			(receiver
 				(e-call
 					(e-runtime-error (tag "ident_not_in_scope"))
