@@ -179,7 +179,7 @@ pub const ModuleState = struct {
         return .{
             .name = name,
             .path = path,
-            .env = null,
+            .env = @as(?*ModuleEnv, null),
             .cached_ast = null,
             .phase = .Parse,
             .imports = std.ArrayList(ModuleId).empty,
@@ -2300,7 +2300,6 @@ pub const Coordinator = struct {
 
         // Resolve imports
         env.imports.resolveImports(env, task.imported_envs);
-        env.store.resolvePendingLookups(env, task.imported_envs);
 
         // typeCheckModule writes into env.* (e.g. growing env.common.idents via
         // copy_import.copyVar when bringing in cross-module types). The allocator

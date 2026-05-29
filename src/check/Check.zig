@@ -5631,11 +5631,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_runtime_error => {
             try self.unifyWith(expr_var, .err, env);
         },
-        .e_lookup_pending => {
-            // Pending lookups should be resolved before Check runs. Treat any
-            // that escape as type errors.
-            try self.unifyWith(expr_var, .err, env);
-        },
     }
 
     // Check if we have an annotation

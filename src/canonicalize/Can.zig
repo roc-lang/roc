@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
@@ -13,8 +12,6 @@ const NumericLiteral = parse.NumericLiteral;
 const types = @import("types");
 const builtins = @import("builtins");
 const tracy = @import("tracy");
-
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CIR = @import("CIR.zig");
 const Scope = @import("Scope.zig");
@@ -39,9 +36,6 @@ pub const AutoImportedType = struct {
     /// Whether this is a package-qualified import (e.g., "pf.Stdout" vs "Bool")
     /// Used to determine the correct module name for auto-imports
     is_package_qualified: bool = false,
-    /// Whether this is a placeholder entry for a module that hasn't been compiled yet.
-    /// When true, member lookup failures are not errors - they'll be validated during type checking.
-    is_placeholder: bool = false,
 };
 
 /// Builtin module information required to auto-install builtin type bindings.
@@ -433,20 +427,6 @@ fn builtinNumericMethodAlias(self: *Self, type_name: Ident.Idx) ?Ident.Idx {
     return null;
 }
 
-/// Register a user-facing identifier mapping for an associated item. This
-/// records the qualified name as an exposed item so external lookups can
-/// find it. Stubbed here — origin/main wired this through the published
-/// associated-name index.
-fn registerUserFacingName(
-    self: *Self,
-    qualified_ident: Ident.Idx,
-    pattern_idx: CIR.Pattern.Idx,
-) std.mem.Allocator.Error!void {
-    _ = self;
-    _ = qualified_ident;
-    _ = pattern_idx;
-}
-
 fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
     return self.lookupAvailableModuleEnv(ident) != null;
 }
@@ -720,12 +700,12 @@ fn registerTypeDecl(
         if (self.scopeLookupTypeDecl(qualified_name_idx) == null) {
             if (self.scopeLookupTypeDecl(type_header.name)) |bare_existing| {
                 const bare_stmt = self.env.store.getStatement(bare_existing);
-                const bare_is_placeholder = switch (bare_stmt) {
+                const bare_awaiting_real_decl = switch (bare_stmt) {
                     .s_alias_decl => |a| a.anno == .placeholder,
                     .s_nominal_decl => |n| n.anno == .placeholder,
                     else => false,
                 };
-                if (bare_is_placeholder) {
+                if (bare_awaiting_real_decl) {
                     var s_idx_rebind = self.scopes.items.len;
                     while (s_idx_rebind > 0) {
                         s_idx_rebind -= 1;
@@ -746,13 +726,13 @@ fn registerTypeDecl(
     const type_decl_stmt_idx = if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| blk: {
         // Type was already introduced - check if it's a placeholder (anno = 0) or a real declaration
         const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
-        const is_placeholder = switch (existing_stmt) {
+        const awaiting_real_decl = switch (existing_stmt) {
             .s_alias_decl => |alias| alias.anno == .placeholder,
             .s_nominal_decl => |nominal| nominal.anno == .placeholder,
             else => false,
         };
 
-        if (is_placeholder) {
+        if (awaiting_real_decl) {
             // The binding was set up earlier by `createPlaceholderTypeDecl`
             // for a forward reference. Overwrite that statement below.
             break :blk existing_stmt_idx;
@@ -1926,12 +1906,12 @@ fn diagnosePostWalkTypeDecls(
             .external_nominal => continue,
         };
         const stmt = self.env.store.getStatement(stmt_idx);
-        const is_placeholder = switch (stmt) {
+        const awaiting_real_decl = switch (stmt) {
             .s_alias_decl => |a| a.anno == .placeholder,
             .s_nominal_decl => |n| n.anno == .placeholder,
             else => false,
         };
-        if (is_placeholder) {
+        if (awaiting_real_decl) {
             const region = self.env.store.getStatementRegion(stmt_idx);
             try self.env.pushDiagnostic(Diagnostic{ .undeclared_type = .{
                 .name = entry.key_ptr.*,
@@ -1986,7 +1966,7 @@ fn reorderTypeDeclsTopologically(
 
     const gpa = self.env.gpa;
 
-    // Snapshot the current scratch slice so we can rebuild it from scratch.
+    // Snapshot the current scratch slice so we can repopulate it.
     var snapshot = std.ArrayList(Statement.Idx){};
     defer snapshot.deinit(gpa);
     {
@@ -2231,15 +2211,7 @@ fn canonicalizeTopLevelTypeDecl(
         else
             try self.env.insertQualifiedIdent(module_name_text, type_name_text);
 
-        // The Builtin module's types (Str, Bool, …) are implicitly imported
-        // everywhere, so their items get bare names. Other modules carry a
-        // relative parent so nested types get names like "T.NestedType".
-        const relative_parent = if (std.mem.eql(u8, module_name_text, "Builtin"))
-            null
-        else
-            type_ident;
-
-        try self.processAssociatedBlock(qualified_type_ident, relative_parent, type_ident, assoc);
+        try self.processAssociatedBlock(qualified_type_ident, type_ident, type_ident, assoc);
     }
 }
 
@@ -2779,7 +2751,7 @@ fn createAnnoOnlyDef(
             .not_found => {
                 // Placeholder is tracked but not found in current scope chain.
                 // This can happen if the placeholder was created in a scope that's
-                // not an ancestor of the current scope. Create a new pattern as fallback;
+                // not an ancestor of the current scope. Create a new pattern;
                 // any actual errors will be caught later during definition checking.
                 const pattern = Pattern{
                     .assign = .{
@@ -3585,7 +3557,7 @@ fn canonicalizeImportStatement(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // 1. Reconstruct the full module name (e.g., "json.Json")
+    // 1. Build the full module name (e.g., "json.Json")
     const module_name = blk: {
         if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) {
             const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
@@ -3944,21 +3916,6 @@ fn introduceItemsAliased(
             return;
         };
 
-        // If module is a placeholder (not yet compiled), skip validation and introduce items directly
-        // This matches the behavior in type annotation canonicalization where placeholders create pending lookups
-        if (module_entry.is_placeholder) {
-            for (exposed_items_slice) |exposed_item_idx| {
-                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-                const item_name = exposed_item.alias orelse exposed_item.name;
-                const item_info = Scope.ExposedItemInfo{
-                    .module_name = module_name,
-                    .original_name = exposed_item.name,
-                };
-                try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
-            }
-            return;
-        }
-
         const module_env = module_entry.env;
 
         // Auto-expose the module's main type for type modules
@@ -3981,7 +3938,7 @@ fn introduceItemsAliased(
                                 }
                             }
                         }
-                        // Fallback to the old method if we can't find it via statement_idx
+                        // If we can't find it via statement_idx, look it up by ident.
                         break :blk module_env.getExposedNodeIndexById(main_type_ident);
                     };
 
@@ -4468,6 +4425,8 @@ fn recordNumeralLiteralForExpr(
     );
 }
 
+/// Parse an integer literal's textual form into a CIR.IntValue, honoring an
+/// optional leading minus and `0x`/`0o`/`0b`/`0d` base prefixes.
 pub fn parseIntText(num_text: []const u8) ?CIR.IntValue {
     const is_negated = num_text[0] == '-';
     const after_minus_sign = @as(usize, @intFromBool(is_negated));
@@ -4825,11 +4784,6 @@ pub fn canonicalizeExpr(
                                             };
                                         }
 
-                                        if (trace_modules) {
-                                            const parent_text = self.env.getIdent(module_alias);
-                                            const nested_text = self.env.getIdent(ident);
-                                            std.debug.print("[TRACE-MODULES] nested_value_not_found: {s}.{s} (scope lookup failed)\n", .{ parent_text, nested_text });
-                                        }
                                         const diagnostic = Diagnostic{ .nested_value_not_found = .{
                                             .parent_name = module_alias,
                                             .nested_name = ident,
@@ -4865,9 +4819,8 @@ pub fn canonicalizeExpr(
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
-                            // For placeholder modules, use the original module text (not the placeholder's env.module_name)
                             const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name
+                                if (info.is_package_qualified) module_text else info.env.module_name
                             else
                                 module_text;
 
@@ -4875,10 +4828,9 @@ pub fn canonicalizeExpr(
                             const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (auto_imported_type_info) |info| {
-                                    // For placeholders, use the original module text
                                     // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
                                     // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name;
+                                    const actual_module_name = if (info.is_package_qualified) module_text else info.env.module_name;
                                     break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
@@ -4977,36 +4929,6 @@ pub fn canonicalizeExpr(
                                     // Module import failed, don't generate redundant error
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
-                                }
-
-                                // If this is a placeholder module (not yet compiled), create a pending lookup
-                                // that will be resolved after all modules are canonicalized.
-                                if (auto_imported_type_info.?.is_placeholder) {
-                                    const info = auto_imported_type_info.?;
-                                    // Build the fully qualified member name like we do for non-placeholder modules.
-                                    // For builtin types with statement_idx, use qualified_type_ident + field_text
-                                    // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
-                                    // For nested module access (qualifier_tokens.len > 1), use module_name + nested_path
-                                    // e.g., for Outer.Inner.inner: "Outer" + "Inner.inner" -> "Outer.Inner.inner"
-                                    // For simple access (qualifier_tokens.len == 1), just use field_text
-                                    // e.g., for A.main!: just "main!" (not "A.main!")
-                                    const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
-                                        const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                        break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
-                                    } else if (qualifier_tokens.len > 1)
-                                        try self.env.insertQualifiedIdent(self.env.getIdent(module_name), nested_path)
-                                    else
-                                        ident;
-
-                                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
-                                        .module_idx = import_idx,
-                                        .ident_idx = qualified_ident_idx,
-                                        .region = region,
-                                    } }, region);
-                                    return CanonicalizedExpr{
-                                        .idx = expr_idx,
-                                        .free_vars = DataSpan.empty(),
-                                    };
                                 }
 
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
@@ -5208,9 +5130,9 @@ pub fn canonicalizeExpr(
                             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
                         }
 
-                        // Defensive fallback: only reachable if there are no
-                        // scopes at all (which shouldn't happen during a real
-                        // canon run). Emit the not-in-scope diagnostic.
+                        // Only reachable if there are no scopes at all (which
+                        // shouldn't happen during a real canon run). Emit the
+                        // not-in-scope diagnostic.
                         return CanonicalizedExpr{
                             .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
                                 .ident = ident,
@@ -6802,10 +6724,10 @@ fn canonicalizeExprOrMalformed(
 }
 
 /// Canonicalize the `??` (double question) operator.
-/// Desugars `expr ?? fallback` into:
+/// Desugars `expr ?? rhs` into:
 ///   match expr {
 ///       Ok(#ok) => #ok,
-///       Err(_) => fallback,
+///       Err(_) => rhs,
 ///   }
 fn canonicalizeDoubleQuestionOp(
     self: *Self,
@@ -6911,7 +6833,7 @@ fn canonicalizeDoubleQuestionOp(
         try self.env.store.addScratchMatchBranch(ok_branch_idx);
     }
 
-    // === Branch 2: Err(_) => fallback ===
+    // === Branch 2: Err(_) => rhs ===
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
@@ -6958,7 +6880,7 @@ fn canonicalizeDoubleQuestionOp(
         try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
         const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
-        // Branch value is the fallback expression (already canonicalized as can_rhs)
+        // Branch value is the rhs expression (already canonicalized as can_rhs)
         const branch_value_idx = can_rhs.idx;
 
         // Create the Err branch
@@ -9120,206 +9042,6 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: Patte
 }
 
 // Result type for parsing fractional literals into small, Dec, or f64
-const FracLiteralResult = union(enum) {
-    small: struct {
-        numerator: i16,
-        denominator_power_of_ten: u8,
-        requirements: types.Frac.Requirements,
-    },
-    dec: struct {
-        value: RocDec,
-        requirements: types.Frac.Requirements,
-    },
-    f64: struct {
-        value: f64,
-        requirements: types.Frac.Requirements,
-    },
-};
-
-// Try to parse a fractional literal as a small dec (numerator/10^power)
-fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_power_of_ten: u8 } {
-    // Return null if input is too long to fit in our 32-byte buffer
-    if (token_text.len > 32) return null;
-
-    // For negative zero, we'll return null to force f64 path
-    if (token_text.len > 0 and token_text[0] == '-') {
-        const rest = token_text[1..];
-        // Check if it's -0, -0.0, -0.00, etc.
-        var all_zeros = true;
-        for (rest) |c| {
-            if (c != '0' and c != '.') {
-                all_zeros = false;
-                break;
-            }
-        }
-        if (all_zeros) return null;
-    }
-
-    // Parse as a whole number by removing the decimal point
-    const dot_pos = std.mem.indexOf(u8, token_text, ".") orelse {
-        // No decimal point, parse as integer
-        const val = std.fmt.parseInt(i32, token_text, 10) catch return null;
-        if (val < -32768 or val > 32767) return null;
-        return .{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = 0 };
-    };
-
-    // Count digits after decimal point
-    const after_decimal_len = token_text.len - dot_pos - 1;
-    if (after_decimal_len > 255) return null; // Too many decimal places
-
-    // Build the string without the decimal point
-    var buf: [32]u8 = undefined;
-    var len: usize = 0;
-
-    // Copy part before decimal
-    @memcpy(buf[0..dot_pos], token_text[0..dot_pos]);
-    len = dot_pos;
-
-    // Copy part after decimal
-    if (after_decimal_len > 0) {
-        @memcpy(buf[len..][0..after_decimal_len], token_text[dot_pos + 1 ..]);
-        len += after_decimal_len;
-    }
-
-    // Parse the combined number
-    const val = std.fmt.parseInt(i32, buf[0..len], 10) catch return null;
-    if (val < -32768 or val > 32767) return null;
-
-    return .{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = @as(u8, @intCast(after_decimal_len)) };
-}
-
-// Parse a fractional literal from text and return small, Dec, or F64 value
-fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
-    // First, always parse as f64 to get the numeric value
-    const f64_val = std.fmt.parseFloat(f64, token_text) catch {
-        // If it can't be parsed as F64, it's too big to fit in any of Roc's Frac types.
-        return error.InvalidNumeral;
-    };
-
-    // Check if it has scientific notation
-    const has_scientific_notation = blk: {
-        for (token_text) |char| {
-            if (char == 'e' or char == 'E') {
-                break :blk true;
-            }
-        }
-        break :blk false;
-    };
-
-    // For non-scientific notation, try the original parseSmallDec first to preserve behavior
-    if (!has_scientific_notation) {
-        if (parseSmallDec(token_text)) |small| {
-            // Convert to f64 to check requirements
-            const numerator_f64 = @as(f64, @floatFromInt(small.numerator));
-            var divisor: f64 = 1.0;
-            var i: u8 = 0;
-            while (i < small.denominator_power_of_ten) : (i += 1) {
-                divisor *= 10.0;
-            }
-            const small_f64_val = numerator_f64 / divisor;
-
-            return FracLiteralResult{
-                .small = .{
-                    .numerator = small.numerator,
-                    .denominator_power_of_ten = small.denominator_power_of_ten,
-                    .requirements = types.Frac.Requirements{
-                        .fits_in_f32 = CIR.fitsInF32(small_f64_val),
-                        .fits_in_dec = true,
-                    },
-                },
-            };
-        }
-    }
-
-    // For scientific notation or when parseSmallDec fails, check if it's a whole number
-    const rounded = @round(f64_val);
-    if (f64_val == rounded and rounded >= -32768 and rounded <= 32767) {
-        // It's a whole number in i16 range, can use small dec with denominator_power_of_ten = 0
-        return FracLiteralResult{
-            .small = .{
-                .numerator = @as(i16, @intFromFloat(rounded)),
-                .denominator_power_of_ten = 0,
-                .requirements = types.Frac.Requirements{
-                    .fits_in_f32 = CIR.fitsInF32(f64_val),
-                    .fits_in_dec = true,
-                },
-            },
-        };
-    }
-
-    // Check if the value can fit in RocDec (whether or not it uses scientific notation)
-    // RocDec uses i128 with 18 decimal places
-    // We need to check if the value is within RocDec's range
-    if (CIR.fitsInDec(f64_val)) {
-        // Convert f64 to RocDec by multiplying by 10^18
-        const dec_scale = std.math.pow(f64, 10, 18);
-        const scaled_val = f64_val * dec_scale;
-
-        // i128 max is 170141183460469231731687303715884105727
-        // i128 min is -170141183460469231731687303715884105728
-        // We need to be more conservative to avoid overflow during conversion
-        const i128_max_f64 = 170141183460469231731687303715884105727.0;
-        const i128_min_f64 = -170141183460469231731687303715884105728.0;
-
-        if (scaled_val >= i128_min_f64 and scaled_val <= i128_max_f64) {
-            // Safe to convert - but check for special cases
-            const rounded_val = @round(scaled_val);
-
-            // Extra safety check for boundary values
-            if (rounded_val < i128_min_f64 or rounded_val > i128_max_f64) {
-                // Would overflow, use f64 instead
-                return FracLiteralResult{
-                    .f64 = .{
-                        .value = f64_val,
-                        .requirements = types.Frac.Requirements{
-                            .fits_in_f32 = CIR.fitsInF32(f64_val),
-                            .fits_in_dec = false,
-                        },
-                    },
-                };
-            }
-
-            const dec_num = builtins.compiler_rt_128.f64_to_i128(rounded_val);
-
-            // Check if the value is too small (would round to 0 or near 0)
-            // This prevents loss of precision for very small numbers like 1e-40
-            const min_representable = 1e-18; // Smallest non-zero value Dec can represent
-            if (@abs(f64_val) > 0 and @abs(f64_val) < min_representable) {
-                // Too small for Dec precision, use f64
-                return FracLiteralResult{
-                    .f64 = .{
-                        .value = f64_val,
-                        .requirements = types.Frac.Requirements{
-                            .fits_in_f32 = CIR.fitsInF32(f64_val),
-                            .fits_in_dec = false,
-                        },
-                    },
-                };
-            }
-
-            return FracLiteralResult{
-                .dec = .{
-                    .value = RocDec{ .num = dec_num },
-                    .requirements = types.Frac.Requirements{
-                        .fits_in_f32 = CIR.fitsInF32(f64_val),
-                        .fits_in_dec = true,
-                    },
-                },
-            };
-        }
-    }
-
-    // If it doesn't fit in small dec or RocDec, use f64
-    return FracLiteralResult{
-        .f64 = .{
-            .value = f64_val,
-            .requirements = types.Frac.Requirements{
-                .fits_in_f32 = CIR.fitsInF32(f64_val),
-                .fits_in_dec = false,
-            },
-        },
-    };
-}
 
 /// Introduce a var identifier to the current scope with function boundary tracking
 fn scopeIntroduceVar(
@@ -9704,12 +9426,12 @@ fn canonicalizeTypeAnnoBasicType(
                         // TYPE instead of a dangling local lookup.
                         if (self.processing_alias_declarations) {
                             const nom_stmt = self.env.store.getStatement(stmt);
-                            const is_placeholder = switch (nom_stmt) {
+                            const awaiting_real_decl = switch (nom_stmt) {
                                 .s_nominal_decl => |n| n.anno == .placeholder,
                                 .s_alias_decl => |a| a.anno == .placeholder,
                                 else => false,
                             };
-                            if (is_placeholder) {
+                            if (awaiting_real_decl) {
                                 const is_self_reference = if (self.current_alias_name) |current_name|
                                     current_name.eql(type_name_ident)
                                 else
@@ -9800,21 +9522,6 @@ fn canonicalizeTypeAnnoBasicType(
 
             // Check if this is an auto-imported type from module_envs
             if (self.lookupAvailableModuleEnv(type_name_ident)) |auto_imported_type| {
-                // If this is a placeholder module (not yet compiled), create a pending lookup
-                // that will be resolved after all modules are canonicalized.
-                if (auto_imported_type.is_placeholder) {
-                    // Get or create import for the placeholder module
-                    const module_name_text = self.env.getIdent(type_name_ident);
-                    const import_idx = try self.getOrCreateAutoImport(module_name_text);
-                    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .pending = .{
-                            .module_idx = import_idx,
-                            .type_name = type_name_ident,
-                        } },
-                    } }, region);
-                }
-
                 // This is an auto-imported type like Bool or Try
                 // We need to create an import for it and return the type annotation
                 const module_name_text = auto_imported_type.env.module_name;
@@ -9995,15 +9702,6 @@ fn canonicalizeTypeAnnoBasicType(
             const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
                 break :blk 0;
             };
-
-            // If this is a placeholder module (not yet compiled), create a pending lookup
-            // that will be resolved after all modules are canonicalized.
-            if (auto_imported_type.is_placeholder) {
-                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_name_ident, .base = .{ .pending = .{
-                    .module_idx = import_idx,
-                    .type_name = type_name_ident,
-                } } } }, region);
-            }
 
             const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse {
                 // Type is not exposed by the module
@@ -13138,7 +12836,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     };
 
     // This IS a module-qualified lookup - we must handle it completely here.
-    // After this point, returning null would cause incorrect fallback to regular field access.
+    // After this point, returning null would cause it to be processed as a regular field access.
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
@@ -13433,13 +13131,13 @@ fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator
     return switch (right_expr) {
         .apply => |apply| try self.parseMethodCall(apply),
         .ident => |ident| .{
-            try self.resolveIdentOrFallback(ident.token),
+            try self.resolveIdentOrUnknown(ident.token),
             self.parse_ir.tokenizedRegionToRegion(ident.region),
             null,
         },
         else => .{
             try self.createUnknownIdent(),
-            self.parse_ir.tokenizedRegionToRegion(field_access.region), // fallback to whole region
+            self.parse_ir.tokenizedRegionToRegion(field_access.region),
             null,
         },
     };
@@ -13462,13 +13160,13 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
             else
                 raw_region;
             break :blk .{
-                try self.resolveIdentOrFallback(ident.token),
+                try self.resolveIdentOrUnknown(ident.token),
                 adjusted_region,
             };
         },
         else => .{
             try self.createUnknownIdent(),
-            self.parse_ir.tokenizedRegionToRegion(apply.region), // fallback
+            self.parse_ir.tokenizedRegionToRegion(apply.region),
         },
     };
 
@@ -13487,7 +13185,7 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
     return .{ field_name, field_name_region, args };
 }
 
-/// Resolve an identifier token or return a fallback "unknown" identifier.
+/// Resolve an identifier token or return an "unknown" identifier.
 ///
 /// This helps maintain the "inform don't block" philosophy - even if we can't
 /// resolve an identifier (due to malformed input), we continue compilation.
@@ -13495,7 +13193,7 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
 /// Examples:
 /// - Valid token for "name" -> returns the interned identifier for "name"
 /// - Malformed/missing token -> returns identifier for "unknown"
-fn resolveIdentOrFallback(self: *Self, token: Token.Idx) std.mem.Allocator.Error!Ident.Idx {
+fn resolveIdentOrUnknown(self: *Self, token: Token.Idx) std.mem.Allocator.Error!Ident.Idx {
     if (self.parse_ir.tokens.resolveIdentifier(token)) |ident_idx| {
         return ident_idx;
     } else {
@@ -13503,7 +13201,7 @@ fn resolveIdentOrFallback(self: *Self, token: Token.Idx) std.mem.Allocator.Error
     }
 }
 
-/// Create an "unknown" identifier for fallback cases.
+/// Create an "unknown" identifier for malformed/unresolved cases.
 ///
 /// Used when we encounter malformed or unexpected syntax but want to continue
 /// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
@@ -13655,7 +13353,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
             else => {},
         }
     }
-    // Fallback: try auto-imported types from explicitly imported or builtin modules.
+    // Next, try auto-imported types from explicitly imported or builtin modules.
     if (self.lookupAvailableModuleEnv(type_ident)) |auto_imported_type| {
         if (auto_imported_type.statement_idx) |stmt_idx| {
             const module_name_text = auto_imported_type.env.module_name;
@@ -13773,7 +13471,7 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
     const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
 
-    // Use heuristic: if there are types declared, assume type module, else assume default-app
+    // If there are types declared, assume type module, else assume default-app.
     if (self.hasAnyTypeDeclarations()) {
         // Assume user wanted type module
         try self.env.pushDiagnostic(.{
