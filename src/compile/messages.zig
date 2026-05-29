@@ -77,16 +77,14 @@ pub const CanonicalizeTask = struct {
     module_name: []const u8,
     /// Filesystem path (for diagnostics)
     path: []const u8,
-    /// Source-relative import base directory.
-    source_dir: []const u8,
+    /// Root directory of the owning package (used to resolve local imports).
+    root_dir: []const u8,
     /// Dependency depth
     depth: u32,
     /// Module environment (ownership transferred from coordinator)
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
-    /// Real imported semantic envs available to canonicalization
-    imported_modules: []const CanonicalizeImport,
 };
 
 /// Task to type-check a canonicalized module
@@ -194,10 +192,12 @@ pub const CanonicalizedResult = struct {
 /// Result of successfully type-checking a module
 pub const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
-    checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
+    checked_artifact: ?*CheckedArtifact.CheckedModuleArtifact = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
-        if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
+        if (self.checked_artifact) |artifact| {
+            artifact.deinit(artifact.canonical_names.allocator);
+        }
     }
 };
 

@@ -189,7 +189,12 @@ const Builder = struct {
 
     fn writeContent(self: *Builder, content: types.Content) Allocator.Error!void {
         switch (content) {
-            .err => invariantViolation("canonical type key requested for erroneous checked type"),
+            // Erroneous types reach the key builder when a def's type
+            // simplified to `.err` (the diagnostic was emitted earlier).
+            // Encode them as a stable sentinel byte instead of panicking;
+            // downstream consumers treat any def with an `.err` root as a
+            // type-error stub and don't read further into the key.
+            .err => self.writeTag("err"),
             .flex => |flex| {
                 if (self.require_concrete and self.flexDefaultsToDec(flex)) {
                     self.writeDefaultDec();

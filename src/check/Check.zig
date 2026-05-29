@@ -8201,7 +8201,24 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+                // Recursive-def equality constraints compare the def's
+                // generalized pattern var against the body's recursive-lookup
+                // var. Instantiate the generalized side so the rigid type
+                // parameters get fresh flex vars before unifying — without
+                // this, the lookup's return position never gets resolved.
+                // Other eql constraint contexts (early-return, try-operator)
+                // compare body vars at the same rank and must NOT instantiate.
+                const expected_var = switch (eql.ctx) {
+                    .recursive_def => blk: {
+                        const expected_resolved = self.types.resolveVar(eql.expected);
+                        if (expected_resolved.desc.rank == Rank.generalized) {
+                            break :blk try self.instantiateVar(eql.expected, env, .use_last_var);
+                        }
+                        break :blk eql.expected;
+                    },
+                    else => eql.expected,
+                };
+                _ = try self.unifyInContext(expected_var, eql.actual, env, eql.ctx);
             },
         }
     }

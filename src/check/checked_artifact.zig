@@ -2018,12 +2018,17 @@ pub const CheckedTypeStore = struct {
         try appendStaticDispatchTypeRoots(allocator, module, names, import_views, &roots, &payloads, &active);
 
         for (module.allDefs()) |def_idx| {
-            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, module.defType(def_idx));
+            // Skip defs whose top-level type ended up as `.err` — Check has
+            // already emitted a diagnostic for them; trying to canonicalize an
+            // erroneous type into a key would panic the artifact builder.
+            const def_var = module.defType(def_idx);
+            if (module.typeStoreConst().resolveVar(def_var).desc.content == .err) continue;
+            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, def_var);
             const scheme_key = try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
                 module.identStoreConst(),
-                module.defType(def_idx),
+                def_var,
             );
             if (findCheckedTypeScheme(schemes.items, scheme_key) == null) {
                 const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(schemes.items.len)));
@@ -4040,12 +4045,11 @@ fn copyCheckedTypePayload(
     content: types.Content,
 ) Allocator.Error!CheckedTypePayload {
     return switch (content) {
-        .err => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("checked artifact invariant violated: erroneous checked type reached artifact publication", .{});
-            }
-            unreachable;
-        },
+        // An erroneous root means Check already reported a type error for this
+        // declaration. Encode it as `pending` so callers that walk the
+        // artifact still see a payload and don't crash; downstream lowering
+        // skips defs whose root is the type-error stub.
+        .err => .pending,
         .flex => |flex| .{ .flex = .{
             .name = try copyOptionalIdentText(allocator, module, flex.name),
             .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, imports, roots, payloads, active, flex.constraints),

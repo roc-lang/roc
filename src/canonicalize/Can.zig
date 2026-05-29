@@ -48,6 +48,11 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
+    /// Optional explicit "root" names supplied by callers that want only those
+    /// top-level defs canonicalized (e.g. the checked-artifact lowering path).
+    /// Single-pass canon ignores this hint — the field exists only to keep the
+    /// initContext shape stable for callers that still pass it through.
+    explicit_root_names: ?[]const []const u8 = null,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -2694,6 +2699,32 @@ pub fn canonicalizeFile(
 /// Validate a type module for use in checking mode (roc check).
 /// This accepts both type modules and default-app modules, providing helpful
 /// error messages when neither is valid.
+/// Stub alias matching `validateForChecking` for legacy explicit-roots callers.
+pub fn validateForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
+    return self.validateForChecking();
+}
+
+/// Find a top-level def whose `assign` pattern binds the given identifier name.
+/// Returns the `Def.Idx` if found, null otherwise.
+pub fn explicitRootDefByName(self: *Self, name: []const u8) ?CIR.Def.Idx {
+    const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = self.env.store.getDef(def_idx);
+        const pat = self.env.store.getPattern(def.pattern);
+        const ident_idx = switch (pat) {
+            .assign => |a| a.ident,
+            .as => |a| a.ident,
+            else => continue,
+        };
+        const ident_text = self.env.getIdent(ident_idx);
+        if (std.mem.eql(u8, ident_text, name)) return def_idx;
+    }
+    return null;
+}
+
+/// Run post-canonicalization validation that the type checker depends on —
+/// module-kind sanity for type modules / default apps, header presence on
+/// non-default-app files, and any other deferred diagnostics.
 pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
