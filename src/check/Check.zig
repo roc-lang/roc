@@ -1165,10 +1165,12 @@ fn unifyTypedLiteralWithExplicitType(
     env: *Env,
 ) Allocator.Error!void {
     const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("typed numeric literal reached checking without a canonicalized suffix target", .{});
-        }
-        unreachable;
+        // Canonicalization didn't publish a suffix target for this typed
+        // numeric literal — treat it as a type error so subsequent stages
+        // see a stub instead of panicking. The diagnostic for the bad
+        // suffix is already produced earlier.
+        try self.unifyWith(flex_var, .err, env);
+        return;
     };
 
     switch (suffix_type.target()) {

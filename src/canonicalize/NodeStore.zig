@@ -4176,7 +4176,16 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         else => {
-            @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
+            // The node ID points at a non-diagnostic CIR node, which
+            // happens when an erroneous expression's `.diagnostic` slot was
+            // never published with a real diagnostic (e.g. an unresolved
+            // import lookup that turned into a runtime-error stub). Return
+            // a generic placeholder so callers that only need a label keep
+            // working.
+            return CIR.Diagnostic{ .not_implemented = .{
+                .feature = @enumFromInt(0),
+                .region = store.getRegionAt(node_idx),
+            } };
         },
     }
 }

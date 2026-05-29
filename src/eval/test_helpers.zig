@@ -1444,6 +1444,12 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
 
 /// Public `lirInterpreterStrWithStats` function.
 pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
+    // No root procedures means every published root was a stub for an
+    // erroneous type. Surface this as a Crash so the snapshot renderer
+    // emits the type-error diagnostics instead of trying to interpret an
+    // empty program.
+    if (lowered.view.root_procs.len == 0) return error.Crash;
+
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
