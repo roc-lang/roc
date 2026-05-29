@@ -1376,6 +1376,14 @@ fn canonicalizeAssociatedItems(
                                     // Add unqualified name (e.g., "bar") to current scope only
                                     try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
+                                    // Skip the module-scope publish for the
+                                    // Builtin module — its items are auto-imported
+                                    // elsewhere and the extra entries would collide
+                                    // with the existing builtin bindings.
+                                    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
+                                        try self.scopes.items[0].idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                                    }
+
                                     // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
                                     const type_qualified_ident_idx = if (parent_name.eql(type_name))
                                         qualified_idx
@@ -1512,6 +1520,18 @@ fn canonicalizeAssociatedItems(
 
                         // Add unqualified name (e.g., "bar") to current scope only
                         try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+
+                        // Publish the fully-qualified parent-prefixed name
+                        // (e.g. `Test.MyBool.my_eq`) at the module scope so
+                        // top-level references like
+                        // `x = Test.MyBool.my_eq(...)` resolve after this
+                        // associated block's scope exits. Skip in the
+                        // Builtin module — its items are auto-imported via a
+                        // separate path and adding them again here collides
+                        // with the existing bindings.
+                        if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
+                            try self.scopes.items[0].idents.put(self.env.gpa, qualified_idx, pattern_idx);
+                        }
 
                         // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
                         const type_qualified_ident_idx = if (parent_name.eql(type_name))
