@@ -4847,7 +4847,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             }
 
-            // Instantiate if generalized, otherwise just use the pattern var
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
