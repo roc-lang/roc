@@ -41,7 +41,7 @@ pub fn init(source: []const u8) !TestEnv {
     const parse_ast = try parse.parseExpr(&allocators, &module_env.common);
     errdefer parse_ast.deinit();
 
-    // Phase 4: AST Structure Validation
+    // Touch the root expression so AST construction errors surface here.
     if (parse_ast.root_node_idx >= 0) {
         const root_expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
         if (root_expr == .tag) {}
