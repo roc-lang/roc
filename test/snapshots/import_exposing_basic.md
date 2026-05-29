@@ -115,13 +115,15 @@ main = {
 			(s-let
 				(p-assign (ident "encoded"))
 				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local
+						(p-assign (ident "encode")))
 					(e-lookup-local
 						(p-assign (ident "data")))))
 			(s-let
 				(p-assign (ident "decoded"))
 				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local
+						(p-assign (ident "decode")))
 					(e-lookup-local
 						(p-assign (ident "encoded")))))
 			(e-lookup-local
@@ -135,7 +137,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "_a")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "_a"))))
 ~~~

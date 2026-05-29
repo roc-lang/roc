@@ -98,7 +98,8 @@ NO CHANGE
 			(args
 				(p-assign (ident "msg")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-lookup-local
+					(p-assign (ident "line!")))
 				(e-lookup-local
 					(p-assign (ident "msg")))))
 		(annotation

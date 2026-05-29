@@ -755,11 +755,20 @@ fn registerTypeDecl(
         try self.introduceTypeParametersFromHeader(final_header_idx);
 
         // For alias types, track the name so self-references can pass through
-        // (to be caught as RECURSIVE ALIAS in Check).
+        // (to be caught as RECURSIVE ALIAS in Check), and flag the lookup
+        // path so any reference to a still-unfilled placeholder produces an
+        // UNDECLARED TYPE diagnostic (matching the historical behavior for
+        // mutually-recursive alias groups) instead of leaving a dangling
+        // local lookup for Check to trip over.
+        const was_processing_alias = self.processing_alias_declarations;
         if (type_decl.kind == .alias) {
             self.current_alias_name = qualified_name_idx;
+            self.processing_alias_declarations = true;
         }
-        defer self.current_alias_name = null;
+        defer {
+            self.current_alias_name = null;
+            self.processing_alias_declarations = was_processing_alias;
+        }
 
         // Now canonicalize the type annotation with type parameters and type name in scope
         break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
@@ -1732,6 +1741,189 @@ fn diagnosePostWalkTypeDecls(
 /// yet. Used by the lookup paths to satisfy forward references to types
 /// declared later in source order. The placeholder is an `s_alias_decl` with
 /// `anno = .placeholder`; when the real declaration is canonicalized,
+/// Reorder the scratch_statements list so type declarations come first, in
+/// topological order — a type appears only after every other type it
+/// references in its annotation. This is what the Check pass expects: its
+/// first walk over `all_statements` sets up each type decl's type var, and a
+/// later type can only resolve through `resolveVar(varFrom(decl_idx))` once
+/// the earlier one has been processed. Other statements (defs, imports,
+/// expects, file imports) keep their original relative source order, but
+/// they all follow the type-decl block.
+fn reorderTypeDeclsTopologically(
+    self: *Self,
+    scratch_statements_start: u32,
+) std.mem.Allocator.Error!void {
+    const top = self.env.store.scratch.?.statements.top();
+    if (top <= scratch_statements_start) return;
+
+    const gpa = self.env.gpa;
+
+    // Snapshot the current scratch slice so we can rebuild it from scratch.
+    var snapshot = std.ArrayList(Statement.Idx){};
+    defer snapshot.deinit(gpa);
+    {
+        const current = self.env.store.scratch.?.statements.sliceFromStart(scratch_statements_start);
+        try snapshot.appendSlice(gpa, current);
+    }
+
+    // Split into type declarations (which need topo ordering) and everything
+    // else (preserved in source order).
+    var type_decls = std.ArrayList(Statement.Idx){};
+    defer type_decls.deinit(gpa);
+    var others = std.ArrayList(Statement.Idx){};
+    defer others.deinit(gpa);
+    for (snapshot.items) |stmt_idx| {
+        const stmt = self.env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_alias_decl, .s_nominal_decl => try type_decls.append(gpa, stmt_idx),
+            else => try others.append(gpa, stmt_idx),
+        }
+    }
+
+    if (type_decls.items.len <= 1) {
+        // Nothing to reorder.
+        return;
+    }
+
+    // Build the set of type-decl stmt_idxs so we ignore references to anything
+    // else when collecting dependencies.
+    var decl_set = std.AutoHashMapUnmanaged(Statement.Idx, void){};
+    defer decl_set.deinit(gpa);
+    for (type_decls.items) |idx| try decl_set.put(gpa, idx, {});
+
+    // Compute dependencies (`stmt → set of type decls it references`).
+    var deps = std.AutoHashMapUnmanaged(Statement.Idx, std.AutoHashMapUnmanaged(Statement.Idx, void)){};
+    defer {
+        var it = deps.valueIterator();
+        while (it.next()) |d| d.deinit(gpa);
+        deps.deinit(gpa);
+    }
+    for (type_decls.items) |idx| {
+        var d = std.AutoHashMapUnmanaged(Statement.Idx, void){};
+        const stmt = self.env.store.getStatement(idx);
+        switch (stmt) {
+            .s_alias_decl => |a| try self.collectTypeAnnoDeclDeps(a.anno, &decl_set, &d),
+            .s_nominal_decl => |n| try self.collectTypeAnnoDeclDeps(n.anno, &decl_set, &d),
+            else => {},
+        }
+        _ = d.remove(idx); // a type can recurse on itself; that's not an ordering edge
+        try deps.put(gpa, idx, d);
+    }
+
+    // Iterative DFS topological sort. We push nodes in pre-order and pop in
+    // post-order; appending the post-order to `sorted` gives the dependency
+    // order we want. Cycles are tolerated — the dependent type is emitted
+    // anyway, which is fine because mutual-alias diagnostics already fired
+    // upstream and the resulting type is the same regardless of edge order.
+    var sorted = std.ArrayList(Statement.Idx){};
+    defer sorted.deinit(gpa);
+    var visited = std.AutoHashMapUnmanaged(Statement.Idx, void){};
+    defer visited.deinit(gpa);
+    var on_path = std.AutoHashMapUnmanaged(Statement.Idx, void){};
+    defer on_path.deinit(gpa);
+
+    const Frame = struct {
+        node: Statement.Idx,
+        iter: std.AutoHashMapUnmanaged(Statement.Idx, void).Iterator,
+    };
+    var stack = std.ArrayList(Frame){};
+    defer stack.deinit(gpa);
+
+    for (type_decls.items) |start_node| {
+        if (visited.contains(start_node)) continue;
+        try stack.append(gpa, .{
+            .node = start_node,
+            .iter = (deps.getPtr(start_node) orelse continue).iterator(),
+        });
+        try on_path.put(gpa, start_node, {});
+
+        while (stack.items.len > 0) {
+            const frame = &stack.items[stack.items.len - 1];
+            if (frame.iter.next()) |entry| {
+                const dep_idx = entry.key_ptr.*;
+                if (visited.contains(dep_idx)) continue;
+                if (on_path.contains(dep_idx)) continue; // cycle edge; skip it
+                try on_path.put(gpa, dep_idx, {});
+                try stack.append(gpa, .{
+                    .node = dep_idx,
+                    .iter = (deps.getPtr(dep_idx) orelse {
+                        try visited.put(gpa, dep_idx, {});
+                        try sorted.append(gpa, dep_idx);
+                        _ = on_path.remove(dep_idx);
+                        _ = stack.pop();
+                        continue;
+                    }).iterator(),
+                });
+            } else {
+                try visited.put(gpa, frame.node, {});
+                try sorted.append(gpa, frame.node);
+                _ = on_path.remove(frame.node);
+                _ = stack.pop();
+            }
+        }
+    }
+
+    // Catch any type decl that wasn't visited (shouldn't happen given the
+    // initial loop, but guard against it anyway so we never drop a statement).
+    for (type_decls.items) |idx| {
+        if (!visited.contains(idx)) try sorted.append(gpa, idx);
+    }
+
+    // Replace the scratch contents with [sorted type decls] + [others in source order].
+    self.env.store.scratch.?.statements.clearFrom(scratch_statements_start);
+    for (sorted.items) |idx| try self.env.store.addScratchStatement(idx);
+    for (others.items) |idx| try self.env.store.addScratchStatement(idx);
+}
+
+/// Walk a canonicalized type annotation tree and collect every local
+/// statement index it references, intersected with the supplied set of
+/// known type-decl indices.
+fn collectTypeAnnoDeclDeps(
+    self: *Self,
+    anno_idx: TypeAnno.Idx,
+    decl_set: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    out: *std.AutoHashMapUnmanaged(Statement.Idx, void),
+) std.mem.Allocator.Error!void {
+    if (anno_idx == TypeAnno.Idx.placeholder) return;
+    const anno = self.env.store.getTypeAnno(anno_idx);
+    switch (anno) {
+        .lookup => |l| {
+            switch (l.base) {
+                .local => |loc| if (decl_set.contains(loc.decl_idx)) try out.put(self.env.gpa, loc.decl_idx, {}),
+                else => {},
+            }
+        },
+        .apply => |a| {
+            switch (a.base) {
+                .local => |loc| if (decl_set.contains(loc.decl_idx)) try out.put(self.env.gpa, loc.decl_idx, {}),
+                else => {},
+            }
+            for (self.env.store.sliceTypeAnnos(a.args)) |arg| try self.collectTypeAnnoDeclDeps(arg, decl_set, out);
+        },
+        .tag_union => |tu| {
+            for (self.env.store.sliceTypeAnnos(tu.tags)) |t| try self.collectTypeAnnoDeclDeps(t, decl_set, out);
+        },
+        .tag => |t| {
+            for (self.env.store.sliceTypeAnnos(t.args)) |arg| try self.collectTypeAnnoDeclDeps(arg, decl_set, out);
+        },
+        .tuple => |t| {
+            for (self.env.store.sliceTypeAnnos(t.elems)) |arg| try self.collectTypeAnnoDeclDeps(arg, decl_set, out);
+        },
+        .record => |r| {
+            for (self.env.store.sliceAnnoRecordFields(r.fields)) |f_idx| {
+                const f = self.env.store.getAnnoRecordField(f_idx);
+                try self.collectTypeAnnoDeclDeps(f.ty, decl_set, out);
+            }
+        },
+        .@"fn" => |f| {
+            for (self.env.store.sliceTypeAnnos(f.args)) |arg| try self.collectTypeAnnoDeclDeps(arg, decl_set, out);
+            try self.collectTypeAnnoDeclDeps(f.ret, decl_set, out);
+        },
+        .parens => |p| try self.collectTypeAnnoDeclDeps(p.anno, decl_set, out),
+        .rigid_var, .rigid_var_lookup, .underscore, .malformed => {},
+    }
+}
+
 /// `registerTypeDecl` finds it via `scopeLookupTypeDecl` and rewrites the
 /// statement (and its kind, alias vs nominal) through `setStatementNode`.
 /// Returns the placeholder's statement index, or null if a minimal header
@@ -2214,6 +2406,13 @@ pub fn canonicalizeFile(
     for (self.scratch_local_type_decls.items) |stmt_idx| {
         try self.env.store.addScratchStatement(stmt_idx);
     }
+
+    // Topologically reorder type declarations within scratch_statements so
+    // Check's first pass sees each type's dependencies before the type
+    // itself. Without this, an annotation that references a type defined
+    // later in source order resolves to an unset type var when Check first
+    // touches it and trips an assertion.
+    try self.reorderTypeDeclsTopologically(scratch_statements_start);
 
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
@@ -9553,10 +9752,39 @@ fn canonicalizeTypeAnnoBasicType(
             if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
                 const binding = binding_location.binding.*;
                 return switch (binding) {
-                    .local_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .local = .{ .decl_idx = stmt } },
-                    } }, region),
+                    .local_nominal => |stmt| blk_nom: {
+                        // Same logic as the local_alias branch: when we're
+                        // inside an alias body and the looked-up name is still
+                        // bound to an unfilled placeholder (a forward
+                        // reference whose real declaration hasn't been seen
+                        // yet — typically because the two are in the same
+                        // mutually-recursive alias group), emit UNDECLARED
+                        // TYPE instead of a dangling local lookup.
+                        if (self.processing_alias_declarations) {
+                            const nom_stmt = self.env.store.getStatement(stmt);
+                            const is_placeholder = switch (nom_stmt) {
+                                .s_nominal_decl => |n| n.anno == .placeholder,
+                                .s_alias_decl => |a| a.anno == .placeholder,
+                                else => false,
+                            };
+                            if (is_placeholder) {
+                                const is_self_reference = if (self.current_alias_name) |current_name|
+                                    current_name.eql(type_name_ident)
+                                else
+                                    false;
+                                if (!is_self_reference) {
+                                    break :blk_nom try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .undeclared_type = .{
+                                        .name = type_name_ident,
+                                        .region = region,
+                                    } });
+                                }
+                            }
+                        }
+                        break :blk_nom try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .local = .{ .decl_idx = stmt } },
+                        } }, region);
+                    },
                     .local_alias => |stmt| blk: {
                         // When canonicalizing one alias body, references to another
                         // alias whose body is still a placeholder mean both names
@@ -9738,7 +9966,13 @@ fn canonicalizeTypeAnnoBasicType(
                 const c0 = text[0];
                 break :blk c0 >= 'A' and c0 <= 'Z';
             };
-            if (can_be_forward_type) {
+            // While canonicalizing an alias body, treat a missing type as an
+            // immediate UNDECLARED TYPE diagnostic rather than planting a
+            // placeholder. If the alias forms a mutually-recursive cycle with
+            // the missing name, the cycle diagnostic + a malformed lookup
+            // here is exactly what the existing test suite expects (and what
+            // Check can consume without tripping its assertion).
+            if (can_be_forward_type and !self.processing_alias_declarations) {
                 if (try self.createPlaceholderTypeDecl(type_name_ident, region)) |placeholder_stmt| {
                     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
