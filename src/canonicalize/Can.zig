@@ -1125,6 +1125,7 @@ fn findOrCreateAssocPattern(
         const found = self.scopeLookup(.ident, qualified_ident).found;
         self.drainForwardReferences(qualified_ident, type_qualified_ident, decl_ident);
         self.rebindPlaceholderPatternIdent(found, qualified_ident);
+        try self.publishAssocPatternNames(qualified_ident, type_qualified_ident, decl_ident, found);
         return found;
     }
 
@@ -1138,6 +1139,7 @@ fn findOrCreateAssocPattern(
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
+            try self.publishAssocPatternNames(qualified_ident, type_qualified_ident, decl_ident, placeholder);
             return placeholder;
         }
         if (type_qualified_ident) |tq| {
@@ -1148,6 +1150,7 @@ fn findOrCreateAssocPattern(
                 _ = scope.idents.remove(tq);
                 self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
                 try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
+                try self.publishAssocPatternNames(qualified_ident, type_qualified_ident, decl_ident, placeholder);
                 return placeholder;
             }
         }
@@ -1157,6 +1160,7 @@ fn findOrCreateAssocPattern(
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
+            try self.publishAssocPatternNames(qualified_ident, type_qualified_ident, decl_ident, placeholder);
             return placeholder;
         }
     }
@@ -1165,7 +1169,31 @@ fn findOrCreateAssocPattern(
     const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
     _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true);
     try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
+    try self.publishAssocPatternNames(qualified_ident, type_qualified_ident, decl_ident, new_pattern_idx);
     return new_pattern_idx;
+}
+
+/// Publish the type-qualified alias for an associated item's pattern to the
+/// module scope so a sibling body — including the item's own recursive body —
+/// canonicalized in the same block resolves the method to the same
+/// Pattern.Idx as the def. This runs *before* the body is canonicalized so
+/// the body's lookup doesn't get a forward-reference placeholder pointing at
+/// a different pattern than the def the caller is about to publish.
+fn publishAssocPatternNames(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    type_qualified_ident: ?Ident.Idx,
+    decl_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    _ = qualified_ident;
+    _ = decl_ident;
+    if (self.scopes.items.len == 0) return;
+    const module_scope = &self.scopes.items[0];
+
+    if (type_qualified_ident) |tq| {
+        try module_scope.idents.put(self.env.gpa, tq, pattern_idx);
+    }
 }
 
 /// Remove any forward_reference entries keyed by the names a definition
