@@ -1849,6 +1849,18 @@ fn diagnosePostWalkTypeDecls(
             .associated_nominal => |s| s,
             .external_nominal => continue,
         };
+        // For-clause aliases (eg `Model` in `[Model : model] for main : ...`)
+        // are registered through processRequiresEntries with a real rigid_var
+        // anno that may happen to land at node idx 0, which collides with
+        // `TypeAnno.Idx.placeholder`. They are always fully declared, so skip
+        // them here.
+        const is_for_clause_alias = blk: {
+            for (self.env.for_clause_aliases.items.items) |for_clause| {
+                if (for_clause.alias_stmt_idx == stmt_idx) break :blk true;
+            }
+            break :blk false;
+        };
+        if (is_for_clause_alias) continue;
         const stmt = self.env.store.getStatement(stmt_idx);
         const is_placeholder = switch (stmt) {
             .s_alias_decl => |a| a.anno == .placeholder,

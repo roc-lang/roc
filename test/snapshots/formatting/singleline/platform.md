@@ -12,23 +12,11 @@ platform "pf"
 	provides { pr1: "not implemented", pr2: "not implemented" }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - platform.md:2:14:2:21
 EXPOSED BUT NOT DEFINED - platform.md:5:13:5:35
 EXPOSED BUT NOT DEFINED - platform.md:5:37:5:59
 EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 EXPOSED BUT NOT DEFINED - platform.md:3:15:3:17
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _R1_ is not declared in this scope.
-
-This type is referenced here:
-**platform.md:2:14:2:21:**
-```roc
-	requires { [R1 : r1, R2 : r2] for main : R1 -> R2 }
-```
-	            ^^^^^^^
-
-
 **EXPOSED BUT NOT DEFINED**
 The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
 
