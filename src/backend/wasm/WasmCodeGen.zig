@@ -1001,7 +1001,6 @@ fn generateExpr(self: *Self, expr_id: LirExprId) Allocator.Error!void {
             try self.generateRcExpr(.free, rc_op.value, rc_op.layout_idx, 1);
         },
         .discriminant_switch => |ds| {
-            // debug removed
             try self.generateDiscriminantSwitch(ds);
         },
         .while_loop => |wl| {

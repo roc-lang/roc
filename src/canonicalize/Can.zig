@@ -4214,7 +4214,7 @@ fn introduceItemsAliased(
                                 }
                             }
                         }
-                        // Fallback to the old method if we can't find it via statement_idx
+                        // Fall back to lookup by ident when statement_idx isn't available.
                         break :blk module_env.getExposedNodeIndexById(main_type_ident);
                     };
 
@@ -9736,7 +9736,6 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
         break :blk false;
     };
 
-    // For non-scientific notation, try the original parseSmallDec first to preserve behavior
     if (!has_scientific_notation) {
         if (parseSmallDec(token_text)) |small| {
             // Convert to f64 to check requirements

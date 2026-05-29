@@ -394,7 +394,6 @@ test "integration - transitive module imports (module A imports module B)" {
     const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
     defer allocs.gpa.free(roc_path);
 
-    // This should compile successfully now that we pass sibling modules during compilation
     const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile transitive import test: {}\n", .{err});
         return err;

@@ -903,9 +903,8 @@ pub const Import = struct {
                 else
                     import_name;
 
-                // The original semantics walked modules in order and matched the
-                // first one whose name was either import_name or base_name, so take
-                // whichever first-occurrence index is smaller.
+                // Match by full import_name or by base_name (the part after the last
+                // dot). When both match different modules, pick the one declared first.
                 const exact = name_to_idx.get(import_name);
                 const base_match = if (base_name.ptr == import_name.ptr) exact else name_to_idx.get(base_name);
                 const resolved = if (exact == null)

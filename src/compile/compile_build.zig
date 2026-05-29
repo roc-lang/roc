@@ -1052,9 +1052,7 @@ pub const BuildEnv = struct {
         }
     };
 
-    // External import classification heuristic removed.
     // ModuleBuild determines external vs local using CIR qualifier metadata (s_import.qualifier_tok).
-
     fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return;

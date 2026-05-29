@@ -1674,8 +1674,8 @@ test "List.fold with record accumulator - single field record destructuring" {
     );
 }
 
-// List destructuring tests in lambda params - these previously leaked memory
-// Fixed by adding decref after successful patternMatchesBind in for_loop_iterate
+// List destructuring tests in lambda params — verify that for_loop_iterate
+// decrefs bound values after a successful patternMatchesBind.
 
 test "List.fold with list destructuring - simple first element" {
     // Simplest case: just extract the first element
@@ -3071,14 +3071,9 @@ test "lambda with list param, var, for loop, and List.append" {
 }
 
 test "issue 8899: closure decref index out of bounds in for loop" {
-    // Regression test for GitHub issue #8899: panic "index out of bounds: index 131, len 73"
-    // when running roc test on code with closures and for loops.
-    // The bug was in decrefLayoutPtr which read captures_layout_idx from raw memory
-    // instead of using the layout parameter.
-    //
-    // The original code was a compress function that removes consecutive duplicates.
-    // The issue manifested when closures were created inside the for loop (match branches)
-    // and List operations like List.last and List.append were used.
+    // Regression test for GitHub issue #8899: closures created inside a for loop
+    // (in match branches) combined with List.append/List.last must decref without
+    // tripping a captures-layout index-out-of-bounds panic.
     try runExpectI64(
         \\{
         \\    sum_with_last = |l| {
@@ -3183,23 +3178,11 @@ test "issue 8946: closure capturing for-loop element with == comparison" {
 }
 
 test "issue 8978: incref alignment with recursive tag unions in tuples" {
-    // Regression test for GitHub issue #8978: incref alignment check failed
-    // when a recursive tag union using pointer tagging was stored in a tuple.
-    //
-    // Recursive tag unions (types that contain themselves, like linked lists
-    // or expression trees) use pointer tagging to store the tag discriminant
-    // in the low bits of the pointer. When incref is called on such a pointer,
-    // it needs to strip the tag bits before accessing the refcount at ptr - 8.
-    //
-    // The bug was that increfDataPtrC had an alignment check that would fail
-    // on tagged pointers because they aren't aligned to @alignOf(usize).
-    //
-    // The fix: remove the alignment check since the tag bits are stripped
-    // before accessing the refcount anyway.
-    //
-    // This test uses a recursive tag pattern (Element containing children
-    // that can also be Element) inside a tuple, which triggers the incref
-    // alignment issue when the tuple is returned from a function.
+    // Regression test for GitHub issue #8978. Recursive tag unions use pointer
+    // tagging (tag discriminant in the pointer's low bits), so incref must strip
+    // those bits before accessing the refcount at ptr - 8. This test stores such
+    // a tagged pointer inside a tuple that is returned from a function, which
+    // is the path that exercises incref on the tagged pointer.
     try runExpectI64(
         \\{
         \\    make_result = || {

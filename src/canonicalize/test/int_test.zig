@@ -979,7 +979,7 @@ test "parseNumeralWithSuffix function" {
         expected_num_text: []const u8,
         expected_suffix: ?[]const u8,
     }{
-        // Hex literals - these were the originally failing cases
+        // Hex literals
         .{ .input = "0xE", .expected_num_text = "0xE", .expected_suffix = null },
         .{ .input = "0xf", .expected_num_text = "0xf", .expected_suffix = null },
         .{ .input = "0x20", .expected_num_text = "0x20", .expected_suffix = null },

@@ -1,8 +1,7 @@
 //! A shim to read the ModuleEnv from shared memory and JIT-compile
 //! Roc code using the dev backend (CIR → MIR → LIR → native machine code).
 //!
-//! Adapted from the interpreter shim. Instead of interpreting CIR directly,
-//! this shim compiles to native code via DevEvaluator and executes via
+//! Compiles to native code via DevEvaluator and executes via
 //! ExecutableMemory (mmap/mprotect).
 //!
 //! No wasm32 support — the dev backend targets x86_64/aarch64 only.

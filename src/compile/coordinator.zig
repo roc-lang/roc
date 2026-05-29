@@ -2273,7 +2273,6 @@ pub const Coordinator = struct {
             }
         }
 
-        // Free AST - deinit now handles both internal cleanup and self-destruction
         ast.deinit();
 
         return .{

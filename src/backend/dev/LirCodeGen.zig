@@ -8745,13 +8745,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(ptr_reg);
             self.codegen.freeGeneral(len_reg);
 
-            // Return the list location
-            // Note: data_offset is no longer meaningful for heap-allocated lists,
-            // but we keep it for compatibility with existing code
+            // For heap-allocated lists, data_offset points to the stack slot
+            // holding the heap pointer rather than to the elements directly.
             return .{
                 .list_stack = .{
                     .struct_offset = list_struct_offset,
-                    .data_offset = heap_ptr_slot, // Now points to heap ptr storage on stack
+                    .data_offset = heap_ptr_slot,
                     .num_elements = num_elems,
                 },
             };
