@@ -8205,22 +8205,22 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             .eql => |eql| {
                 // Recursive-def equality constraints compare the def's
                 // generalized pattern var against the body's recursive-lookup
-                // var. Instantiate the generalized side so the rigid type
-                // parameters get fresh flex vars before unifying — without
-                // this, the lookup's return position stays unbound. Other
-                // eql contexts (early-return, try-operator) compare body
-                // vars at the same rank and must NOT instantiate.
-                const expected_var = switch (eql.ctx) {
-                    .recursive_def => blk: {
-                        const expected_resolved = self.types.resolveVar(eql.expected);
-                        if (expected_resolved.desc.rank == Rank.generalized) {
-                            break :blk try self.instantiateVar(eql.expected, env, .use_last_var);
-                        }
-                        break :blk eql.expected;
-                    },
-                    else => eql.expected,
-                };
-                _ = try self.unifyInContext(expected_var, eql.actual, env, eql.ctx);
+                // var. Instantiate the generalized side into a fresh copy so
+                // we never mutate the def's own pattern var during the call —
+                // otherwise the fresh flex args bound to the call site's
+                // outer rigid vars would leak into the def's published type
+                // and downstream consumers would see a stubbed signature.
+                // Other eql contexts (early-return, try-operator) compare
+                // body vars at the same rank and must NOT instantiate.
+                if (eql.ctx == .recursive_def) {
+                    const expected_resolved = self.types.resolveVar(eql.expected);
+                    if (expected_resolved.desc.rank == Rank.generalized) {
+                        const instantiated = try self.instantiateVar(eql.expected, env, .use_last_var);
+                        _ = try self.unifyInContext(instantiated, eql.actual, env, eql.ctx);
+                        continue;
+                    }
+                }
+                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
             },
         }
     }
