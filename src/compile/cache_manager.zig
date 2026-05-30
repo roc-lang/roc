@@ -162,8 +162,17 @@ pub const CacheManager = struct {
             return;
         }
 
-        // Ensure cache subdirectory exists
-        self.ensureCacheSubdir(cache_key) catch |err| {
+        // Ensure cache subdirectory exists. The cache file path comes from
+        // getCacheFilePath (checked-artifact dir), so the subdirectory must be
+        // created under that same dir — not getCacheEntriesDir, which would
+        // create it in a sibling directory and leave the write target missing.
+        const entries_dir = self.config.getCheckedArtifactCacheDir(self.allocator) catch |err| {
+            self.verboseLog("Failed to resolve checked artifact cache dir: {}\n", .{err});
+            self.stats.recordStoreFailure();
+            return;
+        };
+        defer self.allocator.free(entries_dir);
+        self.ensureCacheSubdirIn(cache_key, entries_dir) catch |err| {
             self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
             self.stats.recordStoreFailure();
             return;

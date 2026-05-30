@@ -119,7 +119,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same 81 identifiers as original: hello, world, TestModule + 16 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 85), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 90), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
