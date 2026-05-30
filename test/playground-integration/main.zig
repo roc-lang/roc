@@ -1191,10 +1191,6 @@ pub fn main(init: std.process.Init) !void {
     try test_cases.append(allocator, .{
         .name = "REPL Core - Definitions and Expressions",
         .steps = repl_core_steps,
-        // TODO: zig 0.16 migration - WASM trap in publishFromTypedModule when
-        // evaluating an expression referencing a chained variable definition.
-        // Passes on CLI (.wasm backend); only the playground WASM build hits this.
-        .skip = true,
     });
 
     // Test: REPL Variable Redefinition - Dependency Updates
@@ -1215,8 +1211,6 @@ pub fn main(init: std.process.Init) !void {
     try test_cases.append(allocator, .{
         .name = "REPL Variable Redefinition - Dependency Updates",
         .steps = repl_redefinition_steps,
-        // TODO: zig 0.16 migration - same WASM trap as REPL Core. See above.
-        .skip = true,
     });
 
     // Test: REPL Error Handling - Invalid Syntax Recovery

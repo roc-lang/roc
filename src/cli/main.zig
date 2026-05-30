@@ -408,19 +408,24 @@ fn configuredSharedMemorySize() usize {
     return @intCast(build_options.shared_memory_size);
 }
 
-/// Reduced shared memory size for systems with overcommit disabled.
-const SHARED_MEMORY_SMALL_SIZE: usize = 256 * 1024 * 1024; // 256MB
+/// Floor for the retry loop in `createSharedMemory`. Set to the
+/// macOS/Windows reservation — documented as "ample headroom for real
+/// programs" — so a smaller reservation still produces a usable arena. On
+/// 32-bit targets the preferred size is already smaller than 8 GiB and an
+/// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
+/// itself (single attempt, no retry); `-Dshared-memory-size` builds are
+/// likewise handled by the allocator clamping `min_size` to the preferred.
+const SHARED_MEMORY_MIN_SIZE: usize = if (@sizeOf(usize) < 8)
+    SHARED_MEMORY_SIZE
+else
+    8 * 1024 * 1024 * 1024;
 
-/// Create shared memory, retrying with a smaller reservation on systems
-/// that reject the preferred large allocation (overcommit disabled).
-fn createSharedMemoryAdaptive(io: std.Io, page_size: usize) !SharedMemoryAllocator {
-    // Try the preferred size first
-    if (SharedMemoryAllocator.create(io, SHARED_MEMORY_SIZE, page_size)) |shm| {
-        return shm;
-    } else |_| {}
-
-    // Retry with smaller size for systems with overcommit disabled
-    return SharedMemoryAllocator.create(io, SHARED_MEMORY_SMALL_SIZE, page_size);
+/// Create the shared-memory arena used for the parent-produced LIR runtime
+/// image. Tries the preferred size first and halves down to
+/// `SHARED_MEMORY_MIN_SIZE` if the OS rejects the reservation; see
+/// `SharedMemoryAllocator.createWithMinSize` for details.
+fn createSharedMemory(io: std.Io, page_size: usize) !SharedMemoryAllocator {
+    return SharedMemoryAllocator.createWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
@@ -1983,7 +1988,7 @@ pub fn buildLirImageWithCoordinator(
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemoryAdaptive(ctx.io.std_io, page_size);
+    var shm = try createSharedMemory(ctx.io.std_io, page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
@@ -3659,7 +3664,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     defer ctx.gpa.free(relation_artifacts);
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemoryAdaptive(ctx.io.std_io, page_size);
+    var shm = try createSharedMemory(ctx.io.std_io, page_size);
     defer shm.deinit(ctx.gpa);
 
     const shm_allocator = shm.allocator();
@@ -3993,47 +3998,6 @@ const CliTestRunSummary = struct {
 };
 
 const cli_test_cache_magic = "ROC_TEST_RESULTS_V3";
-
-/// Magic identifier for the whole-run replay cache. Stored at the head of
-/// every replay payload to validate the format before decoding.
-const cli_test_replay_magic = "ROC_TEST_REPLAY_V1";
-
-/// Cache key for the full `roc test` replay cache.
-///
-/// The key intentionally mixes everything that can change the rendered
-/// output of a run: compiler version, source bytes, optimisation level,
-/// verbose flag, the resolved entry path, the explicit `--main` arg, and a
-/// reserved filter-expression slot. The filter slot is empty today; once
-/// `roc test --filter <expr>` (or similar test-selection flags) lands the
-/// caller just has to plumb the filter string through, no key format change.
-fn cliTestReplayCacheKey(
-    source: []const u8,
-    compiler_version: []const u8,
-    opt: cli_args.OptLevel,
-    verbose: bool,
-    entry_path: []const u8,
-    main_arg: ?[]const u8,
-    filter: []const u8,
-) [32]u8 {
-    var hasher = std.crypto.hash.Blake3.init(.{});
-    hasher.update(cli_test_replay_magic);
-    hasher.update(std.mem.asBytes(&compiler_version.len));
-    hasher.update(compiler_version);
-    hasher.update(@tagName(opt));
-    hasher.update(if (verbose) &[_]u8{1} else &[_]u8{0});
-    hasher.update(std.mem.asBytes(&entry_path.len));
-    hasher.update(entry_path);
-    const main_bytes = main_arg orelse "";
-    hasher.update(std.mem.asBytes(&main_bytes.len));
-    hasher.update(main_bytes);
-    hasher.update(std.mem.asBytes(&filter.len));
-    hasher.update(filter);
-    hasher.update(std.mem.asBytes(&source.len));
-    hasher.update(source);
-    var out: [32]u8 = undefined;
-    hasher.final(&out);
-    return out;
-}
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) !void {
     var buf: [4]u8 = undefined;
@@ -4404,48 +4368,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
         .roc_ctx = ctx.coreCtx(),
     };
 
-    // --- Test cache check (before any compilation) ---
-    // Read source to compute cache key for test result caching
-    const source: ?[]const u8 = if (!args.no_cache)
-        (std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, args.path, ctx.gpa, .unlimited) catch null)
-    else
-        null;
-    defer if (source) |s| ctx.gpa.free(s);
-
-    // Cache key for the whole-run replay cache. Filter is empty today —
-    // when `roc test` grows a `--filter`/test-selection flag, thread its
-    // value through here so different filters yield distinct cache entries.
-    const replay_filter: []const u8 = "";
-    const replay_cache_key: ?[32]u8 = if (source) |src|
-        cliTestReplayCacheKey(
-            src,
-            build_options.compiler_version,
-            args.opt,
-            args.verbose,
-            args.path,
-            args.main,
-            replay_filter,
-        )
-    else
-        null;
-
-    if (source != null and replay_cache_key != null) {
-        const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
-        if (test_cache_dir) |dir| {
-            defer ctx.gpa.free(dir);
-            var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-            if (test_cache_manager.loadRawBytes(replay_cache_key.?, dir)) |cached_data| {
-                defer ctx.gpa.free(cached_data);
-                if (try replayTestRun(ctx, cached_data, start_time)) |outcome| {
-                    if (outcome == .failed) return error.TestsFailed;
-                    return;
-                }
-                // Malformed payload: fall through to recompile.
-            }
-        }
-    }
-
-    // --- Normal compilation path (cache miss) ---
+    // --- Normal compilation path ---
 
     // Determine threading mode and thread count
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
@@ -4516,12 +4439,6 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
         total.cached_modules += summary.cached_modules;
     }
 
-    // TODO(zig-16): CIR-level test backend (dev/interpreter) is not yet ported.
-    // The runCheckedArtifactTests loop above already handles test running via the
-    // new BuildEnv pipeline. This stub silences the old code that referenced
-    // variables removed during the migration.
-    {}
-
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
@@ -4532,7 +4449,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
         "";
 
     // Render the per-module bodies once into in-memory buffers so we can
-    // both print them now and stash them in the replay cache verbatim.
+    // print them after the summary line.
     var stdout_body = std.Io.Writer.Allocating.init(ctx.gpa);
     defer stdout_body.deinit();
     var stderr_body = std.Io.Writer.Allocating.init(ctx.gpa);
@@ -4544,25 +4461,6 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
         module_results.items,
         args.verbose,
     );
-
-    // Persist the whole-run replay cache so a subsequent `roc test` against
-    // the same source/opt/verbose/main/filter can skip compilation entirely.
-    if (cache_config.enabled and replay_cache_key != null and source != null) {
-        const test_cache_dir = cache_config.getTestCacheDir(ctx.gpa) catch null;
-        if (test_cache_dir) |dir| {
-            defer ctx.gpa.free(dir);
-            var test_cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-            storeTestReplayCache(
-                ctx,
-                &test_cache_manager,
-                dir,
-                replay_cache_key.?,
-                total,
-                stdout_body.written(),
-                stderr_body.written(),
-            ) catch {};
-        }
-    }
 
     // Report results
     if (total.failed == 0) {
@@ -4582,8 +4480,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
 /// Walk the per-module test results and write the per-test body output to
 /// the supplied writers. Verbose PASS lines go to `stdout_body`; FAIL
 /// blocks (and verbose PASS lines for partially-failing runs) go to
-/// `stderr_body`. The summary line is rendered separately by the caller so
-/// fresh timing can be substituted on cache replay.
+/// `stderr_body`.
 fn renderTestResultBodies(
     stdout_body: *std.Io.Writer,
     stderr_body: *std.Io.Writer,
@@ -4615,94 +4512,6 @@ fn renderTestResultBodies(
             }
         }
     }
-}
-
-const ReplayOutcome = enum { passed, failed };
-
-/// Write a replay payload to the test cache directory. Layout:
-///   magic[len(cli_test_replay_magic)]
-///   u32 passed
-///   u32 failed
-///   u32 modules_with_tests
-///   u32 stdout_body_len
-///   stdout_body_len bytes
-///   u32 stderr_body_len
-///   stderr_body_len bytes
-fn storeTestReplayCache(
-    ctx: *CliCtx,
-    manager: *CacheManager,
-    entries_dir: []const u8,
-    cache_key: [32]u8,
-    summary: CliTestRunSummary,
-    stdout_body: []const u8,
-    stderr_body: []const u8,
-) !void {
-    var bytes = std.ArrayList(u8).empty;
-    defer bytes.deinit(ctx.gpa);
-    try bytes.appendSlice(ctx.gpa, cli_test_replay_magic);
-    try appendU32(&bytes, ctx.gpa, summary.passed);
-    try appendU32(&bytes, ctx.gpa, summary.failed);
-    try appendU32(&bytes, ctx.gpa, summary.modules_with_tests);
-    try appendU32(&bytes, ctx.gpa, @intCast(stdout_body.len));
-    try bytes.appendSlice(ctx.gpa, stdout_body);
-    try appendU32(&bytes, ctx.gpa, @intCast(stderr_body.len));
-    try bytes.appendSlice(ctx.gpa, stderr_body);
-    manager.storeRawBytes(cache_key, bytes.items, entries_dir);
-}
-
-/// Parse a replay payload and print it to the live stdout/stderr,
-/// substituting the live elapsed-time into the summary line and tagging the
-/// output `(cached)` so users can see the run was a cache hit.
-///
-/// Returns the run outcome on a clean hit, or null if the payload is
-/// malformed (caller should fall through to a real compilation in that
-/// case).
-fn replayTestRun(
-    ctx: *CliCtx,
-    data: []const u8,
-    start_time: i128,
-) !?ReplayOutcome {
-    var offset: usize = 0;
-    if (data.len < cli_test_replay_magic.len) return null;
-    if (!std.mem.eql(u8, data[0..cli_test_replay_magic.len], cli_test_replay_magic)) return null;
-    offset += cli_test_replay_magic.len;
-
-    const passed = readU32(data, &offset) orelse return null;
-    const failed = readU32(data, &offset) orelse return null;
-    _ = readU32(data, &offset) orelse return null; // modules_with_tests, unused on replay
-    const stdout_len = readU32(data, &offset) orelse return null;
-    const stdout_len_usize: usize = @intCast(stdout_len);
-    if (offset + stdout_len_usize > data.len) return null;
-    const stdout_body = data[offset..][0..stdout_len_usize];
-    offset += stdout_len_usize;
-    const stderr_len = readU32(data, &offset) orelse return null;
-    const stderr_len_usize: usize = @intCast(stderr_len);
-    if (offset + stderr_len_usize > data.len) return null;
-    const stderr_body = data[offset..][0..stderr_len_usize];
-    offset += stderr_len_usize;
-    if (offset != data.len) return null;
-
-    const stdout = ctx.io.stdout();
-    const stderr = ctx.io.stderr();
-
-    const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
-    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
-
-    if (failed == 0) {
-        try stdout.print("All ({}) tests passed in {d:.1} ms. (cached)\n", .{ passed, elapsed_ms });
-        try stdout.writeAll(stdout_body);
-        return .passed;
-    }
-
-    const total_tests = passed + failed;
-    try stderr.print(
-        "Ran {} tests (cached) in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n",
-        .{ total_tests, elapsed_ms, passed, failed },
-    );
-    try stdout.writeAll(stdout_body);
-    try stderr.writeAll(stderr_body);
-    return .failed;
 }
 
 /// Prints a formatted test failure to stderr, including the source snippet,

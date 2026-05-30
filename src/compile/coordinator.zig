@@ -55,7 +55,6 @@ const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const app_header_mod = @import("app_header.zig");
-const ImportInfo = cache_manager_mod.ImportInfo;
 const roc_target = @import("roc_target");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
@@ -887,7 +886,7 @@ pub const Coordinator = struct {
     }
 
     /// Set the I/O / core context implementation. Callers must supply a fully
-    /// initialised `CoreCtx` — there is intentionally no fallback to
+    /// initialised `CoreCtx` — it must not create a replacement
     /// `CoreCtx.default(...)` here because the existing context may have been
     /// constructed via `CoreCtx.testing(undefined, undefined)` (see
     /// `cache_config.zig`), in which case snapshotting its fields into a
@@ -2524,108 +2523,6 @@ pub const Coordinator = struct {
         self.cache_misses += 1;
         self.modules_compiled += 1;
 
-        // Store to cache
-        if (self.cache_manager) |cache| {
-            if (mod.moduleEnv()) |env| {
-                // Compute source hash for metadata
-                const source_hash = CacheManager.computeSourceHash(env.common.source);
-
-                // Compute full cache key (source + compiler_version)
-                const full_cache_key = CacheManager.generateCacheKey(env.common.source, self.compiler_version);
-
-                // Collect import info for metadata
-                // Note: We use owned strings that we free after storing
-                var imports = std.ArrayList(ImportInfo).empty;
-                defer {
-                    for (imports.items) |*imp| {
-                        imp.deinit(self.gpa);
-                    }
-                    imports.deinit(self.gpa);
-                }
-
-                // Add local imports (dupe strings since we'll free them)
-                // Read source files directly to compute hashes (more reliable than env)
-                for (mod.imports.items) |imp_id| {
-                    if (pkg.getModule(imp_id)) |imp_mod| {
-                        // Compute source hash by reading the file
-                        var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
-                        const imp_path = self.resolveModulePath(pkg.root_dir, imp_mod.name) catch null;
-                        if (imp_path) |path| {
-                            defer self.gpa.free(path);
-                            if (self.roc_ctx.readFile(path, self.gpa) catch null) |source| {
-                                defer self.gpa.free(source);
-                                imp_source_hash = CacheManager.computeSourceHash(source);
-                            }
-                        }
-
-                        const mod_name = self.gpa.dupe(u8, imp_mod.name) catch continue;
-                        imports.append(self.gpa, .{
-                            .package = "", // Local import - empty string, not owned
-                            .module = mod_name,
-                            .source_hash = imp_source_hash,
-                        }) catch {
-                            self.gpa.free(mod_name);
-                            continue;
-                        };
-                    }
-                }
-
-                // Add external imports (these have format "pkg.Module")
-                for (mod.external_imports.items) |ext_name| {
-                    if (base.module_path.parseQualifiedImport(ext_name)) |qualified| {
-                        // Resolve the external package and compute source hash by reading file
-                        var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
-                        if (pkg.shorthands.get(qualified.qualifier)) |ext_pkg_name| {
-                            if (self.packages.get(ext_pkg_name)) |ext_pkg| {
-                                const imp_path = self.resolveModulePath(ext_pkg.root_dir, qualified.module) catch null;
-                                if (imp_path) |path| {
-                                    defer self.gpa.free(path);
-                                    if (self.roc_ctx.readFile(path, self.gpa) catch null) |source| {
-                                        defer self.gpa.free(source);
-                                        imp_source_hash = CacheManager.computeSourceHash(source);
-                                    }
-                                }
-                            }
-                        }
-
-                        const pkg_part = self.gpa.dupe(u8, qualified.qualifier) catch continue;
-                        const mod_part = self.gpa.dupe(u8, qualified.module) catch {
-                            self.gpa.free(pkg_part);
-                            continue;
-                        };
-                        imports.append(self.gpa, .{
-                            .package = pkg_part,
-                            .module = mod_part,
-                            .source_hash = imp_source_hash,
-                        }) catch {
-                            self.gpa.free(pkg_part);
-                            self.gpa.free(mod_part);
-                            continue;
-                        };
-                    }
-                }
-
-                // Count errors and warnings
-                var error_count: u32 = 0;
-                var warning_count: u32 = 0;
-                for (mod.reports.items) |*rep| {
-                    if (rep.severity == .fatal or rep.severity == .runtime_error) {
-                        error_count += 1;
-                    } else if (rep.severity == .warning) {
-                        warning_count += 1;
-                    }
-                }
-
-                // Store metadata for fast path lookup
-                cache.storeMetadata(source_hash, full_cache_key, imports.items, error_count, warning_count) catch {};
-
-                // Store full cache
-                cache.store(full_cache_key, env, error_count, warning_count) catch {};
-
-                // imports are freed by the defer block above
-            }
-        }
-
         // Decrement counters
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
         if (self.total_remaining > 0) self.total_remaining -= 1;
@@ -2860,18 +2757,6 @@ pub const Coordinator = struct {
                 try imported_envs.append(allocator, ext_env);
                 mod.moduleEnv().?.imports.setResolvedModule(import_idx, resolved_module_idx);
                 continue;
-            }
-
-            // Fallback: canonicalization may create duplicate import entries for
-            // a referenced type/module using only the base name (e.g. "Types"
-            // alongside the qualified "pf.Types"). If we already imported an env
-            // with a matching module_name, reuse its index. This keeps deferred
-            // type/expression lookups resolvable during type checking.
-            for (imported_envs.items, 0..) |existing_env, idx| {
-                if (std.mem.eql(u8, existing_env.module_name, import_name)) {
-                    mod.moduleEnv().?.imports.setResolvedModule(import_idx, @intCast(idx));
-                    break;
-                }
             }
         }
 
@@ -3329,9 +3214,7 @@ pub const Coordinator = struct {
         defer ast.deinit();
 
         // Build KnownModule entries for qualified imports (e.g. platform-exposed
-        // `pf.Stdout`) so they get placeholders during canonicalization and the
-        // members resolve via resolvePendingLookups. Without these, member access
-        // like `Stdout.line!` reports UNDEFINED VARIABLE on app+platform checks.
+        // `pf.Stdout`) so canonicalization has explicit module names.
         const qualified_imports = module_discovery.extractQualifiedImportsFromAST(ast, task_allocs.scratch) catch &[_][]const u8{};
         defer {
             for (qualified_imports) |qi| task_allocs.scratch.free(qi);
@@ -3413,8 +3296,6 @@ pub const Coordinator = struct {
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
-
-        env.store.resolvePendingLookups(env, task.imported_envs);
 
         const result_alloc = task_allocs.result;
         // The checked artifact can retain memory owned by the checker output.

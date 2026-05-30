@@ -239,7 +239,7 @@ pub fn init(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    try preflightForTypeChecking(mutable_cir, imported_modules);
+    try preflightForTypeChecking(mutable_cir);
     return initAssumePrepared(
         gpa,
         types,
@@ -265,7 +265,7 @@ pub fn initWithOwnerModules(
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
     const mutable_cir = @constCast(cir);
-    try preflightForTypeChecking(mutable_cir, imported_modules);
+    try preflightForTypeChecking(mutable_cir);
     return initAssumePrepared(
         gpa,
         types,
@@ -280,10 +280,7 @@ pub fn initWithOwnerModules(
 
 /// Preflight module state required by type-checking.
 /// This is intentionally private so `Check.init` is the only public entry point.
-fn preflightForTypeChecking(
-    cir: *ModuleEnv,
-    imported_modules: []const *const ModuleEnv,
-) std.mem.Allocator.Error!void {
+fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
     try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
     // Type checking rewrites some expressions into dispatch calls, which can
     // append argument spans to the CIR index store. Existing CIR spans are valid
@@ -306,8 +303,6 @@ fn preflightForTypeChecking(
             .{ import_name, cir.module_name },
         );
     }
-    // Resolve deferred expr/type pending lookups now that imported modules are known.
-    cir.store.resolvePendingLookups(cir, imported_modules);
 }
 
 fn initAssumePrepared(
@@ -610,7 +605,7 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     // Set regions and add to the current rank all variables created during unification.
     //
     // We assign all fresh variables the region of `b` (the "actual" type), since `a` is
-    // typically the "expected" type from an annotation. This heuristic works well for
+    // typically the "expected" type from an annotation. This policy works well for
     // most cases but can be imprecise for deeply nested unifications where fresh variables
     // are created for sub-components (e.g., record fields, tag payloads). In those cases,
     // error messages may point to the outer expression rather than the specific field.
@@ -1073,7 +1068,6 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
         self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     // Use fully-qualified type name "Builtin.Num.U8" etc.
-    // This allows method lookup to work correctly (getMethodIdent builds "Builtin.Num.U8.method_name")
     const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Builtin.Num.{s}", .{type_name});
     defer self.gpa.free(qualified_type_name);
     const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
@@ -4873,15 +4867,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } else {
                 try self.unifyWith(expr_var, .err, env);
             }
-        },
-        .e_lookup_pending => {
-            // Pending lookups should normally be resolved before type-checking.
-            // However, if an import references a non-existent package shorthand
-            // (e.g., "import f.S" where "f" is not defined), the pending lookup
-            // cannot be resolved because there's no target module to look up from.
-            // In this case, treat it as an error type - the user will get an
-            // error about the unresolved identifier elsewhere.
-            try self.unifyWith(expr_var, .err, env);
         },
         .e_lookup_required => |req| {
             // Look up the type from the platform's requires clause

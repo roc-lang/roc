@@ -96,9 +96,6 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/test_issue9034.roc",
         .io_spec = "1>test",
         .description = "Platform-exposed opaque types in type annotations (issue #9034)",
-        // TODO: re-enable once the type checker stops requesting canonical type keys for `.err`
-        // contents on this program — currently panics in src/check/canonical_type_keys.zig:192.
-        .skip = true,
     },
 
     // Language feature tests

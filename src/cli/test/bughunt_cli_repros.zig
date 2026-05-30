@@ -2827,7 +2827,7 @@ fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
         const full_path = try pathJoin(gpa, &.{ test_dir, file.path });
         defer gpa.free(full_path);
         if (std.fs.path.dirname(full_path)) |dir| {
-            try std.fs.cwd().makePath(dir);
+            try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
         }
         try std.fs.cwd().writeFile(.{ .sub_path = full_path, .data = rendered });
     }
@@ -2850,9 +2850,9 @@ fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: 
     }
 }
 
-fn isCleanUserFailure(result: std.process.Child.RunResult) bool {
+fn isCleanUserFailure(result: std.process.RunResult) bool {
     const exited_nonzero = switch (result.term) {
-        .Exited => |code| code != 0,
+        .exited => |code| code != 0,
         else => return false,
     };
     if (!exited_nonzero) return false;
@@ -2876,8 +2876,8 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
 
 fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
-        .Exited => |code| @intCast(code),
-        .Signal => |sig| @as(u32, sig) | 0x80000000,
+        .exited => |code| @intCast(code),
+        .signal => |sig| @as(u32, sig) | 0x80000000,
         else => 0xFFFFFFFF,
     };
 }
@@ -2886,7 +2886,7 @@ fn mismatchMessage(gpa: Allocator, prefix: []const u8, expected: []const u8, act
     return std.fmt.allocPrint(gpa, "{s}: expected '{s}', got '{s}'", .{ prefix, expected, actual }) catch prefix;
 }
 
-fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.RunResult, timer: *harness.Timer) TestResult {
+fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResult, timer: *harness.Timer) TestResult {
     const duration_ns = timer.read();
 
     if (hasMemoryErrors(result.stderr)) |msg| {
@@ -2901,7 +2901,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
     }
 
     switch (result.term) {
-        .Signal => {
+        .signal => {
             return .{
                 .status = .crash,
                 .duration_ns = duration_ns,
@@ -2917,7 +2917,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
     switch (expected) {
         .success => {
             const ok = switch (result.term) {
-                .Exited => |code| code == 0,
+                .exited => |code| code == 0,
                 else => false,
             };
             if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
@@ -2932,13 +2932,13 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
         },
         .success_stdout_exact => |expected_stdout| {
             const ok = switch (result.term) {
-                .Exited => |code| code == 0 and std.mem.eql(u8, result.stdout, expected_stdout),
+                .exited => |code| code == 0 and std.mem.eql(u8, result.stdout, expected_stdout),
                 else => false,
             };
             if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
 
             const msg = if (switch (result.term) {
-                .Exited => |code| code == 0,
+                .exited => |code| code == 0,
                 else => false,
             })
                 mismatchMessage(gpa, "stdout mismatch", expected_stdout, result.stdout)
@@ -2956,13 +2956,13 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
         },
         .warning_stdout_exact => |expected_stdout| {
             const ok = switch (result.term) {
-                .Exited => |code| code == 2 and std.mem.eql(u8, result.stdout, expected_stdout),
+                .exited => |code| code == 2 and std.mem.eql(u8, result.stdout, expected_stdout),
                 else => false,
             };
             if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
 
             const msg = if (switch (result.term) {
-                .Exited => |code| code == 2,
+                .exited => |code| code == 2,
                 else => false,
             })
                 mismatchMessage(gpa, "stdout mismatch", expected_stdout, result.stdout)
@@ -2991,7 +2991,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
         },
         .success_or_clean_failure => {
             const ok = switch (result.term) {
-                .Exited => |code| code == 0,
+                .exited => |code| code == 0,
                 else => false,
             };
             if (ok or isCleanUserFailure(result)) return .{ .status = .pass, .duration_ns = duration_ns };
@@ -3010,7 +3010,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
 fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
-    const repo_root = std.fs.cwd().realpathAlloc(gpa, ".") catch
+    const repo_root = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch
         return .{ .status = .crash, .message = "failed to resolve repo root" };
 
     const cache_dirs = util.createIsolatedTestCacheDirs(gpa) catch
@@ -3021,8 +3021,8 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
         currentProcessIdForFilename(),
         spec.id,
     }) catch return .{ .status = .crash, .message = "OOM" };
-    std.fs.cwd().deleteTree(test_dir) catch {};
-    std.fs.cwd().makePath(test_dir) catch |err| {
+    std.Io.Dir.cwd().deleteTree(std.testing.io, test_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(std.testing.io, test_dir) catch |err| {
         const msg = std.fmt.allocPrint(gpa, "failed to create temp dir: {}", .{err}) catch "failed to create temp dir";
         return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
     };
@@ -3038,7 +3038,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     const argv = buildArgv(gpa, spec, main_path, test_dir, repo_root) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to build argv" };
 
-    var env_map = std.process.getEnvMap(gpa) catch
+    var env_map = util.buildIsolatedTestEnvMap(gpa, null) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
@@ -3046,9 +3046,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set zig cache env" };
 
-    const child_result = std.process.Child.run(.{
-        .allocator = gpa,
-        .argv = argv,
+    const child_result = util.runChildWithTimeout(gpa, argv, .{
         .cwd = repo_root,
         .env_map = &env_map,
         .max_output_bytes = 2 * 1024 * 1024,

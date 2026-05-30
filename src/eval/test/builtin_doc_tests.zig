@@ -364,11 +364,17 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
         // Child path.
         _ = std.c.close(pipe_read);
 
-        // Silence the child's stderr — a crashing child writes its panic stack
-        // there, which would otherwise flood the parent test's output. The
-        // parent already records the signal number via waitpid.
+        // Silence the child's stdout AND stderr by pointing both at /dev/null.
+        // stderr: a crashing child writes its panic stack there, which would
+        // otherwise flood the parent test's output (the parent records the
+        // signal number via waitpid). stdout: under `zig build`'s test runner
+        // the test process owns fd 1 as the `--listen` IPC pipe; any byte the
+        // child's in-process roc evaluation writes to stdout would corrupt that
+        // protocol and fail the command even though every test passed. The child
+        // returns its result over the explicit `pipe_write`, never via stdout.
         const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY });
         if (dev_null >= 0) {
+            _ = std.c.dup2(dev_null, 1);
             _ = std.c.dup2(dev_null, 2);
             _ = std.c.close(dev_null);
         }

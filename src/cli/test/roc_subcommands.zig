@@ -19,11 +19,11 @@ test "CLI test cache roots are distinct" {
     try std.testing.expect(!std.mem.eql(u8, first.roc_cache_dir, second.roc_cache_dir));
     try std.testing.expect(!std.mem.eql(u8, first.zig_local_cache_dir, second.zig_local_cache_dir));
 
-    var first_dir = try std.fs.openDirAbsolute(first.roc_cache_dir, .{});
-    first_dir.close();
+    var first_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, first.roc_cache_dir, .{});
+    first_dir.close(std.testing.io);
 
-    var second_dir = try std.fs.openDirAbsolute(second.roc_cache_dir, .{});
-    second_dir.close();
+    var second_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, second.roc_cache_dir, .{});
+    second_dir.close(std.testing.io);
 }
 
 const GeneratedModuleGraphConfig = struct {
@@ -36,7 +36,7 @@ const GeneratedModuleGraphConfig = struct {
 
 fn writeGeneratedModuleGraphProject(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
 ) !void {
     try std.testing.expect(config.roc_file_count > 0);
@@ -51,14 +51,14 @@ fn writeGeneratedModuleGraphProject(
 }
 
 fn writeGeneratedPackageModule(
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
 ) !void {
-    var file = try dir.createFile("main.roc", .{});
-    defer file.close();
+    var file = try dir.createFile(std.testing.io, "main.roc", .{});
+    defer file.close(std.testing.io);
 
     var write_buffer: [4096]u8 = undefined;
-    var writer = file.writer(&write_buffer);
+    var writer = file.writer(std.testing.io, &write_buffer);
     const out = &writer.interface;
 
     const type_module_count = config.roc_file_count - 1;
@@ -95,18 +95,18 @@ fn writeGeneratedPackageModule(
 
 fn writeGeneratedTypeModule(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
     module_idx: usize,
 ) !void {
     const file_name = try std.fmt.allocPrint(allocator, "T{d}.roc", .{module_idx});
     defer allocator.free(file_name);
 
-    var file = try dir.createFile(file_name, .{});
-    defer file.close();
+    var file = try dir.createFile(std.testing.io, file_name, .{});
+    defer file.close(std.testing.io);
 
     var write_buffer: [4096]u8 = undefined;
-    var writer = file.writer(&write_buffer);
+    var writer = file.writer(std.testing.io, &write_buffer);
     const out = &writer.interface;
 
     // Keep the graph acyclic: T2..Tn import T1, and main.roc imports all T*.roc.
@@ -143,30 +143,28 @@ fn runGeneratedModuleGraphCheck(
 
     try writeGeneratedModuleGraphProject(allocator, tmp_dir.dir, config);
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    try tmp_dir.dir.makePath("roc-cache");
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
     const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
     defer allocator.free(cache_path);
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
     defer allocator.free(main_path);
 
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cwd_path);
 
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{ roc_path, "check", main_path },
+    const result = try util.runChildWithTimeout(allocator, &.{ roc_path, "check", main_path }, .{
         .cwd = cwd_path,
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
@@ -176,7 +174,7 @@ fn runGeneratedModuleGraphCheck(
 
     const cached_module_count = try countModuleCacheFiles(allocator, cache_path);
 
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print(
             \\roc check failed for generated module graph:
             \\  roc files: {d}
@@ -193,7 +191,7 @@ fn runGeneratedModuleGraphCheck(
         printTruncatedOutput("stdout", result.stdout);
         printTruncatedOutput("stderr", result.stderr);
     }
-    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try std.testing.expect(result.term == .exited and result.term.exited == 0);
 
     if (cached_module_count != config.roc_file_count) {
         std.debug.print(
@@ -205,17 +203,17 @@ fn runGeneratedModuleGraphCheck(
 }
 
 fn countModuleCacheFiles(allocator: std.mem.Allocator, cache_path: []const u8) !usize {
-    var cache_dir = std.fs.cwd().openDir(cache_path, .{ .iterate = true }) catch |err| switch (err) {
+    var cache_dir = std.Io.Dir.cwd().openDir(std.testing.io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return 0,
         else => return err,
     };
-    defer cache_dir.close();
+    defer cache_dir.close(std.testing.io);
 
     var walker = try cache_dir.walk(allocator);
     defer walker.deinit();
 
     var count: usize = 0;
-    while (try walker.next()) |entry| {
+    while (try walker.next(std.testing.io)) |entry| {
         if (entry.kind != .file) continue;
         if (std.mem.endsWith(u8, entry.basename, ".meta")) continue;
         if (std.mem.endsWith(u8, entry.basename, ".tmp")) continue;
@@ -902,7 +900,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
 
     // 4. Stdout contains success message
     try testing.expect(result.stdout.len > 5);
-    try testing.expect(std.mem.find(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build creates executable from test/int/app.roc (dev)" {
@@ -1552,7 +1550,7 @@ test "roc check treats integral scientific notation as integer syntax sugar" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
     try testing.expect(std.mem.find(u8, result.stdout, "No errors found") != null or
         std.mem.find(u8, result.stderr, "No errors found") != null);
     try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
@@ -1658,7 +1656,7 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     try testing.expect(stat.size > 0);
 
     // 4. Success message was printed
-    try testing.expect(std.mem.find(u8, result.stdout, "Successfully built") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build returns exit code 2 for warnings (dev)" {
@@ -1799,7 +1797,7 @@ test "roc test runs expects in Parser type module (dev)" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Output indicates tests passed
     const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
@@ -1926,7 +1924,7 @@ test "roc run issue 9208 open union tag before Exit matches wildcard" {
     defer gpa.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
+        .exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
         else => {
             std.debug.print("roc run terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
@@ -1944,7 +1942,7 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "hosted_nominal_return" });
@@ -1962,8 +1960,8 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     defer gpa.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| try std.testing.expect(code != 134),
-        .Signal => |sig| {
+        .exited => |code| try std.testing.expect(code != 134),
+        .signal => |sig| {
             std.debug.print("roc build crashed with signal {}\n", .{sig});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});

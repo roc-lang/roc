@@ -1497,11 +1497,8 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
         defer module_envs_map.deinit();
 
-        // Add sibling modules - use placeholder-based approach for all paths.
-        // In canonicalize-first mode, modules use placeholders during canonicalization.
-        // Actual module envs are resolved during type-checking after topological sort.
-        // The resolver's getEnv may return null for siblings not yet processed, so we
-        // always add placeholders first. If the resolver has the actual env, we use it.
+        // Add sibling modules whose environments are already available.
+        // Canonicalization consumes concrete exposed-node data from dependencies.
         const sibling_imports = try module_discovery.extractImportsFromAST(parse_ast, gpa);
         defer {
             for (sibling_imports) |imp| gpa.free(imp);
@@ -1554,15 +1551,6 @@ pub const PackageEnv = struct {
                     continue;
                 }
             }
-
-            // Resolver doesn't have env yet (or no resolver) - add placeholder
-            // Canonicalization will proceed with placeholder, actual env resolved later
-            if (!module_envs_map.contains(sibling_ident)) {
-                try module_envs_map.put(sibling_ident, .{
-                    .env = builtin_module_env, // Placeholder
-                    .qualified_type_ident = qualified_ident,
-                });
-            }
         }
 
         // Add additional known modules (e.g., from platform exposes for URL platforms)
@@ -1580,11 +1568,7 @@ pub const PackageEnv = struct {
 
             // Try to get the actual module env. Prefer an already-built env the
             // coordinator supplied via pre_resolved_imports (matching the sibling
-            // path above); this lets platform-exposed nominal types like
-            // `Host.Tree` resolve directly instead of falling back to a
-            // placeholder (which only defers value/type-annotation lookups, not
-            // nominal tag expressions/patterns). Fall back to the resolver, then
-            // to the builtin placeholder when the dependency isn't built yet.
+            // path above), then ask the resolver.
             const actual_env: *const ModuleEnv = blk: {
                 for (pre_resolved_imports) |pre| {
                     if (std.mem.eql(u8, pre.import_name, km.import_name) or
@@ -1604,26 +1588,22 @@ pub const PackageEnv = struct {
                         break :blk mod_env;
                     }
                 }
-                break :blk builtin_module_env;
+                continue;
             };
 
             // For platform type modules, set statement_idx so method lookups work correctly
-            const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
+            const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
                 // Look up the type in the module's exposed_items to get the actual node index
                 const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
                 const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
                 break :stmt_blk @enumFromInt(type_node_idx);
-            } else null;
+            };
 
             const entry = Can.AutoImportedType{
                 .env = actual_env,
                 .statement_idx = statement_idx,
                 .qualified_type_ident = base_ident,
                 .is_package_qualified = true,
-                // Mark as placeholder if using builtin env as fallback (actual env not available yet).
-                // The canonicalizer then defers member lookups via e_lookup_pending, which
-                // resolvePendingLookups() resolves once all dependencies are compiled.
-                .is_placeholder = (actual_env == builtin_module_env),
             };
 
             // Add entry for the UNQUALIFIED name (e.g., "Stdout", "Builder")
@@ -1894,12 +1874,6 @@ pub const PackageEnv = struct {
         }
         const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
         defer self.gpa.free(available_artifacts);
-
-        // Resolve pending member lookups (e.g. `Stdout.line!` from platform-exposed
-        // modules canonicalized as placeholders) AND deferred type lookups. The
-        // coordinator (roc build/run) path calls resolvePendingLookups; the check
-        // path must too, or platform-module members stay unresolved ("undefined").
-        env.store.resolvePendingLookups(env, imported_envs.items);
 
         var check_timer = startStageTimer();
         var typecheck_output = try typeCheckModule(

@@ -2948,15 +2948,34 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2)" },
     },
-    // TODO(zig16-merge): re-enable. Crashes during monotype inspect lowering with
-    // an undefined tuple-item type id (0xAAAAAAAA) at postcheck/monotype/lower.zig
-    // inspectBody -> types.get(shape_ty). Deep type-construction bug in the
-    // checked-arithmetic inspect path; temporarily excluded so test-eval is green
-    // (1234/1235). See memory project_zig16_merge.md.
-    //  .{
-    //      .name = "inspect: checked integer arithmetic reports boundary errors",
-    //      ...
-    //  },
+    .{
+        .name = "inspect: checked integer arithmetic reports boundary errors",
+        .source =
+        \\{
+        \\    (
+        \\        U8.add_checked(250, 5),
+        \\        U8.add_checked(250, 6),
+        \\        U8.sub_checked(0, 1),
+        \\        U8.mul_checked(16, 16),
+        \\        U8.div_checked(1, 0),
+        \\        I8.add_checked(126, 1),
+        \\        I8.add_checked(127, 1),
+        \\        I8.add_checked(I8.lowest, -1),
+        \\        I8.sub_checked(I8.lowest, 1),
+        \\        I8.mul_checked(63, 2),
+        \\        I8.mul_checked(64, 2),
+        \\        I8.mul_checked(I8.lowest, -1),
+        \\        I8.div_checked(I8.lowest, -1),
+        \\        I8.div_checked(1, 0),
+        \\        I8.div_checked(-7, 2),
+        \\        I64.add_checked(I64.highest, -1),
+        \\        I64.add_checked(I64.highest, 1),
+        \\        U128.mul_checked(U128.highest, 2),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Ok(255), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(127), Err(Overflow), Err(Overflow), Err(Overflow), Ok(126), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(-3), Ok(9223372036854775806), Err(Overflow), Err(Overflow))" },
+    },
     .{
         .name = "inspect: numeric inclusive ranges stop at highest",
         .source =
