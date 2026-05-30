@@ -90,10 +90,17 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
     }
 
     for (paths) |file_path| {
-        const bytes_read = (std.Io.Dir.cwd().readFile(io,file_path, file_buffer) catch |err| {
+        const bytes_read = (std.Io.Dir.cwd().readFile(io, file_path, file_buffer) catch |err| {
             std.debug.print("Error reading {s}: {}\n", .{ file_path, err });
             continue;
         }).len;
+
+        // Skip binary files without a recognized extension (e.g. gitignored
+        // compiled executables left in the working tree). A NUL byte in the
+        // first chunk is a strong indicator of binary content.
+        const sniff_len = @min(bytes_read, 1024);
+        if (std.mem.indexOfScalar(u8, file_buffer[0..sniff_len], 0) != null) continue;
+
         if (bytes_read >= file_buffer.len - 1) {
             std.debug.panic(
                 \\File exceeds {d} MiB buffer limit: {s}
@@ -103,12 +110,6 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
             , .{ max_text_file_size / MiB, file_path });
         }
         file_buffer[bytes_read] = 0;
-
-        // Skip binary files without a recognized extension (e.g. gitignored
-        // compiled executables left in the working tree). A NUL byte in the
-        // first chunk is a strong indicator of binary content.
-        const sniff_len = @min(bytes_read, 1024);
-        if (std.mem.indexOfScalar(u8, file_buffer[0..sniff_len], 0) != null) continue;
 
         const source_file = SourceFile{ .path = file_path, .text = file_buffer[0..bytes_read :0] };
         try tidyFile(gpa, &counter, source_file, &errors);
@@ -922,6 +923,7 @@ fn shouldSkipTopLevelDir(path: []const u8) bool {
     const skip_dirs: []const []const u8 = &.{
         ".git",
         ".tmp",
+        ".venv",
         ".zig-cache",
         "kcov-output",
         "target",
@@ -936,7 +938,9 @@ fn shouldSkipTopLevelDir(path: []const u8) bool {
 
 fn shouldSkipListedFile(path: []const u8) bool {
     if (std.mem.eql(u8, path, ".git")) return true;
+    if (std.mem.eql(u8, path, "profile.json")) return true;
     if (shouldSkipTopLevelDir(path)) return true;
+    if (hasPathComponent(path, "zig-out")) return true;
 
     // Skip binary files entirely - they shouldn't be read into the buffer.
     for (binary_extensions) |ext| {
@@ -950,6 +954,14 @@ fn isPathInTopLevelDir(path: []const u8, dir: []const u8) bool {
     return std.mem.startsWith(u8, path, dir) and
         path.len > dir.len and
         path[dir.len] == '/';
+}
+
+fn hasPathComponent(path: []const u8, component: []const u8) bool {
+    var parts = std.mem.splitScalar(u8, path, '/');
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, part, component)) return true;
+    }
+    return false;
 }
 
 /// Splits a string at the first occurrence of a delimiter.

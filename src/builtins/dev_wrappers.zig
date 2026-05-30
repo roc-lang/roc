@@ -1447,7 +1447,45 @@ pub fn roc_builtins_i32_mod_by(a: i32, b: i32) callconv(.c) i32 {
     return @mod(a, b);
 }
 
+/// i8 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i8_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: i8 = @intCast(a);
+    const rhs: i8 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// u8 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u8_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: u8 = @intCast(a);
+    const rhs: u8 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// i16 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i16_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: i16 = @intCast(a);
+    const rhs: i16 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// u16 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u16_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: u16 = @intCast(a);
+    const rhs: u16 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// u32 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u32_mod_by(a: u32, b: u32) callconv(.c) u32 {
+    return @mod(a, b);
+}
+
 /// i64 modulo (floored division mod, not truncated remainder)
 pub fn roc_builtins_i64_mod_by(a: i64, b: i64) callconv(.c) i64 {
+    return @mod(a, b);
+}
+
+/// u64 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u64_mod_by(a: u64, b: u64) callconv(.c) u64 {
     return @mod(a, b);
 }

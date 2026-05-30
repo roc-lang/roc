@@ -758,7 +758,6 @@ pub const RocDec = extern struct {
     }
 };
 
-
 fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
     const answer_u256 = mul_u128(a, b);
 

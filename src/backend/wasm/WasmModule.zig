@@ -7,6 +7,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const WasmLinking = @import("WasmLinking.zig");
+const index_types = @import("index_types.zig");
+const DefinedFunction = index_types.DefinedFunction;
+const FunctionIndex = index_types.FunctionIndex;
+const LocalFunctionIndex = index_types.LocalFunctionIndex;
+const SymbolIndex = index_types.SymbolIndex;
 
 const Self = @This();
 
@@ -494,9 +499,37 @@ pub fn addImport(self: *Self, module_name: []const u8, field_name: []const u8, t
     return func_idx;
 }
 
+/// Add an imported function and the corresponding linking symbol.
+///
+/// Relocatable generated code must reference symbols, not raw function indices.
+pub fn addFunctionImportWithSymbol(
+    self: *Self,
+    module_name: []const u8,
+    field_name: []const u8,
+    type_idx: u32,
+) !struct { function: FunctionIndex, symbol: SymbolIndex } {
+    const raw_function = try self.addImport(module_name, field_name, type_idx);
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
+        .name = field_name,
+        .index = raw_function,
+    });
+    return .{
+        .function = FunctionIndex.fromRaw(raw_function),
+        .symbol = SymbolIndex.fromRaw(raw_symbol),
+    };
+}
+
 /// Get the number of imported functions. Regular function indices are offset by this.
 pub fn importCount(self: *const Self) u32 {
     return @intCast(self.imports.items.len);
+}
+
+/// Return the current global function-space length used by liveness bitsets.
+pub fn liveFunctionCount(self: *const Self) u32 {
+    return self.importCount() + self.dead_import_dummy_count + @as(u32, @intCast(self.function_offsets.items.len));
 }
 
 /// Add a function type (signature) and return its index.
@@ -514,9 +547,80 @@ pub fn addFuncType(self: *Self, params: []const ValType, results: []const ValTyp
 /// Global indices account for imports: imports occupy indices 0..import_count-1,
 /// and locally-defined functions start at import_count.
 pub fn addFunction(self: *Self, type_idx: u32) !u32 {
-    const local_idx: u32 = @intCast(self.func_type_indices.items.len);
+    return (try self.addDefinedFunction(type_idx)).function.raw();
+}
+
+/// Add a defined function and return both its defined local index and global
+/// function index.
+pub fn addDefinedFunction(self: *Self, type_idx: u32) !DefinedFunction {
+    const local = LocalFunctionIndex.fromRaw(@intCast(self.func_type_indices.items.len));
     try self.func_type_indices.append(self.allocator, type_idx);
-    return local_idx + self.importCount();
+    return .{
+        .local = local,
+        .function = index_types.localToFunction(local, self.importCount()),
+    };
+}
+
+/// Add a linking symbol for a defined function.
+pub fn addDefinedFunctionSymbol(
+    self: *Self,
+    local: LocalFunctionIndex,
+    name: []const u8,
+    flags: u32,
+) !SymbolIndex {
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .function,
+        .flags = flags,
+        .name = name,
+        .index = index_types.localToFunction(local, self.importCount()).raw(),
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Errors from exact linking-symbol lookup.
+pub const SymbolLookupError = error{
+    MissingSymbol,
+    DuplicateSymbol,
+    WrongSymbolKind,
+    UndefinedSymbol,
+};
+
+/// Find exactly one defined function symbol by exact name.
+pub fn findDefinedFunctionSymbolExact(self: *const Self, name: []const u8) SymbolLookupError!SymbolIndex {
+    var found: ?SymbolIndex = null;
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
+        if (!std.mem.eql(u8, sym_name, name)) continue;
+        if (sym.kind != .function) return error.WrongSymbolKind;
+        if (sym.isUndefined()) return error.UndefinedSymbol;
+        if (found != null) return error.DuplicateSymbol;
+        found = SymbolIndex.fromRaw(@intCast(i));
+    }
+    return found orelse error.MissingSymbol;
+}
+
+/// Return the wasm type index for an imported or defined function.
+pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
+    const raw = function.raw();
+    const import_count = self.importCount();
+    if (raw < import_count) {
+        return self.imports.items[raw].type_idx;
+    }
+    const local = raw - import_count;
+    return self.func_type_indices.items[local];
+}
+
+/// Assert that a function has the expected wasm type index.
+pub fn assertFunctionType(self: *const Self, function: FunctionIndex, expected_type_idx: u32) void {
+    if (self.functionType(function) == expected_type_idx) return;
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic(
+            "WasmModule invariant violated: function {d} has type {d}, expected {d}",
+            .{ function.raw(), self.functionType(function), expected_type_idx },
+        );
+    }
+    unreachable;
 }
 
 /// Set the body of a function. Takes a global function index (as returned by addFunction).
@@ -547,6 +651,17 @@ pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) !voi
 pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
     self.memory_min_pages = min_pages;
+}
+
+/// Ensure the module's memory minimum covers at least `byte_count` bytes.
+pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
+    const page_size: usize = 65536;
+    const requested_pages: u32 = @intCast(@max(1, (byte_count + page_size - 1) / page_size));
+    self.has_memory = true;
+    self.memory_min_pages = @max(self.memory_min_pages, requested_pages);
+    if (self.has_stack_pointer and self.stack_pointer_init < self.memory_min_pages * @as(u32, 65536)) {
+        self.stack_pointer_init = self.memory_min_pages * @as(u32, 65536);
+    }
 }
 
 /// Add a data segment to linear memory. Returns the offset where the data
@@ -764,7 +879,7 @@ pub const MergeResult = struct {
 /// `emitRelocatableCall` to emit calls to builtins.
 pub const BuiltinSymbols = struct {
     // --- Decimal / i128 arithmetic ---
-    dec_mul: u32, // roc_builtins_dec_mul_saturated
+    dec_mul: u32, // roc_builtins_dec_mul
     dec_div: u32, // roc_builtins_dec_div
     dec_div_trunc: u32, // roc_builtins_dec_div_trunc
     dec_to_str: u32, // roc_builtins_dec_to_str
@@ -805,8 +920,6 @@ pub const BuiltinSymbols = struct {
 
     // --- List operations ---
     list_append_unsafe: u32, // roc_builtins_list_append_unsafe
-    list_append_safe: u32, // roc_builtins_list_append_safe
-    list_sort_with: u32, // roc_builtins_list_sort_with
     list_eq: u32, // roc_builtins_list_eq
     list_str_eq: u32, // roc_builtins_list_str_eq
     list_list_eq: u32, // roc_builtins_list_list_eq
@@ -816,12 +929,18 @@ pub const BuiltinSymbols = struct {
     allocate_with_refcount: u32, // roc_builtins_allocate_with_refcount
 
     // --- Integer modulo ---
+    i8_mod_by: u32, // roc_builtins_i8_mod_by
+    u8_mod_by: u32, // roc_builtins_u8_mod_by
+    i16_mod_by: u32, // roc_builtins_i16_mod_by
+    u16_mod_by: u32, // roc_builtins_u16_mod_by
     i32_mod_by: u32, // roc_builtins_i32_mod_by
+    u32_mod_by: u32, // roc_builtins_u32_mod_by
     i64_mod_by: u32, // roc_builtins_i64_mod_by
+    u64_mod_by: u32, // roc_builtins_u64_mod_by
 
     /// Name → field mapping used by `populate` to fill this struct.
     const mapping = .{
-        .{ "roc_builtins_dec_mul_saturated", "dec_mul" },
+        .{ "roc_builtins_dec_mul", "dec_mul" },
         .{ "roc_builtins_dec_div", "dec_div" },
         .{ "roc_builtins_dec_div_trunc", "dec_div_trunc" },
         .{ "roc_builtins_dec_to_str", "dec_to_str" },
@@ -856,15 +975,19 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_str_caseless_ascii_equals", "str_caseless_ascii_equals" },
         .{ "roc_builtins_str_from_utf8", "str_from_utf8" },
         .{ "roc_builtins_list_append_unsafe", "list_append_unsafe" },
-        .{ "roc_builtins_list_append_safe", "list_append_safe" },
-        .{ "roc_builtins_list_sort_with", "list_sort_with" },
         .{ "roc_builtins_list_eq", "list_eq" },
         .{ "roc_builtins_list_str_eq", "list_str_eq" },
         .{ "roc_builtins_list_list_eq", "list_list_eq" },
         .{ "roc_builtins_list_reverse", "list_reverse" },
         .{ "roc_builtins_allocate_with_refcount", "allocate_with_refcount" },
+        .{ "roc_builtins_i8_mod_by", "i8_mod_by" },
+        .{ "roc_builtins_u8_mod_by", "u8_mod_by" },
+        .{ "roc_builtins_i16_mod_by", "i16_mod_by" },
+        .{ "roc_builtins_u16_mod_by", "u16_mod_by" },
         .{ "roc_builtins_i32_mod_by", "i32_mod_by" },
+        .{ "roc_builtins_u32_mod_by", "u32_mod_by" },
         .{ "roc_builtins_i64_mod_by", "i64_mod_by" },
+        .{ "roc_builtins_u64_mod_by", "u64_mod_by" },
     };
 
     pub const PopulateError = error{MissingBuiltinSymbol};

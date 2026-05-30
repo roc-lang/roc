@@ -1551,8 +1551,8 @@ fn hostMulti3(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const 
     const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
     const result = i128h.mul_i128(a, b);
     const result_u128: u128 = @bitCast(result);
-    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
-    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
+    writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
+    writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));
 }
 
 /// __muloti4: 128-bit signed multiply with overflow detection.
@@ -1571,7 +1571,7 @@ fn hostMuloti4(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
     // Overflow if result / b != a (when b != 0).
     const overflow: i32 = if (b != 0 and @divTrunc(result, b) != a) 1 else 0;
     const result_u128: u128 = @bitCast(result);
-    std.mem.writeInt(u64, buffer[result_ptr..][0..8], @truncate(result_u128), .little);
-    std.mem.writeInt(u64, buffer[result_ptr + 8 ..][0..8], @truncate(result_u128 >> 64), .little);
-    std.mem.writeInt(i32, buffer[overflow_ptr..][0..4], overflow, .little);
+    writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
+    writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));
+    writeIntLittle(i32, buffer, overflow_ptr, overflow);
 }
