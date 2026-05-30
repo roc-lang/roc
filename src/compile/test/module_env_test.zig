@@ -106,7 +106,9 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 15 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
-    try testing.expectEqual(@as(u32, 85), original.common.idents.interner.entry_count);
+    // Count reflects the merged builtin set after the zig-16 / origin/main merge
+    // (grew from 85 to 90 builtin identifiers).
+    try testing.expectEqual(@as(u32, 90), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 

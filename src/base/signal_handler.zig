@@ -148,12 +148,44 @@ pub const FaultKind = enum {
 };
 
 fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
-    // zig 0.16 no longer exposes posix.ucontext_t / posix.REG, so we can't read
-    // the faulting stack pointer portably here. classifyFault falls back to the
-    // faulting address (guard-page check) when the stack pointer is unknown,
-    // which still detects genuine stack overflows.
-    _ = context;
-    return null;
+    // zig 0.16 no longer exposes posix.ucontext_t / posix.REG, so for Linux we
+    // read the faulting stack pointer from a locally-declared ucontext layout
+    // (the kernel signal-frame ABI). For other arches/OSes we return null and
+    // classifyFault falls back to the faulting address (guard-page check).
+    if (comptime builtin.os.tag != .linux) return null;
+    const raw_context = context orelse return null;
+    switch (comptime builtin.cpu.arch) {
+        .x86_64 => {
+            // Linux x86_64 ucontext_t / mcontext_t; RSP is gregs[15] (REG_RSP).
+            const stack_t = extern struct { ss_sp: ?*anyopaque, ss_flags: i32, ss_size: usize };
+            const mcontext_t = extern struct { gregs: [23]u64, fpregs: ?*anyopaque, reserved1: [8]u64 };
+            const ucontext_t = extern struct {
+                uc_flags: u64,
+                uc_link: ?*anyopaque,
+                uc_stack: stack_t,
+                uc_mcontext: mcontext_t,
+            };
+            const uc: *const ucontext_t = @ptrCast(@alignCast(raw_context));
+            return @intCast(uc.uc_mcontext.gregs[15]);
+        },
+        .aarch64 => {
+            // Linux aarch64 ucontext_t; uc_sigmask precedes uc_mcontext, which
+            // holds fault_address, regs[31], then sp.
+            const stack_t = extern struct { ss_sp: ?*anyopaque, ss_flags: i32, ss_size: usize };
+            const ucontext_t = extern struct {
+                uc_flags: u64,
+                uc_link: ?*anyopaque,
+                uc_stack: stack_t,
+                uc_sigmask: [16]u64,
+                uc_mcontext_fault_address: u64,
+                uc_mcontext_regs: [31]u64,
+                uc_mcontext_sp: u64,
+            };
+            const uc: *const ucontext_t = @ptrCast(@alignCast(raw_context));
+            return @intCast(uc.uc_mcontext_sp);
+        },
+        else => return null,
+    }
 }
 
 /// Install crash handling for the current thread.

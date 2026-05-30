@@ -606,7 +606,7 @@ fn windowsWrite(handle: std.posix.fd_t, buffer: []const u8) std.Io.Operation.Fil
 
 fn windowsDirOpenFile(
     _: ?*anyopaque,
-    dir: std.Io.Dir,
+    _: std.Io.Dir,
     sub_path: []const u8,
     options: std.Io.Dir.OpenFileOptions,
 ) std.Io.File.OpenError!std.Io.File {
@@ -615,8 +615,6 @@ fn windowsDirOpenFile(
     // keep the shim small. Relative paths are resolved against the process cwd
     // rather than `dir.handle`; this is sufficient for the small coordination
     // file the shim needs, which is always specified by absolute path.
-    _ = dir;
-
     var path_w_buf: [std.os.windows.PATH_MAX_WIDE + 1]u16 = undefined;
     const path_w_len = std.unicode.wtf8ToWtf16Le(&path_w_buf, sub_path) catch return error.BadPathName;
     if (path_w_len >= path_w_buf.len) return error.NameTooLong;

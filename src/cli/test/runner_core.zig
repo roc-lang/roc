@@ -37,8 +37,7 @@ pub const TestStats = struct {
     }
 };
 
-fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
-    _ = std_io;
+fn runRocChildWithOutputLimit(allocator: Allocator, _: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
     // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB at use)
     // and PosixBlock on POSIX (must point at std.c.environ).
     const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
@@ -160,10 +159,9 @@ pub fn buildNative(
 /// Run a native executable and check for successful execution.
 pub fn runNative(
     allocator: Allocator,
-    std_io: std.Io,
+    _: std.Io,
     exe_path: []const u8,
 ) !TestResult {
-    _ = std_io;
     const result = util.runChildWithTimeout(allocator, &[_][]const u8{exe_path}, .{
         .max_output_bytes = 50 * 1024,
     }) catch |err| {

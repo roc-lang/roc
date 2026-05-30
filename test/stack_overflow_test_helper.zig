@@ -35,8 +35,12 @@ pub fn main(init: std.process.Init) noreturn {
 }
 
 fn triggerHighAccessViolation() noreturn {
-    const bad_addr: usize = if (comptime @bitSizeOf(usize) >= 64) 0x1_0000_1000 else 0x1000;
-    const ptr: *volatile u8 = @ptrFromInt(bad_addr);
+    var bad_addr: usize = if (comptime @bitSizeOf(usize) >= 64) 0x1_0000_1000 else 0x1000;
+    // Read the address back through a volatile pointer so it is a runtime value
+    // in a register. A comptime-constant absolute address makes the Zig 0.16
+    // x86_64 backend emit `mov [moffs], imm`, which it currently fails to encode.
+    const addr_ptr: *volatile usize = &bad_addr;
+    const ptr: *volatile u8 = @ptrFromInt(addr_ptr.*);
     ptr.* = 1;
     std.process.exit(96);
 }
