@@ -97,7 +97,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "msg")))
-			(e-call
+			(e-call (constraint-fn-var 42)
 				(e-lookup-local
 					(p-assign (ident "line!")))
 				(e-lookup-local
@@ -108,7 +108,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 45)
+		(e-call (constraint-fn-var 49)
 			(e-lookup-local
 				(p-assign (ident "print_msg!")))
 			(e-string

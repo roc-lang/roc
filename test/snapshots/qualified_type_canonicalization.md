@@ -57,21 +57,23 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
 MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 MODULE NOT FOUND - qualified_type_canonicalization.md:14:24:14:28
-MODULE NOT FOUND - qualified_type_canonicalization.md:15:19:15:24
+UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT FOUND - qualified_type_canonicalization.md:18:26:18:35
 MODULE NOT FOUND - qualified_type_canonicalization.md:19:26:19:35
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
 MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:21
 MODULE NOT FOUND - qualified_type_canonicalization.md:30:23:30:27
-MODULE NOT FOUND - qualified_type_canonicalization.md:31:16:31:21
+UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 MODULE NOT FOUND - qualified_type_canonicalization.md:34:21:34:25
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
 MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:20
 MODULE NOT FOUND - qualified_type_canonicalization.md:39:26:39:30
 MODULE NOT FOUND - qualified_type_canonicalization.md:39:38:39:44
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:49:39:70
+UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:12
 DOES NOT EXIST - qualified_type_canonicalization.md:42:24:42:39
+UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:12
 DOES NOT EXIST - qualified_type_canonicalization.md:43:25:43:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:17:43:20
 # PROBLEMS
@@ -153,10 +155,10 @@ simpleQualified : Color.RGB
                        ^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
 
-You're attempting to use this type here:
+This type is referenced here:
 **qualified_type_canonicalization.md:15:19:15:24:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
@@ -176,7 +178,7 @@ aliasedQualified : ExtMod.DataType
 
 
 **MODULE NOT FOUND**
-The type `DataType` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
+The type `.DataType` is qualified by the module `ExternalModule`, but that module was not found in this Roc project.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:19:26:19:35:**
@@ -229,10 +231,10 @@ getColor : {} -> Color.RGB
                       ^^^^
 
 
-**MODULE NOT FOUND**
-The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+**UNDECLARED TYPE**
+The type _Color_ is not declared in this scope.
 
-You're attempting to use this type here:
+This type is referenced here:
 **qualified_type_canonicalization.md:31:16:31:21:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
@@ -307,6 +309,17 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
                                                 ^^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDECLARED TYPE**
+The type _Try_ is not declared in this scope.
+
+This type is referenced here:
+**qualified_type_canonicalization.md:42:9:42:12:**
+```roc
+        Try.Ok(rgb) => TypeC.fromColor(rgb)
+```
+        ^^^
+
+
 **DOES NOT EXIST**
 `TypeC.fromColor` does not exist.
 
@@ -315,6 +328,17 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
         Try.Ok(rgb) => TypeC.fromColor(rgb)
 ```
                        ^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Try_ is not declared in this scope.
+
+This type is referenced here:
+**qualified_type_canonicalization.md:43:9:43:12:**
+```roc
+        Try.Err(err) => TypeC.default
+```
+        ^^^
 
 
 **DOES NOT EXIST**
@@ -516,7 +540,7 @@ transform = |result|
 (can-ir
 	(d-let
 		(p-assign (ident "simpleQualified"))
-		(e-runtime-error (tag "type_from_missing_module"))
+		(e-runtime-error (tag "undeclared_type"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -543,7 +567,7 @@ transform = |result|
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-runtime-error (tag "type_from_missing_module")))
+			(e-runtime-error (tag "undeclared_type")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record)
@@ -561,32 +585,33 @@ transform = |result|
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
-		(e-lambda
-			(args
-				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
-									(e-lookup-local
-										(p-assign (ident "rgb"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))))))))
+		(e-closure
+			(captures
+				(capture (ident "rgb")))
+			(e-lambda
+				(args
+					(p-assign (ident "result")))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error (tag "undeclared_type"))))
+								(value
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "rgb"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error (tag "undeclared_type"))))
+								(value
+									(e-runtime-error (tag "qualified_ident_does_not_exist")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

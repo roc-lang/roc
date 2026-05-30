@@ -14,6 +14,7 @@ Foo := [Whatever].{
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
+DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `absent` in this scope.
@@ -25,6 +26,17 @@ Is there an `import` or `exposing` missing up-top?
 ```
              ^^^^^^
 
+
+**DECLARATION HAS NO VALUE**
+This declaration has a type annotation but no implementation.
+**canon_revamp_forward_ref_to_anno_only.md:5:5:5:17:**
+```roc
+    absent : Foo
+```
+    ^^^^^^^^^^^^
+
+
+Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
 # TOKENS
 ~~~zig

@@ -52,51 +52,79 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "or")
-	(e-binop (op "gt")
-		(e-match
-			(match
-				(cond
-					(e-tag (name "Err")
+(e-if
+	(if-branches
+		(if-branch
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 166)
+				(receiver
+					(e-match
+						(match
+							(cond
+								(e-tag (name "Err")
+									(args
+										(e-lookup-local
+											(p-assign (ident "foo"))))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-num (value "12"))))))))
+				(args
+					(e-dispatch-call (method "times") (constraint-fn-var 161)
+						(receiver
+							(e-num (value "5")))
 						(args
-							(e-lookup-local
-								(p-assign (ident "foo"))))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-nominal-external (builtin)
-									(p-applied-tag))))
-						(value
-							(e-lookup-local
-								(p-assign (ident "#ok")))))
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-nominal-external (builtin)
-									(p-applied-tag))))
-						(value
-							(e-num (value "12")))))))
-		(e-binop (op "mul")
-			(e-num (value "5"))
-			(e-num (value "5"))))
-	(e-binop (op "or")
-		(e-binop (op "and")
-			(e-binop (op "lt")
-				(e-binop (op "add")
-					(e-num (value "13"))
-					(e-num (value "2")))
-				(e-num (value "5")))
-			(e-binop (op "ge")
-				(e-binop (op "sub")
-					(e-num (value "10"))
-					(e-num (value "1")))
-				(e-num (value "16"))))
-		(e-binop (op "le")
-			(e-num (value "12"))
-			(e-binop (op "div")
-				(e-num (value "3"))
-				(e-num (value "5"))))))
+							(e-num (value "5"))))))
+			(e-tag (name "True"))))
+	(if-else
+		(e-if
+			(if-branches
+				(if-branch
+					(e-if
+						(if-branches
+							(if-branch
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 267)
+									(receiver
+										(e-dispatch-call (method "plus") (constraint-fn-var 232)
+											(receiver
+												(e-num (value "13")))
+											(args
+												(e-num (value "2")))))
+									(args
+										(e-num (value "5"))))
+								(e-dispatch-call (method "is_gte") (constraint-fn-var 367)
+									(receiver
+										(e-dispatch-call (method "minus") (constraint-fn-var 332)
+											(receiver
+												(e-num (value "10")))
+											(args
+												(e-num (value "1")))))
+									(args
+										(e-num (value "16"))))))
+						(if-else
+							(e-tag (name "False"))))
+					(e-tag (name "True"))))
+			(if-else
+				(e-dispatch-call (method "is_lte") (constraint-fn-var 470)
+					(receiver
+						(e-num (value "12")))
+					(args
+						(e-dispatch-call (method "div_by") (constraint-fn-var 465)
+							(receiver
+								(e-num (value "3")))
+							(args
+								(e-num (value "5"))))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -1,6 +1,7 @@
 //! Stores AST nodes and provides scratch arrays for working with nodes.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const builtins = @import("builtins");
@@ -610,11 +611,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // Retrieve args span from span2_data
             const args_span = store.span2_data.items.items[p.args_span2_idx];
 
+            // `constraint_fn_var` is stored as `var + 1` so a stored `0` means
+            // "no constraint" (Check has not yet picked a dispatch fn var).
+            const constraint_fn_var: ?types.Var = if (p.constraint_fn_var_plus_one == 0)
+                null
+            else
+                @enumFromInt(p.constraint_fn_var_plus_one - 1);
+
             return CIR.Expr{
                 .e_call = .{
                     .func = @enumFromInt(p.func),
                     .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
                     .called_via = @enumFromInt(p.called_via),
+                    .constraint_fn_var = constraint_fn_var,
                 },
             };
         },
@@ -967,6 +976,53 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         // If compilation errors occur, use pushMalformed() to create .malformed nodes
         // that reference diagnostic indices. The .malformed case above handles
         // converting these to runtime_error nodes in the ModuleEnv.
+        .expr_dispatch_call => {
+            const p = payload.expr_dispatch_call;
+            const args_data = store.span2_data.items.items[p.args_span2_idx];
+            const region_data = store.span2_data.items.items[p.region_span2_idx];
+            return CIR.Expr{ .e_dispatch_call = .{
+                .receiver = @enumFromInt(p.receiver),
+                .method_name = @bitCast(p.method_name),
+                .method_name_region = .{
+                    .start = .{ .offset = region_data.start },
+                    .end = .{ .offset = region_data.len },
+                },
+                .args = .{ .span = .{ .start = args_data.start, .len = args_data.len } },
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+            } };
+        },
+        .expr_type_dispatch_call => {
+            const p = payload.expr_type_dispatch_call;
+            const args_data = store.span2_data.items.items[p.args_span2_idx];
+            const region_data = store.span2_data.items.items[p.region_span2_idx];
+            return CIR.Expr{ .e_type_dispatch_call = .{
+                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .method_name = @bitCast(p.method_name),
+                .method_name_region = .{
+                    .start = .{ .offset = region_data.start },
+                    .end = .{ .offset = region_data.len },
+                },
+                .args = .{ .span = .{ .start = args_data.start, .len = args_data.len } },
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+            } };
+        },
+        .expr_structural_eq => {
+            const p = payload.expr_structural_eq;
+            return CIR.Expr{ .e_structural_eq = .{
+                .lhs = @enumFromInt(p.lhs),
+                .rhs = @enumFromInt(p.rhs),
+                .negated = p.negated != 0,
+            } };
+        },
+        .expr_method_eq => {
+            const p = payload.expr_method_eq;
+            return CIR.Expr{ .e_method_eq = .{
+                .lhs = @enumFromInt(p.lhs),
+                .rhs = @enumFromInt(p.rhs),
+                .negated = p.negated != 0,
+                .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+            } };
+        },
         else => {
             std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
         },
@@ -2210,11 +2266,57 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .type_name = @bitCast(e.type_name),
             } });
         },
-        .e_dispatch_call,
-        .e_structural_eq,
-        .e_method_eq,
-        .e_type_dispatch_call,
-        => @panic("unhandled CIR.Expr variant in addExpr; needs implementation"),
+        .e_dispatch_call => |e| {
+            node.tag = .expr_dispatch_call;
+            const args_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{ .start = e.args.span.start, .len = e.args.span.len });
+            const region_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = e.method_name_region.start.offset,
+                .len = e.method_name_region.end.offset,
+            });
+            node.setPayload(.{ .expr_dispatch_call = .{
+                .receiver = @intFromEnum(e.receiver),
+                .method_name = @bitCast(e.method_name),
+                .args_span2_idx = args_idx,
+                .region_span2_idx = region_idx,
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+            } });
+        },
+        .e_type_dispatch_call => |e| {
+            node.tag = .expr_type_dispatch_call;
+            const args_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{ .start = e.args.span.start, .len = e.args.span.len });
+            const region_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = e.method_name_region.start.offset,
+                .len = e.method_name_region.end.offset,
+            });
+            node.setPayload(.{ .expr_type_dispatch_call = .{
+                .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
+                .method_name = @bitCast(e.method_name),
+                .args_span2_idx = args_idx,
+                .region_span2_idx = region_idx,
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+            } });
+        },
+        .e_structural_eq => |e| {
+            node.tag = .expr_structural_eq;
+            node.setPayload(.{ .expr_structural_eq = .{
+                .lhs = @intFromEnum(e.lhs),
+                .rhs = @intFromEnum(e.rhs),
+                .negated = @intFromBool(e.negated),
+            } });
+        },
+        .e_method_eq => |e| {
+            node.tag = .expr_method_eq;
+            node.setPayload(.{ .expr_method_eq = .{
+                .lhs = @intFromEnum(e.lhs),
+                .rhs = @intFromEnum(e.rhs),
+                .negated = @intFromBool(e.negated),
+                .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+            } });
+        },
     }
 
     const node_idx = try store.nodes.append(store.gpa, node);
@@ -3160,7 +3262,8 @@ pub fn patternAt(store: *const NodeStore, span: CIR.Pattern.Span, offset: usize)
     return store.slicePatterns(span)[offset];
 }
 
-/// Rewrite an `e_type_method_call` into an `e_type_dispatch_call`. Stub.
+/// Rewrite an `e_type_method_call` into an `e_type_dispatch_call`, recording the
+/// constraint fn var Check resolved for static dispatch.
 pub fn replaceExprWithTypeDispatchCall(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
@@ -3170,19 +3273,28 @@ pub fn replaceExprWithTypeDispatchCall(
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
 ) void {
-    _ = store;
-    _ = expr_idx;
-    _ = type_var_alias_stmt;
-    _ = method_name;
-    _ = method_name_region;
-    _ = args;
-    _ = constraint_fn_var;
-    // No-op stub.
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = store.nodes.get(node_idx);
+    const args_idx: u32 = @intCast(store.span2_data.len());
+    _ = store.span2_data.append(store.gpa, .{ .start = args.span.start, .len = args.span.len }) catch unreachable;
+    const region_idx: u32 = @intCast(store.span2_data.len());
+    _ = store.span2_data.append(store.gpa, .{
+        .start = method_name_region.start.offset,
+        .len = method_name_region.end.offset,
+    }) catch unreachable;
+    node.tag = .expr_type_dispatch_call;
+    node.setPayload(.{ .expr_type_dispatch_call = .{
+        .type_var_alias_stmt = @intFromEnum(type_var_alias_stmt),
+        .method_name = @bitCast(method_name),
+        .args_span2_idx = args_idx,
+        .region_span2_idx = region_idx,
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
-/// Rewrite an `e_method_call` into an `e_dispatch_call` once Check has picked
-/// the constraint fn var for static dispatch. Stub — the dispatch_call payload
-/// schema isn't fully implemented in this NodeStore yet, so callers panic.
+/// Rewrite an `e_method_call` into an `e_dispatch_call`, recording the
+/// constraint fn var Check resolved for static dispatch.
 pub fn replaceExprWithDispatchCall(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
@@ -3192,14 +3304,24 @@ pub fn replaceExprWithDispatchCall(
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
 ) void {
-    _ = store;
-    _ = expr_idx;
-    _ = receiver;
-    _ = method_name;
-    _ = method_name_region;
-    _ = args;
-    _ = constraint_fn_var;
-    // No-op stub — leave the original e_method_call in place.
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = store.nodes.get(node_idx);
+    const args_idx: u32 = @intCast(store.span2_data.len());
+    _ = store.span2_data.append(store.gpa, .{ .start = args.span.start, .len = args.span.len }) catch unreachable;
+    const region_idx: u32 = @intCast(store.span2_data.len());
+    _ = store.span2_data.append(store.gpa, .{
+        .start = method_name_region.start.offset,
+        .len = method_name_region.end.offset,
+    }) catch unreachable;
+    node.tag = .expr_dispatch_call;
+    node.setPayload(.{ .expr_dispatch_call = .{
+        .receiver = @intFromEnum(receiver),
+        .method_name = @bitCast(method_name),
+        .args_span2_idx = args_idx,
+        .region_span2_idx = region_idx,
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Append a slice of Expr.Idx to the store's expression-span list and return
@@ -3250,25 +3372,33 @@ pub fn replaceExprWithRuntimeError(store: *NodeStore, expr_idx: CIR.Expr.Idx, di
     store.nodes.set(node_idx, node);
 }
 
-/// No-op stub. Origin/main rewrote eq-binop into a dedicated e_structural_eq
-/// variant once Check picked structural equality; this NodeStore layout
-/// doesn't have a slot for it yet, so leave the original binop in place.
+/// Rewrite an equality expression into an `e_structural_eq` once Check
+/// determines equality is satisfied structurally rather than via a method.
 pub fn replaceExprWithStructuralEq(store: *NodeStore, expr_idx: CIR.Expr.Idx, lhs: CIR.Expr.Idx, rhs: CIR.Expr.Idx, negated: bool) void {
-    _ = store;
-    _ = expr_idx;
-    _ = lhs;
-    _ = rhs;
-    _ = negated;
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = store.nodes.get(node_idx);
+    node.tag = .expr_structural_eq;
+    node.setPayload(.{ .expr_structural_eq = .{
+        .lhs = @intFromEnum(lhs),
+        .rhs = @intFromEnum(rhs),
+        .negated = @intFromBool(negated),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
-/// No-op stub for the same reason as replaceExprWithStructuralEq.
+/// Rewrite an equality expression into an `e_method_eq`, recording the
+/// constraint fn var Check resolved for the user-defined `is_eq` method.
 pub fn replaceExprWithMethodEq(store: *NodeStore, expr_idx: CIR.Expr.Idx, lhs: CIR.Expr.Idx, rhs: CIR.Expr.Idx, negated: bool, constraint_fn_var: types.Var) void {
-    _ = store;
-    _ = expr_idx;
-    _ = lhs;
-    _ = rhs;
-    _ = negated;
-    _ = constraint_fn_var;
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = store.nodes.get(node_idx);
+    node.tag = .expr_method_eq;
+    node.setPayload(.{ .expr_method_eq = .{
+        .lhs = @intFromEnum(lhs),
+        .rhs = @intFromEnum(rhs),
+        .negated = @intFromBool(negated),
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Returns a slice of record fields from the store.
@@ -3807,6 +3937,17 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_circular_value_definition => return CIR.Diagnostic{ .circular_value_definition = .{
+            .ident = @bitCast(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
+            .ident = @bitCast(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_erroneous_value_expr => return CIR.Diagnostic{ .erroneous_value_expr = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
@@ -4176,16 +4317,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         else => {
-            // The node ID points at a non-diagnostic CIR node, which
-            // happens when an erroneous expression's `.diagnostic` slot was
-            // never published with a real diagnostic (e.g. an unresolved
-            // import lookup that turned into a runtime-error stub). Return
-            // a generic placeholder so callers that only need a label keep
-            // working.
-            return CIR.Diagnostic{ .not_implemented = .{
-                .feature = @enumFromInt(0),
-                .region = store.getRegionAt(node_idx),
-            } };
+            if (builtin.mode == .Debug) {
+                @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
+            }
+            unreachable;
         },
     }
 }

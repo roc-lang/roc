@@ -2,6 +2,7 @@
 ~~~ini
 description=Complete test - all ordering patterns at all depths, plus scoping violations
 type=file:Test.roc
+module_validation_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc

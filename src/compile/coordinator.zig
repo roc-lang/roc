@@ -367,6 +367,15 @@ pub const PackageState = struct {
         return mod.env;
     }
 
+    /// Get a done module's published checked artifact, if it built one.
+    pub fn getArtifactIfDone(self: *PackageState, name: []const u8) ?*check.CheckedArtifact.CheckedModuleArtifact {
+        const id = self.module_names.get(name) orelse return null;
+        const mod = &self.modules.items[id];
+        if (mod.phase != .Done) return null;
+        if (mod.semantic) |*semantic| return semantic.checked_artifact;
+        return null;
+    }
+
     /// Check if a module is done (regardless of whether it has an env).
     /// This is used to check if dependents can proceed - a module that failed
     /// to parse is still "done" and shouldn't block dependents.
@@ -1366,8 +1375,17 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] TYPE_CHECKED: mod.reports BEFORE append: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
-        // Take ownership of module env
+        // Take ownership of module env and semantic data. The build-side
+        // transfer (`transferCoordinatorResults`) reads `mod.semantic` to carry
+        // each compiled module forward, so we must populate it here — not just
+        // `mod.env`. Move the checked artifact out of the worker result so
+        // `WorkerResult.deinit` doesn't free it after ownership transfers here.
         mod.env = result.semantic.module_env;
+        mod.semantic = .{
+            .module_env = result.semantic.module_env,
+            .checked_artifact = result.semantic.checked_artifact,
+        };
+        result.semantic.checked_artifact = null;
 
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {
@@ -1562,20 +1580,40 @@ pub const Coordinator = struct {
         mod.phase = .TypeCheck;
         mod.visit_color = .black;
 
-        // Build imported_envs array
-        // Pre-allocate with expected capacity: 1 (builtin) + local imports + external imports
+        // Build imported_envs and the matching per-import checked artifacts in
+        // lockstep. Artifact publication requires a checked artifact at every
+        // imported-env index (see `importedArtifactsCoverImportedEnvs`), so each
+        // env we add must contribute its artifact, indexed by its position here.
+        // Pre-allocate with expected capacity: 1 (builtin) + local + external.
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, expected_capacity);
         defer imported_envs.deinit(self.gpa);
+        var imported_artifacts = try std.ArrayList(check.CheckedArtifact.PublishImportArtifact).initCapacity(self.gpa, expected_capacity);
+        defer imported_artifacts.deinit(self.gpa);
 
-        // Always include builtin first
+        // Always include builtin first (index 0)
         try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+        try imported_artifacts.append(self.gpa, .{
+            .module_idx = 0,
+            .key = self.builtin_modules.checked_artifact.key,
+            .view = check.CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
+        });
 
         // Add local imports
         for (mod.imports.items) |imp_id| {
             const imp = pkg.getModule(imp_id).?;
             if (imp.env) |env| {
+                const resolved_idx: u32 = @intCast(imported_envs.items.len);
                 try imported_envs.append(self.gpa, env);
+                if (imp.semantic) |*semantic| {
+                    if (semantic.checked_artifact) |artifact| {
+                        try imported_artifacts.append(self.gpa, .{
+                            .module_idx = resolved_idx,
+                            .key = artifact.key,
+                            .view = check.CheckedArtifact.importedView(artifact),
+                        });
+                    }
+                }
             }
         }
 
@@ -1593,7 +1631,15 @@ pub const Coordinator = struct {
         // used in where clauses even when not directly imported by this module.
         for (mod.external_imports.items) |ext_name| {
             const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
+            const resolved_idx: u32 = @intCast(imported_envs.items.len);
             try imported_envs.append(self.gpa, ext_env);
+            if (self.getExternalArtifact(pkg.name, ext_name)) |artifact| {
+                try imported_artifacts.append(self.gpa, .{
+                    .module_idx = resolved_idx,
+                    .key = artifact.key,
+                    .view = check.CheckedArtifact.importedView(artifact),
+                });
+            }
 
             // Parse "pf.Wrapper" -> { .qualifier = "pf", .module = "Wrapper" }
             const qualified = base.module_path.parseQualifiedImport(ext_name) orelse continue;
@@ -1609,10 +1655,27 @@ pub const Coordinator = struct {
 
                 // Resolve the transitive import from the same target package
                 if (target_pkg.getEnvIfDone(trans_name)) |trans_env| {
+                    const trans_idx: u32 = @intCast(imported_envs.items.len);
                     try imported_envs.append(self.gpa, trans_env);
                     try seen_modules.put(trans_name, {});
+                    if (target_pkg.getArtifactIfDone(trans_name)) |artifact| {
+                        try imported_artifacts.append(self.gpa, .{
+                            .module_idx = trans_idx,
+                            .key = artifact.key,
+                            .view = check.CheckedArtifact.importedView(artifact),
+                        });
+                    }
                 }
             }
+        }
+
+        // Build the available-artifact views (builtin plus everything imported)
+        // so artifact publication can resolve cross-module types.
+        var available_views = try std.ArrayList(check.CheckedArtifact.ImportedModuleView).initCapacity(self.gpa, imported_artifacts.items.len + 1);
+        defer available_views.deinit(self.gpa);
+        try available_views.append(self.gpa, check.CheckedArtifact.importedView(&self.builtin_modules.checked_artifact));
+        for (imported_artifacts.items) |imported| {
+            try available_views.append(self.gpa, imported.view);
         }
 
         // DEBUG: Verify all imports are completed before type-checking.
@@ -1633,8 +1696,8 @@ pub const Coordinator = struct {
                 .path = mod.path,
                 .module_env = mod.env.?,
                 .imported_envs = try imported_envs.toOwnedSlice(self.gpa),
-                .imported_artifacts = &.{},
-                .available_artifacts = &.{},
+                .imported_artifacts = try imported_artifacts.toOwnedSlice(self.gpa),
+                .available_artifacts = try available_views.toOwnedSlice(self.gpa),
             },
         });
     }
@@ -1771,6 +1834,17 @@ pub const Coordinator = struct {
         const target_pkg = self.packages.get(target_pkg_name) orelse return null;
 
         return target_pkg.getEnvIfDone(qualified.module);
+    }
+
+    /// Get the published checked artifact for an external (cross-package) import.
+    pub fn getExternalArtifact(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) ?*check.CheckedArtifact.CheckedModuleArtifact {
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return null;
+
+        const source = self.packages.get(source_pkg) orelse return null;
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
+        const target_pkg = self.packages.get(target_pkg_name) orelse return null;
+
+        return target_pkg.getArtifactIfDone(qualified.module);
     }
 
     /// Get build statistics for this compilation
@@ -2071,10 +2145,23 @@ pub const Coordinator = struct {
 
     /// Helper: allocate and initialize an OwnedSemanticModuleData on the worker
     /// allocator. WorkerResult.deinit will destroy this via the same allocator.
-    fn makeOwnedSemantic(self: *Coordinator, env: *ModuleEnv) *messages.OwnedSemanticModuleData {
+    /// When a checked artifact is provided it is moved onto the heap (using the
+    /// artifact's own allocator, so the build-side transfer that destroys this
+    /// pointer via `artifact.canonical_names.allocator` frees it correctly).
+    fn makeOwnedSemantic(
+        self: *Coordinator,
+        env: *ModuleEnv,
+        maybe_artifact: ?check.CheckedArtifact.CheckedModuleArtifact,
+    ) *messages.OwnedSemanticModuleData {
         const worker_alloc = self.getWorkerAllocator();
         const semantic = worker_alloc.create(messages.OwnedSemanticModuleData) catch unreachable;
-        semantic.* = .{ .module_env = env };
+        var artifact_ptr: ?*check.CheckedArtifact.CheckedModuleArtifact = null;
+        if (maybe_artifact) |artifact| {
+            const heap_artifact = artifact.canonical_names.allocator.create(check.CheckedArtifact.CheckedModuleArtifact) catch unreachable;
+            heap_artifact.* = artifact;
+            artifact_ptr = heap_artifact;
+        }
+        semantic.* = .{ .module_env = env, .checked_artifact = artifact_ptr };
         return semantic;
     }
 
@@ -2111,7 +2198,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .semantic = self.makeOwnedSemantic(env),
+                    .semantic = self.makeOwnedSemantic(env, null),
                     .reports = std.ArrayList(Report).empty,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
@@ -2120,6 +2207,12 @@ pub const Coordinator = struct {
         };
         defer tc_output.deinit();
         const checker = &tc_output.checker;
+
+        // Move the checked artifact (if one was published) out of the
+        // type-check output so it survives `tc_output.deinit()` and is carried
+        // forward in the module's semantic data for codegen.
+        const taken_artifact: ?check.CheckedArtifact.CheckedModuleArtifact =
+            if (tc_output.checked_artifact != null) tc_output.takeCheckedArtifact() else null;
 
         const check_end = if (threads_available) std.time.nanoTimestamp() else 0;
 
@@ -2143,13 +2236,15 @@ pub const Coordinator = struct {
         ) catch {
             // On allocation failure, return result with empty reports
             self.gpa.free(task.imported_envs);
+            self.gpa.free(task.imported_artifacts);
+            self.gpa.free(task.available_artifacts);
             return .{
                 .type_checked = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .semantic = self.makeOwnedSemantic(env),
+                    .semantic = self.makeOwnedSemantic(env, taken_artifact),
                     .reports = reports,
                     .type_check_ns = 0,
                     .check_diagnostics_ns = 0,
@@ -2167,6 +2262,8 @@ pub const Coordinator = struct {
 
         // Free imported_envs slice (owned by coordinator)
         self.gpa.free(task.imported_envs);
+        self.gpa.free(task.imported_artifacts);
+        self.gpa.free(task.available_artifacts);
 
         return .{
             .type_checked = .{
@@ -2174,7 +2271,7 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .path = task.path,
-                .semantic = self.makeOwnedSemantic(env),
+                .semantic = self.makeOwnedSemantic(env, taken_artifact),
                 .reports = reports,
                 .type_check_ns = if (threads_available) @intCast(check_end - start_time) else 0,
                 .check_diagnostics_ns = if (threads_available) @intCast(diag_end - diag_start) else 0,

@@ -41,7 +41,7 @@ EndOfFile,
 ~~~clojure
 (e-string
 	(e-literal (string "This is a string with "))
-	(e-call
+	(e-call (constraint-fn-var 21)
 		(e-lookup-local
 			(p-assign (ident "some_func")))
 		(e-lookup-local

@@ -50,9 +50,9 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-method-call (method "c")
+		(e-dispatch-call (method "c") (constraint-fn-var 47)
 			(receiver
-				(e-call
+				(e-call (constraint-fn-var 46)
 					(e-lookup-local
 						(p-assign (ident "b")))
 					(e-num (value "0"))))

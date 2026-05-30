@@ -22,14 +22,8 @@ pub fn run(
     modules: Common.CheckedModules,
     roots: Common.RootRequests,
 ) Common.LowerError!Ast.Program {
-    // No requests to lower (every requested CheckedModule root was a stub
-    // for an erroneous type, leaving the request set empty). Return an
-    // empty program instead of tripping the lowering invariant; the
-    // diagnostics for those types are produced earlier in Check.
     if (roots.requests.len == 0 and roots.layout_requests.len == 0 and roots.static_data_requests.len == 0) {
-        var empty = Ast.Program.init(allocator);
-        errdefer empty.deinit();
-        return empty;
+        Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
     }
 
     var program = Ast.Program.init(allocator);

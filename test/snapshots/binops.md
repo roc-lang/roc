@@ -138,47 +138,47 @@ EndOfFile,
 ~~~clojure
 (e-tuple
 	(elems
-		(e-dispatch-call (method "plus") (constraint-fn-var 133)
+		(e-dispatch-call (method "plus") (constraint-fn-var 131)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "minus") (constraint-fn-var 195)
+		(e-dispatch-call (method "minus") (constraint-fn-var 193)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "times") (constraint-fn-var 257)
+		(e-dispatch-call (method "times") (constraint-fn-var 255)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "div_by") (constraint-fn-var 319)
+		(e-dispatch-call (method "div_by") (constraint-fn-var 317)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "rem_by") (constraint-fn-var 381)
+		(e-dispatch-call (method "rem_by") (constraint-fn-var 379)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_lt") (constraint-fn-var 446)
+		(e-dispatch-call (method "is_lt") (constraint-fn-var 444)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_gt") (constraint-fn-var 511)
+		(e-dispatch-call (method "is_gt") (constraint-fn-var 509)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_lte") (constraint-fn-var 576)
+		(e-dispatch-call (method "is_lte") (constraint-fn-var 574)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_gte") (constraint-fn-var 641)
+		(e-dispatch-call (method "is_gte") (constraint-fn-var 639)
 			(receiver
 				(e-num (value "4")))
 			(args
@@ -193,7 +193,7 @@ EndOfFile,
 				(e-num (value "4")))
 			(rhs
 				(e-num (value "2"))))
-		(e-dispatch-call (method "div_trunc_by") (constraint-fn-var 843)
+		(e-dispatch-call (method "div_trunc_by") (constraint-fn-var 841)
 			(receiver
 				(e-num (value "4")))
 			(args
@@ -208,18 +208,14 @@ EndOfFile,
 						(builtin)
 						(e-tag (name "False")))))
 			(if-else
-				(e-nominal-external
-					(builtin)
-					(e-tag (name "False")))))
+				(e-tag (name "False"))))
 		(e-if
 			(if-branches
 				(if-branch
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "False")))
-					(e-nominal-external
-						(builtin)
-						(e-tag (name "True")))))
+					(e-tag (name "True"))))
 			(if-else
 				(e-nominal-external
 					(builtin)

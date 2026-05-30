@@ -15,20 +15,9 @@ main = {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
 UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
+UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `encode` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**import_exposing_basic.md:5:15:5:21:**
-```roc
-    encoded = encode(data)
-```
-              ^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `decode` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -36,6 +25,17 @@ Is there an `import` or `exposing` missing up-top?
 **import_exposing_basic.md:6:15:6:21:**
 ```roc
     decoded = decode(encoded)
+```
+              ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `encode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**import_exposing_basic.md:5:15:5:21:**
+```roc
+    encoded = encode(data)
 ```
               ^^^^^^
 
@@ -114,14 +114,14 @@ main = {
 							(e-num (value "30"))))))
 			(s-let
 				(p-assign (ident "encoded"))
-				(e-call
+				(e-call (constraint-fn-var 74)
 					(e-lookup-local
 						(p-assign (ident "encode")))
 					(e-lookup-local
 						(p-assign (ident "data")))))
 			(s-let
 				(p-assign (ident "decoded"))
-				(e-call
+				(e-call (constraint-fn-var 77)
 					(e-lookup-local
 						(p-assign (ident "decode")))
 					(e-lookup-local

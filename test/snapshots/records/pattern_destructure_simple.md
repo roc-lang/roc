@@ -2,6 +2,7 @@
 ~~~ini
 description=Simple record destructuring pattern
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc

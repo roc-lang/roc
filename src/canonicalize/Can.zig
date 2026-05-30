@@ -1223,7 +1223,6 @@ fn publishAssocPatternNames(
     type_qualified_ident: ?Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
 ) std.mem.Allocator.Error!void {
-    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) return;
     if (self.scopes.items.len == 0) return;
     if (type_qualified_ident) |tq| {
         try self.scopes.items[0].idents.put(self.env.gpa, tq, pattern_idx);
@@ -1392,6 +1391,64 @@ fn canonicalizeAssociatedDeclWithAnno(
 
 /// Walk an associated block's statements in source order, fully canonicalizing
 /// each one — including nested type declarations and their associated blocks.
+/// Register a single nested type declaration's bindings — the type itself plus
+/// its bare, qualified, and type-qualified aliases — without canonicalizing its
+/// associated block body. Every nested type in a block is registered up front
+/// (see the pre-pass in `canonicalizeAssociatedItems`) so that one nested type's
+/// block body can reference a sibling nested type by name (e.g. a method on
+/// `Iter` calling `List.iter`) regardless of the order the types appear in
+/// source. The block body itself is canonicalized later via
+/// `processAssociatedBlock`.
+///
+/// The relative-parent-name passed to `registerTypeDecl` is the path up to (but
+/// not including) this type — `null` for direct children of the module root so
+/// the type's relative_name stays bare, the parent path joined with `.` for
+/// deeper nesting.
+fn registerNestedTypeDecl(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_name_idx: ?Ident.Idx,
+    type_name: Ident.Idx,
+    nested_type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
+) std.mem.Allocator.Error!void {
+    const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch return;
+    const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse return;
+
+    try self.registerTypeDecl(nested_type_decl, parent_name, relative_name_idx, true);
+
+    const nested_qualified_idx = try self.env.insertQualifiedIdent(
+        self.env.getIdent(parent_name),
+        self.env.getIdent(nested_type_ident),
+    );
+
+    if (self.scopeLookupTypeDecl(nested_qualified_idx)) |nested_type_decl_idx| {
+        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+        try current_scope.introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
+
+        const user_qualified_ident_idx = try self.env.insertQualifiedIdent(
+            self.env.getIdent(type_name),
+            self.env.getIdent(nested_type_ident),
+        );
+        try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
+
+        // Also publish the user-facing qualified name (e.g. `Test.MyBool`)
+        // at the module scope so references from outside the associated
+        // block — like `x = Test.MyBool.method(...)` at top level —
+        // can still resolve the nested type after this scope is exited.
+        try self.scopes.items[0].introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
+
+        // The module's main type IS the module namespace, so its
+        // direct nested types are part of the module's own type
+        // surface: file-level items (outside the main type's block)
+        // reference them by their bare name. Publish the bare name
+        // at the module scope for the main type's children so those
+        // references resolve to the real declaration.
+        if (std.mem.eql(u8, self.env.getIdent(type_name), self.env.module_name)) {
+            try self.scopes.items[0].introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
+        }
+    }
+}
+
 fn canonicalizeAssociatedItems(
     self: *Self,
     parent_name: Ident.Idx,
@@ -1400,29 +1457,34 @@ fn canonicalizeAssociatedItems(
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
     const stmt_idxs = self.parse_ir.store.statementSlice(statements);
+
+    // Pre-pass: register every nested type declaration in this block before
+    // canonicalizing any associated-block body or method below, so that a
+    // method in one nested type's block can reference a sibling nested type
+    // (e.g. `Iter`'s `take_last` calling `List.iter`) regardless of the order
+    // the types appear in source.
+    for (stmt_idxs) |stmt_idx| {
+        switch (self.parse_ir.store.getStatement(stmt_idx)) {
+            .type_decl => |nested_type_decl| try self.registerNestedTypeDecl(parent_name, relative_name_idx, type_name, nested_type_decl),
+            else => {},
+        }
+    }
+
     var i: usize = 0;
     while (i < stmt_idxs.len) : (i += 1) {
         const stmt_idx = stmt_idxs[i];
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
             .type_decl => |nested_type_decl| {
+                // Registration happened in the pre-pass above; here we only
+                // canonicalize the nested type's associated block body, which
+                // can now see every sibling nested type's binding.
                 const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
                 const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
                 const nested_qualified_idx = try self.env.insertQualifiedIdent(
                     self.env.getIdent(parent_name),
                     self.env.getIdent(nested_type_ident),
                 );
-
-                // Register the nested type itself first so its type binding is
-                // visible (qualified, bare, and type-qualified) to sibling items
-                // and to the body of its own associated block. The block itself
-                // is canonicalized via processAssociatedBlock below so we can key
-                // it under the fully-qualified parent name we already computed.
-                // The relative-parent-name passed to `registerTypeDecl` is the
-                // path up to (but not including) this type — `null` for direct
-                // children of the module root so the type's relative_name stays
-                // bare, the parent path joined with `.` for deeper nesting.
-                try self.registerTypeDecl(nested_type_decl, parent_name, relative_name_idx, true);
 
                 // The relative parent for the inner block IS this type's path,
                 // so nested items inside the block get prefixes like
@@ -1431,28 +1493,9 @@ fn canonicalizeAssociatedItems(
                     try self.env.insertQualifiedIdent(self.env.getIdent(rel_idx), self.env.getIdent(nested_type_ident))
                 else
                     nested_type_ident;
+
                 if (nested_type_decl.associated) |nested_assoc| {
                     try self.processAssociatedBlock(nested_qualified_idx, nested_relative_for_block, nested_type_ident, nested_assoc);
-                }
-
-                if (self.scopeLookupTypeDecl(nested_qualified_idx)) |nested_type_decl_idx| {
-                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                    try current_scope.introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
-
-                    const user_qualified_ident_idx = try self.env.insertQualifiedIdent(
-                        self.env.getIdent(type_name),
-                        self.env.getIdent(nested_type_ident),
-                    );
-                    try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
-
-                    // Also publish the user-facing qualified name (e.g. `Test.MyBool`)
-                    // at the module scope so references from outside the associated
-                    // block — like `x = Test.MyBool.method(...)` at top level —
-                    // can still resolve the nested type after this scope is exited.
-                    try self.scopes.items[0].introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
-                }
-
-                if (nested_type_decl.associated) |nested_assoc| {
                     try self.introduceNestedItemAliases(nested_qualified_idx, self.env.getIdent(nested_type_ident), nested_assoc.statements);
                 }
             },
@@ -2704,6 +2747,14 @@ pub fn canonicalizeFile(
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
 
+    // The module-global value definitions are exactly the top-level defs
+    // collected above: top-level values, associated items, and compiler-created
+    // hosted globals. Local block definitions live inside their block's
+    // statement list rather than this top-level span, so they're naturally
+    // excluded. The checked-artifact builder consumes this to publish each
+    // module-global value as a procedure binding or const template.
+    self.env.global_value_defs = self.env.all_defs;
+
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
 
@@ -2723,6 +2774,13 @@ pub fn canonicalizeFile(
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
+
+    // Finalize the diagnostics accumulated during this canonicalization pass by
+    // moving them from the scratch accumulator into the module's published
+    // diagnostic span. Consumers (report generation, the coordinator) read the
+    // published span, so this is the explicit hand-off of canonicalization's
+    // diagnostic output to later stages.
+    try self.env.publishScratchDiagnostics();
 }
 
 /// Validate a type module for use in checking mode (roc check).
@@ -2799,6 +2857,8 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
             // No validation needed for these module kinds in checking mode
         },
     }
+
+    try self.env.publishScratchDiagnostics();
 }
 
 /// Validate a module for use in execution mode (e.g. `roc main.roc` or `roc build`).
@@ -2815,6 +2875,8 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
             // No validation needed for these module kinds in execution mode
         },
     }
+
+    try self.env.publishScratchDiagnostics();
 }
 
 /// Creates an annotation-only def for a standalone type annotation with no implementation
@@ -3433,6 +3495,44 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
             .region = entry_region,
             .type_aliases = type_aliases_range,
         });
+    }
+}
+
+/// Map a type identifier to the builtin numeric kind it names, if any. Mirrors
+/// the type checker's resolution so the canonicalized suffix target it reads
+/// back is consistent. Compares against the module's cached numeric idents
+/// (both the bare `U8` form and the fully-qualified `Builtin.Num.U8` form).
+fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.NumKind {
+    const ids = self.env.idents;
+    if (type_ident.eql(ids.u8) or type_ident.eql(ids.u8_type)) return .u8;
+    if (type_ident.eql(ids.i8) or type_ident.eql(ids.i8_type)) return .i8;
+    if (type_ident.eql(ids.u16) or type_ident.eql(ids.u16_type)) return .u16;
+    if (type_ident.eql(ids.i16) or type_ident.eql(ids.i16_type)) return .i16;
+    if (type_ident.eql(ids.u32) or type_ident.eql(ids.u32_type)) return .u32;
+    if (type_ident.eql(ids.i32) or type_ident.eql(ids.i32_type)) return .i32;
+    if (type_ident.eql(ids.u64) or type_ident.eql(ids.u64_type)) return .u64;
+    if (type_ident.eql(ids.i64) or type_ident.eql(ids.i64_type)) return .i64;
+    if (type_ident.eql(ids.u128) or type_ident.eql(ids.u128_type)) return .u128;
+    if (type_ident.eql(ids.i128) or type_ident.eql(ids.i128_type)) return .i128;
+    if (type_ident.eql(ids.f32) or type_ident.eql(ids.f32_type)) return .f32;
+    if (type_ident.eql(ids.f64) or type_ident.eql(ids.f64_type)) return .f64;
+    if (type_ident.eql(ids.dec) or type_ident.eql(ids.dec_type)) return .dec;
+    return null;
+}
+
+/// Record, for an explicitly-suffixed numeric literal (e.g. `123.U8` or
+/// `5.Foo`), what its suffix type resolves to in the current scope. The type
+/// checker consumes this so it can unify the literal against the right concrete
+/// type without re-running scope resolution. The caller has already verified
+/// `type_ident` names a type binding in scope.
+fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
+    const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
+    if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+        try self.env.recordNumericSuffixType(node_idx, .{ .builtin = num_kind });
+        return;
+    }
+    if (self.scopeLookupTypeDecl(type_ident)) |stmt_idx| {
+        try self.env.recordNumericSuffixType(node_idx, .{ .local = stmt_idx });
     }
 }
 
@@ -5309,6 +5409,7 @@ pub fn canonicalizeExpr(
             };
             const expr_idx = try self.env.addExpr(numeric_expr, region);
             try self.recordNumeralLiteralForExpr(expr_idx, literal);
+            try self.recordTypedNumericSuffix(expr_idx, type_ident);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .typed_frac => |e| {
@@ -5352,6 +5453,7 @@ pub fn canonicalizeExpr(
             };
             const expr_idx = try self.env.addExpr(numeric_expr, region);
             try self.recordNumeralLiteralForExpr(expr_idx, literal);
+            try self.recordTypedNumericSuffix(expr_idx, type_ident);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .single_quote => |e| {
@@ -5811,7 +5913,13 @@ pub fn canonicalizeExpr(
                 return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
             };
 
-            const method_name_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = mc.method_token, .end = mc.method_token });
+            const raw_method_region = self.parse_ir.tokens.resolve(mc.method_token);
+            // The method token region includes the leading dot; the diagnostic
+            // region should cover only the method-name identifier.
+            const method_name_region = if (raw_method_region.end.offset > raw_method_region.start.offset)
+                Region{ .start = .{ .offset = raw_method_region.start.offset + 1 }, .end = raw_method_region.end }
+            else
+                raw_method_region;
 
             const scratch_top = self.env.store.scratchExprTop();
             for (self.parse_ir.store.exprSlice(mc.args)) |arg| {
@@ -6038,6 +6146,40 @@ pub fn canonicalizeExpr(
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
                 },
             };
+
+            // The short-circuiting boolean operators have no corresponding Bool
+            // method to dispatch to, so they desugar to `if`:
+            //   `a and b` -> `if a then b else False`
+            //   `a or b`  -> `if a then True else b`
+            // The bare `True`/`False` tags unify to Bool through the branch/else
+            // unification, and the condition position enforces that the left
+            // operand is a Bool.
+            if (op == .@"and" or op == .@"or") {
+                const bool_tag_ident = try self.env.insertIdent(base.Ident.for_text(if (op == .@"and") "False" else "True"));
+                const bool_tag_idx = try self.env.addExpr(Expr{ .e_tag = .{
+                    .name = bool_tag_ident,
+                    .args = .{ .span = base.DataSpan.empty() },
+                } }, region);
+
+                const then_body = if (op == .@"and") can_rhs.idx else bool_tag_idx;
+                const final_else = if (op == .@"and") bool_tag_idx else can_rhs.idx;
+
+                const if_scratch_top = self.env.store.scratchIfBranchTop();
+                const if_branch_idx = try self.env.addIfBranch(Expr.IfBranch{
+                    .cond = can_lhs.idx,
+                    .body = then_body,
+                }, region);
+                try self.env.store.addScratchIfBranch(if_branch_idx);
+                const branches_span = try self.env.store.ifBranchSpanFrom(if_scratch_top);
+
+                const if_expr_idx = try self.env.addExpr(Expr{ .e_if = .{
+                    .branches = branches_span,
+                    .final_else = final_else,
+                } }, region);
+
+                const if_free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
+                return CanonicalizedExpr{ .idx = if_expr_idx, .free_vars = if_free_vars };
+            }
 
             const expr_idx = try self.env.addExpr(Expr{
                 .e_binop = Expr.Binop.init(op, can_lhs.idx, can_rhs.idx),
@@ -8135,7 +8277,11 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
             const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                break :blk 0;
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = DataSpan.empty() };
             };
 
             const target_ident = auto_imported_type.env.common.findIdent(type_name) orelse {
@@ -8709,7 +8855,11 @@ pub fn canonicalizePattern(
                 // Look up the target node index in the module's exposed_nodes
                 const target_node_idx, _ = blk: {
                     const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                        break :blk .{ 0, Content.err };
+                        return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                            .module_name = module_name,
+                            .type_name = type_tok_ident,
+                            .region = type_tok_region,
+                        } });
                     };
 
                     const target_ident = auto_imported_type.env.common.findIdent(type_tok_text) orelse {
@@ -9788,7 +9938,11 @@ fn canonicalizeTypeAnnoBasicType(
         const type_name_text = self.env.getIdent(type_name_ident);
         const target_node_idx = blk: {
             const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                break :blk 0;
+                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                    .module_name = module_name,
+                    .type_name = type_name_ident,
+                    .region = type_name_region,
+                } });
             };
 
             const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse {

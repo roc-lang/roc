@@ -2,6 +2,7 @@
 ~~~ini
 description=Nested record destructuring pattern in a match expression
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc

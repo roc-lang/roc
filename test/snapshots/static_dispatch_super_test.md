@@ -2,6 +2,7 @@
 ~~~ini
 description=Dot access super test
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
@@ -63,17 +64,17 @@ EndOfFile,
 (e-question-suffix
 	(e-field-access
 		(e-question-suffix
-			(e-field-access
-				(e-question-suffix
-					(e-field-access
-						(e-question-suffix
-							(e-apply
-								(e-ident (raw "some_fn"))
-								(e-ident (raw "arg1"))))
-						(e-apply
-							(e-ident (raw "static_dispatch_method")))))
-				(e-apply
-					(e-ident (raw "next_static_dispatch_method")))))
+			(e-method-call (method ".next_static_dispatch_method")
+				(receiver
+					(e-question-suffix
+						(e-method-call (method ".static_dispatch_method")
+							(receiver
+								(e-question-suffix
+									(e-apply
+										(e-ident (raw "some_fn"))
+										(e-ident (raw "arg1")))))
+							(args))))
+				(args)))
 		(e-ident (raw "record_field"))))
 ~~~
 # FORMATTED
@@ -85,22 +86,22 @@ NO CHANGE
 (e-match
 	(match
 		(cond
-			(e-dot-access (field "record_field")
+			(e-field-access (field "record_field")
 				(receiver
 					(e-match
 						(match
 							(cond
-								(e-dot-access (field "next_static_dispatch_method")
+								(e-method-call (method "next_static_dispatch_method")
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dot-access (field "static_dispatch_method")
+													(e-method-call (method "static_dispatch_method")
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-call
+																		(e-call (constraint-fn-var 84)
 																			(e-lookup-local
 																				(p-assign (ident "some_fn")))
 																			(e-lookup-local

@@ -18,10 +18,10 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access
-	(e-ident (raw "list"))
-	(e-apply
-		(e-ident (raw "map"))
+(e-method-call (method ".map")
+	(receiver
+		(e-ident (raw "list")))
+	(args
 		(e-ident (raw "fn"))))
 ~~~
 # FORMATTED
@@ -30,7 +30,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "map")
+(e-dispatch-call (method "map") (constraint-fn-var 11)
 	(receiver
 		(e-lookup-local
 			(p-assign (ident "list"))))

@@ -626,14 +626,27 @@ fn checkedModuleHasArtifactBlockingProblems(module: *const CheckedModule) bool {
     for (module.checker.problems.problems.items) |problem| {
         if (problemBlocksCheckedArtifact(problem)) return true;
     }
-    // We only treat erroneous-typed defs as blocking if Check also produced
-    // at least one problem report — bare .err content without an
-    // accompanying diagnostic is a sign that a stub slipped through (e.g.
-    // an erroneous-typed assoc method left as a placeholder). Letting the
-    // module proceed avoids the snapshot tool tripping its
-    // "TypeCheckError produced no reports" invariant on programs that
-    // actually evaluate fine at runtime.
-    if (module.checker.problems.problems.items.len == 0) return false;
+    // An undefined identifier leaves a dangling forward-reference placeholder
+    // pattern: canon reports `ident_not_in_scope` but the `e_lookup_local`
+    // still points at a binder that is never defined, which the Monotype
+    // lowerer cannot resolve. Treat such a reference as blocking so the error
+    // is reported instead of crashing during lowering.
+    {
+        const me = module.module_env;
+        for (me.store.sliceDiagnostics(me.diagnostics)) |diag_idx| {
+            switch (me.store.getDiagnostic(diag_idx)) {
+                .ident_not_in_scope => return true,
+                else => {},
+            }
+        }
+    }
+
+    // Erroneous (`.err`) checked types cannot be published — the checked
+    // artifact builder rejects them outright. So any module whose type store
+    // still holds `.err` content must be reported as a problem rather than
+    // built. A canonicalization error such as `return` outside a function, or
+    // an undefined uppercase tag like `Bool.true`, surfaces this way even when
+    // it does not also produce a separate Check problem.
     return module.module_env.types.containsErrContent();
 }
 
@@ -916,6 +929,10 @@ pub fn parseCheckModule(
 
     var can_timer = try StageTimer.start();
     try czer.canonicalizeFile();
+    // Finalize the canonicalization diagnostics so later stages (the
+    // artifact-blocking-problem check) can see errors like an undefined
+    // variable, which canon records but does not leave as `.err` content.
+    try module_env.publishScratchDiagnostics();
     switch (validation) {
         .roc_check => try czer.validateForChecking(),
         .checked_artifact => try czer.validateForExplicitRoots(),

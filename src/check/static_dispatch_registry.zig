@@ -429,12 +429,25 @@ pub const StaticDispatchPlanTable = struct {
                 .dec_small,
                 .typed_frac,
                 => continue,
-                // Stub: a non-numeric checked expression here means the
-                // numeral plan attached to an erroneous-typed expression;
-                // skip it instead of crashing artifact publication.
-                else => continue,
+                else => {
+                    if (@import("builtin").mode == .Debug) {
+                        std.debug.panic(
+                            "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression",
+                            .{numeral_plan.node_idx},
+                        );
+                    }
+                    unreachable;
+                },
             }
-            const literal = module_env.numeralLiteralForNode(node) orelse continue;
+            const literal = module_env.numeralLiteralForNode(node) orelse {
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
+                        .{numeral_plan.node_idx},
+                    );
+                }
+                unreachable;
+            };
             const args = try allocator.alloc(StaticDispatchOperand, 1);
             errdefer allocator.free(args);
             args[0] = .{ .generated_numeral = literal };
@@ -675,11 +688,15 @@ fn staticDispatchOperandsForSlice(
 }
 
 fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {
-    // Stub: a missing checked-expression slot means the expression was tagged
-    // erroneous earlier and never copied. Return id 0 — downstream lowering
-    // treats stubs by type, not by id, so referencing the first checked
-    // expression is harmless here.
-    return checked_bodies.exprIdForSource(expr) orelse @as(CheckedExprId, @enumFromInt(0));
+    return checked_bodies.exprIdForSource(expr) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch invariant violated: dispatch expression {d} has no checked expression id",
+                .{@intFromEnum(expr)},
+            );
+        }
+        unreachable;
+    };
 }
 
 test "method registry can be empty" {

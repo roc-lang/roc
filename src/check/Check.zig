@@ -1165,12 +1165,10 @@ fn unifyTypedLiteralWithExplicitType(
     env: *Env,
 ) Allocator.Error!void {
     const suffix_type = self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
-        // Canonicalization didn't publish a suffix target for this typed
-        // numeric literal — treat it as a type error so subsequent stages
-        // see a stub instead of panicking. The diagnostic for the bad
-        // suffix is already produced earlier.
-        try self.unifyWith(flex_var, .err, env);
-        return;
+        if (builtin.mode == .Debug) {
+            std.debug.panic("typed numeric literal reached checking without a canonicalized suffix target", .{});
+        }
+        unreachable;
     };
 
     switch (suffix_type.target()) {
@@ -4849,6 +4847,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             }
 
+            // Instantiate if generalized, otherwise just use the pattern var
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
@@ -8203,23 +8202,6 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                // Recursive-def equality constraints compare the def's
-                // generalized pattern var against the body's recursive-lookup
-                // var. Instantiate the generalized side into a fresh copy so
-                // we never mutate the def's own pattern var during the call —
-                // otherwise the fresh flex args bound to the call site's
-                // outer rigid vars would leak into the def's published type
-                // and downstream consumers would see a stubbed signature.
-                // Other eql contexts (early-return, try-operator) compare
-                // body vars at the same rank and must NOT instantiate.
-                if (eql.ctx == .recursive_def) {
-                    const expected_resolved = self.types.resolveVar(eql.expected);
-                    if (expected_resolved.desc.rank == Rank.generalized) {
-                        const instantiated = try self.instantiateVar(eql.expected, env, .use_last_var);
-                        _ = try self.unifyInContext(instantiated, eql.actual, env, eql.ctx);
-                        continue;
-                    }
-                }
                 _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
             },
         }

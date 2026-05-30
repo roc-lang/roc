@@ -599,12 +599,124 @@ pub const BuildEnv = struct {
         // Transfer results back to PackageEnv before platform validation and emission.
         try self.transferCoordinatorResults();
 
+        // Bind the platform's required values to the app's provided values and
+        // re-publish the platform artifact with that relation, so platform data
+        // exports that reference required bindings (e.g. `main_for_host = main`)
+        // get their consts finalized against the app's values.
+        try self.finalizePlatformAppRelation();
+
         // Deterministic emission
         try self.emitDeterministic();
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] compileDiscovered complete\n", .{});
         }
+    }
+
+    /// After all modules are compiled, establish the platform-app relation
+    /// (binding each platform-required value to the app value that provides it)
+    /// and re-publish the platform's checked artifact with that relation. The
+    /// re-publication rewrites the platform's required-value references from
+    /// `.platform_required_declaration` (unbound) to `.platform_required_const`/
+    /// `.platform_required_proc` (bound to the app), which lets the compile-time
+    /// finalizer evaluate and store the platform's provided data-export consts.
+    fn finalizePlatformAppRelation(self: *BuildEnv) !void {
+        // Locate the platform package, its scheduler, and its root module.
+        var platform_pkg_name: ?[]const u8 = null;
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                platform_pkg_name = entry.key_ptr.*;
+                break;
+            }
+        }
+        const pf_name = platform_pkg_name orelse return;
+        const platform_sched = self.schedulers.get(pf_name) orelse return;
+        const platform_root = platform_sched.getRootModule() orelse return;
+        const platform_env = platform_root.moduleEnv() orelse return;
+        const platform_artifact = platform_root.checkedArtifact() orelse return;
+
+        // Only platforms that declare requirements (and have not yet been bound)
+        // need this pass.
+        if (platform_artifact.platform_required_declarations.declarations.len == 0) return;
+        if (platform_artifact.platform_required_bindings.bindings.len > 0) return;
+
+        const app = self.getAppSemanticData() orelse return;
+        const app_artifact = app.checked_artifact orelse return;
+
+        var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
+            self.gpa,
+            platform_artifact,
+            platform_env,
+            app_artifact,
+        );
+        const relation = switch (relation_result) {
+            .relation => |r| r,
+            .missing_value, .type_mismatch => {
+                // The app does not satisfy every required value (missing or
+                // type-mismatched); leave the platform artifact unbound (a later
+                // stage reports the error).
+                relation_result.deinit(self.gpa);
+                return;
+            },
+        };
+        defer relation_result.deinit(self.gpa);
+
+        // Build the platform's import set (Builtin plus any sibling modules in
+        // the platform package) and the available/relation artifact views.
+        const modules = try self.getCompiledModules(self.gpa);
+        defer self.gpa.free(modules);
+
+        var imported_envs = std.ArrayList(*ModuleEnv).empty;
+        defer imported_envs.deinit(self.gpa);
+        var imported_artifacts = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
+        defer imported_artifacts.deinit(self.gpa);
+        try imported_envs.append(self.gpa, self.builtin_modules.builtin_module.env);
+        try imported_artifacts.append(self.gpa, .{
+            .module_idx = 0,
+            .key = self.builtin_modules.checked_artifact.key,
+            .view = check.CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
+        });
+        for (modules) |module| {
+            if (!std.mem.eql(u8, module.package_name, pf_name)) continue;
+            if (module.is_platform_main) continue;
+            const sibling_artifact = module.semantic.checked_artifact orelse continue;
+            const resolved_idx: u32 = @intCast(imported_envs.items.len);
+            try imported_envs.append(self.gpa, module.semantic.env);
+            try imported_artifacts.append(self.gpa, .{
+                .module_idx = resolved_idx,
+                .key = sibling_artifact.key,
+                .view = check.CheckedArtifact.importedView(sibling_artifact),
+            });
+        }
+
+        var relation_views = [_]check.CheckedArtifact.ImportedModuleView{
+            check.CheckedArtifact.importedView(app_artifact),
+        };
+
+        var available_views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer available_views.deinit(self.gpa);
+        try available_views.append(self.gpa, check.CheckedArtifact.importedView(&self.builtin_modules.checked_artifact));
+        try available_views.append(self.gpa, check.CheckedArtifact.importedView(app_artifact));
+        for (imported_artifacts.items) |imported| {
+            try available_views.append(self.gpa, imported.view);
+        }
+
+        const new_artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModule(
+            self.gpa,
+            platform_env,
+            imported_envs.items,
+            imported_artifacts.items,
+            .{
+                .platform_app_relation = relation,
+                .relation_artifacts = &relation_views,
+                .available_artifacts = available_views.items,
+            },
+        );
+
+        // The new artifact shares `platform_env` with the old one, so the old
+        // must be torn down without freeing that env.
+        platform_root.replaceCheckedArtifactRetainingModuleEnv(new_artifact);
     }
 
     /// Transfer compilation results from Coordinator to PackageEnv.
