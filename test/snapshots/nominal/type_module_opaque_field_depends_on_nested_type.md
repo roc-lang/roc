@@ -12,19 +12,9 @@ ModuleType :: {
 }
 ~~~
 # EXPECTED
-MISSING NESTED TYPE - type_module_opaque_field_depends_on_nested_type.md:2:13:2:36
+NIL
 # PROBLEMS
-**MISSING NESTED TYPE**
-`ModuleType` is in scope, but it doesn't have a nested type named `InternalType`.
-
-It's referenced here:
-**type_module_opaque_field_depends_on_nested_type.md:2:13:2:36:**
-```roc
-    field : ModuleType.InternalType,
-```
-            ^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpDoubleColon,OpenCurly,
@@ -69,7 +59,7 @@ ModuleType :: {
 		(ty-header (name "ModuleType"))
 		(ty-record
 			(field (field "field")
-				(ty-malformed))))
+				(ty-lookup (name "ModuleType.InternalType") (local)))))
 	(s-nominal-decl
 		(ty-header (name "ModuleType.InternalType"))
 		(ty-tag-union
