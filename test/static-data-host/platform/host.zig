@@ -8,6 +8,21 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
+const shim_io = @import("shim_io");
+
+// Route std.debug's IO through shim_io instead of the default std.Io.Threaded.
+// Zig 0.16's Threaded backend pulls in timestampToPosix, whose i128 division
+// references compiler-rt (__divti3/__modti3) that this libc/compiler_rt-free
+// host archive does not link. Setting debug_threaded_io = null avoids that pull-in.
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+pub const std_options_debug_io = shim_io.io();
+pub const std_options_debug_threaded_io = null;
+
+pub const std_options: std.Options = .{
+    .logFn = std.log.defaultLog,
+    .log_level = .warn,
+    .allow_stack_tracing = false,
+};
 
 const RocAlloc = builtins.host_abi.RocAlloc;
 const RocCrashed = builtins.host_abi.RocCrashed;
@@ -22,7 +37,10 @@ const RocStr = builtins.str.RocStr;
 const CheckError = error{StaticDataHostCheckFailed};
 
 const HostEnv = struct {
-    gpa: std.heap.DebugAllocator(.{}),
+    // thread_safe = false: this single-threaded test host must stay compiler_rt-free,
+    // but DebugAllocator's thread-safe mutex pulls in std.Io.Threaded (timestampToPosix
+    // -> i128 division -> __divti3/__modti3, which this archive does not link).
+    gpa: std.heap.DebugAllocator(.{ .thread_safe = false }),
     dealloc_count: usize,
 };
 
@@ -94,7 +112,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = argv;
 
     var host_env = HostEnv{
-        .gpa = std.heap.DebugAllocator(.{}){},
+        .gpa = std.heap.DebugAllocator(.{ .thread_safe = false }){},
         .dealloc_count = 0,
     };
     defer _ = host_env.gpa.deinit();
